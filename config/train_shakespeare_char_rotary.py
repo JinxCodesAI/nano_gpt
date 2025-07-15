@@ -3,8 +3,8 @@
 
 # rotary embedding settings
 use_rotary_embeddings = True
-rotary_base = 10000.0
-rotary_max_position_embeddings = 2048
+rotary_base = 100.0
+rotary_max_position_embeddings = 128
 
 out_dir = 'out-shakespeare-char'
 eval_interval = 150 # keep frequent because we'll overfit
@@ -25,10 +25,10 @@ block_size = 256 # context of up to 256 previous characters
 
 # baby GPT model :)
 n_layer = 16
-n_head = 4
-n_embd = 512
+n_head = 8
+n_embd = 128
 dropout = 0.2
-n_hidden = 1024 # feed forward hidden dimension, defaults to 4 * n_embd = 2048
+n_hidden = 512 # feed forward hidden dimension, defaults to 4 * n_embd = 2048
 
 learning_rate = 4e-4 # with baby networks can afford to go a bit higher
 max_iters = 5000

@@ -200,6 +200,13 @@ if block_size < model.config.block_size:
     model_args['block_size'] = block_size # so that the checkpoint will have the right value
 model.to(device)
 
+# display detailed parameter count
+if master_process:
+    print("\nDetailed parameter count:")
+    detailed_params = model.get_detailed_param_count()
+    for component, count in detailed_params.items():
+        print(f"  {component}: {count:,}")
+
 # initialize a GradScaler. If enabled=False scaler is a no-op
 scaler = torch.cuda.amp.GradScaler(enabled=(dtype == 'float16'))
 
