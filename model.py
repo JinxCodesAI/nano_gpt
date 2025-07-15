@@ -29,16 +29,19 @@ class RotaryPositionalEmbedding(nn.Module):
         self.register_buffer('inv_freq', inv_freq)
         
         # Precompute cos and sin values for all positions
+        self.max_seq_len_cached = 0
         self._precompute_freqs(max_position_embeddings)
     
     def _precompute_freqs(self, seq_len):
         """Precompute cos and sin values for all positions up to seq_len"""
-        t = torch.arange(seq_len, device=self.inv_freq.device, dtype=self.inv_freq.dtype)
-        freqs = torch.outer(t, self.inv_freq)
-        # Different from paper, but it uses a different permutation in parts of the final model
-        freqs = torch.cat((freqs, freqs), dim=-1)
-        self.register_buffer('cos_cached', freqs.cos(), persistent=False)
-        self.register_buffer('sin_cached', freqs.sin(), persistent=False)
+        if seq_len > self.max_seq_len_cached:
+            self.max_seq_len_cached = seq_len
+            t = torch.arange(seq_len, dtype=self.inv_freq.dtype, device=self.inv_freq.device)
+            freqs = torch.outer(t, self.inv_freq)
+            # Different from paper, but it uses a different permutation in parts of the final model
+            freqs = torch.cat((freqs, freqs), dim=-1)
+            self.register_buffer('cos_cached', freqs.cos(), persistent=False)
+            self.register_buffer('sin_cached', freqs.sin(), persistent=False)
     
     def rotate_half(self, x):
         """Rotate half the hidden dims of the input."""
@@ -52,11 +55,14 @@ class RotaryPositionalEmbedding(nn.Module):
             seq_len = q.shape[-2]
         
         # Ensure we have precomputed values for this sequence length
-        if seq_len > self.cos_cached.shape[0]:
-            self._precompute_freqs(seq_len)
+        self._precompute_freqs(seq_len)
         
         cos = self.cos_cached[:seq_len]
         sin = self.sin_cached[:seq_len]
+        
+        # Reshape for broadcasting: (seq_len, dim) -> (1, 1, seq_len, dim)
+        cos = cos.unsqueeze(0).unsqueeze(0)
+        sin = sin.unsqueeze(0).unsqueeze(0)
         
         # Apply rotary embeddings
         q_embed = (q * cos) + (self.rotate_half(q) * sin)
@@ -91,6 +97,16 @@ class CausalSelfAttention(nn.Module):
         self.n_head = config.n_head
         self.n_embd = config.n_embd
         self.dropout = config.dropout
+        
+        # rotary embeddings
+        self.use_rotary_embeddings = config.use_rotary_embeddings
+        if self.use_rotary_embeddings:
+            self.rotary_emb = RotaryPositionalEmbedding(
+                config.n_embd // config.n_head,
+                max_position_embeddings=config.rotary_max_position_embeddings,
+                base=config.rotary_base
+            )
+        
         # flash attention make GPU go brrrrr but support is only in PyTorch >= 2.0
         self.flash = hasattr(torch.nn.functional, 'scaled_dot_product_attention')
         if not self.flash:
@@ -107,6 +123,10 @@ class CausalSelfAttention(nn.Module):
         k = k.view(B, T, self.n_head, C // self.n_head).transpose(1, 2) # (B, nh, T, hs)
         q = q.view(B, T, self.n_head, C // self.n_head).transpose(1, 2) # (B, nh, T, hs)
         v = v.view(B, T, self.n_head, C // self.n_head).transpose(1, 2) # (B, nh, T, hs)
+
+        # apply rotary embeddings if enabled
+        if self.use_rotary_embeddings:
+            q, k = self.rotary_emb(q, k, seq_len=T)
 
         # causal self-attention; Self-attend: (B, nh, T, hs) x (B, nh, hs, T) -> (B, nh, T, T)
         if self.flash:
@@ -164,6 +184,11 @@ class GPTConfig:
     n_embd: int = 768
     dropout: float = 0.0
     bias: bool = True # True: bias in Linears and LayerNorms, like GPT-2. False: a bit better and faster
+    
+    # rotary embedding parameters
+    use_rotary_embeddings: bool = False
+    rotary_base: float = 10000.0
+    rotary_max_position_embeddings: int = 2048
 
 class GPT(nn.Module):
 
@@ -173,14 +198,21 @@ class GPT(nn.Module):
         assert config.block_size is not None
         self.config = config
 
-        self.transformer = nn.ModuleDict(dict(
+        # Build transformer components
+        transformer_dict = dict(
             wte = nn.Embedding(config.vocab_size, config.n_embd),
-            wpe = nn.Embedding(config.block_size, config.n_embd),
             drop = nn.Dropout(config.dropout),
             h = nn.ModuleList([Block(config) for _ in range(config.n_layer)]),
             ln_f = LayerNorm(config.n_embd, bias=config.bias),
-        ))
+        )
+        
+        # Only add position embeddings if not using rotary embeddings
+        if not config.use_rotary_embeddings:
+            transformer_dict['wpe'] = nn.Embedding(config.block_size, config.n_embd)
+        
+        self.transformer = nn.ModuleDict(transformer_dict)
         self.lm_head = nn.Linear(config.n_embd, config.vocab_size, bias=False)
+        
         # with weight tying when using torch.compile() some warnings get generated:
         # "UserWarning: functional_call was passed multiple values for tied weights.
         # This behavior is deprecated and will be an error in future versions"
@@ -205,7 +237,8 @@ class GPT(nn.Module):
         params are actually used as weights in the final layer, so we include them.
         """
         n_params = sum(p.numel() for p in self.parameters())
-        if non_embedding:
+        if non_embedding and not self.config.use_rotary_embeddings:
+            # Only subtract position embeddings if they exist (not using rotary embeddings)
             n_params -= self.transformer.wpe.weight.numel()
         return n_params
 
@@ -225,8 +258,15 @@ class GPT(nn.Module):
 
         # forward the GPT model itself
         tok_emb = self.transformer.wte(idx) # token embeddings of shape (b, t, n_embd)
-        pos_emb = self.transformer.wpe(pos) # position embeddings of shape (t, n_embd)
-        x = self.transformer.drop(tok_emb + pos_emb)
+        
+        # Handle position embeddings based on rotary embedding setting
+        if self.config.use_rotary_embeddings:
+            # No position embeddings when using rotary embeddings
+            x = self.transformer.drop(tok_emb)
+        else:
+            pos_emb = self.transformer.wpe(pos) # position embeddings of shape (t, n_embd)
+            x = self.transformer.drop(tok_emb + pos_emb)
+            
         for block in self.transformer.h:
             x = block(x)
         x = self.transformer.ln_f(x)
@@ -248,7 +288,11 @@ class GPT(nn.Module):
         # but want to use a smaller block size for some smaller, simpler model
         assert block_size <= self.config.block_size
         self.config.block_size = block_size
-        self.transformer.wpe.weight = nn.Parameter(self.transformer.wpe.weight[:block_size])
+        
+        # Only crop position embeddings if they exist (not using rotary embeddings)
+        if not self.config.use_rotary_embeddings:
+            self.transformer.wpe.weight = nn.Parameter(self.transformer.wpe.weight[:block_size])
+        
         for block in self.transformer.h:
             if hasattr(block.attn, 'bias'):
                 block.attn.bias = block.attn.bias[:,:,:block_size,:block_size]
