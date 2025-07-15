@@ -19,6 +19,7 @@ class RotaryPositionalEmbedding(nn.Module):
     """ Rotary Position Embedding (RoPE) implementation """
     
     def __init__(self, dim, max_position_embeddings=2048, base=10000.0):
+        print("Using rotary embedings")
         super().__init__()
         self.dim = dim
         self.max_position_embeddings = max_position_embeddings
@@ -149,9 +150,11 @@ class MLP(nn.Module):
 
     def __init__(self, config):
         super().__init__()
-        self.c_fc    = nn.Linear(config.n_embd, 4 * config.n_embd, bias=config.bias)
+        # Use configurable hidden dimension, default to 4 * n_embd for backward compatibility
+        hidden_dim = config.n_hidden if config.n_hidden is not None else 4 * config.n_embd
+        self.c_fc    = nn.Linear(config.n_embd, hidden_dim, bias=config.bias)
         self.gelu    = nn.GELU()
-        self.c_proj  = nn.Linear(4 * config.n_embd, config.n_embd, bias=config.bias)
+        self.c_proj  = nn.Linear(hidden_dim, config.n_embd, bias=config.bias)
         self.dropout = nn.Dropout(config.dropout)
 
     def forward(self, x):
@@ -184,6 +187,9 @@ class GPTConfig:
     n_embd: int = 768
     dropout: float = 0.0
     bias: bool = True # True: bias in Linears and LayerNorms, like GPT-2. False: a bit better and faster
+    
+    # feed forward network parameters
+    n_hidden: int = None # feed forward hidden dimension, defaults to 4 * n_embd if None
     
     # rotary embedding parameters
     use_rotary_embeddings: bool = False
