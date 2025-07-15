@@ -15,6 +15,56 @@ import torch
 import torch.nn as nn
 from torch.nn import functional as F
 
+class RotaryPositionalEmbedding(nn.Module):
+    """ Rotary Position Embedding (RoPE) implementation """
+    
+    def __init__(self, dim, max_position_embeddings=2048, base=10000.0):
+        super().__init__()
+        self.dim = dim
+        self.max_position_embeddings = max_position_embeddings
+        self.base = base
+        
+        # Precompute frequency tensor
+        inv_freq = 1.0 / (base ** (torch.arange(0, dim, 2).float() / dim))
+        self.register_buffer('inv_freq', inv_freq)
+        
+        # Precompute cos and sin values for all positions
+        self._precompute_freqs(max_position_embeddings)
+    
+    def _precompute_freqs(self, seq_len):
+        """Precompute cos and sin values for all positions up to seq_len"""
+        t = torch.arange(seq_len, device=self.inv_freq.device, dtype=self.inv_freq.dtype)
+        freqs = torch.outer(t, self.inv_freq)
+        # Different from paper, but it uses a different permutation in parts of the final model
+        freqs = torch.cat((freqs, freqs), dim=-1)
+        self.register_buffer('cos_cached', freqs.cos(), persistent=False)
+        self.register_buffer('sin_cached', freqs.sin(), persistent=False)
+    
+    def rotate_half(self, x):
+        """Rotate half the hidden dims of the input."""
+        x1 = x[..., : x.shape[-1] // 2]
+        x2 = x[..., x.shape[-1] // 2 :]
+        return torch.cat((-x2, x1), dim=-1)
+    
+    def forward(self, q, k, seq_len=None):
+        """Apply rotary position embedding to query and key tensors."""
+        if seq_len is None:
+            seq_len = q.shape[-2]
+        
+        # Ensure we have precomputed values for this sequence length
+        if seq_len > self.cos_cached.shape[0]:
+            self._precompute_freqs(seq_len)
+        
+        cos = self.cos_cached[:seq_len]
+        sin = self.sin_cached[:seq_len]
+        
+        # Apply rotary embeddings
+        q_embed = (q * cos) + (self.rotate_half(q) * sin)
+        k_embed = (k * cos) + (self.rotate_half(k) * sin)
+        
+        return q_embed, k_embed
+
+
 class LayerNorm(nn.Module):
     """ LayerNorm but with an optional bias. PyTorch doesn't support simply bias=False """
 
