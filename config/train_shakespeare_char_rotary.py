@@ -24,9 +24,9 @@ batch_size = 64
 block_size = 256 # context of up to 256 previous characters
 
 # baby GPT model :)
-n_layer = 16
+n_layer = 6
 n_head = 8
-n_embd = 128
+n_embd = 512
 dropout = 0.2
 n_hidden = 512 # feed forward hidden dimension, defaults to 4 * n_embd = 2048
 
