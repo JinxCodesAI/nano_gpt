@@ -248,6 +248,99 @@ class GPT(nn.Module):
             n_params -= self.transformer.wpe.weight.numel()
         return n_params
 
+    def get_detailed_param_count(self):
+        """
+        Return detailed parameter count broken down by component type.
+        Returns a dictionary with parameter counts for each component.
+        """
+        param_counts = {
+            'token_embeddings': 0,
+            'position_embeddings': 0,
+            'attention_layers': 0,
+            'feed_forward_layers': 0,
+            'layer_norms': 0,
+            'final_layer_norm': 0,
+            'language_model_head': 0,
+            'rotary_embeddings': 0,
+            'total': 0
+        }
+        
+        # Token embeddings
+        param_counts['token_embeddings'] = self.transformer.wte.weight.numel()
+        
+        # Position embeddings (if they exist)
+        if not self.config.use_rotary_embeddings and hasattr(self.transformer, 'wpe'):
+            param_counts['position_embeddings'] = self.transformer.wpe.weight.numel()
+        
+        # Rotary embeddings (if used)
+        if self.config.use_rotary_embeddings:
+            # Rotary embeddings don't have trainable parameters, but we'll track the buffer
+            for block in self.transformer.h:
+                if hasattr(block.attn, 'rotary_emb'):
+                    # Count any parameters in rotary embedding (usually none)
+                    for p in block.attn.rotary_emb.parameters():
+                        param_counts['rotary_embeddings'] += p.numel()
+        
+        # Attention layers across all blocks
+        attention_params = 0
+        for block in self.transformer.h:
+            # Query, Key, Value projections
+            attention_params += block.attn.c_attn.weight.numel()
+            if block.attn.c_attn.bias is not None:
+                attention_params += block.attn.c_attn.bias.numel()
+            
+            # Output projection
+            attention_params += block.attn.c_proj.weight.numel()
+            if block.attn.c_proj.bias is not None:
+                attention_params += block.attn.c_proj.bias.numel()
+        
+        param_counts['attention_layers'] = attention_params
+        
+        # Feed-forward layers across all blocks
+        ff_params = 0
+        for block in self.transformer.h:
+            # First linear layer
+            ff_params += block.mlp.c_fc.weight.numel()
+            if block.mlp.c_fc.bias is not None:
+                ff_params += block.mlp.c_fc.bias.numel()
+            
+            # Second linear layer
+            ff_params += block.mlp.c_proj.weight.numel()
+            if block.mlp.c_proj.bias is not None:
+                ff_params += block.mlp.c_proj.bias.numel()
+        
+        param_counts['feed_forward_layers'] = ff_params
+        
+        # Layer norms across all blocks
+        layer_norm_params = 0
+        for block in self.transformer.h:
+            # Attention layer norm
+            layer_norm_params += block.ln_1.weight.numel()
+            if block.ln_1.bias is not None:
+                layer_norm_params += block.ln_1.bias.numel()
+            
+            # Feed-forward layer norm
+            layer_norm_params += block.ln_2.weight.numel()
+            if block.ln_2.bias is not None:
+                layer_norm_params += block.ln_2.bias.numel()
+        
+        param_counts['layer_norms'] = layer_norm_params
+        
+        # Final layer norm
+        param_counts['final_layer_norm'] = self.transformer.ln_f.weight.numel()
+        if self.transformer.ln_f.bias is not None:
+            param_counts['final_layer_norm'] += self.transformer.ln_f.bias.numel()
+        
+        # Language model head
+        param_counts['language_model_head'] = self.lm_head.weight.numel()
+        if self.lm_head.bias is not None:
+            param_counts['language_model_head'] += self.lm_head.bias.numel()
+        
+        # Calculate total
+        param_counts['total'] = sum(param_counts.values()) - param_counts.get('rotary_embeddings', 0)
+        
+        return param_counts
+
     def _init_weights(self, module):
         if isinstance(module, nn.Linear):
             torch.nn.init.normal_(module.weight, mean=0.0, std=0.02)
