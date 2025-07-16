@@ -195,6 +195,9 @@ class GPTConfig:
     use_rotary_embeddings: bool = False
     rotary_base: float = 10000.0
     rotary_max_position_embeddings: int = 2048
+    
+    # dual-mode parameters
+    mode: str = 'generator' # Can be 'generator' or 'reward'
 
 class GPT(nn.Module):
 
@@ -202,9 +205,10 @@ class GPT(nn.Module):
         super().__init__()
         assert config.vocab_size is not None
         assert config.block_size is not None
+        assert config.mode in ['generator', 'reward'], "mode must be 'generator' or 'reward'"
         self.config = config
 
-        # Build transformer components
+        # Build shared transformer trunk
         transformer_dict = dict(
             wte = nn.Embedding(config.vocab_size, config.n_embd),
             drop = nn.Dropout(config.dropout),
@@ -217,13 +221,22 @@ class GPT(nn.Module):
             transformer_dict['wpe'] = nn.Embedding(config.block_size, config.n_embd)
         
         self.transformer = nn.ModuleDict(transformer_dict)
-        self.lm_head = nn.Linear(config.n_embd, config.vocab_size, bias=False)
         
-        # with weight tying when using torch.compile() some warnings get generated:
-        # "UserWarning: functional_call was passed multiple values for tied weights.
-        # This behavior is deprecated and will be an error in future versions"
-        # not 100% sure what this is, so far seems to be harmless. TODO investigate
-        self.transformer.wte.weight = self.lm_head.weight # https://paperswithcode.com/method/weight-tying
+        # Task-specific heads
+        if self.config.mode == 'generator':
+            self.lm_head = nn.Linear(config.n_embd, config.vocab_size, bias=False)
+            # with weight tying when using torch.compile() some warnings get generated:
+            # "UserWarning: functional_call was passed multiple values for tied weights.
+            # This behavior is deprecated and will be an error in future versions"
+            # not 100% sure what this is, so far seems to be harmless. TODO investigate
+            self.transformer.wte.weight = self.lm_head.weight # https://paperswithcode.com/method/weight-tying
+        elif self.config.mode == 'reward':
+            self.reward_head = nn.Sequential(
+                nn.Linear(config.n_embd, 256),
+                nn.ReLU(),
+                nn.Linear(256, 2), # Outputs 2 raw scores for [natural, synthetic]
+                nn.Softmax(dim=-1)  # Converts scores to probabilities
+            )
 
         # init all weights
         self.apply(self._init_weights)
@@ -370,16 +383,30 @@ class GPT(nn.Module):
             x = block(x)
         x = self.transformer.ln_f(x)
 
-        if targets is not None:
-            # if we are given some desired targets also calculate the loss
-            logits = self.lm_head(x)
-            loss = F.cross_entropy(logits.view(-1, logits.size(-1)), targets.view(-1), ignore_index=-1)
-        else:
-            # inference-time mini-optimization: only forward the lm_head on the very last position
-            logits = self.lm_head(x[:, [-1], :]) # note: using list [-1] to preserve the time dim
-            loss = None
+        if self.config.mode == 'generator':
+            if targets is not None:
+                # if we are given some desired targets also calculate the loss
+                logits = self.lm_head(x)
+                loss = F.cross_entropy(logits.view(-1, logits.size(-1)), targets.view(-1), ignore_index=-1)
+            else:
+                # inference-time mini-optimization: only forward the lm_head on the very last position
+                logits = self.lm_head(x[:, [-1], :]) # note: using list [-1] to preserve the time dim
+                loss = None
+            return logits, loss
 
-        return logits, loss
+        elif self.config.mode == 'reward':
+            # Pool by taking the hidden state of the last token
+            pooled_output = x[:, -1, :] # Shape: (batch_size, n_embd)
+            # Get probabilities from the reward head
+            probabilities = self.reward_head(pooled_output) # Shape: (batch_size, 2)
+            
+            # For reward model training, loss is calculated if targets provided
+            loss = None
+            if targets is not None:
+                # MSE loss between predicted and target probabilities
+                loss = F.mse_loss(probabilities, targets)
+            
+            return probabilities, loss
 
     def crop_block_size(self, block_size):
         # model surgery to decrease the block size if necessary
