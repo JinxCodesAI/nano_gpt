@@ -21,13 +21,13 @@ import time
 import math
 import pickle
 from contextlib import nullcontext
-
 import numpy as np
 import torch
 from torch.nn.parallel import DistributedDataParallel as DDP
 from torch.distributed import init_process_group, destroy_process_group
 
 from model import GPTConfig, GPT
+from logger import TrainingLogger
 
 # -----------------------------------------------------------------------------
 # default config values designed to train a gpt2 (124M) on OpenWebText
@@ -39,6 +39,9 @@ eval_iters = 200
 eval_only = False # if True, script exits right after the first eval
 always_save_checkpoint = True # if True, always save a checkpoint after each eval
 init_from = 'scratch' # 'scratch' or 'resume' or 'gpt2*'
+# file logging
+log_dir = 'logs' # directory for log files
+file_logging = True # enable file logging
 # wandb logging
 wandb_log = False # disabled by default
 wandb_project = 'owt'
@@ -83,6 +86,9 @@ exec(open('configurator.py').read()) # overrides from command line or config fil
 config = {k: globals()[k] for k in config_keys} # will be useful for logging
 # -----------------------------------------------------------------------------
 
+# logging setup
+training_logger = TrainingLogger(log_dir=log_dir, enabled=file_logging)
+
 # various inits, derived attributes, I/O setup
 ddp = int(os.environ.get('RANK', -1)) != -1 # is this a ddp run?
 if ddp:
@@ -108,6 +114,7 @@ print(f"tokens per iteration will be: {tokens_per_iter:,}")
 
 if master_process:
     os.makedirs(out_dir, exist_ok=True)
+    training_logger.setup(config)
 torch.manual_seed(1337 + seed_offset)
 torch.backends.cuda.matmul.allow_tf32 = True # allow tf32 on matmul
 torch.backends.cudnn.allow_tf32 = True # allow tf32 on cudnn
@@ -278,6 +285,8 @@ while True:
     if iter_num % eval_interval == 0 and master_process:
         losses = estimate_loss()
         print(f"step {iter_num}: train loss {losses['train']:.4f}, val loss {losses['val']:.4f}")
+        # Log to file as well
+        training_logger.log_step(iter_num, losses['train'], losses['val'])
         if wandb_log:
             wandb.log({
                 "iter": iter_num,
@@ -346,6 +355,10 @@ while True:
     # termination conditions
     if iter_num > max_iters:
         break
+
+# cleanup logging
+if master_process:
+    training_logger.close()
 
 if ddp:
     destroy_process_group()
