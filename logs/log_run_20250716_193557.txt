@@ -1,0 +1,57 @@
+================================================================================
+Training run started at 2025-07-16 19:35:57
+================================================================================
+Configuration:
+----------------------------------------
+always_save_checkpoint: False
+backend: nccl
+batch_size: 128
+beta1: 0.9
+beta2: 0.99
+bias: False
+block_size: 256
+compile: True
+dataset: shakespeare_char
+decay_lr: True
+device: cuda
+dropout: 0.2
+dtype: bfloat16
+eval_interval: 150
+eval_iters: 30
+eval_only: False
+file_logging: True
+grad_clip: 1.0
+gradient_accumulation_steps: 1
+init_from: scratch
+learning_rate: 0.0004
+log_dir: logs
+log_interval: 10
+lr_decay_iters: 5000
+max_iters: 5000
+min_lr: 4e-05
+n_embd: 256
+n_head: 8
+n_layer: 12
+out_dir: out-shakespeare-char
+rotary_base: 100.0
+rotary_max_position_embeddings: 128
+use_rotary_embeddings: False
+wandb_log: False
+wandb_project: shakespeare-char
+wandb_run_name: mini-gpt
+warmup_iters: 20
+weight_decay: 0.1
+----------------------------------------
+[2025-07-16 19:36:26] step 0: train loss 4.2958, val loss 4.2911
+[2025-07-16 19:39:32] step 150: train loss 2.3743, val loss 2.3913
+[2025-07-16 19:42:34] step 300: train loss 2.0178, val loss 2.0853
+[2025-07-16 19:45:37] step 450: train loss 1.7178, val loss 1.8649
+[2025-07-16 19:48:40] step 600: train loss 1.5521, val loss 1.7266
+[2025-07-16 19:51:42] step 750: train loss 1.4419, val loss 1.6466
+[2025-07-16 19:54:45] step 900: train loss 1.3780, val loss 1.5998
+[2025-07-16 19:57:48] step 1050: train loss 1.3206, val loss 1.5520
+[2025-07-16 20:00:51] step 1200: train loss 1.2757, val loss 1.5272
+[2025-07-16 20:03:53] step 1350: train loss 1.2387, val loss 1.5057
+[2025-07-16 20:06:56] step 1500: train loss 1.2066, val loss 1.4918
+[2025-07-16 20:09:59] step 1650: train loss 1.1779, val loss 1.4870
+[2025-07-16 20:13:02] step 1800: train loss 1.1524, val loss 1.4754

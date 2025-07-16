@@ -20,20 +20,20 @@ wandb_run_name = 'mini-gpt'
 
 dataset = 'shakespeare_char'
 gradient_accumulation_steps = 1
-batch_size = 64
+batch_size = 128
 block_size = 256 # context of up to 256 previous characters
 
 # baby GPT model :)
-n_layer = 6
+n_layer = 4
 n_head = 8
 n_embd = 512
 dropout = 0.2
-n_hidden = 512 # feed forward hidden dimension, defaults to 4 * n_embd = 2048
+n_hidden = 2048 # feed forward hidden dimension, defaults to 4 * n_embd = 2048
 
-learning_rate = 4e-4 # with baby networks can afford to go a bit higher
+learning_rate = 1e-3 # with baby networks can afford to go a bit higher
 max_iters = 5000
 lr_decay_iters = 5000 # make equal to max_iters usually
-min_lr = 4e-5 # learning_rate / 10 usually
+min_lr = 1e-4 # learning_rate / 10 usually
 beta2 = 0.99 # make a bit bigger because number of tokens per iter is small
 
 warmup_iters = 20 # not super necessary potentially
