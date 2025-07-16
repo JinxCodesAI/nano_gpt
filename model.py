@@ -198,6 +198,7 @@ class GPTConfig:
     
     # dual-mode parameters
     mode: str = 'generator' # Can be 'generator' or 'reward'
+    reward_head_hidden_dim: int = 256 # Hidden dimension for reward head MLP
 
 class GPT(nn.Module):
 
@@ -232,9 +233,9 @@ class GPT(nn.Module):
             self.transformer.wte.weight = self.lm_head.weight # https://paperswithcode.com/method/weight-tying
         elif self.config.mode == 'reward':
             self.reward_head = nn.Sequential(
-                nn.Linear(config.n_embd, 256),
+                nn.Linear(config.n_embd, config.reward_head_hidden_dim),
                 nn.ReLU(),
-                nn.Linear(256, 2), # Outputs 2 raw scores for [natural, synthetic]
+                nn.Linear(config.reward_head_hidden_dim, 2), # Outputs 2 raw scores for [natural, synthetic]
                 nn.Softmax(dim=-1)  # Converts scores to probabilities
             )
 
@@ -274,6 +275,7 @@ class GPT(nn.Module):
             'layer_norms': 0,
             'final_layer_norm': 0,
             'language_model_head': 0,
+            'reward_head': 0,
             'rotary_embeddings': 0,
             'total': 0
         }
@@ -344,10 +346,18 @@ class GPT(nn.Module):
         if self.transformer.ln_f.bias is not None:
             param_counts['final_layer_norm'] += self.transformer.ln_f.bias.numel()
         
-        # Language model head
-        param_counts['language_model_head'] = self.lm_head.weight.numel()
-        if self.lm_head.bias is not None:
-            param_counts['language_model_head'] += self.lm_head.bias.numel()
+        # Mode-specific heads
+        if self.config.mode == 'generator':
+            param_counts['language_model_head'] = self.lm_head.weight.numel()
+            if hasattr(self.lm_head, 'bias') and self.lm_head.bias is not None:
+                param_counts['language_model_head'] += self.lm_head.bias.numel()
+        elif self.config.mode == 'reward':
+            # Count reward head parameters
+            for module in self.reward_head:
+                if isinstance(module, nn.Linear):
+                    param_counts['reward_head'] += module.weight.numel()
+                    if module.bias is not None:
+                        param_counts['reward_head'] += module.bias.numel()
         
         # Calculate total
         param_counts['total'] = sum(param_counts.values()) - param_counts.get('rotary_embeddings', 0)

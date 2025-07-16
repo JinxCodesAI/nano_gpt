@@ -40,7 +40,8 @@
   - **Commit after completion:** "Update weight tying to be mode-specific for compatibility"
   - _Requirements: 5.2, 5.3_
 
-- [ ] 7. Create basic functionality tests
+- [x] 7. Create basic functionality tests
+
   - Write test for GPTConfig mode parameter validation
   - Write test for correct head creation in both modes
   - Write test for forward pass output shapes in both modes
@@ -49,6 +50,9 @@
   - _Requirements: All requirements validation_
 
 - [ ] 8. Test backward compatibility and integration
+
+
+
   - Verify existing generator functionality remains unchanged
   - Test model parameter counting works correctly for both modes
   - Verify checkpoint loading compatibility with existing models
