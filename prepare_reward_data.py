@@ -340,7 +340,7 @@ def main():
         if suggestions:
             print("\nSuggested fixes:")
             for suggestion in suggestions:
-                print(f"  💡 {suggestion}")
+                print(f"  SUGGESTION: {suggestion}")
         return 1
 
     # Print any warnings
@@ -412,10 +412,10 @@ def main():
         return 0
 
     except (RewardDataPrepError, TokenizationError, DataLoadError) as e:
-        print(f"\n❌ Error: {str(e)}")
+        print(f"\nERROR: {str(e)}")
         return 1
     except Exception as e:
-        print(f"\n❌ Unexpected error: {str(e)}")
+        print(f"\nUnexpected error: {str(e)}")
         logging.exception("Unexpected error occurred")
         return 1
 

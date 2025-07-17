@@ -246,15 +246,15 @@ class ConfigurationValidator:
         if config.get_warnings():
             print("\nWarnings:")
             for warning in config.get_warnings():
-                print(f"  ⚠️  {warning}")
-        
+                print(f"  WARNING: {warning}")
+
         if config.get_errors():
             print("\nValidation Errors:")
             for error in config.get_errors():
-                print(f"  ❌ {error}")
+                print(f"  ERROR: {error}")
             print("\nPlease fix the above errors before proceeding.")
         else:
-            print("\n✅ Configuration validation passed")
+            print("\nConfiguration validation passed")
     
     def suggest_fixes(self, config: RewardDataConfig) -> List[str]:
         """
