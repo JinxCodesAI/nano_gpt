@@ -30,21 +30,49 @@ Your project directory should be organized as follows. We will be modifying mode
 ```
 /your_project/
 |
-|-- model.py             # (Will be modified)
-|-- train.py             # Main script for standard LM training
-|-- train_reward_model.py # New script for training the reward model
-|-- train_grpo.py        # New script for the GRPO reinforcement learning step
+|-- model.py                    # (Will be modified)
+|-- train.py                    # Main script for standard LM training
+|-- train_reward_model.py       # New script for training the reward model
+|-- train_grpo.py               # New script for the GRPO reinforcement learning step
+|
+|-- prepare_reward_data.py      # Enhanced script to generate the reward dataset
+|-- tokenization_manager.py     # New: Unified tokenization interface
+|-- data_loader.py              # New: Unified data loading interface
+|-- reward_data_config.py       # New: Configuration and validation system
+|-- reward_dataset_loader.py    # Enhanced: Dataset loading with tokenization validation
 |
 |-- data/
-|   |-- shakespeare_char/
+|   |-- shakespeare/            # BPE tokenization data
 |   |   |-- input.txt
 |   |   |-- prepare.py
+|   |   |-- train.bin
+|   |   |-- val.bin
 |   |
-|   |-- reward_dataset/     # Directory for the reward model's data
-|       |-- train.bin
-|       |-- val.bin
+|   |-- shakespeare_char/       # Character tokenization data
+|   |   |-- input.txt
+|   |   |-- prepare.py
+|   |   |-- meta.pkl           # Character tokenization metadata
+|   |   |-- train.bin
+|   |   |-- val.bin
+|   |
+|   |-- reward_dataset/         # Directory for the reward model's data
+|       |-- train_x.bin         # Input sequences
+|       |-- train_y.bin         # Target probabilities
+|       |-- train_metadata.txt  # Training metadata with tokenization info
+|       |-- val_x.bin           # Validation sequences
+|       |-- val_y.bin           # Validation probabilities
+|       |-- val_metadata.txt    # Validation metadata with tokenization info
 |
-|-- prepare_reward_data.py # New script to generate the reward dataset
+|-- tests/                      # Comprehensive test suite
+|   |-- test_tokenization_manager.py
+|   |-- test_data_loader.py
+|   |-- test_integration.py
+|   |-- test_reward_dataset_loader.py
+|   |-- test_end_to_end.py
+|
+|-- docs/                       # Documentation
+    |-- reward_model_training_infrastructure.md
+    |-- reward_model_training3.md
 ```
 
 ## Part 2: Model Architecture Modifications (model.py)
@@ -69,8 +97,9 @@ class GPTConfig:
     n_embd: int = 768
     dropout: float = 0.0
     bias: bool = True
-    # --- ADD THIS LINE ---
+    # --- ADD THESE LINES ---
     mode: str = 'generator' # Can be 'generator' or 'reward'
+    reward_head_hidden_dim: int = 256  # Configurable reward head size
 ```
 
 ### 2.2. Update GPT Class
