@@ -69,7 +69,7 @@ For `mode='generator'`:
 
 For `mode='reward'`:
 - **Pooling Layer**: Extracts the last token's hidden state as sequence representation
-- **MLP**: Two-layer network (n_embd → 256 → 2) with ReLU activation
+- **MLP**: Two-layer network (n_embd → reward_head_hidden_dim → 2) with ReLU activation, reward_head_hidden_dim default is 256
 - **Softmax**: Converts raw scores to probability distribution [P(natural), P(synthetic)]
 - Computes MSE loss when targets provided
 
