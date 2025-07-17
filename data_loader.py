@@ -263,27 +263,29 @@ class DataLoader:
     def get_data_info(self, train_tokens: List[int], val_tokens: List[int]) -> dict:
         """
         Get information about loaded data.
-        
+
         Args:
             train_tokens: Training tokens
             val_tokens: Validation tokens
-            
+
         Returns:
             Dictionary with data statistics
         """
+        total_size = len(train_tokens) + len(val_tokens)
+
         info = {
             'train_size': len(train_tokens),
             'val_size': len(val_tokens),
-            'total_size': len(train_tokens) + len(val_tokens),
-            'train_split_ratio': len(train_tokens) / (len(train_tokens) + len(val_tokens)),
+            'total_size': total_size,
+            'train_split_ratio': len(train_tokens) / total_size if total_size > 0 else 0.0,
             'tokenization_method': self.tokenizer.tokenization_type,
             'vocab_size': self.tokenizer.vocab_size
         }
-        
+
         if train_tokens:
             info['train_token_range'] = (min(train_tokens), max(train_tokens))
-        
+
         if val_tokens:
             info['val_token_range'] = (min(val_tokens), max(val_tokens))
-        
+
         return info
