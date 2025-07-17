@@ -9,12 +9,22 @@ This script creates a dataset for training the reward model by:
 4. Taking first K tokens from natural data, remaining from model generation
 5. Creating target labels [K/N, (N-K)/N] for the reward model
 
+Enhanced with configurable tokenization support and binary file reuse capabilities.
+
 Usage:
+    # Text mode with BPE tokenization (default)
     python prepare_reward_data.py --model_path checkpoints/base_model_v1.pt --data_path data/shakespeare/input.txt
+
+    # Text mode with character tokenization
+    python prepare_reward_data.py --model_path checkpoints/char_model.pt --input_mode text --data_path data/shakespeare_char/input.txt --tokenization char --meta_path data/shakespeare_char/meta.pkl
+
+    # Binary mode (reuse existing train.bin/val.bin)
+    python prepare_reward_data.py --model_path checkpoints/base_model.pt --input_mode binary --train_bin data/shakespeare/train.bin --val_bin data/shakespeare/val.bin
 """
 
 import os
 import argparse
+import logging
 import numpy as np
 import torch
 import tiktoken
@@ -22,6 +32,9 @@ from tqdm import tqdm
 import random
 
 from model import GPT, GPTConfig
+from tokenization_manager import TokenizationManager, TokenizationError
+from data_loader import DataLoader, DataLoadError
+from reward_data_config import RewardDataConfig, ConfigurationValidator, RewardDataPrepError, TokenizationInfo
 
 
 def load_base_model(model_path, device):
@@ -43,30 +56,75 @@ def load_base_model(model_path, device):
     return model, config
 
 
+def load_data_with_config(config: RewardDataConfig) -> tuple:
+    """
+    Load data using the new configurable system.
+
+    Args:
+        config: Validated RewardDataConfig instance
+
+    Returns:
+        Tuple of (train_tokens, val_tokens, tokenization_manager)
+    """
+    # Initialize tokenization manager
+    if config.tokenization == 'auto':
+        # Auto-detect based on data path or meta path
+        if config.input_mode == 'text':
+            tokenization_manager = TokenizationManager(data_path=config.data_path)
+        else:
+            # For binary mode, try to detect from directory structure
+            data_dir = os.path.dirname(config.train_bin) if config.train_bin else None
+            tokenization_manager = TokenizationManager(data_path=data_dir, meta_path=config.meta_path)
+    elif config.tokenization == 'char':
+        tokenization_manager = TokenizationManager(meta_path=config.meta_path)
+    else:  # bpe
+        tokenization_manager = TokenizationManager()
+        tokenization_manager.load_bpe_tokenization()
+
+    # Initialize data loader
+    data_loader = DataLoader(tokenization_manager)
+
+    # Load data based on input mode
+    if config.input_mode == 'text':
+        train_tokens, val_tokens = data_loader.load_from_text(config.data_path, config.train_split)
+    else:  # binary
+        train_tokens, val_tokens = data_loader.load_from_binary(config.train_bin, config.val_bin)
+
+    # Log data information
+    data_info = data_loader.get_data_info(train_tokens, val_tokens)
+    logging.info(f"Data loaded successfully:")
+    logging.info(f"  Tokenization: {data_info['tokenization_method']}")
+    logging.info(f"  Vocab size: {data_info['vocab_size']}")
+    logging.info(f"  Train tokens: {data_info['train_size']:,}")
+    logging.info(f"  Val tokens: {data_info['val_size']:,}")
+
+    return train_tokens, val_tokens, tokenization_manager
+
+
 def load_and_split_data(data_path, train_split=0.9):
     """
-    Load raw text data and split it using the same ratio as the base model.
-    This ensures perfect alignment with base model's train/val splits.
+    Legacy function for backward compatibility.
+    Load raw text data and split it using BPE tokenization.
     """
     print(f"Loading data from {data_path}")
-    
+
     with open(data_path, 'r', encoding='utf-8') as f:
         data = f.read()
-    
+
     # Use tiktoken GPT-2 BPE encoding (same as base model)
     enc = tiktoken.get_encoding("gpt2")
     tokens = enc.encode_ordinary(data)
-    
+
     # Split using the same ratio as base model (90/10)
     n = len(tokens)
     split_idx = int(n * train_split)
-    
+
     train_tokens = tokens[:split_idx]
     val_tokens = tokens[split_idx:]
-    
+
     print(f"Train tokens: {len(train_tokens):,}")
     print(f"Val tokens: {len(val_tokens):,}")
-    
+
     return train_tokens, val_tokens, enc
 
 
@@ -164,25 +222,25 @@ def create_reward_samples(tokens, model, config, device, num_samples_per_chunk=1
     return samples_x, samples_y
 
 
-def save_reward_dataset(samples_x, samples_y, output_dir, split_name):
-    """Save the reward dataset to binary files."""
+def save_reward_dataset(samples_x, samples_y, output_dir, split_name, tokenization_info=None):
+    """Save the reward dataset to binary files with optional tokenization metadata."""
     os.makedirs(output_dir, exist_ok=True)
-    
+
     # Convert to numpy arrays
     x_array = np.array(samples_x, dtype=np.uint16)  # Token IDs
     y_array = np.array(samples_y, dtype=np.float32)  # Probability distributions
-    
+
     # Save to binary files
     x_path = os.path.join(output_dir, f'{split_name}_x.bin')
     y_path = os.path.join(output_dir, f'{split_name}_y.bin')
-    
+
     x_array.tofile(x_path)
     y_array.tofile(y_path)
-    
+
     print(f"Saved {split_name} data:")
     print(f"  X: {x_path} ({x_array.shape})")
     print(f"  Y: {y_path} ({y_array.shape})")
-    
+
     # Save metadata
     metadata = {
         'num_samples': len(samples_x),
@@ -192,7 +250,15 @@ def save_reward_dataset(samples_x, samples_y, output_dir, split_name):
         'x_dtype': str(x_array.dtype),
         'y_dtype': str(y_array.dtype)
     }
-    
+
+    # Add tokenization information if provided
+    if tokenization_info:
+        metadata.update({
+            'tokenization_method': tokenization_info.method,
+            'vocab_size': tokenization_info.vocab_size,
+            'meta_path': tokenization_info.meta_path or 'None'
+        })
+
     metadata_path = os.path.join(output_dir, f'{split_name}_metadata.txt')
     with open(metadata_path, 'w') as f:
         for key, value in metadata.items():
@@ -200,11 +266,29 @@ def save_reward_dataset(samples_x, samples_y, output_dir, split_name):
 
 
 def main():
-    parser = argparse.ArgumentParser(description='Prepare reward model training data')
+    parser = argparse.ArgumentParser(description='Prepare reward model training data with configurable tokenization')
+
+    # Required parameters
     parser.add_argument('--model_path', type=str, required=True,
                         help='Path to the pre-trained base model checkpoint')
-    parser.add_argument('--data_path', type=str, default='data/shakespeare/input.txt',
-                        help='Path to the raw text data file')
+
+    # Input mode parameters
+    parser.add_argument('--input_mode', choices=['text', 'binary'], default='text',
+                        help='Input mode: text (raw text file) or binary (existing .bin files)')
+    parser.add_argument('--data_path', type=str, default=None,
+                        help='Path to the raw text data file (text mode only)')
+    parser.add_argument('--train_bin', type=str, default=None,
+                        help='Path to existing train.bin file (binary mode only)')
+    parser.add_argument('--val_bin', type=str, default=None,
+                        help='Path to existing val.bin file (binary mode only)')
+
+    # Tokenization configuration
+    parser.add_argument('--tokenization', choices=['auto', 'bpe', 'char'], default='auto',
+                        help='Tokenization method (auto-detect, bpe, or char)')
+    parser.add_argument('--meta_path', type=str, default=None,
+                        help='Path to meta.pkl file for character tokenization')
+
+    # Generation parameters (existing)
     parser.add_argument('--output_dir', type=str, default='data/reward_dataset',
                         help='Output directory for reward dataset')
     parser.add_argument('--train_split', type=float, default=0.9,
@@ -221,57 +305,119 @@ def main():
                         help='Random seed for reproducibility')
     
     args = parser.parse_args()
-    
+
+    # Set up logging
+    logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
+
+    # Handle backward compatibility - if only data_path is provided, use text mode
+    if args.data_path and not args.train_bin and not args.val_bin:
+        if args.input_mode == 'binary':
+            print("Warning: data_path provided but input_mode is binary. Switching to text mode.")
+            args.input_mode = 'text'
+
+    # Create configuration object
+    config_obj = RewardDataConfig(
+        model_path=args.model_path,
+        input_mode=args.input_mode,
+        data_path=args.data_path,
+        train_bin=args.train_bin,
+        val_bin=args.val_bin,
+        tokenization=args.tokenization,
+        meta_path=args.meta_path,
+        output_dir=args.output_dir,
+        train_split=args.train_split,
+        samples_per_chunk=args.samples_per_chunk,
+        temperature=args.temperature,
+        top_k=args.top_k,
+        device=args.device
+    )
+
+    # Validate configuration
+    validator = ConfigurationValidator()
+    if not validator.validate_config(config_obj):
+        validator.print_validation_results(config_obj)
+        suggestions = validator.suggest_fixes(config_obj)
+        if suggestions:
+            print("\nSuggested fixes:")
+            for suggestion in suggestions:
+                print(f"  💡 {suggestion}")
+        return 1
+
+    # Print any warnings
+    if config_obj.get_warnings():
+        validator.print_validation_results(config_obj)
+
     # Set random seeds for reproducibility
     random.seed(args.seed)
     np.random.seed(args.seed)
     torch.manual_seed(args.seed)
     if torch.cuda.is_available():
         torch.cuda.manual_seed(args.seed)
-    
+
     # Determine device
-    if args.device == 'auto':
+    if config_obj.device == 'auto':
         device = 'cuda' if torch.cuda.is_available() else 'cpu'
     else:
-        device = args.device
+        device = config_obj.device
     print(f"Using device: {device}")
-    
-    # Load base model
-    model, config = load_base_model(args.model_path, device)
-    
-    # Load and split data (using same split as base model)
-    train_tokens, val_tokens, tokenizer = load_and_split_data(args.data_path, args.train_split)
-    
-    print(f"\nGenerating reward dataset with block_size={config.block_size}")
-    print(f"Samples per chunk: {args.samples_per_chunk}")
-    print(f"Temperature: {args.temperature}")
-    if args.top_k:
-        print(f"Top-k: {args.top_k}")
-    
-    # Generate training samples from training data
-    print("\n=== Generating Training Samples ===")
-    train_x, train_y = create_reward_samples(
-        train_tokens, model, config, device, 
-        args.samples_per_chunk, args.temperature
-    )
-    
-    # Generate validation samples from validation data
-    print("\n=== Generating Validation Samples ===")
-    val_x, val_y = create_reward_samples(
-        val_tokens, model, config, device,
-        args.samples_per_chunk, args.temperature
-    )
-    
-    # Save datasets
-    print(f"\n=== Saving to {args.output_dir} ===")
-    save_reward_dataset(train_x, train_y, args.output_dir, 'train')
-    save_reward_dataset(val_x, val_y, args.output_dir, 'val')
-    
-    print("\n=== Dataset Creation Complete ===")
-    print(f"Training samples: {len(train_x)}")
-    print(f"Validation samples: {len(val_x)}")
-    print(f"Block size: {config.block_size}")
-    print(f"Output directory: {args.output_dir}")
+
+    try:
+        # Load base model
+        model, model_config = load_base_model(config_obj.model_path, device)
+
+        # Load data using new configurable system
+        train_tokens, val_tokens, tokenization_manager = load_data_with_config(config_obj)
+
+        # Create tokenization info for metadata
+        tokenization_info = TokenizationInfo(
+            method=tokenization_manager.tokenization_type,
+            vocab_size=tokenization_manager.vocab_size,
+            meta_path=tokenization_manager.meta_path
+        )
+
+        print(f"\nGenerating reward dataset with block_size={model_config.block_size}")
+        print(f"Tokenization method: {tokenization_info.method}")
+        print(f"Vocab size: {tokenization_info.vocab_size}")
+        print(f"Samples per chunk: {config_obj.samples_per_chunk}")
+        print(f"Temperature: {config_obj.temperature}")
+        if config_obj.top_k:
+            print(f"Top-k: {config_obj.top_k}")
+
+        # Generate training samples from training data
+        print("\n=== Generating Training Samples ===")
+        train_x, train_y = create_reward_samples(
+            train_tokens, model, model_config, device,
+            config_obj.samples_per_chunk, config_obj.temperature
+        )
+
+        # Generate validation samples from validation data
+        print("\n=== Generating Validation Samples ===")
+        val_x, val_y = create_reward_samples(
+            val_tokens, model, model_config, device,
+            config_obj.samples_per_chunk, config_obj.temperature
+        )
+
+        # Save datasets with tokenization metadata
+        print(f"\n=== Saving to {config_obj.output_dir} ===")
+        save_reward_dataset(train_x, train_y, config_obj.output_dir, 'train', tokenization_info)
+        save_reward_dataset(val_x, val_y, config_obj.output_dir, 'val', tokenization_info)
+
+        print("\n=== Dataset Creation Complete ===")
+        print(f"Training samples: {len(train_x)}")
+        print(f"Validation samples: {len(val_x)}")
+        print(f"Block size: {model_config.block_size}")
+        print(f"Output directory: {config_obj.output_dir}")
+        print(f"Tokenization: {tokenization_info.method} (vocab_size={tokenization_info.vocab_size})")
+
+        return 0
+
+    except (RewardDataPrepError, TokenizationError, DataLoadError) as e:
+        print(f"\n❌ Error: {str(e)}")
+        return 1
+    except Exception as e:
+        print(f"\n❌ Unexpected error: {str(e)}")
+        logging.exception("Unexpected error occurred")
+        return 1
 
 
 if __name__ == '__main__':
