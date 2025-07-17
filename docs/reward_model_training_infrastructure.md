@@ -30,6 +30,10 @@ The reward model training infrastructure consists of three main components:
 - **Configurable Architecture**: Supports configurable reward head hidden dimensions
 - **Efficient Storage**: Binary file format with metadata for fast loading
 - **PyTorch Integration**: Standard Dataset and DataLoader compatibility
+- **🆕 Configurable Tokenization**: Support for both BPE and character-level tokenization with auto-detection
+- **🆕 Flexible Input Modes**: Text mode (raw files) and binary mode (preprocessed files) for optimal performance
+- **🆕 Tokenization Compatibility**: Automatic validation of tokenization consistency across datasets
+- **🆕 Enhanced Error Handling**: Comprehensive validation and user-friendly error messages
 
 ## Architecture
 
@@ -78,16 +82,18 @@ Both modes share the same transformer "trunk":
 
 ### Algorithm Overview
 
-The data preparation process creates training samples by mixing natural and synthetic text:
+The data preparation process creates training samples by mixing natural and synthetic text with configurable tokenization support:
 
-1. **Load Base Model**: Pre-trained model in generator mode for text generation
-2. **Data Splitting**: Split raw text using same ratio as base model (prevents contamination)
-3. **Sample Generation**: For each sequence:
+1. **Tokenization Setup**: Auto-detect or configure tokenization method (BPE or character-level)
+2. **Data Loading**: Load from raw text files or reuse existing binary files for performance
+3. **Load Base Model**: Pre-trained model in generator mode for text generation
+4. **Data Splitting**: Split raw text using same ratio as base model (prevents contamination)
+5. **Sample Generation**: For each sequence:
    - Choose random crossover point K ∈ [1, block_size-1]
    - Take first K tokens from natural data
    - Generate remaining (block_size - K) tokens using base model
    - Create target labels [K/block_size, (block_size-K)/block_size]
-4. **Binary Serialization**: Save sequences and labels to efficient binary format
+6. **Binary Serialization**: Save sequences and labels to efficient binary format with tokenization metadata
 
 ### Data Format
 
@@ -103,7 +109,7 @@ The data preparation process creates training samples by mixing natural and synt
 
 **Metadata Files:**
 - Format: Plain text key-value pairs
-- Content: Dataset dimensions, types, and statistics
+- Content: Dataset dimensions, types, statistics, and tokenization information
 
 ### Directory Structure
 
@@ -121,20 +127,23 @@ data/reward_dataset/
 
 ### RewardDataset Class
 
-The `RewardDataset` class provides PyTorch-compatible dataset functionality:
+The `RewardDataset` class provides PyTorch-compatible dataset functionality with tokenization validation:
 
 ```python
 from reward_dataset_loader import RewardDataset
+from reward_data_config import TokenizationInfo
 
-# Load dataset
-dataset = RewardDataset('data/reward_dataset', split='train')
+# Load dataset with tokenization validation
+expected_tokenization = TokenizationInfo(method='char', vocab_size=65, meta_path='data/shakespeare_char/meta.pkl')
+dataset = RewardDataset('data/reward_dataset', split='train', expected_tokenization_info=expected_tokenization)
 
 # Access samples
 x, y = dataset[0]  # x: LongTensor, y: FloatTensor
 
-# Get statistics
+# Get statistics including tokenization info
 stats = dataset.get_stats()
 print(f"Dataset size: {len(dataset)}")
+print(f"Tokenization: {stats['tokenization_method']} (vocab_size={stats['vocab_size']})")
 print(f"Probability sums: {stats['prob_sum_mean']:.6f}")
 ```
 
@@ -142,12 +151,15 @@ print(f"Probability sums: {stats['prob_sum_mean']:.6f}")
 
 ```python
 from reward_dataset_loader import create_reward_dataloaders
+from reward_data_config import TokenizationInfo
 
-# Create train and validation loaders
+# Create train and validation loaders with tokenization validation
+expected_tokenization = TokenizationInfo(method='bpe', vocab_size=50257)
 train_loader, val_loader = create_reward_dataloaders(
     data_dir='data/reward_dataset',
     batch_size=32,
-    num_workers=4
+    num_workers=4,
+    expected_tokenization_info=expected_tokenization
 )
 
 # Use in training loop
@@ -207,23 +219,51 @@ for epoch in range(num_epochs):
 
 ### prepare_reward_data.py
 
-Generate reward model training datasets from any base model and text corpus.
+Generate reward model training datasets from any base model and text corpus with configurable tokenization support.
 
 #### Basic Usage
 
 ```bash
+# Text mode with BPE tokenization (default, backward compatible)
 python prepare_reward_data.py \
     --model_path checkpoints/base_model.pt \
     --data_path data/shakespeare/input.txt \
     --output_dir data/reward_dataset
+
+# Text mode with character tokenization
+python prepare_reward_data.py \
+    --model_path checkpoints/char_model.pt \
+    --input_mode text \
+    --data_path data/shakespeare_char/input.txt \
+    --tokenization char \
+    --meta_path data/shakespeare_char/meta.pkl
+
+# Binary mode (reuse existing preprocessed files for performance)
+python prepare_reward_data.py \
+    --model_path checkpoints/base_model.pt \
+    --input_mode binary \
+    --train_bin data/shakespeare/train.bin \
+    --val_bin data/shakespeare/val.bin
 ```
 
 #### Full Parameter Reference
 
 ```bash
 python prepare_reward_data.py \
+    # Required parameters
     --model_path PATH           # Path to pre-trained base model checkpoint (required)
-    --data_path PATH            # Path to raw text data file (default: data/shakespeare/input.txt)
+
+    # Input mode parameters
+    --input_mode {text,binary}  # Input mode: text (raw files) or binary (preprocessed) (default: text)
+    --data_path PATH            # Path to raw text data file (text mode only)
+    --train_bin PATH            # Path to existing train.bin file (binary mode only)
+    --val_bin PATH              # Path to existing val.bin file (binary mode only)
+
+    # Tokenization configuration
+    --tokenization {auto,bpe,char}  # Tokenization method (default: auto)
+    --meta_path PATH            # Path to meta.pkl file for character tokenization
+
+    # Generation parameters (existing)
     --output_dir PATH           # Output directory for reward dataset (default: data/reward_dataset)
     --train_split FLOAT         # Train/validation split ratio (default: 0.9)
     --samples_per_chunk INT     # Samples per data chunk (default: 10)
@@ -238,8 +278,20 @@ python prepare_reward_data.py \
 **Required Parameters:**
 - `--model_path`: Path to the base model checkpoint (.pt file) used for generating synthetic text
 
+**Input Mode Parameters:**
+- `--input_mode`: Choose between 'text' (raw text files) or 'binary' (preprocessed files)
+- `--data_path`: Raw text file to use as source of natural text (text mode only)
+- `--train_bin`: Path to existing train.bin file (binary mode only)
+- `--val_bin`: Path to existing val.bin file (binary mode only)
+
+**Tokenization Parameters:**
+- `--tokenization`: Method for tokenization ('auto', 'bpe', 'char')
+  - 'auto': Automatically detect based on file structure
+  - 'bpe': Use tiktoken GPT-2 BPE encoding
+  - 'char': Use character-level tokenization from meta.pkl
+- `--meta_path`: Path to meta.pkl file (required for character tokenization)
+
 **Data Parameters:**
-- `--data_path`: Raw text file to use as source of natural text
 - `--output_dir`: Directory where binary dataset files will be saved
 - `--train_split`: Fraction of data used for training (must match base model's split)
 
@@ -254,18 +306,39 @@ python prepare_reward_data.py \
 
 #### Example Commands
 
-**Basic dataset generation:**
+**Basic dataset generation (BPE tokenization):**
 ```bash
 python prepare_reward_data.py \
     --model_path checkpoints/shakespeare_model.pt \
     --data_path data/shakespeare/input.txt
 ```
 
-**High-quality dataset with more samples:**
+**Character tokenization with explicit configuration:**
+```bash
+python prepare_reward_data.py \
+    --model_path checkpoints/char_model.pt \
+    --input_mode text \
+    --data_path data/shakespeare_char/input.txt \
+    --tokenization char \
+    --meta_path data/shakespeare_char/meta.pkl
+```
+
+**Binary mode for faster processing:**
 ```bash
 python prepare_reward_data.py \
     --model_path checkpoints/base_model.pt \
-    --data_path data/openwebtext/train.txt \
+    --input_mode binary \
+    --train_bin data/shakespeare/train.bin \
+    --val_bin data/shakespeare/val.bin \
+    --output_dir data/reward_dataset_fast
+```
+
+**Auto-detection with high-quality settings:**
+```bash
+python prepare_reward_data.py \
+    --model_path checkpoints/base_model.pt \
+    --data_path data/shakespeare_char \
+    --tokenization auto \
     --output_dir data/reward_dataset_v2 \
     --samples_per_chunk 50 \
     --temperature 0.8 \
@@ -283,7 +356,7 @@ python prepare_reward_data.py \
 
 ### reward_dataset_loader.py
 
-Utility script for inspecting and testing reward datasets.
+Utility script for inspecting and testing reward datasets with tokenization compatibility validation.
 
 #### Dataset Information
 
@@ -294,8 +367,9 @@ python reward_dataset_loader.py
 This will:
 - Display comprehensive dataset statistics
 - Show probability distribution analysis
+- Display tokenization information and compatibility
 - Test DataLoader functionality
-- Validate data integrity
+- Validate data integrity and tokenization consistency
 
 ## Step-by-Step Guide
 
@@ -323,13 +397,19 @@ python prepare_reward_data.py \
 
 **Expected Output:**
 ```
+Configuration validation passed
+Using device: cuda
 Loading base model from logs/model_checkpoint.pt
 Loaded model with 10.65M parameters
-Loading data from data/shakespeare/input.txt
-Train tokens: 900,000
-Val tokens: 100,000
+Data loaded successfully:
+  Tokenization: bpe
+  Vocab size: 50257
+  Train tokens: 900,000
+  Val tokens: 100,000
 
 Generating reward dataset with block_size=1024
+Tokenization method: bpe
+Vocab size: 50257
 Samples per chunk: 20
 Temperature: 1.0
 
@@ -354,6 +434,7 @@ Training samples: 17,560
 Validation samples: 1,940
 Block size: 1024
 Output directory: data/reward_dataset
+Tokenization: bpe (vocab_size=50257)
 ```
 
 ### Step 3: Inspect Dataset Quality
@@ -371,6 +452,7 @@ python reward_dataset_loader.py
 TRAIN SET:
   Samples: 17,560
   Block size: 1024
+  Tokenization: bpe (vocab_size=50257)
   Y statistics:
     Min: [0.0009766 0.0009766]
     Max: [0.999023 0.999023]
@@ -384,6 +466,7 @@ TRAIN SET:
 VAL SET:
   Samples: 1,940
   Block size: 1024
+  Tokenization: bpe (vocab_size=50257)
   Y statistics:
     Min: [0.0009766 0.0009766]
     Max: [0.999023 0.999023]
@@ -393,6 +476,8 @@ VAL SET:
     Min: 1.000000
     Max: 1.000000
     Mean: 1.000000
+
+✅ Tokenization consistency: Both splits use bpe with vocab_size=50257
 
 === DataLoader Test ===
 Train batches: 4,390
