@@ -343,51 +343,101 @@ def get_lr(it):
     return (min_lr + coeff * (learning_rate - min_lr)) * lr_multiplier
 
 # Training Orchestrator - Execute Operation Function
-def execute_operation(op):
-    """Execute a scaling operation and update global state"""
+def execute_operation(op, trigger_reason, current_val_loss, iter_num):
+    """Execute a scaling operation and update global state with comprehensive logging"""
     global lr_multiplier, batch_size_multiplier, grad_accum_multiplier, lr_schedule_offset
-    global gradient_accumulation_steps, batch_size
+    global gradient_accumulation_steps, batch_size, training_logger
 
     op_name = op['name']
     op_value = op['value']
 
     print(f"Executing operation: {op_name} with value: {op_value}")
 
+    # Log operation start to file
+    training_logger.log_operation_start(iter_num, op_name, op_value, trigger_reason, current_val_loss,
+                                      op['trigger_loss'], op['max_wait_iters'])
+
     if op_name == 'change_lr':
         if op_value <= 0:
-            print(f"Error: Invalid lr multiplier {op_value}, must be positive")
+            error_msg = f"Invalid lr multiplier {op_value}, must be positive"
+            print(f"Error: {error_msg}")
+            training_logger.log_operation_error(iter_num, op_name, error_msg)
             return False
+
+        old_lr_multiplier = lr_multiplier
         lr_multiplier *= op_value
-        print(f"Learning rate multiplier updated to: {lr_multiplier}")
+        print(f"Learning rate multiplier updated from {old_lr_multiplier:.4f} to {lr_multiplier:.4f}")
+
+        # Log detailed change to file
+        training_logger.log_operation_success(iter_num, op_name, {
+            'old_lr_multiplier': old_lr_multiplier,
+            'new_lr_multiplier': lr_multiplier,
+            'multiplier_applied': op_value
+        })
 
     elif op_name == 'change_batch_size':
         if op_value <= 0:
-            print(f"Error: Invalid batch size multiplier {op_value}, must be positive")
+            error_msg = f"Invalid batch size multiplier {op_value}, must be positive"
+            print(f"Error: {error_msg}")
+            training_logger.log_operation_error(iter_num, op_name, error_msg)
             return False
+
         old_batch_size = batch_size
+        old_batch_size_multiplier = batch_size_multiplier
         batch_size_multiplier *= op_value
         # Update the actual batch_size variable
-        new_batch_size = max(1, int(batch_size * batch_size_multiplier))
-        print(f"Batch size updated from {old_batch_size} to {new_batch_size} (multiplier: {batch_size_multiplier})")
+        new_batch_size = max(1, int(batch_size * op_value))
+        print(f"Batch size updated from {old_batch_size} to {new_batch_size} (multiplier: {old_batch_size_multiplier:.4f} → {batch_size_multiplier:.4f})")
         batch_size = new_batch_size
+
+        # Log detailed change to file
+        training_logger.log_operation_success(iter_num, op_name, {
+            'old_batch_size': old_batch_size,
+            'new_batch_size': new_batch_size,
+            'old_multiplier': old_batch_size_multiplier,
+            'new_multiplier': batch_size_multiplier,
+            'multiplier_applied': op_value
+        })
 
     elif op_name == 'change_grad_accum':
         if op_value <= 0:
-            print(f"Error: Invalid grad accum multiplier {op_value}, must be positive")
+            error_msg = f"Invalid grad accum multiplier {op_value}, must be positive"
+            print(f"Error: {error_msg}")
+            training_logger.log_operation_error(iter_num, op_name, error_msg)
             return False
+
         old_grad_accum = gradient_accumulation_steps
+        old_grad_accum_multiplier = grad_accum_multiplier
         grad_accum_multiplier *= op_value
         # Update the actual gradient_accumulation_steps variable
-        new_grad_accum = max(1, int(gradient_accumulation_steps * grad_accum_multiplier))
-        print(f"Gradient accumulation steps updated from {old_grad_accum} to {new_grad_accum} (multiplier: {grad_accum_multiplier})")
+        new_grad_accum = max(1, int(gradient_accumulation_steps * op_value))
+        print(f"Gradient accumulation steps updated from {old_grad_accum} to {new_grad_accum} (multiplier: {old_grad_accum_multiplier:.4f} → {grad_accum_multiplier:.4f})")
         gradient_accumulation_steps = new_grad_accum
 
+        # Log detailed change to file
+        training_logger.log_operation_success(iter_num, op_name, {
+            'old_grad_accum_steps': old_grad_accum,
+            'new_grad_accum_steps': new_grad_accum,
+            'old_multiplier': old_grad_accum_multiplier,
+            'new_multiplier': grad_accum_multiplier,
+            'multiplier_applied': op_value
+        })
+
     elif op_name == 'reset_lr_schedule':
+        old_lr_schedule_offset = lr_schedule_offset
         lr_schedule_offset = iter_num
-        print(f"Learning rate schedule reset at iteration {iter_num}")
+        print(f"Learning rate schedule reset at iteration {iter_num} (offset: {old_lr_schedule_offset} → {lr_schedule_offset})")
+
+        # Log detailed change to file
+        training_logger.log_operation_success(iter_num, op_name, {
+            'old_lr_schedule_offset': old_lr_schedule_offset,
+            'new_lr_schedule_offset': lr_schedule_offset
+        })
 
     else:
-        print(f"Warning: Unknown operation '{op_name}' - skipping")
+        error_msg = f"Unknown operation '{op_name}'"
+        print(f"Warning: {error_msg} - skipping")
+        training_logger.log_operation_error(iter_num, op_name, error_msg)
         return False
 
     return True
@@ -451,14 +501,15 @@ while True:
                 timeout_triggered = (iter_num - iter_of_last_op) >= next_op['max_wait_iters']
 
                 if loss_triggered or timeout_triggered:
+                    trigger_reason = 'Loss threshold' if loss_triggered else 'Timeout'
                     print(f"\n=== SCALING OPERATION TRIGGERED ===")
                     print(f"Operation: {next_op['name']}")
-                    print(f"Trigger reason: {'Loss threshold' if loss_triggered else 'Timeout'}")
+                    print(f"Trigger reason: {trigger_reason}")
                     print(f"Current val loss: {current_val_loss:.4f}, Trigger loss: {next_op['trigger_loss']:.4f}")
                     print(f"Iterations since last op: {iter_num - iter_of_last_op}, Max wait: {next_op['max_wait_iters']}")
 
-                    # Execute the operation
-                    if execute_operation(next_op):
+                    # Execute the operation with comprehensive logging
+                    if execute_operation(next_op, trigger_reason, current_val_loss, iter_num):
                         # Remove the executed operation from the schedule
                         scaling_schedule.pop(0)
                         iter_of_last_op = iter_num
@@ -467,7 +518,12 @@ while True:
                         if next_op['reevaluate']:
                             print("Re-evaluating validation loss after operation...")
                             losses = estimate_loss()
-                            print(f"New val loss after operation: {losses['val']:.4f}")
+                            new_val_loss = losses['val']
+                            print(f"New val loss after operation: {new_val_loss:.4f}")
+
+                            # Log re-evaluation to file
+                            training_logger.log_operation_reevaluation(iter_num, next_op['name'],
+                                                                     current_val_loss, new_val_loss)
 
                             # Update logging with new loss
                             training_logger.log_step(iter_num, losses['train'], losses['val'])

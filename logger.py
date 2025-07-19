@@ -102,13 +102,73 @@ class TrainingLogger:
     def log_step(self, iter_num, train_loss, val_loss):
         """
         Log a training step with losses.
-        
+
         Args:
             iter_num (int): Current iteration number
             train_loss (float): Training loss
             val_loss (float): Validation loss
         """
         message = f"step {iter_num}: train loss {train_loss:.4f}, val loss {val_loss:.4f}"
+        self.log(message)
+
+    def log_operation_start(self, iter_num, op_name, op_value, trigger_reason, current_val_loss,
+                           trigger_loss, max_wait_iters):
+        """
+        Log the start of a scaling operation.
+
+        Args:
+            iter_num (int): Current iteration number
+            op_name (str): Name of the operation
+            op_value: Value/parameter for the operation
+            trigger_reason (str): Reason the operation was triggered
+            current_val_loss (float): Current validation loss
+            trigger_loss (float): Trigger threshold loss
+            max_wait_iters (int): Maximum wait iterations
+        """
+        message = (f"OPERATION_START: {op_name} | iter={iter_num} | value={op_value} | "
+                  f"trigger={trigger_reason} | val_loss={current_val_loss:.4f} | "
+                  f"trigger_loss={trigger_loss:.4f} | max_wait={max_wait_iters}")
+        self.log(message)
+
+    def log_operation_success(self, iter_num, op_name, details):
+        """
+        Log successful completion of a scaling operation.
+
+        Args:
+            iter_num (int): Current iteration number
+            op_name (str): Name of the operation
+            details (dict): Dictionary containing operation-specific details
+        """
+        details_str = " | ".join([f"{k}={v}" for k, v in details.items()])
+        message = f"OPERATION_SUCCESS: {op_name} | iter={iter_num} | {details_str}"
+        self.log(message)
+
+    def log_operation_error(self, iter_num, op_name, error_msg):
+        """
+        Log an error during operation execution.
+
+        Args:
+            iter_num (int): Current iteration number
+            op_name (str): Name of the operation
+            error_msg (str): Error message
+        """
+        message = f"OPERATION_ERROR: {op_name} | iter={iter_num} | error={error_msg}"
+        self.log(message)
+
+    def log_operation_reevaluation(self, iter_num, op_name, old_val_loss, new_val_loss):
+        """
+        Log validation loss re-evaluation after an operation.
+
+        Args:
+            iter_num (int): Current iteration number
+            op_name (str): Name of the operation that triggered re-evaluation
+            old_val_loss (float): Validation loss before operation
+            new_val_loss (float): Validation loss after operation
+        """
+        loss_change = new_val_loss - old_val_loss
+        message = (f"OPERATION_REEVALUATION: {op_name} | iter={iter_num} | "
+                  f"old_val_loss={old_val_loss:.4f} | new_val_loss={new_val_loss:.4f} | "
+                  f"change={loss_change:+.4f}")
         self.log(message)
         
     def close(self):
