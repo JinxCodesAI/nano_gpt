@@ -9,4 +9,9 @@ __pycache__/
 *.pyc
 input.txt
 env/
+wandb/
+_wandb/
 venv/
+logs/
+CLAUDE.md
+.claude/

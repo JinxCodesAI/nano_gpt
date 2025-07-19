@@ -1,0 +1,100 @@
+[
+  {
+    "name": "change_lr",
+    "value": 0.3,
+    "trigger_loss": 7.2,
+    "max_wait_iters": 200,
+    "reevaluate": false
+  },
+  {
+    "name": "change_eval_interval",
+    "value": 2.5,
+    "trigger_loss": 7.1,
+    "max_wait_iters": 500,
+    "reevaluate": false
+  },
+  {
+    "name": "change_eval_iters",
+    "value": 2.5,
+    "trigger_loss":  6.9,
+    "max_wait_iters": 500,
+    "reevaluate": false
+  },
+  {
+    "name": "change_grad_accum",
+    "value": 2.5,
+    "trigger_loss": 6.5,
+    "max_wait_iters": 1200,
+    "reevaluate": false
+  },
+  {
+    "name": "change_lr",
+    "value": 0.35,
+    "trigger_loss": 6.0,
+    "max_wait_iters": 2500,
+    "reevaluate": false
+  },
+  {
+    "name": "change_eval_interval",
+    "value": 5.0,
+    "trigger_loss": 5.7,
+    "max_wait_iters": 3000,
+    "reevaluate": false
+  },
+  {
+    "name": "change_eval_iters",
+    "value": 2.5,
+    "trigger_loss": 5.6,
+    "max_wait_iters": 3500,
+    "reevaluate": false
+  },
+  {
+    "name": "change_grad_accum",
+    "value": 2.5,
+    "trigger_loss": 5.0,
+    "max_wait_iters": 5000,
+    "reevaluate": false
+  },
+  {
+    "name": "reset_lr_schedule",
+    "value": null,
+    "trigger_loss": 4.9,
+    "max_wait_iters": 1000,
+    "reevaluate": false
+  },
+  {
+    "name": "change_eval_interval",
+    "value": 2.0,
+    "trigger_loss": 4.5,
+    "max_wait_iters": 20000,
+    "reevaluate": false
+  },
+  {
+    "name": "change_eval_iters",
+    "value": 2.0,
+    "trigger_loss": 4.4,
+    "max_wait_iters": 1000,
+    "reevaluate": false
+  },
+  {
+    "name": "change_lr",
+    "value": 0.5,
+    "trigger_loss": 4.2,
+    "max_wait_iters": 40000,
+    "reevaluate": false
+  },
+  {
+    "name": "change_lr",
+    "value": 0.5,
+    "trigger_loss": 3.5,
+    "max_wait_iters": 80000,
+    "reevaluate": false
+  },
+  {
+    "name": "change_lr",
+    "value": 0.5,
+    "trigger_loss": 3.1,
+    "max_wait_iters": 150000,
+    "reevaluate": false
+  }
+]

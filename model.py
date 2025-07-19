@@ -9,11 +9,77 @@ https://github.com/huggingface/transformers/blob/main/src/transformers/models/gp
 
 import math
 import inspect
+import copy
 from dataclasses import dataclass
 
 import torch
 import torch.nn as nn
 from torch.nn import functional as F
+
+class LoRAEmbedding(nn.Module):
+    """LoRA adapter for embedding layers"""
+    
+    def __init__(self, vocab_size, n_embd, rank, alpha):
+        super().__init__()
+        self.main_weight = nn.Embedding(vocab_size, n_embd)
+        self.lora_A = nn.Embedding(vocab_size, rank) if rank > 0 else None
+        self.lora_B = nn.Linear(rank, n_embd, bias=False) if rank > 0 else None
+        self.rank = rank
+        self.alpha = alpha
+        
+        if self.rank > 0:
+            self.main_weight.requires_grad_(False)
+            nn.init.normal_(self.lora_A.weight, std=0.02)
+            nn.init.zeros_(self.lora_B.weight)
+
+    def forward(self, idx):
+        main_output = self.main_weight(idx)
+        if self.rank == 0 or self.lora_A is None or self.lora_B is None:
+            return main_output
+        lora_output = self.lora_B(self.lora_A(idx))
+        return main_output + (self.alpha / self.rank) * lora_output
+
+    def merge_and_reset(self):
+        if self.rank == 0 or self.lora_A is None or self.lora_B is None:
+            return
+        # Calculate W_0 + B @ A
+        lora_update = self.lora_B.weight.t() @ self.lora_A.weight
+        self.main_weight.weight.data += lora_update.t() * (self.alpha / self.rank)
+        # Reset LoRA weights
+        nn.init.normal_(self.lora_A.weight, std=0.02)
+        nn.init.zeros_(self.lora_B.weight)
+
+class LoRALinear(nn.Module):
+    """LoRA adapter for linear layers"""
+    
+    def __init__(self, in_features, out_features, rank, alpha, bias=True):
+        super().__init__()
+        self.main_weight = nn.Linear(in_features, out_features, bias=bias)
+        self.lora_A = nn.Linear(in_features, rank, bias=False) if rank > 0 else None
+        self.lora_B = nn.Linear(rank, out_features, bias=False) if rank > 0 else None
+        self.rank = rank
+        self.alpha = alpha
+        
+        if self.rank > 0:
+            self.main_weight.requires_grad_(False)
+            nn.init.kaiming_uniform_(self.lora_A.weight, a=math.sqrt(5))
+            nn.init.zeros_(self.lora_B.weight)
+
+    def forward(self, x):
+        main_output = self.main_weight(x)
+        if self.rank == 0 or self.lora_A is None or self.lora_B is None:
+            return main_output
+        lora_output = self.lora_B(self.lora_A(x))
+        return main_output + (self.alpha / self.rank) * lora_output
+
+    def merge_and_reset(self):
+        if self.rank == 0 or self.lora_A is None or self.lora_B is None:
+            return
+        # Calculate W_0 + B @ A
+        self.main_weight.weight.data += self.lora_B.weight @ self.lora_A.weight * (self.alpha / self.rank)
+        # Reset LoRA weights
+        nn.init.kaiming_uniform_(self.lora_A.weight, a=math.sqrt(5))
+        nn.init.zeros_(self.lora_B.weight)
 
 class RotaryPositionalEmbedding(nn.Module):
     """ Rotary Position Embedding (RoPE) implementation """
@@ -195,6 +261,12 @@ class GPTConfig:
     use_rotary_embeddings: bool = False
     rotary_base: float = 10000.0
     rotary_max_position_embeddings: int = 2048
+    
+    # LoRA parameters
+    embedding_mode: str = 'standard' # 'standard' or 'lora'
+    embedding_rank: int = 0 # rank for embedding LoRA, 0 disables
+    attn_lora_rank: int = 0 # rank for attention LoRA, 0 disables
+    lora_alpha: float = 1.0 # scaling factor for LoRA layers
 
 class GPT(nn.Module):
 
@@ -521,3 +593,120 @@ class GPT(nn.Module):
             idx = torch.cat((idx, idx_next), dim=1)
 
         return idx
+
+    def stack_layers(self, num_copies):
+        """
+        Stack layers by duplicating the existing layers num_copies times.
+        This implements the layer stacking operation for dynamic model growth.
+        """
+        if num_copies <= 1:
+            return
+        
+        print(f"Stacking layers: current depth {self.config.n_layer}, creating {self.config.n_layer * num_copies} total layers.")
+        original_layers = self.transformer.h
+        new_layers = nn.ModuleList()
+        
+        for _ in range(num_copies):
+            for layer in original_layers:
+                new_layers.append(copy.deepcopy(layer))
+        
+        self.transformer.h = new_layers
+        self.config.n_layer = len(new_layers)
+        print(f"Model now has {self.config.n_layer} layers.")
+
+    def widen_mlp(self, scale_factor):
+        """
+        Widen MLP layers using Net2WiderNet algorithm with noise injection.
+        This implements the MLP widening operation for dynamic model growth.
+        """
+        if scale_factor <= 1:
+            return
+            
+        print(f"Widening MLP layers by a factor of {scale_factor}.")
+        new_hidden_dim = 0
+        
+        for block in self.transformer.h:
+            mlp = block.mlp
+            w_fc, b_fc, w_proj = mlp.c_fc.weight, mlp.c_fc.bias, mlp.c_proj.weight
+            original_hidden_dim = w_fc.shape[0]
+            new_hidden_dim = int(original_hidden_dim * scale_factor)
+
+            new_c_fc = nn.Linear(self.config.n_embd, new_hidden_dim, bias=self.config.bias)
+            new_c_proj = nn.Linear(new_hidden_dim, self.config.n_embd, bias=self.config.bias)
+            
+            # Net2WiderNet mapping
+            mapping = torch.randint(0, original_hidden_dim, (new_hidden_dim,), device=w_fc.device)
+            mapping[:original_hidden_dim] = torch.arange(original_hidden_dim)
+            
+            # Copy weights for the first linear layer
+            new_c_fc.weight.data.copy_(w_fc.data[mapping])
+            if b_fc is not None:
+                new_c_fc.bias.data.copy_(b_fc.data[mapping])
+            
+            # CRITICAL: Break symmetry for new neurons by adding small noise
+            if new_hidden_dim > original_hidden_dim:
+                noise = torch.randn_like(new_c_fc.weight.data[original_hidden_dim:]) * 1e-4
+                new_c_fc.weight.data[original_hidden_dim:] += noise
+            
+            # Scale weights for the output projection layer
+            replication_factors = torch.zeros(original_hidden_dim, device=w_fc.device)
+            for i in range(original_hidden_dim):
+                replication_factors[i] = (mapping == i).sum()
+            
+            new_c_proj.weight.data.copy_(w_proj.data[:, mapping])
+            new_c_proj.weight.data /= replication_factors[mapping].view(1, -1)
+            
+            mlp.c_fc, mlp.c_proj = new_c_fc, new_c_proj
+            
+        self.config.n_hidden = new_hidden_dim
+        print(f"MLP hidden dimension widened to {new_hidden_dim}.")
+
+    def resize_lora_rank(self, new_rank_divisor):
+        """
+        Resize attention LoRA rank by changing the rank divisor.
+        """
+        if self.config.attn_lora_rank == 0:
+            print("Cannot resize LoRA rank: attention LoRA is disabled")
+            return
+            
+        new_rank = self.config.n_embd // new_rank_divisor if new_rank_divisor > 0 else 0
+        print(f"Resizing attention LoRA rank to {new_rank} (divisor: {new_rank_divisor})")
+        
+        # For now, this is a placeholder - full implementation would require
+        # careful state transfer between different rank LoRA layers
+        # This would involve merging current LoRA weights and re-initializing
+        # with new rank while preserving the learned function
+        print("LoRA rank resizing not fully implemented yet")
+
+    def resize_embedding_rank(self, new_rank_divisor):
+        """
+        Resize embedding LoRA rank by changing the rank divisor.
+        """
+        if self.config.embedding_rank == 0:
+            print("Cannot resize embedding LoRA rank: embedding LoRA is disabled")
+            return
+            
+        new_rank = self.config.n_embd // new_rank_divisor if new_rank_divisor > 0 else 0
+        print(f"Resizing embedding LoRA rank to {new_rank} (divisor: {new_rank_divisor})")
+        
+        # Placeholder - similar to resize_lora_rank
+        print("Embedding LoRA rank resizing not fully implemented yet")
+
+    def merge_lora_weights(self):
+        """
+        Merge LoRA weights into the main weights and reset LoRA adapters.
+        """
+        print("Merging LoRA weights into main weights...")
+        
+        # Merge embedding LoRA if it exists
+        if hasattr(self.transformer.wte, 'merge_and_reset'):
+            self.transformer.wte.merge_and_reset()
+            
+        # Merge attention LoRA weights in all blocks
+        for block in self.transformer.h:
+            if hasattr(block.attn.c_attn, 'merge_and_reset'):
+                block.attn.c_attn.merge_and_reset()
+            if hasattr(block.attn.c_proj, 'merge_and_reset'):
+                block.attn.c_proj.merge_and_reset()
+        
+        print("LoRA weights merged and reset.")

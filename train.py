@@ -1,21 +1,3 @@
-"""
-This training script can be run both on a single gpu in debug mode,
-and also in a larger training run with distributed data parallel (ddp).
-
-To run on a single GPU, example:
-$ python train.py --batch_size=32 --compile=False
-
-To run with DDP on 4 gpus on 1 node, example:
-$ torchrun --standalone --nproc_per_node=4 train.py
-
-To run with DDP on 4 gpus across 2 nodes, example:
-- Run on the first (master) node with example IP 123.456.123.456:
-$ torchrun --nproc_per_node=8 --nnodes=2 --node_rank=0 --master_addr=123.456.123.456 --master_port=1234 train.py
-- Run on the worker node:
-$ torchrun --nproc_per_node=8 --nnodes=2 --node_rank=1 --master_addr=123.456.123.456 --master_port=1234 train.py
-(If your cluster does not have Infiniband interconnect prepend NCCL_IB_DISABLE=1)
-"""
-
 import os
 import time
 import random
@@ -111,7 +93,6 @@ def load_scaling_schedule(file_path):
     """Load scaling schedule from YAML or JSON file"""
     if not file_path or not os.path.exists(file_path):
         return []
-
     try:
         with open(file_path, 'r') as f:
             if file_path.endswith('.yaml') or file_path.endswith('.yml'):
@@ -121,21 +102,16 @@ def load_scaling_schedule(file_path):
             else:
                 print(f"Warning: Unknown file format for scaling schedule: {file_path}")
                 return []
-
-        # Validate schedule format
         if not isinstance(schedule, list):
             print(f"Warning: Scaling schedule must be a list, got {type(schedule)}")
             return []
-
         for i, op in enumerate(schedule):
             required_keys = ['name', 'value', 'trigger_loss', 'max_wait_iters', 'reevaluate']
             if not all(key in op for key in required_keys):
                 print(f"Warning: Operation {i} missing required keys: {required_keys}")
                 return []
-
         print(f"Loaded scaling schedule with {len(schedule)} operations from {file_path}")
         return schedule
-
     except Exception as e:
         print(f"Error loading scaling schedule from {file_path}: {e}")
         return []
@@ -163,8 +139,6 @@ if ddp:
     torch.cuda.set_device(device)
     master_process = ddp_rank == 0 # this process will do logging, checkpointing etc.
     seed_offset = ddp_rank # each process gets a different seed
-    # world_size number of processes will be training simultaneously, so we can scale
-    # down the desired gradient accumulation iterations per process proportionally
     assert gradient_accumulation_steps % ddp_world_size == 0
     gradient_accumulation_steps //= ddp_world_size
 else:
@@ -182,7 +156,6 @@ torch.manual_seed(1337 + seed_offset)
 torch.backends.cuda.matmul.allow_tf32 = True # allow tf32 on matmul
 torch.backends.cudnn.allow_tf32 = True # allow tf32 on cudnn
 device_type = 'cuda' if 'cuda' in device else 'cpu' # for later use in torch.autocast
-# note: float16 data type will automatically use a GradScaler
 ptdtype = {'float32': torch.float32, 'bfloat16': torch.bfloat16, 'float16': torch.float16}[dtype]
 ctx = nullcontext() if device_type == 'cpu' else torch.amp.autocast(device_type=device_type, dtype=ptdtype)
 
@@ -192,31 +165,19 @@ num_train_shards = 103
 train_shard_filenames = [f"fineweb_train_{i:06d}.bin" for i in range(1, num_train_shards + 1)]
 
 def get_batch(split):
-    # We recreate np.memmap every batch to avoid a memory leak, as per
-    # https://stackoverflow.com/questions/45132940/numpy-memmap-memory-usage-want-to-iterate-once/61472122#61472122
     if split == 'train':
-        # --- Modified 'train' logic ---
-        # 1. Randomly select one shard filename from the list.
         shard_name = random.choice(train_shard_filenames)
         shard_path = os.path.join(data_dir, shard_name)
-        
-        # 2. Memory-map the randomly chosen shard.
         data = np.memmap(shard_path, dtype=np.uint16, mode='r')
     else:
-        # --- Unchanged 'val' logic ---
-        # The validation logic remains the same, using the single 'val.bin' file.
         data = np.memmap(os.path.join(data_dir, 'val.bin'), dtype=np.uint16, mode='r')
-    
     ix = torch.randint(len(data) - block_size, (batch_size,))
     x = torch.stack([torch.from_numpy((data[i:i+block_size]).astype(np.int64)) for i in ix])
     y = torch.stack([torch.from_numpy((data[i+1:i+1+block_size]).astype(np.int64)) for i in ix])
-    
     if device_type == 'cuda':
-        # pin arrays x,y, which allows us to move them to GPU asynchronously (non_blocking=True)
         x, y = x.pin_memory().to(device, non_blocking=True), y.pin_memory().to(device, non_blocking=True)
     else:
         x, y = x.to(device), y.to(device)
-        
     return x, y
 
 # init these up here, can override if init_from='resume' (i.e. from a checkpoint)
@@ -237,32 +198,22 @@ model_args = dict(n_layer=n_layer, n_head=n_head, n_embd=n_embd, block_size=bloc
                   bias=bias, vocab_size=None, dropout=dropout, n_hidden=n_hidden,
                   use_rotary_embeddings=use_rotary_embeddings,
                   rotary_base=rotary_base,
-                  rotary_max_position_embeddings=rotary_max_position_embeddings) # start with model_args from command line
+                  rotary_max_position_embeddings=rotary_max_position_embeddings)
 if init_from == 'scratch':
-    # init a new model from scratch
     print("Initializing a new model from scratch")
-    # determine the vocab size we'll use for from-scratch training
-    if meta_vocab_size is None:
-        print("defaulting to vocab_size of GPT-2 to 50304 (50257 rounded up for efficiency)")
     model_args['vocab_size'] = meta_vocab_size if meta_vocab_size is not None else 50304
     gptconf = GPTConfig(**model_args)
     model = GPT(gptconf)
 elif init_from == 'resume':
     print(f"Resuming training from {out_dir}")
-    # resume training from a checkpoint.
     ckpt_path = os.path.join(out_dir, 'ckpt.pt')
     checkpoint = torch.load(ckpt_path, map_location=device)
     checkpoint_model_args = checkpoint['model_args']
-    # force these config attributes to be equal otherwise we can't even resume training
-    # the rest of the attributes (e.g. dropout) can stay as desired from command line
     for k in ['n_layer', 'n_head', 'n_embd', 'block_size', 'bias', 'vocab_size', 'n_hidden']:
         model_args[k] = checkpoint_model_args[k]
-    # create the model
     gptconf = GPTConfig(**model_args)
     model = GPT(gptconf)
     state_dict = checkpoint['model']
-    # fix the keys of the state dictionary :(
-    # honestly no idea how checkpoints sometimes get this prefix, have to debug more
     unwanted_prefix = '_orig_mod.'
     for k,v in list(state_dict.items()):
         if k.startswith(unwanted_prefix):
@@ -272,50 +223,39 @@ elif init_from == 'resume':
     best_val_loss = checkpoint['best_val_loss']
 elif init_from.startswith('gpt2'):
     print(f"Initializing from OpenAI GPT-2 weights: {init_from}")
-    # initialize from OpenAI GPT-2 weights
     override_args = dict(dropout=dropout)
     model = GPT.from_pretrained(init_from, override_args)
-    # read off the created config params, so we can store them into checkpoint correctly
     for k in ['n_layer', 'n_head', 'n_embd', 'block_size', 'bias', 'vocab_size', 'n_hidden']:
         model_args[k] = getattr(model.config, k)
-# crop down the model block size if desired, using model surgery
 if block_size < model.config.block_size:
     model.crop_block_size(block_size)
-    model_args['block_size'] = block_size # so that the checkpoint will have the right value
+    model_args['block_size'] = block_size
 model.to(device)
 
-# display detailed parameter count
 if master_process:
     print("\nDetailed parameter count:")
     detailed_params = model.get_detailed_param_count()
     for component, count in detailed_params.items():
         print(f"  {component}: {count:,}")
 
-# initialize a GradScaler. If enabled=False scaler is a no-op
 scaler = torch.cuda.amp.GradScaler(enabled=(dtype == 'float16'))
-
-# optimizer
 optimizer = model.configure_optimizers(weight_decay, learning_rate, (beta1, beta2), device_type)
 if init_from == 'resume':
     optimizer.load_state_dict(checkpoint['optimizer'])
-checkpoint = None # free up memory
+checkpoint = None
 
-# compile the model
 if compile:
     print("compiling the model... (takes a ~minute)")
     unoptimized_model = model
-    model = torch.compile(model) # requires PyTorch 2.0
+    model = torch.compile(model)
 
-# wrap model into DDP container
 if ddp:
     model = DDP(model, device_ids=[ddp_local_rank])
 
-# helps estimate an arbitrarily accurate loss over either split using many batches
 @torch.no_grad()
 def estimate_loss():
     out = {}
     model.eval()
-    # Apply eval_iters_multiplier to determine actual number of evaluation iterations
     actual_eval_iters = int(eval_iters * eval_iters_multiplier)
     for split in ['train', 'val']:
         losses = torch.zeros(actual_eval_iters)
@@ -328,391 +268,360 @@ def estimate_loss():
     model.train()
     return out
 
-# learning rate decay scheduler (cosine with warmup)
 def get_lr(it):
-    # Apply lr_schedule_offset for reset_lr_schedule operation
     effective_it = it - lr_schedule_offset
-    # Apply multipliers to warmup and decay iterations
     actual_warmup_iters = int(warmup_iters * warmup_iters_multiplier)
     actual_lr_decay_iters = int(lr_decay_iters * warmup_iters_multiplier)
-    # 1) linear warmup for warmup_iters steps
     if effective_it < actual_warmup_iters:
         return learning_rate * lr_multiplier * (effective_it + 1) / (actual_warmup_iters + 1)
-    # 2) if it > lr_decay_iters, return min learning rate
     if effective_it > actual_lr_decay_iters:
         return min_lr * lr_multiplier
-    # 3) in between, use cosine decay down to min learning rate
     decay_ratio = (effective_it - actual_warmup_iters) / (actual_lr_decay_iters - actual_warmup_iters)
     assert 0 <= decay_ratio <= 1
-    coeff = 0.5 * (1.0 + math.cos(math.pi * decay_ratio)) # coeff ranges 0..1
+    coeff = 0.5 * (1.0 + math.cos(math.pi * decay_ratio))
     return (min_lr + coeff * (learning_rate - min_lr)) * lr_multiplier
 
-# Training Orchestrator - Execute Operation Function
+def transfer_optimizer_state(new_optimizer, old_state_dict, old_param_dict, model):
+    """
+    Transfer optimizer state from old optimizer to new optimizer for parameters that still exist.
+    Uses parameter names as the bridge instead of object identity to handle architectural changes.
+    """
+    if 'state' not in old_state_dict:
+        return
+    
+    # Map old parameter names to their state from the old optimizer state_dict
+    state_to_transfer = {}
+    old_param_id_to_name = {id(p): name for name, p in old_param_dict.items()}
+    
+    for param_id, state in old_state_dict['state'].items():
+        if param_id in old_param_id_to_name:
+            param_name = old_param_id_to_name[param_id]
+            state_to_transfer[param_name] = state
+    
+    # For each parameter in the new model, find its state by name and apply it
+    transferred_count = 0
+    new_param_name_map = {name: p for name, p in model.named_parameters()}
+    
+    for param_name, state in state_to_transfer.items():
+        if param_name in new_param_name_map:
+            param_tensor = new_param_name_map[param_name]
+            # Directly set the state in the optimizer
+            new_optimizer.state[param_tensor] = state
+            transferred_count += 1
+    
+    total_params = len(list(model.parameters()))
+    print(f"Transferred optimizer state for {transferred_count} / {total_params} parameters")
+
 def execute_operation(op, trigger_reason, current_val_loss, iter_num):
-    """Execute a scaling operation and update global state with comprehensive logging"""
     global lr_multiplier, batch_size_multiplier, grad_accum_multiplier, lr_schedule_offset
     global warmup_iters_multiplier, eval_iters_multiplier, eval_interval_multiplier
     global gradient_accumulation_steps, batch_size, training_logger, master_process
-
+    global model, optimizer, raw_model, unoptimized_model
+    global attn_lora_rank_divisor, vocab_lora_rank_divisor, lora_alpha_multiplier
+    global n_layer_divisor, n_hidden_divisor
+    
     op_name = op['name']
     op_value = op['value']
-
-    # Only master process prints and logs to avoid garbled output
     if master_process:
         print(f"Executing operation: {op_name} with value: {op_value}")
-
-        # Log operation start to file
         training_logger.log_operation_start(iter_num, op_name, op_value, trigger_reason, current_val_loss,
                                           op['trigger_loss'], op['max_wait_iters'])
-
+    
+    # Check if this is an architectural operation that requires model changes
+    architectural_ops = ['stack_layers', 'widen_mlp', 'decrease_attn_lora_scaling', 
+                        'decrease_vocab_lora_scaling', 'merge_lora_weights']
+    
+    if op_name in architectural_ops:
+        if master_process:
+            print(f"Performing architectural operation: {op_name}")
+        
+        # Get the raw, unwrapped model instance
+        unwrapped_model = unoptimized_model if compile else (model.module if ddp else model)
+        
+        # Store old optimizer state for potential transfer
+        old_optimizer_state = optimizer.state_dict()
+        old_param_dict = {name: p for name, p in unwrapped_model.named_parameters()}
+        
+        # Perform the architectural operation
+        if op_name == 'stack_layers':
+            if op_value <= 1:
+                error_msg = f"Invalid stack_layers value {op_value}, must be > 1"
+                if master_process: 
+                    print(f"Error: {error_msg}")
+                    training_logger.log_operation_error(iter_num, op_name, error_msg)
+                return False
+            unwrapped_model.stack_layers(op_value)
+            old_val = n_layer_divisor
+            n_layer_divisor = n_layer_divisor / op_value
+            if master_process:
+                training_logger.log_operation_success(iter_num, op_name, 
+                    {'old_divisor': old_val, 'new_divisor': n_layer_divisor, 'new_layers': unwrapped_model.config.n_layer})
+                
+        elif op_name == 'widen_mlp':
+            if op_value <= 1:
+                error_msg = f"Invalid widen_mlp value {op_value}, must be > 1"
+                if master_process: 
+                    print(f"Error: {error_msg}")
+                    training_logger.log_operation_error(iter_num, op_name, error_msg)
+                return False
+            unwrapped_model.widen_mlp(op_value)
+            old_val = n_hidden_divisor
+            n_hidden_divisor = n_hidden_divisor / op_value
+            if master_process:
+                training_logger.log_operation_success(iter_num, op_name, 
+                    {'old_divisor': old_val, 'new_divisor': n_hidden_divisor, 'new_hidden': unwrapped_model.config.n_hidden})
+                
+        elif op_name == 'decrease_attn_lora_scaling':
+            if op_value <= 0:
+                error_msg = f"Invalid decrease_attn_lora_scaling divisor {op_value}, must be > 0"
+                if master_process: 
+                    print(f"Error: {error_msg}")
+                    training_logger.log_operation_error(iter_num, op_name, error_msg)
+                return False
+            old_val = attn_lora_rank_divisor
+            attn_lora_rank_divisor = attn_lora_rank_divisor / op_value
+            unwrapped_model.resize_lora_rank(attn_lora_rank_divisor)
+            if master_process:
+                training_logger.log_operation_success(iter_num, op_name, 
+                    {'old_divisor': old_val, 'new_divisor': attn_lora_rank_divisor})
+                
+        elif op_name == 'decrease_vocab_lora_scaling':
+            if op_value <= 0:
+                error_msg = f"Invalid decrease_vocab_lora_scaling divisor {op_value}, must be > 0"
+                if master_process: 
+                    print(f"Error: {error_msg}")
+                    training_logger.log_operation_error(iter_num, op_name, error_msg)
+                return False
+            old_val = vocab_lora_rank_divisor
+            vocab_lora_rank_divisor = vocab_lora_rank_divisor / op_value
+            unwrapped_model.resize_embedding_rank(vocab_lora_rank_divisor)
+            if master_process:
+                training_logger.log_operation_success(iter_num, op_name, 
+                    {'old_divisor': old_val, 'new_divisor': vocab_lora_rank_divisor})
+                
+        elif op_name == 'merge_lora_weights':
+            unwrapped_model.merge_lora_weights()
+            if master_process:
+                training_logger.log_operation_success(iter_num, op_name, {'status': 'merged'})
+        
+        # Re-create optimizer for the modified model
+        if master_process:
+            print("Re-configuring optimizer after architectural change...")
+        optimizer = unwrapped_model.configure_optimizers(weight_decay, learning_rate, (beta1, beta2), device_type)
+        
+        # Transfer optimizer state for parameters that still exist
+        if master_process:
+            print("Transferring optimizer state for existing parameters...")
+        transfer_optimizer_state(optimizer, old_optimizer_state, old_param_dict, unwrapped_model)
+        
+        # Re-apply wrappers like torch.compile and DDP
+        model = unwrapped_model
+        if compile:
+            if master_process:
+                print("Re-compiling the model...")
+            model = torch.compile(model)
+            
+        if ddp:
+            if master_process:
+                print("Re-wrapping model in DDP...")
+            model = DDP(model, device_ids=[ddp_local_rank])
+        
+        raw_model = model.module if ddp else model
+        
+        if master_process:
+            print("Architectural operation completed successfully.")
+        return True
+    
+    # Handle non-architectural operations
     if op_name == 'change_lr':
         if op_value <= 0:
-            error_msg = f"Invalid lr multiplier {op_value}, must be positive"
-            if master_process:
-                print(f"Error: {error_msg}")
-                training_logger.log_operation_error(iter_num, op_name, error_msg)
+            error_msg = f"Invalid lr multiplier {op_value}"
+            if master_process: print(f"Error: {error_msg}"); training_logger.log_operation_error(iter_num, op_name, error_msg)
             return False
-
-        old_lr_multiplier = lr_multiplier
+        old_val = lr_multiplier
         lr_multiplier *= op_value
-
-        if master_process:
-            print(f"Learning rate multiplier updated from {old_lr_multiplier:.4f} to {lr_multiplier:.4f}")
-
-            # Log detailed change to file
-            training_logger.log_operation_success(iter_num, op_name, {
-                'old_lr_multiplier': old_lr_multiplier,
-                'new_lr_multiplier': lr_multiplier,
-                'multiplier_applied': op_value
-            })
-
+        if master_process: print(f"LR multiplier: {old_val:.4f} -> {lr_multiplier:.4f}"); training_logger.log_operation_success(iter_num, op_name, {'old': old_val, 'new': lr_multiplier})
     elif op_name == 'change_batch_size':
         if op_value <= 0:
-            error_msg = f"Invalid batch size multiplier {op_value}, must be positive"
-            if master_process:
-                print(f"Error: {error_msg}")
-                training_logger.log_operation_error(iter_num, op_name, error_msg)
+            error_msg = f"Invalid batch size multiplier {op_value}"
+            if master_process: print(f"Error: {error_msg}"); training_logger.log_operation_error(iter_num, op_name, error_msg)
             return False
-
-        old_batch_size = batch_size
-        old_batch_size_multiplier = batch_size_multiplier
+        old_val = batch_size; old_mult = batch_size_multiplier
         batch_size_multiplier *= op_value
-        # Update the actual batch_size variable
-        new_batch_size = max(1, int(batch_size * op_value))
-        batch_size = new_batch_size
-
-        if master_process:
-            print(f"Batch size updated from {old_batch_size} to {new_batch_size} (multiplier: {old_batch_size_multiplier:.4f} → {batch_size_multiplier:.4f})")
-
-            # Log detailed change to file
-            training_logger.log_operation_success(iter_num, op_name, {
-                'old_batch_size': old_batch_size,
-                'new_batch_size': new_batch_size,
-                'old_multiplier': old_batch_size_multiplier,
-                'new_multiplier': batch_size_multiplier,
-                'multiplier_applied': op_value
-            })
-
+        batch_size = max(1, int(batch_size * op_value))
+        if master_process: print(f"Batch size: {old_val} -> {batch_size}"); training_logger.log_operation_success(iter_num, op_name, {'old': old_val, 'new': batch_size})
     elif op_name == 'change_grad_accum':
         if op_value <= 0:
-            error_msg = f"Invalid grad accum multiplier {op_value}, must be positive"
-            if master_process:
-                print(f"Error: {error_msg}")
-                training_logger.log_operation_error(iter_num, op_name, error_msg)
+            error_msg = f"Invalid grad accum multiplier {op_value}"
+            if master_process: print(f"Error: {error_msg}"); training_logger.log_operation_error(iter_num, op_name, error_msg)
             return False
-
-        old_grad_accum = gradient_accumulation_steps
-        old_grad_accum_multiplier = grad_accum_multiplier
-        grad_accum_multiplier *= op_value
-        # Update the actual gradient_accumulation_steps variable
-        new_grad_accum = max(1, int(gradient_accumulation_steps * op_value))
+        old_val = gradient_accumulation_steps
+        grad_accum_multiplier *= op_value # Update the multiplier tracking the state
+        
+        # FIX: Calculate the new value based on the old value and the operator value
+        new_grad_accum = max(1, int(old_val * op_value))
         gradient_accumulation_steps = new_grad_accum
-
-        if master_process:
-            print(f"Gradient accumulation steps updated from {old_grad_accum} to {new_grad_accum} (multiplier: {old_grad_accum_multiplier:.4f} → {grad_accum_multiplier:.4f})")
-
-            # Log detailed change to file
-            training_logger.log_operation_success(iter_num, op_name, {
-                'old_grad_accum_steps': old_grad_accum,
-                'new_grad_accum_steps': new_grad_accum,
-                'old_multiplier': old_grad_accum_multiplier,
-                'new_multiplier': grad_accum_multiplier,
-                'multiplier_applied': op_value
-            })
-
+        
+        if master_process: 
+            print(f"Grad accum steps: {old_val} -> {gradient_accumulation_steps}")
+            training_logger.log_operation_success(iter_num, op_name, {'old': old_val, 'new': gradient_accumulation_steps})
     elif op_name == 'reset_lr_schedule':
-        old_lr_schedule_offset = lr_schedule_offset
+        old_val = lr_schedule_offset
         lr_schedule_offset = iter_num
-
-        if master_process:
-            print(f"Learning rate schedule reset at iteration {iter_num} (offset: {old_lr_schedule_offset} → {lr_schedule_offset})")
-
-            # Log detailed change to file
-            training_logger.log_operation_success(iter_num, op_name, {
-                'old_lr_schedule_offset': old_lr_schedule_offset,
-                'new_lr_schedule_offset': lr_schedule_offset
-            })
-
+        if master_process: print(f"LR schedule offset: {old_val} -> {lr_schedule_offset}"); training_logger.log_operation_success(iter_num, op_name, {'old': old_val, 'new': lr_schedule_offset})
     elif op_name == 'change_warmup_iters':
         if op_value <= 0:
-            error_msg = f"Invalid warmup iters multiplier {op_value}, must be positive"
-            if master_process:
-                print(f"Error: {error_msg}")
-                training_logger.log_operation_error(iter_num, op_name, error_msg)
+            error_msg = f"Invalid warmup iters multiplier {op_value}"
+            if master_process: print(f"Error: {error_msg}"); training_logger.log_operation_error(iter_num, op_name, error_msg)
             return False
-
-        old_warmup_iters_multiplier = warmup_iters_multiplier
+        old_val = warmup_iters_multiplier
         warmup_iters_multiplier *= op_value
-
-        if master_process:
-            print(f"Warmup iterations multiplier updated from {old_warmup_iters_multiplier:.4f} to {warmup_iters_multiplier:.4f}")
-
-            # Log detailed change to file
-            training_logger.log_operation_success(iter_num, op_name, {
-                'old_warmup_iters_multiplier': old_warmup_iters_multiplier,
-                'new_warmup_iters_multiplier': warmup_iters_multiplier,
-                'multiplier_applied': op_value
-            })
-
+        if master_process: print(f"Warmup iters multiplier: {old_val:.4f} -> {warmup_iters_multiplier:.4f}"); training_logger.log_operation_success(iter_num, op_name, {'old': old_val, 'new': warmup_iters_multiplier})
     elif op_name == 'change_eval_iters':
         if op_value <= 0:
-            error_msg = f"Invalid eval iters multiplier {op_value}, must be positive"
-            if master_process:
-                print(f"Error: {error_msg}")
-                training_logger.log_operation_error(iter_num, op_name, error_msg)
+            error_msg = f"Invalid eval iters multiplier {op_value}"
+            if master_process: print(f"Error: {error_msg}"); training_logger.log_operation_error(iter_num, op_name, error_msg)
             return False
-
-        old_eval_iters_multiplier = eval_iters_multiplier
+        old_val = eval_iters_multiplier
         eval_iters_multiplier *= op_value
-
-        if master_process:
-            print(f"Evaluation iterations multiplier updated from {old_eval_iters_multiplier:.4f} to {eval_iters_multiplier:.4f}")
-
-            # Log detailed change to file
-            training_logger.log_operation_success(iter_num, op_name, {
-                'old_eval_iters_multiplier': old_eval_iters_multiplier,
-                'new_eval_iters_multiplier': eval_iters_multiplier,
-                'multiplier_applied': op_value
-            })
-
+        if master_process: print(f"Eval iters multiplier: {old_val:.4f} -> {eval_iters_multiplier:.4f}  current evals: {eval_iters * eval_iters_multiplier}"); training_logger.log_operation_success(iter_num, op_name, {'old': old_val, 'new': eval_iters_multiplier})
     elif op_name == 'change_eval_interval':
         if op_value <= 0:
-            error_msg = f"Invalid eval interval multiplier {op_value}, must be positive"
-            if master_process:
-                print(f"Error: {error_msg}")
-                training_logger.log_operation_error(iter_num, op_name, error_msg)
+            error_msg = f"Invalid eval interval multiplier {op_value}"
+            if master_process: print(f"Error: {error_msg}"); training_logger.log_operation_error(iter_num, op_name, error_msg)
             return False
-
-        old_eval_interval_multiplier = eval_interval_multiplier
+        old_val = eval_interval_multiplier
         eval_interval_multiplier *= op_value
-
-        if master_process:
-            print(f"Evaluation interval multiplier updated from {old_eval_interval_multiplier:.4f} to {eval_interval_multiplier:.4f}")
-
-            # Log detailed change to file
-            training_logger.log_operation_success(iter_num, op_name, {
-                'old_eval_interval_multiplier': old_eval_interval_multiplier,
-                'new_eval_interval_multiplier': eval_interval_multiplier,
-                'multiplier_applied': op_value
-            })
-
+        if master_process: print(f"Eval interval multiplier: {old_val:.4f} -> {eval_interval_multiplier:.4f} current interval: {eval_interval_multiplier * eval_interval}"); training_logger.log_operation_success(iter_num, op_name, {'old': old_val, 'new': eval_interval_multiplier})
+    elif op_name == 'change_lora_alpha':
+        if op_value <= 0:
+            error_msg = f"Invalid lora alpha multiplier {op_value}"
+            if master_process: print(f"Error: {error_msg}"); training_logger.log_operation_error(iter_num, op_name, error_msg)
+            return False
+        old_val = lora_alpha_multiplier
+        lora_alpha_multiplier *= op_value
+        
+        # Update model config as well
+        unwrapped_model = unoptimized_model if compile else (model.module if ddp else model)
+        unwrapped_model.config.lora_alpha = unwrapped_model.config.lora_alpha * op_value
+        
+        if master_process: print(f"LoRA alpha multiplier: {old_val:.4f} -> {lora_alpha_multiplier:.4f}, model alpha: {unwrapped_model.config.lora_alpha:.4f}"); training_logger.log_operation_success(iter_num, op_name, {'old': old_val, 'new': lora_alpha_multiplier})
     else:
         error_msg = f"Unknown operation '{op_name}'"
-        if master_process:
-            print(f"Warning: {error_msg} - skipping")
-            training_logger.log_operation_error(iter_num, op_name, error_msg)
+        if master_process: print(f"Warning: {error_msg} - skipping"); training_logger.log_operation_error(iter_num, op_name, error_msg)
         return False
-
     return True
 
-# logging
 if wandb_log and master_process:
     import wandb
     wandb.init(project=wandb_project, name=wandb_run_name, config=config)
 
-# training loop
-X, Y = get_batch('train') # fetch the very first batch
+X, Y = get_batch('train')
 t0 = time.time()
-local_iter_num = 0 # number of iterations in the lifetime of this process
-raw_model = model.module if ddp else model # unwrap DDP container if needed
+local_iter_num = 0
+raw_model = model.module if ddp else model
 running_mfu = -1.0
 while True:
-
-    # determine and set the learning rate for this iteration
-    lr = get_lr(iter_num) if decay_lr else learning_rate
+    lr = get_lr(iter_num)
     for param_group in optimizer.param_groups:
         param_group['lr'] = lr
 
-    # evaluate the loss on train/val sets and write checkpoints
-    # Apply eval_interval_multiplier to determine actual evaluation frequency
     actual_eval_interval = int(eval_interval * eval_interval_multiplier)
     if iter_num % actual_eval_interval == 0:
-        # All processes estimate loss, but only master logs/saves
         losses = estimate_loss()
-
         if master_process:
             print(f"step {iter_num}: train loss {losses['train']:.4f}, val loss {losses['val']:.4f}")
-            # Log to file as well
             training_logger.log_step(iter_num, losses['train'], losses['val'])
             if wandb_log:
-                wandb.log({
-                    "iter": iter_num,
-                    "train/loss": losses['train'],
-                    "val/loss": losses['val'],
-                    "lr": lr,
-                    "mfu": running_mfu*100, # convert to percentage
-                })
+                wandb.log({"iter": iter_num, "train/loss": losses['train'], "val/loss": losses['val'], "lr": lr, "mfu": running_mfu*100})
             if losses['val'] < best_val_loss or always_save_checkpoint:
                 best_val_loss = losses['val']
                 if iter_num > 0:
-                    checkpoint = {
-                        'model': raw_model.state_dict(),
-                        'optimizer': optimizer.state_dict(),
-                        'model_args': model_args,
-                        'iter_num': iter_num,
-                        'best_val_loss': best_val_loss,
-                        'config': config,
-                    }
+                    checkpoint = {'model': raw_model.state_dict(), 'optimizer': optimizer.state_dict(), 'model_args': model_args, 'iter_num': iter_num, 'best_val_loss': best_val_loss, 'config': config}
                     print(f"saving checkpoint to {out_dir}")
                     torch.save(checkpoint, os.path.join(out_dir, 'ckpt.pt'))
-
-        # Training Orchestrator - DDP-safe scaling schedule check
-        # Master decides, then broadcasts the decision to all ranks
-        op_to_run = [None]  # Use list for broadcast_object_list
-        if master_process and scaling_schedule:
-            current_val_loss = losses['val']
-
-            # Check if we should execute the next operation
-            if len(scaling_schedule) > 0:
+        
+        # FIX: Wrapped orchestration logic in a while loop to handle consecutive non-blocking operations
+        while True:
+            op_to_run = [None]
+            if master_process and scaling_schedule:
                 next_op = scaling_schedule[0]
-
-                # Check trigger conditions
+                current_val_loss = losses['val']
                 loss_triggered = current_val_loss < next_op['trigger_loss']
                 timeout_triggered = (iter_num - iter_of_last_op) >= next_op['max_wait_iters']
-
                 if loss_triggered or timeout_triggered:
-                    # Pack the operation and the reason into the communication object
                     trigger_reason = 'Loss threshold' if loss_triggered else 'Timeout'
-                    op_to_run[0] = {
-                        'op': next_op,
-                        'reason': trigger_reason,
-                        'loss': current_val_loss
-                    }
+                    op_to_run[0] = {'op': next_op, 'reason': trigger_reason, 'loss': current_val_loss}
+            
+            if ddp:
+                torch.distributed.broadcast_object_list(op_to_run, src=0)
 
-        # Broadcast the decision from rank 0 to all other ranks (DDP-safe)
-        if ddp:
-            torch.distributed.broadcast_object_list(op_to_run, src=0)
+            if op_to_run[0] is not None:
+                op_data = op_to_run[0]
+                next_op, trigger_reason, current_val_loss = op_data['op'], op_data['reason'], op_data['loss']
+                if master_process:
+                    print(f"\n=== SCALING OPERATION TRIGGERED (DDP SYNC) ===")
+                    print(f"Operation: {next_op['name']}")
+                    print(f"Trigger reason: {trigger_reason}")
+                    print(f"Current val loss: {current_val_loss:.4f}, Trigger loss: {next_op['trigger_loss']:.4f}")
+                    print(f"Iterations since last op: {iter_num - iter_of_last_op}, Max wait: {next_op['max_wait_iters']}")
 
-        # All processes check the broadcasted decision and execute synchronously
-        if op_to_run[0] is not None:
-            # Unpack the broadcasted data
-            op_data = op_to_run[0]
-            next_op = op_data['op']
-            trigger_reason = op_data['reason']
-            current_val_loss = op_data['loss']
+                operation_succeeded = execute_operation(next_op, trigger_reason, current_val_loss, iter_num)
+                if operation_succeeded:
+                    scaling_schedule.pop(0)
+                    iter_of_last_op = iter_num
+                    if next_op['reevaluate']:
+                        if master_process: print("Re-evaluating validation loss after operation...")
+                        losses = estimate_loss() # All processes re-evaluate to stay in sync
+                        if master_process:
+                            new_val_loss = losses['val']
+                            print(f"New val loss after operation: {new_val_loss:.4f}")
+                            training_logger.log_operation_reevaluation(iter_num, next_op['name'], current_val_loss, new_val_loss)
+                            training_logger.log_step(iter_num, losses['train'], new_val_loss)
+                            if wandb_log:
+                                wandb.log({"iter": iter_num, "train/loss": losses['train'], "val/loss": new_val_loss, "lr": lr, "mfu": running_mfu*100})
+                        break # Exit the while loop after a blocking re-evaluation
+                if master_process: print(f"=== SCALING OPERATION COMPLETE ===\n")
+            else:
+                break # No operation was triggered, exit the while loop
 
-            # Master process does the pretty printing
-            if master_process:
-                print(f"\n=== SCALING OPERATION TRIGGERED (DDP SYNC) ===")
-                print(f"Operation: {next_op['name']}")
-                print(f"Trigger reason: {trigger_reason}")
-                print(f"Current val loss: {current_val_loss:.4f}, Trigger loss: {next_op['trigger_loss']:.4f}")
-                print(f"Iterations since last op: {iter_num - iter_of_last_op}, Max wait: {next_op['max_wait_iters']}")
-
-            # CRITICAL: ALL processes execute the operation to stay in sync
-            operation_succeeded = execute_operation(next_op, trigger_reason, current_val_loss, iter_num)
-
-            if operation_succeeded:
-                # CRITICAL: ALL processes modify their schedule list
-                scaling_schedule.pop(0)
-                iter_of_last_op = iter_num
-
-                # Handle re-evaluation if needed
-                if next_op['reevaluate']:
-                    if master_process:
-                        print("Re-evaluating validation loss after operation...")
-
-                    # All processes re-evaluate
-                    new_losses = estimate_loss()
-
-                    # Master process logs the result
-                    if master_process:
-                        new_val_loss = new_losses['val']
-                        print(f"New val loss after operation: {new_val_loss:.4f}")
-
-                        # Log re-evaluation to file
-                        training_logger.log_operation_reevaluation(iter_num, next_op['name'],
-                                                                 current_val_loss, new_val_loss)
-
-                        # Update logging with new loss
-                        training_logger.log_step(iter_num, new_losses['train'], new_losses['val'])
-                        if wandb_log:
-                            wandb.log({
-                                "iter": iter_num,
-                                "train/loss": new_losses['train'],
-                                "val/loss": new_losses['val'],
-                                "lr": lr,
-                                "mfu": running_mfu*100,
-                            })
-
-            if master_process:
-                print(f"=== SCALING OPERATION COMPLETE ===\n")
-
-        # Ensure all processes are synchronized before continuing
         if ddp:
             torch.distributed.barrier()
 
     if iter_num == 0 and eval_only:
         break
 
-    # forward backward update, with optional gradient accumulation to simulate larger batch size
-    # and using the GradScaler if data type is float16
     for micro_step in range(gradient_accumulation_steps):
         if ddp:
-            # in DDP training we only need to sync gradients at the last micro step.
-            # the official way to do this is with model.no_sync() context manager, but
-            # I really dislike that this bloats the code and forces us to repeat code
-            # looking at the source of that context manager, it just toggles this variable
             model.require_backward_grad_sync = (micro_step == gradient_accumulation_steps - 1)
         with ctx:
             logits, loss = model(X, Y)
-            loss = loss / gradient_accumulation_steps # scale the loss to account for gradient accumulation
-        # immediately async prefetch next batch while model is doing the forward pass on the GPU
+            loss = loss / gradient_accumulation_steps
         X, Y = get_batch('train')
-        # backward pass, with gradient scaling if training in fp16
         scaler.scale(loss).backward()
-    # clip the gradient
     if grad_clip != 0.0:
         scaler.unscale_(optimizer)
         torch.nn.utils.clip_grad_norm_(model.parameters(), grad_clip)
-    # step the optimizer and scaler if training in fp16
     scaler.step(optimizer)
     scaler.update()
-    # flush the gradients as soon as we can, no need for this memory anymore
     optimizer.zero_grad(set_to_none=True)
 
-    # timing and logging
     t1 = time.time()
     dt = t1 - t0
     t0 = t1
     if iter_num % log_interval == 0 and master_process:
-        # get loss as float. note: this is a CPU-GPU sync point
-        # scale up to undo the division above, approximating the true total loss (exact would have been a sum)
         lossf = loss.item() * gradient_accumulation_steps
-        if local_iter_num >= 5: # let the training loop settle a bit
+        if local_iter_num >= 5:
             mfu = raw_model.estimate_mfu(batch_size * gradient_accumulation_steps, dt)
             running_mfu = mfu if running_mfu == -1.0 else 0.9*running_mfu + 0.1*mfu
-        print(f"iter {iter_num}: loss {lossf:.4f}, time {dt*1000:.2f}ms, mfu {running_mfu*100:.2f}%")
+        print(f"iter {iter_num}: loss {lossf:.4f}, lr {lr:.5f}, time {dt*1000:.2f}ms, mfu {running_mfu*100:.2f}%")
     iter_num += 1
     local_iter_num += 1
 
-    # termination conditions
     if iter_num > max_iters:
         break
 
-# cleanup logging
 if master_process:
     training_logger.close()
-
 if ddp:
     destroy_process_group()
