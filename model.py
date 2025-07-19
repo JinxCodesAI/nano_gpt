@@ -671,30 +671,73 @@ class GPT(nn.Module):
         self.config.n_hidden = new_hidden_dim
         print(f"MLP hidden dimension widened to {new_hidden_dim}.")
 
-    def resize_lora_rank(self, new_rank_divisor):
+    def resize_lora_rank(self, new_rank):
         """
-        Resize attention LoRA rank by changing the rank divisor.
+        Function-preserving resize of the attention LoRA rank.
+        Merges existing adapter, then creates a new one with the specified rank.
         """
-        if self.config.attn_lora_rank == 0:
-            print("Cannot resize LoRA rank: attention LoRA is disabled")
+        new_rank = int(new_rank)  # Ensure rank is an integer
+        print(f"Resizing attention LoRA rank to {new_rank}.")
+        self.config.attn_lora_rank = new_rank
+        device = self.lm_head.weight.device
+
+        for block in self.transformer.h:
+            # Check if the attention projection is a LoRA layer
+            if not isinstance(block.attn.c_attn, LoRALinear):
+                print("Warning: c_attn is not a LoRALinear layer. Skipping resize.")
+                continue
+            
+            # 1. Merge existing knowledge into the main weight
+            block.attn.c_attn.merge_and_reset()
+            
+            # 2. Create a new LoRA layer with the new rank
+            new_c_attn = LoRALinear(
+                in_features=self.config.n_embd,
+                out_features=3 * self.config.n_embd,
+                rank=new_rank,
+                alpha=self.config.lora_alpha,
+                bias=self.config.bias
+            )
+            
+            # 3. Copy the merged main weights from the old layer to the new one
+            new_c_attn.main_weight.load_state_dict(block.attn.c_attn.main_weight.state_dict())
+            
+            # 4. Replace the old layer with the new, resized layer
+            block.attn.c_attn = new_c_attn.to(device)
+        
+    def resize_embedding_rank(self, new_rank):
+        """
+        Function-preserving resize of the embedding LoRA rank.
+        Merges existing adapter, then creates a new one with the specified rank.
+        """
+        if not isinstance(self.transformer.wte, LoRAEmbedding):
+            print("Warning: wte is not a LoRAEmbedding layer. Skipping resize.")
             return
             
-        new_rank = self.config.n_embd // new_rank_divisor if new_rank_divisor > 0 else 0
-        print(f"Resizing attention LoRA rank to {new_rank} (divisor: {new_rank_divisor})")
+        new_rank = int(new_rank)  # Ensure rank is an integer
+        print(f"Resizing embedding LoRA rank to {new_rank}.")
+        self.config.embedding_rank = new_rank
+        device = self.lm_head.weight.device
         
-    def resize_embedding_rank(self, new_rank_divisor):
-        """
-        Resize embedding LoRA rank by changing the rank divisor.
-        """
-        if self.config.embedding_rank == 0:
-            print("Cannot resize embedding LoRA rank: embedding LoRA is disabled")
-            return
-            
-        new_rank = self.config.n_embd // new_rank_divisor if new_rank_divisor > 0 else 0
-        print(f"Resizing embedding LoRA rank to {new_rank} (divisor: {new_rank_divisor})")
+        # 1. Merge existing knowledge
+        self.transformer.wte.merge_and_reset()
         
-        # Placeholder - similar to resize_lora_rank
-        print("Embedding LoRA rank resizing not fully implemented yet")
+        # 2. Create new module with the new rank
+        new_wte = LoRAEmbedding(
+            vocab_size=self.config.vocab_size,
+            n_embd=self.config.n_embd,
+            rank=new_rank,
+            alpha=self.config.lora_alpha
+        )
+        
+        # 3. Copy merged main weights
+        new_wte.main_weight.load_state_dict(self.transformer.wte.main_weight.state_dict())
+        
+        # 4. Replace module and re-tie weights to the language model head
+        self.transformer.wte = new_wte.to(device)
+        self.transformer.wte.main_weight.weight = self.lm_head.weight
+        # Re-freeze the head after re-tying to maintain parameter efficiency
+        self.lm_head.requires_grad_(False)
 
     def merge_lora_weights(self):
         """

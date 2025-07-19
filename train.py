@@ -396,31 +396,39 @@ def execute_operation(op, trigger_reason, current_val_loss, iter_num):
                 
         elif op_name == 'decrease_attn_lora_scaling':
             if op_value <= 0:
-                error_msg = f"Invalid decrease_attn_lora_scaling divisor {op_value}, must be > 0"
-                if master_process: 
-                    print(f"Error: {error_msg}")
-                    training_logger.log_operation_error(iter_num, op_name, error_msg)
+                error_msg = f"Invalid decrease_attn_lora_scaling divisor {op_value}"
+                if master_process: print(f"Error: {error_msg}"); training_logger.log_operation_error(iter_num, op_name, error_msg)
                 return False
             old_val = attn_lora_rank_divisor
-            attn_lora_rank_divisor = attn_lora_rank_divisor / op_value
-            unwrapped_model.resize_lora_rank(attn_lora_rank_divisor)
+            attn_lora_rank_divisor /= op_value
+            
+            # Calculate the new concrete rank from the divisor
+            new_rank = int(unwrapped_model.config.n_embd // attn_lora_rank_divisor) if attn_lora_rank_divisor > 0 else 0
+            
+            # Call the model's resize method with the new rank
+            unwrapped_model.resize_lora_rank(new_rank)
+            
             if master_process:
                 training_logger.log_operation_success(iter_num, op_name, 
-                    {'old_divisor': old_val, 'new_divisor': attn_lora_rank_divisor})
+                    {'old_divisor': old_val, 'new_divisor': attn_lora_rank_divisor, 'new_rank': new_rank})
                 
         elif op_name == 'decrease_vocab_lora_scaling':
             if op_value <= 0:
-                error_msg = f"Invalid decrease_vocab_lora_scaling divisor {op_value}, must be > 0"
-                if master_process: 
-                    print(f"Error: {error_msg}")
-                    training_logger.log_operation_error(iter_num, op_name, error_msg)
+                error_msg = f"Invalid decrease_vocab_lora_scaling divisor {op_value}"
+                if master_process: print(f"Error: {error_msg}"); training_logger.log_operation_error(iter_num, op_name, error_msg)
                 return False
             old_val = vocab_lora_rank_divisor
-            vocab_lora_rank_divisor = vocab_lora_rank_divisor / op_value
-            unwrapped_model.resize_embedding_rank(vocab_lora_rank_divisor)
+            vocab_lora_rank_divisor /= op_value
+            
+            # Calculate the new concrete rank from the divisor
+            new_rank = int(unwrapped_model.config.n_embd // vocab_lora_rank_divisor) if vocab_lora_rank_divisor > 0 else 0
+            
+            # Call the model's resize method with the new rank
+            unwrapped_model.resize_embedding_rank(new_rank)
+
             if master_process:
                 training_logger.log_operation_success(iter_num, op_name, 
-                    {'old_divisor': old_val, 'new_divisor': vocab_lora_rank_divisor})
+                    {'old_divisor': old_val, 'new_divisor': vocab_lora_rank_divisor, 'new_rank': new_rank})
                 
         elif op_name == 'merge_lora_weights':
             unwrapped_model.merge_lora_weights()

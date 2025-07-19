@@ -58,9 +58,9 @@ def test_lora_operations():
     print(f"Original embedding rank: {model.config.embedding_rank}")
     print(f"Original attention LoRA rank: {model.config.attn_lora_rank}")
     
-    # Test resize operations (these are placeholder implementations)
-    model.resize_lora_rank(2.0)
-    model.resize_embedding_rank(2.0)
+    # Test resize operations with proper integer ranks
+    model.resize_lora_rank(4)  # resize to rank 4
+    model.resize_embedding_rank(8)  # resize to rank 8
     
     # Test merge operation
     model.merge_lora_weights()
