@@ -1,0 +1,32 @@
+# Test Scaling Schedule for Manual Validation
+# This schedule has very low trigger thresholds and short wait times for quick testing
+
+- name: change_lr
+  value: 1.5  # Increase learning rate by 50%
+  trigger_loss: 10.0  # High threshold - should trigger quickly
+  max_wait_iters: 10  # Very short wait time
+  reevaluate: false
+
+- name: change_batch_size
+  value: 1.2  # Increase batch size by 20%
+  trigger_loss: 9.0
+  max_wait_iters: 20
+  reevaluate: false
+
+- name: reset_lr_schedule
+  value: null
+  trigger_loss: 8.0
+  max_wait_iters: 30
+  reevaluate: false
+
+- name: change_grad_accum
+  value: 1.5  # Increase gradient accumulation by 50%
+  trigger_loss: 7.0
+  max_wait_iters: 40
+  reevaluate: false
+
+- name: change_lr
+  value: 0.8  # Reduce learning rate by 20%
+  trigger_loss: 6.0
+  max_wait_iters: 50
+  reevaluate: false
