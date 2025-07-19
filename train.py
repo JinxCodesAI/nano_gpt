@@ -315,9 +315,11 @@ if ddp:
 def estimate_loss():
     out = {}
     model.eval()
+    # Apply eval_iters_multiplier to determine actual number of evaluation iterations
+    actual_eval_iters = int(eval_iters * eval_iters_multiplier)
     for split in ['train', 'val']:
-        losses = torch.zeros(eval_iters)
-        for k in range(eval_iters):
+        losses = torch.zeros(actual_eval_iters)
+        for k in range(actual_eval_iters):
             X, Y = get_batch(split)
             with ctx:
                 logits, loss = model(X, Y)
@@ -330,14 +332,17 @@ def estimate_loss():
 def get_lr(it):
     # Apply lr_schedule_offset for reset_lr_schedule operation
     effective_it = it - lr_schedule_offset
+    # Apply multipliers to warmup and decay iterations
+    actual_warmup_iters = int(warmup_iters * warmup_iters_multiplier)
+    actual_lr_decay_iters = int(lr_decay_iters * warmup_iters_multiplier)
     # 1) linear warmup for warmup_iters steps
-    if effective_it < warmup_iters:
-        return learning_rate * lr_multiplier * (effective_it + 1) / (warmup_iters + 1)
+    if effective_it < actual_warmup_iters:
+        return learning_rate * lr_multiplier * (effective_it + 1) / (actual_warmup_iters + 1)
     # 2) if it > lr_decay_iters, return min learning rate
-    if effective_it > lr_decay_iters:
+    if effective_it > actual_lr_decay_iters:
         return min_lr * lr_multiplier
     # 3) in between, use cosine decay down to min learning rate
-    decay_ratio = (effective_it - warmup_iters) / (lr_decay_iters - warmup_iters)
+    decay_ratio = (effective_it - actual_warmup_iters) / (actual_lr_decay_iters - actual_warmup_iters)
     assert 0 <= decay_ratio <= 1
     coeff = 0.5 * (1.0 + math.cos(math.pi * decay_ratio)) # coeff ranges 0..1
     return (min_lr + coeff * (learning_rate - min_lr)) * lr_multiplier
@@ -475,7 +480,9 @@ while True:
         param_group['lr'] = lr
 
     # evaluate the loss on train/val sets and write checkpoints
-    if iter_num % eval_interval == 0:
+    # Apply eval_interval_multiplier to determine actual evaluation frequency
+    actual_eval_interval = int(eval_interval * eval_interval_multiplier)
+    if iter_num % actual_eval_interval == 0:
         # All processes estimate loss, but only master logs/saves
         losses = estimate_loss()
 
