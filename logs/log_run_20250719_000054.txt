@@ -1,0 +1,99 @@
+================================================================================
+Training run started at 2025-07-19 00:00:54
+================================================================================
+Configuration:
+----------------------------------------
+always_save_checkpoint: True
+backend: nccl
+batch_size: 12
+beta1: 0.9
+beta2: 0.95
+bias: False
+block_size: 1024
+compile: True
+dataset: fineweb10B
+decay_lr: True
+device: cuda
+dropout: 0.0
+dtype: bfloat16
+eval_interval: 50
+eval_iters: 1
+eval_only: False
+file_logging: True
+grad_clip: 1.0
+gradient_accumulation_steps: 5
+init_from: scratch
+learning_rate: 0.0006
+log_dir: logs
+log_interval: 10
+lr_decay_iters: 600000
+max_iters: 600000
+min_lr: 6e-05
+n_embd: 192
+n_head: 12
+n_layer: 12
+out_dir: out
+rotary_base: 10000.0
+rotary_max_position_embeddings: 2048
+use_rotary_embeddings: True
+wandb_log: True
+wandb_project: owt
+wandb_run_name: gpt2-124M
+warmup_iters: 2000
+weight_decay: 0.1
+----------------------------------------
+[2025-07-19 00:01:03] step 0: train loss 10.8405, val loss 10.8523
+[2025-07-19 00:01:24] step 50: train loss 10.4566, val loss 10.4469
+[2025-07-19 00:01:43] step 100: train loss 10.1792, val loss 10.1217
+[2025-07-19 00:02:03] step 150: train loss 9.7618, val loss 9.7771
+[2025-07-19 00:02:22] step 200: train loss 9.2247, val loss 9.1554
+[2025-07-19 00:02:42] step 250: train loss 8.6279, val loss 8.7207
+[2025-07-19 00:03:01] step 300: train loss 8.0554, val loss 8.1917
+[2025-07-19 00:03:20] step 350: train loss 7.7819, val loss 7.5425
+[2025-07-19 00:03:40] step 400: train loss 7.3222, val loss 7.3870
+[2025-07-19 00:03:59] step 450: train loss 7.0252, val loss 6.9283
+[2025-07-19 00:04:18] step 500: train loss 7.1649, val loss 6.8611
+[2025-07-19 00:04:38] step 550: train loss 6.6772, val loss 6.7754
+[2025-07-19 00:04:58] step 600: train loss 6.5688, val loss 6.6489
+[2025-07-19 00:05:17] step 650: train loss 6.5014, val loss 6.4948
+[2025-07-19 00:05:37] step 700: train loss 6.5028, val loss 6.4308
+[2025-07-19 00:05:56] step 750: train loss 6.2439, val loss 6.3195
+[2025-07-19 00:06:16] step 800: train loss 6.3101, val loss 6.4951
+[2025-07-19 00:06:35] step 850: train loss 6.1465, val loss 6.0951
+[2025-07-19 00:06:55] step 900: train loss 6.1916, val loss 6.1348
+[2025-07-19 00:07:15] step 950: train loss 5.9284, val loss 6.0547
+[2025-07-19 00:07:34] step 1000: train loss 6.2730, val loss 6.0152
+[2025-07-19 00:07:54] step 1050: train loss 5.9315, val loss 5.8286
+[2025-07-19 00:08:14] step 1100: train loss 6.0148, val loss 5.7514
+[2025-07-19 00:08:33] step 1150: train loss 5.8937, val loss 5.6308
+[2025-07-19 00:08:53] step 1200: train loss 5.7405, val loss 5.6465
+[2025-07-19 00:09:12] step 1250: train loss 5.6826, val loss 5.7045
+[2025-07-19 00:09:32] step 1300: train loss 5.9583, val loss 5.6124
+[2025-07-19 00:09:52] step 1350: train loss 5.5557, val loss 5.6950
+[2025-07-19 00:10:11] step 1400: train loss 5.6721, val loss 5.5216
+[2025-07-19 00:10:31] step 1450: train loss 5.4291, val loss 5.5506
+[2025-07-19 00:10:50] step 1500: train loss 5.5570, val loss 5.3625
+[2025-07-19 00:11:10] step 1550: train loss 5.4172, val loss 5.7718
+[2025-07-19 00:11:30] step 1600: train loss 5.3905, val loss 5.6241
+[2025-07-19 00:11:49] step 1650: train loss 5.3946, val loss 5.2515
+[2025-07-19 00:12:09] step 1700: train loss 5.5230, val loss 5.1648
+[2025-07-19 00:12:29] step 1750: train loss 5.1238, val loss 5.2728
+[2025-07-19 00:12:48] step 1800: train loss 5.4017, val loss 5.2901
+[2025-07-19 00:13:08] step 1850: train loss 5.3038, val loss 5.5353
+[2025-07-19 00:13:27] step 1900: train loss 5.2882, val loss 5.1347
+[2025-07-19 00:13:47] step 1950: train loss 5.4405, val loss 5.4168
+[2025-07-19 00:14:07] step 2000: train loss 5.3123, val loss 5.0017
+[2025-07-19 00:14:26] step 2050: train loss 5.2853, val loss 5.1380
+[2025-07-19 00:14:46] step 2100: train loss 5.1405, val loss 5.1073
+[2025-07-19 00:15:06] step 2150: train loss 5.5783, val loss 5.1751
+[2025-07-19 00:15:25] step 2200: train loss 5.2834, val loss 4.9443
+[2025-07-19 00:15:45] step 2250: train loss 5.0869, val loss 5.0364
+[2025-07-19 00:16:05] step 2300: train loss 5.1635, val loss 5.0479
+[2025-07-19 00:16:24] step 2350: train loss 5.0117, val loss 5.0538
+[2025-07-19 00:16:44] step 2400: train loss 4.9766, val loss 5.0222
+[2025-07-19 00:17:04] step 2450: train loss 4.8621, val loss 5.0627
+[2025-07-19 00:17:23] step 2500: train loss 5.0126, val loss 5.1713
+[2025-07-19 00:17:43] step 2550: train loss 5.1381, val loss 4.8834
+[2025-07-19 00:18:03] step 2600: train loss 5.0982, val loss 4.8116
+[2025-07-19 00:18:22] step 2650: train loss 4.8621, val loss 4.9694
+[2025-07-19 00:18:42] step 2700: train loss 4.7119, val loss 4.8422

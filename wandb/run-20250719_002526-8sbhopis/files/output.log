@@ -1,0 +1,309 @@
+step 0: train loss 10.8452, val loss 10.8523
+iter 0: loss 10.8430, time 6685.80ms, mfu -100.00%
+iter 10: loss 10.7820, time 370.86ms, mfu 14.72%
+iter 20: loss 10.6594, time 373.89ms, mfu 14.71%
+iter 30: loss 10.5578, time 376.55ms, mfu 14.69%
+iter 40: loss 10.5038, time 375.21ms, mfu 14.68%
+step 50: train loss 10.4409, val loss 10.4469
+saving checkpoint to out
+iter 50: loss 10.4584, time 808.45ms, mfu 13.88%
+iter 60: loss 10.3660, time 379.25ms, mfu 13.93%
+iter 70: loss 10.3493, time 377.26ms, mfu 13.99%
+iter 80: loss 10.3076, time 379.62ms, mfu 14.03%
+iter 90: loss 10.1862, time 379.20ms, mfu 14.06%
+step 100: train loss 10.1542, val loss 10.1227
+saving checkpoint to out
+iter 100: loss 10.0846, time 1003.02ms, mfu 13.20%
+iter 110: loss 10.0572, time 376.18ms, mfu 13.33%
+iter 120: loss 9.9586, time 377.08ms, mfu 13.45%
+iter 130: loss 9.8839, time 379.32ms, mfu 13.54%
+iter 140: loss 9.8248, time 370.60ms, mfu 13.66%
+step 150: train loss 9.7124, val loss 9.7816
+saving checkpoint to out
+iter 150: loss 9.7388, time 1060.67ms, mfu 12.81%
+iter 160: loss 9.5939, time 371.38ms, mfu 13.00%
+iter 170: loss 9.5554, time 372.58ms, mfu 13.16%
+iter 180: loss 9.4305, time 374.60ms, mfu 13.31%
+iter 190: loss 9.2821, time 371.80ms, mfu 13.44%
+step 200: train loss 9.2773, val loss 9.1563
+saving checkpoint to out
+iter 200: loss 9.2720, time 960.00ms, mfu 12.67%
+iter 210: loss 9.0872, time 370.67ms, mfu 12.87%
+iter 220: loss 8.9772, time 372.80ms, mfu 13.05%
+iter 230: loss 8.9107, time 373.79ms, mfu 13.21%
+iter 240: loss 8.8810, time 372.81ms, mfu 13.35%
+step 250: train loss 8.7484, val loss 8.7163
+saving checkpoint to out
+iter 250: loss 8.7449, time 834.25ms, mfu 12.67%
+iter 260: loss 8.5209, time 372.71ms, mfu 12.87%
+iter 270: loss 8.3826, time 370.85ms, mfu 13.05%
+iter 280: loss 8.3928, time 374.02ms, mfu 13.21%
+iter 290: loss 8.2057, time 374.17ms, mfu 13.35%
+step 300: train loss 8.1046, val loss 8.1914
+saving checkpoint to out
+iter 300: loss 8.0887, time 896.12ms, mfu 12.62%
+iter 310: loss 8.0652, time 375.86ms, mfu 12.81%
+iter 320: loss 7.8390, time 375.40ms, mfu 12.98%
+iter 330: loss 7.7622, time 372.99ms, mfu 13.15%
+iter 340: loss 7.7735, time 374.38ms, mfu 13.29%
+step 350: train loss 7.8182, val loss 7.5410
+saving checkpoint to out
+iter 350: loss 7.5422, time 983.11ms, mfu 12.52%
+iter 360: loss 7.5676, time 375.25ms, mfu 12.72%
+iter 370: loss 7.3650, time 373.42ms, mfu 12.91%
+iter 380: loss 7.3235, time 373.97ms, mfu 13.08%
+iter 390: loss 7.3366, time 377.02ms, mfu 13.22%
+step 400: train loss 7.2790, val loss 7.3857
+saving checkpoint to out
+iter 400: loss 7.4296, time 827.12ms, mfu 12.56%
+iter 410: loss 7.1753, time 375.86ms, mfu 12.76%
+iter 420: loss 7.1681, time 373.87ms, mfu 12.94%
+iter 430: loss 7.0353, time 375.78ms, mfu 13.10%
+iter 440: loss 6.9845, time 377.68ms, mfu 13.23%
+step 450: train loss 7.0385, val loss 6.9199
+saving checkpoint to out
+iter 450: loss 7.0796, time 960.37ms, mfu 12.48%
+iter 460: loss 7.0172, time 376.07ms, mfu 12.68%
+iter 470: loss 6.8538, time 375.72ms, mfu 12.87%
+iter 480: loss 6.9812, time 374.85ms, mfu 13.04%
+iter 490: loss 6.7813, time 374.44ms, mfu 13.19%
+step 500: train loss 6.8231, val loss 6.8590
+saving checkpoint to out
+iter 500: loss 7.1949, time 889.31ms, mfu 12.49%
+iter 510: loss 6.9630, time 375.19ms, mfu 12.69%
+iter 520: loss 6.8263, time 377.15ms, mfu 12.87%
+iter 530: loss 7.0833, time 375.38ms, mfu 13.04%
+iter 540: loss 6.6952, time 379.57ms, mfu 13.17%
+step 550: train loss 6.5082, val loss 6.7747
+saving checkpoint to out
+iter 550: loss 6.8061, time 848.22ms, mfu 12.50%
+iter 560: loss 6.6682, time 376.67ms, mfu 12.70%
+iter 570: loss 6.5702, time 374.08ms, mfu 12.89%
+iter 580: loss 6.6675, time 377.85ms, mfu 13.05%
+iter 590: loss 6.7626, time 375.97ms, mfu 13.19%
+step 600: train loss 6.5789, val loss 6.6491
+saving checkpoint to out
+iter 600: loss 6.5132, time 926.36ms, mfu 12.46%
+iter 610: loss 6.7451, time 374.94ms, mfu 12.67%
+iter 620: loss 6.6255, time 379.83ms, mfu 12.84%
+iter 630: loss 6.3943, time 377.23ms, mfu 13.01%
+iter 640: loss 6.5072, time 377.11ms, mfu 13.15%
+step 650: train loss 6.2877, val loss 6.4924
+saving checkpoint to out
+iter 650: loss 6.2016, time 995.27ms, mfu 12.39%
+iter 660: loss 6.5504, time 378.05ms, mfu 12.59%
+iter 670: loss 6.3787, time 379.71ms, mfu 12.77%
+iter 680: loss 6.2768, time 376.96ms, mfu 12.94%
+iter 690: loss 6.3951, time 375.60ms, mfu 13.10%
+step 700: train loss 6.4584, val loss 6.4342
+saving checkpoint to out
+iter 700: loss 6.2079, time 900.16ms, mfu 12.40%
+iter 710: loss 6.4739, time 375.74ms, mfu 12.61%
+iter 720: loss 6.1908, time 375.75ms, mfu 12.80%
+iter 730: loss 6.4340, time 380.66ms, mfu 12.96%
+iter 740: loss 6.4073, time 376.41ms, mfu 13.11%
+step 750: train loss 6.3724, val loss 6.3221
+saving checkpoint to out
+iter 750: loss 6.2750, time 859.17ms, mfu 12.44%
+iter 760: loss 6.1917, time 376.30ms, mfu 12.64%
+iter 770: loss 6.3254, time 374.44ms, mfu 12.84%
+iter 780: loss 6.1995, time 379.39ms, mfu 12.99%
+iter 790: loss 6.2688, time 379.51ms, mfu 13.13%
+step 800: train loss 6.1408, val loss 6.5034
+saving checkpoint to out
+iter 800: loss 6.1391, time 964.47ms, mfu 12.38%
+iter 810: loss 6.3694, time 375.01ms, mfu 12.60%
+iter 820: loss 6.2284, time 375.32ms, mfu 12.80%
+iter 830: loss 6.1575, time 380.25ms, mfu 12.95%
+iter 840: loss 6.2440, time 375.59ms, mfu 13.11%
+step 850: train loss 6.1571, val loss 6.0985
+saving checkpoint to out
+iter 850: loss 6.1674, time 1057.52ms, mfu 12.32%
+iter 860: loss 6.3258, time 375.49ms, mfu 12.54%
+iter 870: loss 6.2361, time 374.62ms, mfu 12.74%
+iter 880: loss 6.1367, time 379.25ms, mfu 12.91%
+iter 890: loss 6.0167, time 374.60ms, mfu 13.07%
+step 900: train loss 6.1174, val loss 6.1375
+saving checkpoint to out
+iter 900: loss 6.0678, time 1093.28ms, mfu 12.27%
+iter 910: loss 6.0599, time 375.33ms, mfu 12.49%
+iter 920: loss 6.0602, time 377.96ms, mfu 12.69%
+iter 930: loss 6.0323, time 380.67ms, mfu 12.85%
+iter 940: loss 5.9055, time 373.75ms, mfu 13.03%
+step 950: train loss 6.1381, val loss 6.0482
+saving checkpoint to out
+iter 950: loss 5.9148, time 864.81ms, mfu 12.36%
+iter 960: loss 6.1084, time 374.81ms, mfu 12.58%
+iter 970: loss 6.0371, time 380.02ms, mfu 12.76%
+iter 980: loss 5.8968, time 379.34ms, mfu 12.92%
+iter 990: loss 5.9339, time 378.58ms, mfu 13.07%
+step 1000: train loss 6.2660, val loss 6.0181
+saving checkpoint to out
+iter 1000: loss 5.8738, time 969.99ms, mfu 12.33%
+iter 1010: loss 5.9590, time 378.61ms, mfu 12.54%
+iter 1020: loss 6.1570, time 377.91ms, mfu 12.73%
+iter 1030: loss 6.0153, time 379.70ms, mfu 12.89%
+iter 1040: loss 6.1117, time 378.58ms, mfu 13.05%
+step 1050: train loss 5.8982, val loss 5.8306
+saving checkpoint to out
+iter 1050: loss 6.0041, time 1083.65ms, mfu 12.24%
+iter 1060: loss 5.9240, time 377.96ms, mfu 12.46%
+iter 1070: loss 5.8265, time 378.09ms, mfu 12.66%
+iter 1080: loss 5.9705, time 380.29ms, mfu 12.83%
+iter 1090: loss 5.9626, time 377.62ms, mfu 12.99%
+step 1100: train loss 5.9552, val loss 5.7570
+saving checkpoint to out
+iter 1100: loss 5.8845, time 969.70ms, mfu 12.26%
+iter 1110: loss 5.7450, time 374.60ms, mfu 12.49%
+iter 1120: loss 5.8621, time 377.68ms, mfu 12.69%
+iter 1130: loss 5.7695, time 384.22ms, mfu 12.84%
+iter 1140: loss 6.0086, time 378.87ms, mfu 13.00%
+step 1150: train loss 5.8163, val loss 5.6361
+saving checkpoint to out
+iter 1150: loss 5.7635, time 847.89ms, mfu 12.34%
+iter 1160: loss 5.7534, time 374.31ms, mfu 12.56%
+iter 1170: loss 5.8455, time 378.54ms, mfu 12.75%
+iter 1180: loss 5.8047, time 378.83ms, mfu 12.92%
+iter 1190: loss 5.8648, time 379.35ms, mfu 13.06%
+step 1200: train loss 5.6313, val loss 5.6530
+saving checkpoint to out
+iter 1200: loss 5.9157, time 767.56ms, mfu 12.47%
+iter 1210: loss 5.7986, time 382.26ms, mfu 12.65%
+iter 1220: loss 5.6806, time 376.85ms, mfu 12.83%
+iter 1230: loss 6.0474, time 379.20ms, mfu 12.99%
+iter 1240: loss 5.7632, time 380.02ms, mfu 13.13%
+step 1250: train loss 5.6752, val loss 5.7109
+saving checkpoint to out
+iter 1250: loss 5.6968, time 932.84ms, mfu 12.40%
+iter 1260: loss 5.8651, time 376.22ms, mfu 12.61%
+iter 1270: loss 5.5559, time 375.68ms, mfu 12.80%
+iter 1280: loss 5.5939, time 384.36ms, mfu 12.94%
+iter 1290: loss 5.4771, time 379.02ms, mfu 13.09%
+step 1300: train loss 5.6441, val loss 5.6202
+saving checkpoint to out
+iter 1300: loss 5.7956, time 817.43ms, mfu 12.45%
+iter 1310: loss 5.8106, time 378.76ms, mfu 12.65%
+iter 1320: loss 5.6831, time 378.10ms, mfu 12.83%
+iter 1330: loss 5.7334, time 382.03ms, mfu 12.97%
+iter 1340: loss 5.6363, time 377.68ms, mfu 13.12%
+step 1350: train loss 5.4683, val loss 5.6853
+saving checkpoint to out
+iter 1350: loss 5.5840, time 1036.25ms, mfu 12.33%
+iter 1360: loss 5.6706, time 376.28ms, mfu 12.55%
+iter 1370: loss 5.5738, time 381.90ms, mfu 12.73%
+iter 1380: loss 5.4226, time 380.56ms, mfu 12.89%
+iter 1390: loss 5.4590, time 377.44ms, mfu 13.05%
+step 1400: train loss 5.5310, val loss 5.5374
+saving checkpoint to out
+iter 1400: loss 5.6987, time 1029.58ms, mfu 12.27%
+iter 1410: loss 5.5745, time 375.68ms, mfu 12.50%
+iter 1420: loss 5.4705, time 378.62ms, mfu 12.69%
+iter 1430: loss 5.6994, time 381.95ms, mfu 12.85%
+Traceback (most recent call last):
+  File "/teamspace/studios/this_studio/nanoGPT/train.py", line 339, in <module>
+    logits, loss = model(X, Y)
+  File "/home/zeus/miniconda3/envs/cloudspace/lib/python3.10/site-packages/torch/nn/modules/module.py", line 1751, in _wrapped_call_impl
+    return self._call_impl(*args, **kwargs)
+  File "/home/zeus/miniconda3/envs/cloudspace/lib/python3.10/site-packages/torch/nn/modules/module.py", line 1762, in _call_impl
+    return forward_call(*args, **kwargs)
+  File "/home/zeus/miniconda3/envs/cloudspace/lib/python3.10/site-packages/torch/_dynamo/eval_frame.py", line 655, in _fn
+    return fn(*args, **kwargs)
+  File "/home/zeus/miniconda3/envs/cloudspace/lib/python3.10/site-packages/torch/nn/modules/module.py", line 1751, in _wrapped_call_impl
+    return self._call_impl(*args, **kwargs)
+  File "/home/zeus/miniconda3/envs/cloudspace/lib/python3.10/site-packages/torch/nn/modules/module.py", line 1762, in _call_impl
+    return forward_call(*args, **kwargs)
+  File "/teamspace/studios/this_studio/nanoGPT/model.py", line 352, in forward
+    def forward(self, idx, targets=None):
+  File "/home/zeus/miniconda3/envs/cloudspace/lib/python3.10/site-packages/torch/_dynamo/eval_frame.py", line 838, in _fn
+    return fn(*args, **kwargs)
+  File "/home/zeus/miniconda3/envs/cloudspace/lib/python3.10/site-packages/torch/_functorch/aot_autograd.py", line 1201, in forward
+    return compiled_fn(full_args)
+  File "/home/zeus/miniconda3/envs/cloudspace/lib/python3.10/site-packages/torch/_functorch/_aot_autograd/runtime_wrappers.py", line 315, in runtime_wrapper
+    all_outs = call_func_at_runtime_with_args(
+  File "/home/zeus/miniconda3/envs/cloudspace/lib/python3.10/site-packages/torch/_functorch/_aot_autograd/utils.py", line 126, in call_func_at_runtime_with_args
+    out = normalize_as_list(f(args))
+  File "/home/zeus/miniconda3/envs/cloudspace/lib/python3.10/site-packages/torch/_functorch/_aot_autograd/utils.py", line 100, in g
+    return f(*args)
+  File "/home/zeus/miniconda3/envs/cloudspace/lib/python3.10/site-packages/torch/autograd/function.py", line 575, in apply
+    return super().apply(*args, **kwargs)  # type: ignore[misc]
+  File "/home/zeus/miniconda3/envs/cloudspace/lib/python3.10/site-packages/torch/_functorch/_aot_autograd/runtime_wrappers.py", line 1937, in forward
+    fw_outs = call_func_at_runtime_with_args(
+  File "/home/zeus/miniconda3/envs/cloudspace/lib/python3.10/site-packages/torch/_functorch/_aot_autograd/utils.py", line 126, in call_func_at_runtime_with_args
+    out = normalize_as_list(f(args))
+  File "/home/zeus/miniconda3/envs/cloudspace/lib/python3.10/site-packages/torch/_functorch/_aot_autograd/runtime_wrappers.py", line 495, in wrapper
+    return compiled_fn(runtime_args)
+  File "/home/zeus/miniconda3/envs/cloudspace/lib/python3.10/site-packages/torch/_inductor/output_code.py", line 460, in __call__
+    return self.current_callable(inputs)
+  File "/home/zeus/miniconda3/envs/cloudspace/lib/python3.10/site-packages/torch/_inductor/utils.py", line 2404, in run
+    return model(new_inputs)
+  File "/tmp/torchinductor_adamskrodzki/uk/cuksyjlkqoywv5rpm34elptsx3skxwjtqphbeg6tzlrmn2lqttz6.py", line 2105, in call
+    buf312 = torch.ops.aten._scaled_dot_product_flash_attention.default(buf311, buf310, reinterpret_tensor(buf309, (12, 12, 1024, 16), (589824, 16, 576, 1), 384), 0.0, True, scale=0.25)
+  File "/home/zeus/miniconda3/envs/cloudspace/lib/python3.10/site-packages/torch/_ops.py", line 756, in __call__
+    return self._op(*args, **kwargs)
+KeyboardInterrupt
+Traceback (most recent call last):
+  File "/teamspace/studios/this_studio/nanoGPT/train.py", line 339, in <module>
+    logits, loss = model(X, Y)
+  File "/home/zeus/miniconda3/envs/cloudspace/lib/python3.10/site-packages/torch/nn/modules/module.py", line 1751, in _wrapped_call_impl
+    return self._call_impl(*args, **kwargs)
+  File "/home/zeus/miniconda3/envs/cloudspace/lib/python3.10/site-packages/torch/nn/modules/module.py", line 1762, in _call_impl
+    return forward_call(*args, **kwargs)
+  File "/home/zeus/miniconda3/envs/cloudspace/lib/python3.10/site-packages/torch/_dynamo/eval_frame.py", line 655, in _fn
+    return fn(*args, **kwargs)
+  File "/home/zeus/miniconda3/envs/cloudspace/lib/python3.10/site-packages/torch/nn/modules/module.py", line 1751, in _wrapped_call_impl
+    return self._call_impl(*args, **kwargs)
+  File "/home/zeus/miniconda3/envs/cloudspace/lib/python3.10/site-packages/torch/nn/modules/module.py", line 1762, in _call_impl
+    return forward_call(*args, **kwargs)
+  File "/teamspace/studios/this_studio/nanoGPT/model.py", line 352, in forward
+    def forward(self, idx, targets=None):
+  File "/home/zeus/miniconda3/envs/cloudspace/lib/python3.10/site-packages/torch/_dynamo/eval_frame.py", line 838, in _fn
+    return fn(*args, **kwargs)
+  File "/home/zeus/miniconda3/envs/cloudspace/lib/python3.10/site-packages/torch/_functorch/aot_autograd.py", line 1201, in forward
+    return compiled_fn(full_args)
+  File "/home/zeus/miniconda3/envs/cloudspace/lib/python3.10/site-packages/torch/_functorch/_aot_autograd/runtime_wrappers.py", line 315, in runtime_wrapper
+    all_outs = call_func_at_runtime_with_args(
+  File "/home/zeus/miniconda3/envs/cloudspace/lib/python3.10/site-packages/torch/_functorch/_aot_autograd/utils.py", line 126, in call_func_at_runtime_with_args
+    out = normalize_as_list(f(args))
+  File "/home/zeus/miniconda3/envs/cloudspace/lib/python3.10/site-packages/torch/_functorch/_aot_autograd/utils.py", line 100, in g
+    return f(*args)
+  File "/home/zeus/miniconda3/envs/cloudspace/lib/python3.10/site-packages/torch/autograd/function.py", line 575, in apply
+    return super().apply(*args, **kwargs)  # type: ignore[misc]
+  File "/home/zeus/miniconda3/envs/cloudspace/lib/python3.10/site-packages/torch/_functorch/_aot_autograd/runtime_wrappers.py", line 1937, in forward
+    fw_outs = call_func_at_runtime_with_args(
+  File "/home/zeus/miniconda3/envs/cloudspace/lib/python3.10/site-packages/torch/_functorch/_aot_autograd/utils.py", line 126, in call_func_at_runtime_with_args
+    out = normalize_as_list(f(args))
+  File "/home/zeus/miniconda3/envs/cloudspace/lib/python3.10/site-packages/torch/_functorch/_aot_autograd/runtime_wrappers.py", line 495, in wrapper
+    return compiled_fn(runtime_args)
+  File "/home/zeus/miniconda3/envs/cloudspace/lib/python3.10/site-packages/torch/_inductor/output_code.py", line 460, in __call__
+    return self.current_callable(inputs)
+  File "/home/zeus/miniconda3/envs/cloudspace/lib/python3.10/site-packages/torch/_inductor/utils.py", line 2404, in run
+    return model(new_inputs)
+  File "/tmp/torchinductor_adamskrodzki/uk/cuksyjlkqoywv5rpm34elptsx3skxwjtqphbeg6tzlrmn2lqttz6.py", line 2105, in call
+    buf312 = torch.ops.aten._scaled_dot_product_flash_attention.default(buf311, buf310, reinterpret_tensor(buf309, (12, 12, 1024, 16), (589824, 16, 576, 1), 384), 0.0, True, scale=0.25)
+  File "/home/zeus/miniconda3/envs/cloudspace/lib/python3.10/site-packages/torch/_ops.py", line 756, in __call__
+    return self._op(*args, **kwargs)
+KeyboardInterrupt
+Exception ignored in atexit callback: <function _start_and_connect_service.<locals>.teardown_atexit at 0x71d8e5617be0>
+Traceback (most recent call last):
+  File "/home/zeus/miniconda3/envs/cloudspace/lib/python3.10/site-packages/wandb/sdk/lib/service/service_connection.py", line 54, in teardown_atexit
+    conn.teardown(hooks.exit_code)
+  File "/home/zeus/miniconda3/envs/cloudspace/lib/python3.10/site-packages/wandb/sdk/lib/service/service_connection.py", line 182, in teardown
+    self._router.join()
+  File "/home/zeus/miniconda3/envs/cloudspace/lib/python3.10/site-packages/wandb/sdk/interface/router.py", line 75, in join
+    self._thread.join()
+  File "/home/zeus/miniconda3/envs/cloudspace/lib/python3.10/threading.py", line 1096, in join
+    self._wait_for_tstate_lock()
+  File "/home/zeus/miniconda3/envs/cloudspace/lib/python3.10/threading.py", line 1116, in _wait_for_tstate_lock
+    if lock.acquire(block, timeout):
+KeyboardInterrupt:
+Exception ignored in atexit callback: <function shutdown_compile_workers at 0x71d8f645a290>
+Traceback (most recent call last):
+  File "/home/zeus/miniconda3/envs/cloudspace/lib/python3.10/site-packages/torch/_inductor/async_compile.py", line 113, in shutdown_compile_workers
+    pool.shutdown()
+  File "/home/zeus/miniconda3/envs/cloudspace/lib/python3.10/site-packages/torch/_inductor/compile_worker/subproc_pool.py", line 239, in shutdown
+    self.process.wait(300)
+  File "/home/zeus/miniconda3/envs/cloudspace/lib/python3.10/subprocess.py", line 1209, in wait
+    return self._wait(timeout=timeout)
+  File "/home/zeus/miniconda3/envs/cloudspace/lib/python3.10/subprocess.py", line 1937, in _wait
+    time.sleep(delay)
+KeyboardInterrupt:

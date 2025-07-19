@@ -1,0 +1,44 @@
+================================================================================
+Training run started at 2025-07-18 23:55:35
+================================================================================
+Configuration:
+----------------------------------------
+always_save_checkpoint: True
+backend: nccl
+batch_size: 12
+beta1: 0.9
+beta2: 0.95
+bias: False
+block_size: 1024
+compile: True
+dataset: fineweb10B
+decay_lr: True
+device: cuda
+dropout: 0.0
+dtype: bfloat16
+eval_interval: 50
+eval_iters: 1
+eval_only: False
+file_logging: True
+grad_clip: 1.0
+gradient_accumulation_steps: 5
+init_from: scratch
+learning_rate: 0.0006
+log_dir: logs
+log_interval: 10
+lr_decay_iters: 600000
+max_iters: 600000
+min_lr: 6e-05
+n_embd: 128
+n_head: 12
+n_layer: 12
+out_dir: out
+rotary_base: 10000.0
+rotary_max_position_embeddings: 2048
+use_rotary_embeddings: True
+wandb_log: True
+wandb_project: owt
+wandb_run_name: gpt2-124M
+warmup_iters: 20
+weight_decay: 0.1
+----------------------------------------

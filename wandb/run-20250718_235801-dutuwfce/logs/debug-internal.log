@@ -1,0 +1,6 @@
+{"time":"2025-07-18T23:58:01.806918039Z","level":"INFO","msg":"stream: starting","core version":"0.21.0"}
+{"time":"2025-07-18T23:58:01.95639513Z","level":"INFO","msg":"stream: created new stream","id":"dutuwfce"}
+{"time":"2025-07-18T23:58:01.956459932Z","level":"INFO","msg":"stream: started","id":"dutuwfce"}
+{"time":"2025-07-18T23:58:01.956549705Z","level":"INFO","msg":"handler: started","stream_id":"dutuwfce"}
+{"time":"2025-07-18T23:58:01.956541949Z","level":"INFO","msg":"writer: Do: started","stream_id":"dutuwfce"}
+{"time":"2025-07-18T23:58:01.956556406Z","level":"INFO","msg":"sender: started","stream_id":"dutuwfce"}

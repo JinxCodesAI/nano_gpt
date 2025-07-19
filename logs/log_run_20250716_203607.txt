@@ -46,3 +46,6 @@ weight_decay: 0.1
 [2025-07-16 20:40:03] step 150: train loss 1.6237, val loss 1.8052
 [2025-07-16 20:43:27] step 300: train loss 1.3687, val loss 1.5932
 [2025-07-16 20:46:51] step 450: train loss 1.2603, val loss 1.5236
+[2025-07-16 20:50:14] step 600: train loss 1.1914, val loss 1.4984
+[2025-07-16 20:53:38] step 750: train loss 1.1372, val loss 1.4945
+[2025-07-16 20:57:02] step 900: train loss 1.0810, val loss 1.4883

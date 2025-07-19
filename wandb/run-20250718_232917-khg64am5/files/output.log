@@ -1,0 +1,16 @@
+Traceback (most recent call last):
+  File "/teamspace/studios/this_studio/nanoGPT/train.py", line 272, in <module>
+    X, Y = get_batch('train') # fetch the very first batch
+  File "/teamspace/studios/this_studio/nanoGPT/train.py", line 132, in get_batch
+    data = np.memmap(os.path.join(data_dir, 'train.bin'), dtype=np.uint16, mode='r')
+  File "/home/zeus/miniconda3/envs/cloudspace/lib/python3.10/site-packages/numpy/core/memmap.py", line 229, in __new__
+    f_ctx = open(os_fspath(filename), ('r' if mode == 'c' else mode)+'b')
+FileNotFoundError: [Errno 2] No such file or directory: 'data/fineweb10B/train.bin'
+Traceback (most recent call last):
+  File "/teamspace/studios/this_studio/nanoGPT/train.py", line 272, in <module>
+    X, Y = get_batch('train') # fetch the very first batch
+  File "/teamspace/studios/this_studio/nanoGPT/train.py", line 132, in get_batch
+    data = np.memmap(os.path.join(data_dir, 'train.bin'), dtype=np.uint16, mode='r')
+  File "/home/zeus/miniconda3/envs/cloudspace/lib/python3.10/site-packages/numpy/core/memmap.py", line 229, in __new__
+    f_ctx = open(os_fspath(filename), ('r' if mode == 'c' else mode)+'b')
+FileNotFoundError: [Errno 2] No such file or directory: 'data/fineweb10B/train.bin'
