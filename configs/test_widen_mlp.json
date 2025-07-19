@@ -1,9 +1,0 @@
-[
-  {
-    "name": "widen_mlp",
-    "value": 1.5,
-    "trigger_loss": 10.0,
-    "max_wait_iters": 100,
-    "reevaluate": true
-  }
-]
