@@ -1,0 +1,9 @@
+[
+    {
+      "name": "merge_lora_weights",
+      "value": null,
+      "trigger_loss": 10.0,
+      "max_wait_iters": 100,
+      "reevaluate": true
+    }
+  ]

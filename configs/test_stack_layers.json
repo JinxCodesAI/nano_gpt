@@ -1,0 +1,9 @@
+[
+    {
+      "name": "stack_layers",
+      "value": 2,
+      "trigger_loss": 10.0,
+      "max_wait_iters": 100,
+      "reevaluate": true
+    }
+  ]
