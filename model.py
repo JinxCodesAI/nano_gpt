@@ -42,9 +42,10 @@ class LoRAEmbedding(nn.Module):
     def merge_and_reset(self):
         if self.rank == 0 or self.lora_A is None or self.lora_B is None:
             return
-        # Calculate W_0 + B @ A
-        lora_update = self.lora_B.weight.t() @ self.lora_A.weight
-        self.main_weight.weight.data += lora_update.t() * (self.alpha / self.rank)
+        # Correct matrix multiplication order: A @ B
+        lora_update = self.lora_A.weight @ self.lora_B.weight.T
+        # The result is already (vocab_size, n_embd), so no transpose is needed.
+        self.main_weight.weight.data += lora_update * (self.alpha / self.rank)
         # Reset LoRA weights
         nn.init.normal_(self.lora_A.weight, std=0.02)
         nn.init.zeros_(self.lora_B.weight)
@@ -307,17 +308,15 @@ class GPT(nn.Module):
         self.transformer = nn.ModuleDict(transformer_dict)
         self.lm_head = nn.Linear(config.n_embd, config.vocab_size, bias=False)
         
-        # FIX: Handle weight tying properly for both standard and LoRA embeddings
-        # with weight tying when using torch.compile() some warnings get generated:
-        # "UserWarning: functional_call was passed multiple values for tied weights.
-        # This behavior is deprecated and will be an error in future versions"
-        # not 100% sure what this is, so far seems to be harmless. TODO investigate
         if isinstance(self.transformer.wte, LoRAEmbedding):
             # For LoRA embeddings, tie the main_weight with lm_head
             self.transformer.wte.main_weight.weight = self.lm_head.weight
+            # CRITICAL FIX: After tying, explicitly freeze the lm_head as well,
+            # since it now shares the same (supposedly frozen) weight tensor.
+            self.lm_head.requires_grad_(False)
         else:
             # Standard weight tying for regular embeddings
-            self.transformer.wte.weight = self.lm_head.weight # https://paperswithcode.com/method/weight-tying
+            self.transformer.wte.weight = self.lm_head.weight
 
         # init all weights
         self.apply(self._init_weights)
@@ -345,7 +344,8 @@ class GPT(nn.Module):
     def get_detailed_param_count(self):
         """
         Return a detailed parameter count broken down by component type.
-        This version distinguishes between total and trainable parameters.
+        This version distinguishes between total and trainable parameters and correctly
+        handles shared weights (weight tying) to avoid double-counting.
         """
         param_counts = {
             'total': {'total': 0, 'trainable': 0},
@@ -357,15 +357,32 @@ class GPT(nn.Module):
             'final_layer_norm': {'total': 0, 'trainable': 0},
             'language_model_head': {'total': 0, 'trainable': 0},
         }
+        
+        # Use a set to keep track of parameter IDs that have already been counted
+        counted_param_ids = set()
 
         # Helper function to update counts for a module's parameters
         def _update_counts(module, component_name):
             for p in module.parameters():
-                param_counts[component_name]['total'] += p.numel()
-                if p.requires_grad:
-                    param_counts[component_name]['trainable'] += p.numel()
+                # Only count a parameter if its ID hasn't been seen before
+                if id(p) not in counted_param_ids:
+                    total_params = p.numel()
+                    trainable_params = p.numel() if p.requires_grad else 0
+                    
+                    param_counts[component_name]['total'] += total_params
+                    param_counts[component_name]['trainable'] += trainable_params
+                    
+                    # Add the parameter's ID to the set of counted parameters
+                    counted_param_ids.add(id(p))
 
-        # Token embeddings
+        # --- Count parameters component by component ---
+        
+        # IMPORTANT: The order matters due to weight tying.
+        # We count the language_model_head first.
+        _update_counts(self.lm_head, 'language_model_head')
+        
+        # Now count the token embeddings. If weights are tied, the main embedding
+        # parameter will already be in counted_param_ids and will be skipped.
         _update_counts(self.transformer.wte, 'token_embeddings')
 
         # Position embeddings (if they exist)
@@ -381,30 +398,14 @@ class GPT(nn.Module):
 
         # Final layer norm
         _update_counts(self.transformer.ln_f, 'final_layer_norm')
-
-        # Language model head
-        _update_counts(self.lm_head, 'language_model_head')
-
-        # --- Final Aggregation ---
-        # The language_model_head is tied to the embedding weight.
-        # If the embedding is LoRA, its main weight (tied to lm_head) is frozen.
-        # Our _update_counts function correctly handles this by checking requires_grad.
-        # However, to avoid double-counting the total parameters, we must subtract
-        # the lm_head total, as its parameters are already counted in token_embeddings.
         
-        # Calculate the grand total
+        # --- Final Aggregation ---
+        # Now, sum up the component counts to get the grand total.
+        # This is now correct because double-counting has been prevented.
         for component in param_counts:
             if component != 'total':
                 param_counts['total']['total'] += param_counts[component]['total']
                 param_counts['total']['trainable'] += param_counts[component]['trainable']
-
-        # Correct for weight tying: lm_head shares weights with wte
-        # The parameters are the same object, so they are counted in both.
-        # We subtract the lm_head count from the grand total to correct this.
-        if self.transformer.wte.weight is self.lm_head.weight:
-            param_counts['total']['total'] -= self.lm_head.weight.numel()
-            # No need to adjust trainable count, as the requires_grad flag will be
-            # identical for both and the sum will be correct.
 
         return param_counts
 

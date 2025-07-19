@@ -22,7 +22,7 @@
   },
   {
     "name": "widen_mlp",
-    "value": 1.5,
+    "value": 2,
     "trigger_loss": 9.8,
     "max_wait_iters": 100,
     "reevaluate": true
@@ -38,6 +38,48 @@
     "name": "reset_lr_schedule",
     "value": null,
     "trigger_loss": 9.4,
+    "max_wait_iters": 100,
+    "reevaluate": false
+  },
+  {
+    "name": "decrease_attn_lora_scaling",
+    "value": 2,
+    "trigger_loss": 9.3,
+    "max_wait_iters": 100,
+    "reevaluate": true
+  },
+  {
+    "name": "reset_lr_schedule",
+    "value": null,
+    "trigger_loss": 9.2,
+    "max_wait_iters": 100,
+    "reevaluate": false
+  },
+  {
+    "name": "widen_mlp",
+    "value": 2,
+    "trigger_loss": 9.1,
+    "max_wait_iters": 100,
+    "reevaluate": true
+  },
+  {
+    "name": "reset_lr_schedule",
+    "value": null,
+    "trigger_loss": 9.0,
+    "max_wait_iters": 100,
+    "reevaluate": false
+  },
+  {
+    "name": "decrease_vocab_lora_scaling",
+    "value": 2,
+    "trigger_loss": 9.3,
+    "max_wait_iters": 100,
+    "reevaluate": true
+  },
+  {
+    "name": "reset_lr_schedule",
+    "value": null,
+    "trigger_loss": 9.2,
     "max_wait_iters": 100,
     "reevaluate": false
   }

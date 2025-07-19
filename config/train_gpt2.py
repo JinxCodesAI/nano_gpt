@@ -26,6 +26,3 @@ weight_decay = 1e-1
 #overrides
 
 use_rotary_embeddings = True
-#warmup_iters = 20 # how many steps to warm up for
-n_embd = 192
-n_hidden = 384

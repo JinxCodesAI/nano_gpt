@@ -69,6 +69,16 @@ compile = True # use PyTorch 2.0 to compile the model to be faster
 # Dynamic State Parameters for Training Orchestrator
 # These parameters hold the current state of the dynamic configuration
 # They are multipliers/divisors that modify the final values
+      
+# In train.py, Dynamic State Parameters section
+
+# ... (after lora_alpha_multiplier) ...
+# --- ADD THESE LINES ---
+# Concrete LoRA architectural parameters. These will be overridden by config files.
+embedding_mode = 'standard'
+attn_lora_rank = 0 # rank for attention LoRA, 0 disables
+embedding_rank = 0 # rank for embedding LoRA, 0 disables
+lora_alpha = 1.0 # scaling factor for LoRA layers
 attn_lora_rank_divisor = 0 # Divisor for attention LoRA rank (0 disables LoRA)
 vocab_lora_rank_divisor = 0 # Divisor for embedding LoRA rank (0 disables LoRA)
 lora_alpha_multiplier = 1.0 # Multiplier for LoRA alpha
@@ -87,6 +97,19 @@ scaling_schedule = [] # Will be loaded from file or set programmatically
 config_keys = [k for k,v in globals().items() if not k.startswith('_') and isinstance(v, (int, float, bool, str))]
 exec(open('configurator.py').read()) # overrides from command line or config file
 config = {k: globals()[k] for k in config_keys} # will be useful for logging
+
+
+      
+def log_detailed_params(model_to_log):
+    """Logs the detailed parameter count of the provided model."""
+    if master_process:
+        print("\nDetailed parameter count:")
+        detailed_params = model_to_log.get_detailed_param_count()
+        for component, counts in detailed_params.items():
+            total_str = f"{counts['total']:,}"
+            trainable_str = f"{counts['trainable']:,}"
+            print(f"  {component:<22} | Total: {total_str:>12} | Trainable: {trainable_str:>12}")
+        print("-" * 60) # Add a separator for clarity
 
 # Load scaling schedule if specified
 def load_scaling_schedule(file_path):
@@ -195,10 +218,16 @@ if os.path.exists(meta_path):
 
 # model init
 model_args = dict(n_layer=n_layer, n_head=n_head, n_embd=n_embd, block_size=block_size,
-                  bias=bias, vocab_size=None, dropout=dropout, n_hidden=n_hidden,
-                  use_rotary_embeddings=use_rotary_embeddings,
-                  rotary_base=rotary_base,
-                  rotary_max_position_embeddings=rotary_max_position_embeddings)
+                bias=bias, vocab_size=None, dropout=dropout, n_hidden=n_hidden,
+                use_rotary_embeddings=use_rotary_embeddings,
+                rotary_base=rotary_base,
+                rotary_max_position_embeddings=rotary_max_position_embeddings,
+                # --- ADD THESE LINES ---
+                embedding_mode=embedding_mode,
+                embedding_rank=embedding_rank,
+                attn_lora_rank=attn_lora_rank,
+                lora_alpha=lora_alpha
+            )
 if init_from == 'scratch':
     print("Initializing a new model from scratch")
     model_args['vocab_size'] = meta_vocab_size if meta_vocab_size is not None else 50304
@@ -231,17 +260,6 @@ if block_size < model.config.block_size:
     model.crop_block_size(block_size)
     model_args['block_size'] = block_size
 model.to(device)
-
-if master_process:
-    print("\nDetailed parameter count:")
-    detailed_params = raw_model.get_detailed_param_count() # Use raw_model to get params of the actual model
-    for component, counts in detailed_params.items():
-        # Format with commas for readability
-        total_str = f"{counts['total']:,}"
-        trainable_str = f"{counts['trainable']:,}"
-        
-        # Right-align the numbers for a clean table-like view
-        print(f"  {component:<22} | Total: {total_str:>12} | Trainable: {trainable_str:>12}")
 
 scaler = torch.cuda.amp.GradScaler(enabled=(dtype == 'float16'))
 optimizer = model.configure_optimizers(weight_decay, learning_rate, (beta1, beta2), device_type)
@@ -408,16 +426,8 @@ def execute_operation(op, trigger_reason, current_val_loss, iter_num):
             unwrapped_model.merge_lora_weights()
             if master_process:
                 training_logger.log_operation_success(iter_num, op_name, {'status': 'merged'})
-        if master_process:
-            print("\nDetailed parameter count:")
-            detailed_params = raw_model.get_detailed_param_count() # Use raw_model to get params of the actual model
-            for component, counts in detailed_params.items():
-                # Format with commas for readability
-                total_str = f"{counts['total']:,}"
-                trainable_str = f"{counts['trainable']:,}"
-                
-                # Right-align the numbers for a clean table-like view
-                print(f"  {component:<22} | Total: {total_str:>12} | Trainable: {trainable_str:>12}")
+        
+        log_detailed_params(unwrapped_model)
         
         # Re-create optimizer for the modified model
         if master_process:

@@ -10,7 +10,7 @@ wandb_run_name='orchestrator-lora-test'
 n_layer = 4
 n_head = 4
 n_embd = 128
-n_hidden = 256
+n_hidden = 64
 block_size = 64
 
 # Make the training loop very short
