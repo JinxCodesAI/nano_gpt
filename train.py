@@ -21,6 +21,8 @@ import time
 import random
 import math
 import pickle
+import json
+import yaml
 from contextlib import nullcontext
 import numpy as np
 import torch
@@ -82,9 +84,69 @@ device = 'cuda' # examples: 'cpu', 'cuda', 'cuda:0', 'cuda:1' etc., or try 'mps'
 dtype = 'bfloat16' if torch.cuda.is_available() and torch.cuda.is_bf16_supported() else 'float16' # 'float32', 'bfloat16', or 'float16', the latter will auto implement a GradScaler
 compile = True # use PyTorch 2.0 to compile the model to be faster
 # -----------------------------------------------------------------------------
+# Dynamic State Parameters for Training Orchestrator
+# These parameters hold the current state of the dynamic configuration
+# They are multipliers/divisors that modify the final values
+attn_lora_rank_divisor = 0 # Divisor for attention LoRA rank (0 disables LoRA)
+vocab_lora_rank_divisor = 0 # Divisor for embedding LoRA rank (0 disables LoRA)
+lora_alpha_multiplier = 1.0 # Multiplier for LoRA alpha
+n_layer_divisor = 1.0 # Divisor for model depth
+n_hidden_divisor = 1.0 # Divisor for MLP width
+batch_size_multiplier = 1.0 # Multiplier for batch size
+grad_accum_multiplier = 1.0 # Multiplier for accumulation steps
+lr_multiplier = 1.0 # Multiplier for learning rate
+warmup_iters_multiplier = 1.0 # Multiplier for warmup iterations
+eval_iters_multiplier = 1.0 # Multiplier for evaluation iterations
+eval_interval_multiplier = 1.0 # Multiplier for evaluation frequency
+# scaling schedule configuration
+scaling_schedule_file = None # Path to scaling schedule config file (YAML/JSON)
+scaling_schedule = [] # Will be loaded from file or set programmatically
+# -----------------------------------------------------------------------------
 config_keys = [k for k,v in globals().items() if not k.startswith('_') and isinstance(v, (int, float, bool, str))]
 exec(open('configurator.py').read()) # overrides from command line or config file
 config = {k: globals()[k] for k in config_keys} # will be useful for logging
+
+# Load scaling schedule if specified
+def load_scaling_schedule(file_path):
+    """Load scaling schedule from YAML or JSON file"""
+    if not file_path or not os.path.exists(file_path):
+        return []
+
+    try:
+        with open(file_path, 'r') as f:
+            if file_path.endswith('.yaml') or file_path.endswith('.yml'):
+                schedule = yaml.safe_load(f)
+            elif file_path.endswith('.json'):
+                schedule = json.load(f)
+            else:
+                print(f"Warning: Unknown file format for scaling schedule: {file_path}")
+                return []
+
+        # Validate schedule format
+        if not isinstance(schedule, list):
+            print(f"Warning: Scaling schedule must be a list, got {type(schedule)}")
+            return []
+
+        for i, op in enumerate(schedule):
+            required_keys = ['name', 'value', 'trigger_loss', 'max_wait_iters', 'reevaluate']
+            if not all(key in op for key in required_keys):
+                print(f"Warning: Operation {i} missing required keys: {required_keys}")
+                return []
+
+        print(f"Loaded scaling schedule with {len(schedule)} operations from {file_path}")
+        return schedule
+
+    except Exception as e:
+        print(f"Error loading scaling schedule from {file_path}: {e}")
+        return []
+
+# Load scaling schedule
+if scaling_schedule_file:
+    scaling_schedule = load_scaling_schedule(scaling_schedule_file)
+
+# Training Orchestrator State
+iter_of_last_op = 0 # Iteration number when last operation was executed
+lr_schedule_offset = 0 # Offset for learning rate schedule (for reset_lr_schedule)
 # -----------------------------------------------------------------------------
 
 # logging setup
@@ -266,17 +328,69 @@ def estimate_loss():
 
 # learning rate decay scheduler (cosine with warmup)
 def get_lr(it):
+    # Apply lr_schedule_offset for reset_lr_schedule operation
+    effective_it = it - lr_schedule_offset
     # 1) linear warmup for warmup_iters steps
-    if it < warmup_iters:
-        return learning_rate * (it + 1) / (warmup_iters + 1)
+    if effective_it < warmup_iters:
+        return learning_rate * lr_multiplier * (effective_it + 1) / (warmup_iters + 1)
     # 2) if it > lr_decay_iters, return min learning rate
-    if it > lr_decay_iters:
-        return min_lr
+    if effective_it > lr_decay_iters:
+        return min_lr * lr_multiplier
     # 3) in between, use cosine decay down to min learning rate
-    decay_ratio = (it - warmup_iters) / (lr_decay_iters - warmup_iters)
+    decay_ratio = (effective_it - warmup_iters) / (lr_decay_iters - warmup_iters)
     assert 0 <= decay_ratio <= 1
     coeff = 0.5 * (1.0 + math.cos(math.pi * decay_ratio)) # coeff ranges 0..1
-    return min_lr + coeff * (learning_rate - min_lr)
+    return (min_lr + coeff * (learning_rate - min_lr)) * lr_multiplier
+
+# Training Orchestrator - Execute Operation Function
+def execute_operation(op):
+    """Execute a scaling operation and update global state"""
+    global lr_multiplier, batch_size_multiplier, grad_accum_multiplier, lr_schedule_offset
+    global gradient_accumulation_steps, batch_size
+
+    op_name = op['name']
+    op_value = op['value']
+
+    print(f"Executing operation: {op_name} with value: {op_value}")
+
+    if op_name == 'change_lr':
+        if op_value <= 0:
+            print(f"Error: Invalid lr multiplier {op_value}, must be positive")
+            return False
+        lr_multiplier *= op_value
+        print(f"Learning rate multiplier updated to: {lr_multiplier}")
+
+    elif op_name == 'change_batch_size':
+        if op_value <= 0:
+            print(f"Error: Invalid batch size multiplier {op_value}, must be positive")
+            return False
+        old_batch_size = batch_size
+        batch_size_multiplier *= op_value
+        # Update the actual batch_size variable
+        new_batch_size = max(1, int(batch_size * batch_size_multiplier))
+        print(f"Batch size updated from {old_batch_size} to {new_batch_size} (multiplier: {batch_size_multiplier})")
+        batch_size = new_batch_size
+
+    elif op_name == 'change_grad_accum':
+        if op_value <= 0:
+            print(f"Error: Invalid grad accum multiplier {op_value}, must be positive")
+            return False
+        old_grad_accum = gradient_accumulation_steps
+        grad_accum_multiplier *= op_value
+        # Update the actual gradient_accumulation_steps variable
+        new_grad_accum = max(1, int(gradient_accumulation_steps * grad_accum_multiplier))
+        print(f"Gradient accumulation steps updated from {old_grad_accum} to {new_grad_accum} (multiplier: {grad_accum_multiplier})")
+        gradient_accumulation_steps = new_grad_accum
+
+    elif op_name == 'reset_lr_schedule':
+        lr_schedule_offset = iter_num
+        print(f"Learning rate schedule reset at iteration {iter_num}")
+
+    else:
+        print(f"Warning: Unknown operation '{op_name}' - skipping")
+        return False
+
+    return True
 
 # logging
 if wandb_log and master_process:
@@ -323,6 +437,51 @@ while True:
                 }
                 print(f"saving checkpoint to {out_dir}")
                 torch.save(checkpoint, os.path.join(out_dir, 'ckpt.pt'))
+
+        # Training Orchestrator - Check scaling schedule
+        if scaling_schedule and master_process:
+            current_val_loss = losses['val']
+
+            # Check if we should execute the next operation
+            if len(scaling_schedule) > 0:
+                next_op = scaling_schedule[0]
+
+                # Check trigger conditions
+                loss_triggered = current_val_loss < next_op['trigger_loss']
+                timeout_triggered = (iter_num - iter_of_last_op) >= next_op['max_wait_iters']
+
+                if loss_triggered or timeout_triggered:
+                    print(f"\n=== SCALING OPERATION TRIGGERED ===")
+                    print(f"Operation: {next_op['name']}")
+                    print(f"Trigger reason: {'Loss threshold' if loss_triggered else 'Timeout'}")
+                    print(f"Current val loss: {current_val_loss:.4f}, Trigger loss: {next_op['trigger_loss']:.4f}")
+                    print(f"Iterations since last op: {iter_num - iter_of_last_op}, Max wait: {next_op['max_wait_iters']}")
+
+                    # Execute the operation
+                    if execute_operation(next_op):
+                        # Remove the executed operation from the schedule
+                        scaling_schedule.pop(0)
+                        iter_of_last_op = iter_num
+
+                        # Re-evaluate if requested
+                        if next_op['reevaluate']:
+                            print("Re-evaluating validation loss after operation...")
+                            losses = estimate_loss()
+                            print(f"New val loss after operation: {losses['val']:.4f}")
+
+                            # Update logging with new loss
+                            training_logger.log_step(iter_num, losses['train'], losses['val'])
+                            if wandb_log:
+                                wandb.log({
+                                    "iter": iter_num,
+                                    "train/loss": losses['train'],
+                                    "val/loss": losses['val'],
+                                    "lr": lr,
+                                    "mfu": running_mfu*100,
+                                })
+
+                    print(f"=== SCALING OPERATION COMPLETE ===\n")
+
     if iter_num == 0 and eval_only:
         break
 

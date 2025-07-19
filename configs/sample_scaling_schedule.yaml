@@ -1,0 +1,39 @@
+# Sample Scaling Schedule Configuration
+# This file defines the operations to be executed during training
+# Each operation has the following structure:
+# - name: The name of the operation function to call
+# - value: The argument for the operation (multiplier, divisor, etc.)
+# - trigger_loss: The validation loss threshold that triggers the operation
+# - max_wait_iters: Maximum iterations to wait before forcing the operation
+# - reevaluate: Whether to immediately re-evaluate validation loss after operation
+
+# Basic operations example - focusing on hyperparameter changes
+- name: change_lr
+  value: 2.0  # Double the learning rate
+  trigger_loss: 6.0
+  max_wait_iters: 50000
+  reevaluate: false
+
+- name: change_batch_size
+  value: 1.5  # Increase batch size by 50%
+  trigger_loss: 5.5
+  max_wait_iters: 75000
+  reevaluate: false
+
+- name: reset_lr_schedule
+  value: null  # No value needed for reset
+  trigger_loss: 5.2
+  max_wait_iters: 1000
+  reevaluate: false
+
+- name: change_grad_accum
+  value: 2.0  # Double gradient accumulation steps
+  trigger_loss: 4.8
+  max_wait_iters: 60000
+  reevaluate: false
+
+- name: change_lr
+  value: 0.5  # Halve the learning rate
+  trigger_loss: 4.5
+  max_wait_iters: 100000
+  reevaluate: false
