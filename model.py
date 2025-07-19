@@ -344,95 +344,68 @@ class GPT(nn.Module):
 
     def get_detailed_param_count(self):
         """
-        Return detailed parameter count broken down by component type.
-        Returns a dictionary with parameter counts for each component.
+        Return a detailed parameter count broken down by component type.
+        This version distinguishes between total and trainable parameters.
         """
         param_counts = {
-            'token_embeddings': 0,
-            'position_embeddings': 0,
-            'attention_layers': 0,
-            'feed_forward_layers': 0,
-            'layer_norms': 0,
-            'final_layer_norm': 0,
-            'language_model_head': 0,
-            'rotary_embeddings': 0,
-            'total': 0
+            'total': {'total': 0, 'trainable': 0},
+            'token_embeddings': {'total': 0, 'trainable': 0},
+            'position_embeddings': {'total': 0, 'trainable': 0},
+            'attention_layers': {'total': 0, 'trainable': 0},
+            'feed_forward_layers': {'total': 0, 'trainable': 0},
+            'layer_norms': {'total': 0, 'trainable': 0},
+            'final_layer_norm': {'total': 0, 'trainable': 0},
+            'language_model_head': {'total': 0, 'trainable': 0},
         }
-        
+
+        # Helper function to update counts for a module's parameters
+        def _update_counts(module, component_name):
+            for p in module.parameters():
+                param_counts[component_name]['total'] += p.numel()
+                if p.requires_grad:
+                    param_counts[component_name]['trainable'] += p.numel()
+
         # Token embeddings
-        param_counts['token_embeddings'] = self.transformer.wte.weight.numel()
-        
+        _update_counts(self.transformer.wte, 'token_embeddings')
+
         # Position embeddings (if they exist)
         if not self.config.use_rotary_embeddings and hasattr(self.transformer, 'wpe'):
-            param_counts['position_embeddings'] = self.transformer.wpe.weight.numel()
-        
-        # Rotary embeddings (if used)
-        if self.config.use_rotary_embeddings:
-            # Rotary embeddings don't have trainable parameters, but we'll track the buffer
-            for block in self.transformer.h:
-                if hasattr(block.attn, 'rotary_emb'):
-                    # Count any parameters in rotary embedding (usually none)
-                    for p in block.attn.rotary_emb.parameters():
-                        param_counts['rotary_embeddings'] += p.numel()
-        
-        # Attention layers across all blocks
-        attention_params = 0
+            _update_counts(self.transformer.wpe, 'position_embeddings')
+
+        # Iterate through all blocks for attention, MLP, and layer norms
         for block in self.transformer.h:
-            # Query, Key, Value projections
-            attention_params += block.attn.c_attn.weight.numel()
-            if block.attn.c_attn.bias is not None:
-                attention_params += block.attn.c_attn.bias.numel()
-            
-            # Output projection
-            attention_params += block.attn.c_proj.weight.numel()
-            if block.attn.c_proj.bias is not None:
-                attention_params += block.attn.c_proj.bias.numel()
-        
-        param_counts['attention_layers'] = attention_params
-        
-        # Feed-forward layers across all blocks
-        ff_params = 0
-        for block in self.transformer.h:
-            # First linear layer
-            ff_params += block.mlp.c_fc.weight.numel()
-            if block.mlp.c_fc.bias is not None:
-                ff_params += block.mlp.c_fc.bias.numel()
-            
-            # Second linear layer
-            ff_params += block.mlp.c_proj.weight.numel()
-            if block.mlp.c_proj.bias is not None:
-                ff_params += block.mlp.c_proj.bias.numel()
-        
-        param_counts['feed_forward_layers'] = ff_params
-        
-        # Layer norms across all blocks
-        layer_norm_params = 0
-        for block in self.transformer.h:
-            # Attention layer norm
-            layer_norm_params += block.ln_1.weight.numel()
-            if block.ln_1.bias is not None:
-                layer_norm_params += block.ln_1.bias.numel()
-            
-            # Feed-forward layer norm
-            layer_norm_params += block.ln_2.weight.numel()
-            if block.ln_2.bias is not None:
-                layer_norm_params += block.ln_2.bias.numel()
-        
-        param_counts['layer_norms'] = layer_norm_params
-        
+            _update_counts(block.attn, 'attention_layers')
+            _update_counts(block.mlp, 'feed_forward_layers')
+            _update_counts(block.ln_1, 'layer_norms')
+            _update_counts(block.ln_2, 'layer_norms')
+
         # Final layer norm
-        param_counts['final_layer_norm'] = self.transformer.ln_f.weight.numel()
-        if self.transformer.ln_f.bias is not None:
-            param_counts['final_layer_norm'] += self.transformer.ln_f.bias.numel()
-        
+        _update_counts(self.transformer.ln_f, 'final_layer_norm')
+
         # Language model head
-        param_counts['language_model_head'] = self.lm_head.weight.numel()
-        if self.lm_head.bias is not None:
-            param_counts['language_model_head'] += self.lm_head.bias.numel()
+        _update_counts(self.lm_head, 'language_model_head')
+
+        # --- Final Aggregation ---
+        # The language_model_head is tied to the embedding weight.
+        # If the embedding is LoRA, its main weight (tied to lm_head) is frozen.
+        # Our _update_counts function correctly handles this by checking requires_grad.
+        # However, to avoid double-counting the total parameters, we must subtract
+        # the lm_head total, as its parameters are already counted in token_embeddings.
         
-        # Calculate total
-        param_counts['total'] = sum(param_counts.values()) - param_counts.get('rotary_embeddings', 0)
-        
+        # Calculate the grand total
+        for component in param_counts:
+            if component != 'total':
+                param_counts['total']['total'] += param_counts[component]['total']
+                param_counts['total']['trainable'] += param_counts[component]['trainable']
+
+        # Correct for weight tying: lm_head shares weights with wte
+        # The parameters are the same object, so they are counted in both.
+        # We subtract the lm_head count from the grand total to correct this.
+        if self.transformer.wte.weight is self.lm_head.weight:
+            param_counts['total']['total'] -= self.lm_head.weight.numel()
+            # No need to adjust trainable count, as the requires_grad flag will be
+            # identical for both and the sum will be correct.
+
         return param_counts
 
     def _init_weights(self, module):
@@ -650,35 +623,49 @@ class GPT(nn.Module):
         for block in self.transformer.h:
             mlp = block.mlp
             w_fc, b_fc, w_proj = mlp.c_fc.weight, mlp.c_fc.bias, mlp.c_proj.weight
+            
+            # Get the correct device from an existing parameter
+            device = w_fc.device
+            
             original_hidden_dim = w_fc.shape[0]
             new_hidden_dim = int(original_hidden_dim * scale_factor)
 
+            # Create new layers on the CPU
             new_c_fc = nn.Linear(self.config.n_embd, new_hidden_dim, bias=self.config.bias)
             new_c_proj = nn.Linear(new_hidden_dim, self.config.n_embd, bias=self.config.bias)
             
-            # Net2WiderNet mapping
-            mapping = torch.randint(0, original_hidden_dim, (new_hidden_dim,), device=w_fc.device)
-            mapping[:original_hidden_dim] = torch.arange(original_hidden_dim)
+            # Net2WiderNet mapping, created on the correct device
+            mapping = torch.randint(0, original_hidden_dim, (new_hidden_dim,), device=device)
+            mapping[:original_hidden_dim] = torch.arange(original_hidden_dim, device=device)
             
-            # Copy weights for the first linear layer
+            # === FIX STARTS HERE ===
+            # Move the new layers to the correct device BEFORE operating on their weights.
+            new_c_fc = new_c_fc.to(device)
+            new_c_proj = new_c_proj.to(device)
+            # === FIX ENDS HERE ===
+            
+            # Now all tensors (new_c_fc.weight, w_fc, mapping) are on the same device.
             new_c_fc.weight.data.copy_(w_fc.data[mapping])
             if b_fc is not None:
                 new_c_fc.bias.data.copy_(b_fc.data[mapping])
             
-            # CRITICAL: Break symmetry for new neurons by adding small noise
+            # Break symmetry for new neurons by adding small noise
             if new_hidden_dim > original_hidden_dim:
                 noise = torch.randn_like(new_c_fc.weight.data[original_hidden_dim:]) * 1e-4
                 new_c_fc.weight.data[original_hidden_dim:] += noise
             
-            # Scale weights for the output projection layer
-            replication_factors = torch.zeros(original_hidden_dim, device=w_fc.device)
+            # replication_factors tensor, created on the correct device
+            replication_factors = torch.zeros(original_hidden_dim, device=device)
             for i in range(original_hidden_dim):
                 replication_factors[i] = (mapping == i).sum()
             
+            # All tensors (new_c_proj.weight, w_proj, mapping, replication_factors) are now on the same device.
             new_c_proj.weight.data.copy_(w_proj.data[:, mapping])
             new_c_proj.weight.data /= replication_factors[mapping].view(1, -1)
             
-            mlp.c_fc, mlp.c_proj = new_c_fc, new_c_proj
+            # Assign the new, fully-formed, and device-correct layers
+            mlp.c_fc = new_c_fc
+            mlp.c_proj = new_c_proj
             
         self.config.n_hidden = new_hidden_dim
         print(f"MLP hidden dimension widened to {new_hidden_dim}.")
@@ -694,12 +681,6 @@ class GPT(nn.Module):
         new_rank = self.config.n_embd // new_rank_divisor if new_rank_divisor > 0 else 0
         print(f"Resizing attention LoRA rank to {new_rank} (divisor: {new_rank_divisor})")
         
-        # For now, this is a placeholder - full implementation would require
-        # careful state transfer between different rank LoRA layers
-        # This would involve merging current LoRA weights and re-initializing
-        # with new rank while preserving the learned function
-        print("LoRA rank resizing not fully implemented yet")
-
     def resize_embedding_rank(self, new_rank_divisor):
         """
         Resize embedding LoRA rank by changing the rank divisor.

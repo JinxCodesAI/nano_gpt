@@ -1,4 +1,5 @@
-      
+# File: config/test_base_lora.py
+
 # Base config for fast, small-scale testing of LoRA operations.
 
 wandb_log = False
@@ -13,7 +14,7 @@ n_hidden = 256
 block_size = 64
 
 # Make the training loop very short
-max_iters = 300
+max_iters = 3000
 lr_decay_iters = 300
 gradient_accumulation_steps = 4
 batch_size = 8
@@ -40,6 +41,4 @@ lora_alpha_multiplier = 1.0
 # Calculate the concrete rank values needed for GPTConfig
 attn_lora_rank = n_embd // attn_lora_rank_divisor if attn_lora_rank_divisor > 0 else 0
 embedding_rank = n_embd // vocab_lora_rank_divisor if vocab_lora_rank_divisor > 0 else 0
-lora_alpha = 1.0 * lora_alpha_multiplier # Initial alpha value
-
-    
+lora_alpha = 1.0 * lora_alpha_multiplier

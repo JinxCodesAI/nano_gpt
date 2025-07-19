@@ -234,9 +234,14 @@ model.to(device)
 
 if master_process:
     print("\nDetailed parameter count:")
-    detailed_params = model.get_detailed_param_count()
-    for component, count in detailed_params.items():
-        print(f"  {component}: {count:,}")
+    detailed_params = raw_model.get_detailed_param_count() # Use raw_model to get params of the actual model
+    for component, counts in detailed_params.items():
+        # Format with commas for readability
+        total_str = f"{counts['total']:,}"
+        trainable_str = f"{counts['trainable']:,}"
+        
+        # Right-align the numbers for a clean table-like view
+        print(f"  {component:<22} | Total: {total_str:>12} | Trainable: {trainable_str:>12}")
 
 scaler = torch.cuda.amp.GradScaler(enabled=(dtype == 'float16'))
 optimizer = model.configure_optimizers(weight_decay, learning_rate, (beta1, beta2), device_type)
@@ -403,6 +408,16 @@ def execute_operation(op, trigger_reason, current_val_loss, iter_num):
             unwrapped_model.merge_lora_weights()
             if master_process:
                 training_logger.log_operation_success(iter_num, op_name, {'status': 'merged'})
+        if master_process:
+            print("\nDetailed parameter count:")
+            detailed_params = raw_model.get_detailed_param_count() # Use raw_model to get params of the actual model
+            for component, counts in detailed_params.items():
+                # Format with commas for readability
+                total_str = f"{counts['total']:,}"
+                trainable_str = f"{counts['trainable']:,}"
+                
+                # Right-align the numbers for a clean table-like view
+                print(f"  {component:<22} | Total: {total_str:>12} | Trainable: {trainable_str:>12}")
         
         # Re-create optimizer for the modified model
         if master_process:
