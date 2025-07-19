@@ -16,9 +16,14 @@ The Training Orchestrator enables dynamic adjustment of training hyperparameters
 
 ### ✅ Basic Operations
 - `change_lr`: Multiply learning rate by specified factor
-- `change_batch_size`: Multiply batch size by specified factor  
+- `change_batch_size`: Multiply batch size by specified factor
 - `change_grad_accum`: Multiply gradient accumulation steps by specified factor
 - `reset_lr_schedule`: Reset learning rate warmup/decay schedule offset
+
+### ✅ Training Schedule Operations
+- `change_warmup_iters`: Multiply warmup iterations and lr_decay_iters by specified factor
+- `change_eval_iters`: Multiply evaluation iterations by specified factor
+- `change_eval_interval`: Multiply evaluation frequency by specified factor
 
 ### ✅ Testing & Validation
 - Integration tests for configuration loading and validation
@@ -43,6 +48,24 @@ Create a scaling schedule configuration file (YAML or JSON):
   value: 1.5              # Increase batch size by 50%
   trigger_loss: 5.5
   max_wait_iters: 75000
+  reevaluate: false
+
+- name: change_eval_interval
+  value: 2.0              # Double evaluation interval (evaluate less frequently)
+  trigger_loss: 5.0
+  max_wait_iters: 100000
+  reevaluate: false
+
+- name: change_eval_iters
+  value: 1.5              # Increase evaluation precision by 50%
+  trigger_loss: 4.5
+  max_wait_iters: 125000
+  reevaluate: true
+
+- name: change_warmup_iters
+  value: 0.8              # Reduce warmup iterations by 20%
+  trigger_loss: 4.0
+  max_wait_iters: 150000
   reevaluate: false
 ```
 
@@ -75,6 +98,7 @@ Learning rate multiplier updated to: 2.0
 - `configs/sample_scaling_schedule.yaml`: Production example with realistic thresholds
 - `configs/sample_scaling_schedule.json`: Same schedule in JSON format
 - `configs/test_scaling_schedule.yaml`: Quick-trigger configuration for testing
+- `configs/multiplier_operations_example.yaml`: Example using new multiplier operations
 
 ### Configuration Format
 
@@ -105,6 +129,9 @@ Located in `train.py` after the system configuration:
 - `batch_size_multiplier`: Current batch size multiplier
 - `grad_accum_multiplier`: Current gradient accumulation multiplier
 - `lr_schedule_offset`: Offset for learning rate schedule reset
+- `warmup_iters_multiplier`: Current warmup iterations multiplier
+- `eval_iters_multiplier`: Current evaluation iterations multiplier
+- `eval_interval_multiplier`: Current evaluation interval multiplier
 
 ### Operation Execution
 The `execute_operation()` function handles all operations and updates global state. It includes validation for:

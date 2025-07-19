@@ -351,6 +351,7 @@ def get_lr(it):
 def execute_operation(op, trigger_reason, current_val_loss, iter_num):
     """Execute a scaling operation and update global state with comprehensive logging"""
     global lr_multiplier, batch_size_multiplier, grad_accum_multiplier, lr_schedule_offset
+    global warmup_iters_multiplier, eval_iters_multiplier, eval_interval_multiplier
     global gradient_accumulation_steps, batch_size, training_logger, master_process
 
     op_name = op['name']
@@ -450,6 +451,69 @@ def execute_operation(op, trigger_reason, current_val_loss, iter_num):
             training_logger.log_operation_success(iter_num, op_name, {
                 'old_lr_schedule_offset': old_lr_schedule_offset,
                 'new_lr_schedule_offset': lr_schedule_offset
+            })
+
+    elif op_name == 'change_warmup_iters':
+        if op_value <= 0:
+            error_msg = f"Invalid warmup iters multiplier {op_value}, must be positive"
+            if master_process:
+                print(f"Error: {error_msg}")
+                training_logger.log_operation_error(iter_num, op_name, error_msg)
+            return False
+
+        old_warmup_iters_multiplier = warmup_iters_multiplier
+        warmup_iters_multiplier *= op_value
+
+        if master_process:
+            print(f"Warmup iterations multiplier updated from {old_warmup_iters_multiplier:.4f} to {warmup_iters_multiplier:.4f}")
+
+            # Log detailed change to file
+            training_logger.log_operation_success(iter_num, op_name, {
+                'old_warmup_iters_multiplier': old_warmup_iters_multiplier,
+                'new_warmup_iters_multiplier': warmup_iters_multiplier,
+                'multiplier_applied': op_value
+            })
+
+    elif op_name == 'change_eval_iters':
+        if op_value <= 0:
+            error_msg = f"Invalid eval iters multiplier {op_value}, must be positive"
+            if master_process:
+                print(f"Error: {error_msg}")
+                training_logger.log_operation_error(iter_num, op_name, error_msg)
+            return False
+
+        old_eval_iters_multiplier = eval_iters_multiplier
+        eval_iters_multiplier *= op_value
+
+        if master_process:
+            print(f"Evaluation iterations multiplier updated from {old_eval_iters_multiplier:.4f} to {eval_iters_multiplier:.4f}")
+
+            # Log detailed change to file
+            training_logger.log_operation_success(iter_num, op_name, {
+                'old_eval_iters_multiplier': old_eval_iters_multiplier,
+                'new_eval_iters_multiplier': eval_iters_multiplier,
+                'multiplier_applied': op_value
+            })
+
+    elif op_name == 'change_eval_interval':
+        if op_value <= 0:
+            error_msg = f"Invalid eval interval multiplier {op_value}, must be positive"
+            if master_process:
+                print(f"Error: {error_msg}")
+                training_logger.log_operation_error(iter_num, op_name, error_msg)
+            return False
+
+        old_eval_interval_multiplier = eval_interval_multiplier
+        eval_interval_multiplier *= op_value
+
+        if master_process:
+            print(f"Evaluation interval multiplier updated from {old_eval_interval_multiplier:.4f} to {eval_interval_multiplier:.4f}")
+
+            # Log detailed change to file
+            training_logger.log_operation_success(iter_num, op_name, {
+                'old_eval_interval_multiplier': old_eval_interval_multiplier,
+                'new_eval_interval_multiplier': eval_interval_multiplier,
+                'multiplier_applied': op_value
             })
 
     else:
