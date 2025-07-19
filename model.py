@@ -154,9 +154,17 @@ class CausalSelfAttention(nn.Module):
     def __init__(self, config):
         super().__init__()
         assert config.n_embd % config.n_head == 0
-        # key, query, value projections for all heads, but in a batch
-        self.c_attn = nn.Linear(config.n_embd, 3 * config.n_embd, bias=config.bias)
-        # output projection
+
+        # FIX: Dynamically choose between LoRALinear and nn.Linear for the QKV projection
+        if config.attn_lora_rank > 0:
+            self.c_attn = LoRALinear(config.n_embd, 3 * config.n_embd,
+                                     rank=config.attn_lora_rank,
+                                     alpha=config.lora_alpha,
+                                     bias=config.bias)
+        else:
+            self.c_attn = nn.Linear(config.n_embd, 3 * config.n_embd, bias=config.bias)
+
+        # Output projection (typically not adapted with LoRA, but could be)
         self.c_proj = nn.Linear(config.n_embd, config.n_embd, bias=config.bias)
         # regularization
         self.attn_dropout = nn.Dropout(config.dropout)
@@ -276,9 +284,17 @@ class GPT(nn.Module):
         assert config.block_size is not None
         self.config = config
 
+        # FIX: Dynamically choose the embedding layer type based on the config
+        if config.embedding_mode == 'lora' and config.embedding_rank > 0:
+            wte_module = LoRAEmbedding(config.vocab_size, config.n_embd,
+                                       rank=config.embedding_rank,
+                                       alpha=config.lora_alpha)
+        else:
+            wte_module = nn.Embedding(config.vocab_size, config.n_embd)
+
         # Build transformer components
         transformer_dict = dict(
-            wte = nn.Embedding(config.vocab_size, config.n_embd),
+            wte = wte_module,  # Use the dynamically chosen module
             drop = nn.Dropout(config.dropout),
             h = nn.ModuleList([Block(config) for _ in range(config.n_layer)]),
             ln_f = LayerNorm(config.n_embd, bias=config.bias),
@@ -291,11 +307,17 @@ class GPT(nn.Module):
         self.transformer = nn.ModuleDict(transformer_dict)
         self.lm_head = nn.Linear(config.n_embd, config.vocab_size, bias=False)
         
+        # FIX: Handle weight tying properly for both standard and LoRA embeddings
         # with weight tying when using torch.compile() some warnings get generated:
         # "UserWarning: functional_call was passed multiple values for tied weights.
         # This behavior is deprecated and will be an error in future versions"
         # not 100% sure what this is, so far seems to be harmless. TODO investigate
-        self.transformer.wte.weight = self.lm_head.weight # https://paperswithcode.com/method/weight-tying
+        if isinstance(self.transformer.wte, LoRAEmbedding):
+            # For LoRA embeddings, tie the main_weight with lm_head
+            self.transformer.wte.main_weight.weight = self.lm_head.weight
+        else:
+            # Standard weight tying for regular embeddings
+            self.transformer.wte.weight = self.lm_head.weight # https://paperswithcode.com/method/weight-tying
 
         # init all weights
         self.apply(self._init_weights)
