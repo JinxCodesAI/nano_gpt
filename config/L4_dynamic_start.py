@@ -12,12 +12,12 @@ wandb_project = 'owt'
 n_layer = 3
 n_head = 12
 n_embd = 768
-n_hidden = 768 # Start with a narrow MLP (1 * n_embd)
 
 # Enable LoRA on EVERYTHING with a low initial rank
 embedding_mode = 'lora'
 attn_lora_rank_divisor = 16 # Initial attn rank = 768 / 32 = 24
 vocab_lora_rank_divisor = 16 # Initial vocab rank = 768 / 16 = 48
+n_hidden_divisor = 4
 lr_multiplier = 10
 lora_alpha = 1.0
 use_rotary_embeddings = True

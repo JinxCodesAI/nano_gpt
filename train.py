@@ -101,6 +101,12 @@ config_keys = [k for k,v in globals().items() if not k.startswith('_') and isins
 exec(open('configurator.py').read()) # overrides from command line or config file
 config = {k: globals()[k] for k in config_keys} # will be useful for logging
 
+if n_hidden_divisor is not None:
+    if n_hidden is not None:
+        n_hidden = n_hidden // n_hidden_divisor
+    else:
+        n_hidden = 4 * n_embd // n_hidden_divisor
+
 
       
 def log_detailed_params(model_to_log):
@@ -157,7 +163,7 @@ def log_model_architecture(model, iter_num, is_initial=False, is_target=False):
     # Log to Weights & Biases
     if wandb_log:
         # We prefix with 'arch/' to group these parameters in the W&B UI
-        wandb_log_data = {f"arch/{k}": v for k, v in arch_info.items()}
+        wandb_log_data = {f"{k}": v for k, v in arch_info.items()}
         wandb_log_data['iter'] = iter_num
         wandb.log(wandb_log_data)
 
