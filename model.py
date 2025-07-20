@@ -187,11 +187,13 @@ class CausalSelfAttention(nn.Module):
         self.flash = hasattr(torch.nn.functional, 'scaled_dot_product_attention')
         if not self.flash:
             print("WARNING: using slow attention. Flash Attention requires PyTorch >= 2.0")
-            # causal mask to ensure that attention is only applied to the left in the input sequence
-            self.register_buffer("bias", torch.tril(torch.ones(config.block_size, config.block_size))
-                                        .view(1, 1, config.block_size, config.block_size))
 
-    def forward(self, x):
+        # causal mask to ensure that attention is only applied to the left in the input sequence
+        # Always create this buffer as we need it for return_attention=True even with flash attention
+        self.register_buffer("bias", torch.tril(torch.ones(config.block_size, config.block_size))
+                                    .view(1, 1, config.block_size, config.block_size))
+
+    def forward(self, x, return_attention=False):
         B, T, C = x.size() # batch size, sequence length, embedding dimensionality (n_embd)
 
         # calculate query, key, values for all heads in batch and move head forward to be the batch dim
@@ -205,20 +207,36 @@ class CausalSelfAttention(nn.Module):
             q, k = self.rotary_emb(q, k, seq_len=T)
 
         # causal self-attention; Self-attend: (B, nh, T, hs) x (B, nh, hs, T) -> (B, nh, T, T)
+        att_scores = None # Initialize as None
         if self.flash:
-            # efficient attention using Flash Attention CUDA kernels
-            y = torch.nn.functional.scaled_dot_product_attention(q, k, v, attn_mask=None, dropout_p=self.dropout if self.training else 0, is_causal=True)
+            # Problem: Flash Attention doesn't return attention scores by default.
+            # We must use the manual path when analysis is needed.
+            if return_attention:
+                # Fallback to manual implementation for analysis
+                att = (q @ k.transpose(-2, -1)) * (1.0 / math.sqrt(k.size(-1)))
+                att = att.masked_fill(self.bias[:,:,:T,:T] == 0, float('-inf'))
+                att = F.softmax(att, dim=-1)
+                att_scores = att # Capture scores
+                y = att @ v
+            else:
+                # Default fast path
+                y = torch.nn.functional.scaled_dot_product_attention(q, k, v, attn_mask=None, dropout_p=self.dropout if self.training else 0, is_causal=True)
         else:
             # manual implementation of attention
             att = (q @ k.transpose(-2, -1)) * (1.0 / math.sqrt(k.size(-1)))
             att = att.masked_fill(self.bias[:,:,:T,:T] == 0, float('-inf'))
             att = F.softmax(att, dim=-1)
+            att_scores = att # Capture scores
             att = self.attn_dropout(att)
             y = att @ v # (B, nh, T, T) x (B, nh, T, hs) -> (B, nh, T, hs)
+
         y = y.transpose(1, 2).contiguous().view(B, T, C) # re-assemble all head outputs side by side
 
         # output projection
         y = self.resid_dropout(self.c_proj(y))
+
+        if return_attention:
+            return y, att_scores
         return y
 
 class MLP(nn.Module):
@@ -248,10 +266,16 @@ class Block(nn.Module):
         self.ln_2 = LayerNorm(config.n_embd, bias=config.bias)
         self.mlp = MLP(config)
 
-    def forward(self, x):
-        x = x + self.attn(self.ln_1(x))
-        x = x + self.mlp(self.ln_2(x))
-        return x
+    def forward(self, x, return_attention=False):
+        if return_attention:
+            attn_output, attn_scores = self.attn(self.ln_1(x), return_attention=True)
+            x = x + attn_output
+            x = x + self.mlp(self.ln_2(x))
+            return x, attn_scores
+        else:
+            x = x + self.attn(self.ln_1(x))
+            x = x + self.mlp(self.ln_2(x))
+            return x
 
 @dataclass
 class GPTConfig:
@@ -417,7 +441,7 @@ class GPT(nn.Module):
         elif isinstance(module, nn.Embedding):
             torch.nn.init.normal_(module.weight, mean=0.0, std=0.02)
 
-    def forward(self, idx, targets=None):
+    def forward(self, idx, targets=None, return_attention=False):
         device = idx.device
         b, t = idx.size()
         assert t <= self.config.block_size, f"Cannot forward sequence of length {t}, block size is only {self.config.block_size}"
@@ -425,7 +449,7 @@ class GPT(nn.Module):
 
         # forward the GPT model itself
         tok_emb = self.transformer.wte(idx) # token embeddings of shape (b, t, n_embd)
-        
+
         # Handle position embeddings based on rotary embedding setting
         if self.config.use_rotary_embeddings:
             # No position embeddings when using rotary embeddings
@@ -433,9 +457,14 @@ class GPT(nn.Module):
         else:
             pos_emb = self.transformer.wpe(pos) # position embeddings of shape (t, n_embd)
             x = self.transformer.drop(tok_emb + pos_emb)
-            
+
+        all_attention_scores = []
         for block in self.transformer.h:
-            x = block(x)
+            if return_attention:
+                x, attn_scores = block(x, return_attention=True)
+                all_attention_scores.append(attn_scores)
+            else:
+                x = block(x)
         x = self.transformer.ln_f(x)
 
         if targets is not None:
@@ -446,6 +475,10 @@ class GPT(nn.Module):
             # inference-time mini-optimization: only forward the lm_head on the very last position
             logits = self.lm_head(x[:, [-1], :]) # note: using list [-1] to preserve the time dim
             loss = None
+
+        # Return the collected scores if requested
+        if return_attention:
+            return logits, loss, all_attention_scores
 
         return logits, loss
 
