@@ -4,6 +4,7 @@
       "value": null,
       "trigger_loss": 9.2,
       "max_wait_iters": 300,
+      "desc":"first burn",
       "reevaluate": false
     },
     {
@@ -22,6 +23,7 @@
     },{
       "name": "merge_lora_weights",
       "value": null,
+      "desc":"second burn",
       "trigger_loss": 8.4,
       "max_wait_iters": 300,
       "reevaluate": false
@@ -78,6 +80,7 @@
     {
       "name": "stack_layers",
       "value": 2,
+      "desc":"first resize",
       "trigger_loss": 100.0,
       "max_wait_iters": 1,
       "reevaluate": true
@@ -86,6 +89,7 @@
       "name": "merge_lora_weights",
       "value": null,
       "trigger_loss": 7.8,
+      "desc":"third burn",
       "max_wait_iters": 300,
       "reevaluate": false
     },
@@ -104,9 +108,10 @@
       "reevaluate": false
     },
     {
-      "name": "stack_layers",
+      "name": "widen_mlp",
       "value": 2,
       "trigger_loss": 100,
+      "desc":"second resize",
       "max_wait_iters": 1,
       "reevaluate": true
     },
@@ -125,8 +130,9 @@
       "reevaluate": false
     },
     {
-      "name": "widen_mlp",
+      "name": "stack_layers",
       "value": 2,
+      "desc":"third resize",
       "trigger_loss": 100.0,
       "max_wait_iters": 1,
       "reevaluate": true
@@ -142,21 +148,8 @@
       "name": "merge_lora_weights",
       "value": null,
       "trigger_loss": 6.9,
+      "desc":"fourth burn",
       "max_wait_iters": 400,
-      "reevaluate": false
-    },
-    {
-      "name": "change_lr",
-      "value": 0.5,
-      "trigger_loss": 100,
-      "max_wait_iters": 1,
-      "reevaluate": false
-    },
-    {
-      "name": "reset_lr_schedule",
-      "value": null,
-      "trigger_loss": 100.0,
-      "max_wait_iters": 1,
       "reevaluate": false
     },
     {
@@ -177,21 +170,16 @@
       "name": "widen_mlp",
       "value": 2,
       "trigger_loss": 100,
+      "desc":"fourth resize",
       "max_wait_iters": 1,
       "reevaluate": true
     },
     {
       "name": "merge_lora_weights",
       "value": null,
-      "trigger_loss": 1.0,
-      "max_wait_iters": 100,
-      "reevaluate": false
-    },
-    {
-      "name": "merge_lora_weights",
-      "value": null,
       "trigger_loss": 6.0,
-      "max_wait_iters": 500,
+      "desc":"fifth burn",
+      "max_wait_iters": 1000,
       "reevaluate": false
     },
     {

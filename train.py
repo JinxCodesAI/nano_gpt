@@ -295,6 +295,9 @@ def get_lr(it):
     effective_it = it - lr_schedule_offset
     actual_warmup_iters = int(warmup_iters * warmup_iters_multiplier)
     actual_lr_decay_iters = int(lr_decay_iters * warmup_iters_multiplier)
+    
+    if master_process:
+        wandb.log({"iter": it, "effective_it": effective_it, "warmup_iters": actual_warmup_iters, "lr_decay_iters": actual_lr_decay_iters }) 
     if effective_it < actual_warmup_iters:
         return learning_rate * lr_multiplier * (effective_it + 1) / (actual_warmup_iters + 1)
     if effective_it > actual_lr_decay_iters:
@@ -343,7 +346,8 @@ def execute_operation(op, trigger_reason, current_val_loss, iter_num):
     global attn_lora_rank_divisor, vocab_lora_rank_divisor, lora_alpha_multiplier
     global n_layer_divisor, n_hidden_divisor
     
-    op_name = op['name']
+    op_desc = op['desc']  if op['desc'] is not None else ''
+    op_name = f"{op['name']} {op_desc}"
     op_value = op['value']
     if master_process:
         print(f"Executing operation: {op_name} with value: {op_value}")
@@ -377,6 +381,7 @@ def execute_operation(op, trigger_reason, current_val_loss, iter_num):
             old_val = n_layer_divisor
             n_layer_divisor = n_layer_divisor / op_value
             if master_process:
+                wandb.log({"iter": iter_num, "layer_count": unwrapped_model.config.n_layer})            
                 training_logger.log_operation_success(iter_num, op_name, 
                     {'old_divisor': old_val, 'new_divisor': n_layer_divisor, 'new_layers': unwrapped_model.config.n_layer})
                 
@@ -389,8 +394,9 @@ def execute_operation(op, trigger_reason, current_val_loss, iter_num):
                 return False
             unwrapped_model.widen_mlp(op_value)
             old_val = n_hidden_divisor
-            n_hidden_divisor = n_hidden_divisor / op_value
+            n_hidden_divisor = n_hidden_divisor / op_value    
             if master_process:
+                wandb.log({"iter": iter_num, "n_hidden": unwrapped_model.config.n_hidden}) 
                 training_logger.log_operation_success(iter_num, op_name, 
                     {'old_divisor': old_val, 'new_divisor': n_hidden_divisor, 'new_hidden': unwrapped_model.config.n_hidden})
                 
@@ -409,6 +415,7 @@ def execute_operation(op, trigger_reason, current_val_loss, iter_num):
             unwrapped_model.resize_lora_rank(new_rank)
             
             if master_process:
+                wandb.log({"iter": iter_num, "attn_lora_rank_divisor": attn_lora_rank_divisor, "attn_lora_rank":unwrapped_model.config.attn_lora_rank})  
                 training_logger.log_operation_success(iter_num, op_name, 
                     {'old_divisor': old_val, 'new_divisor': attn_lora_rank_divisor, 'new_rank': new_rank})
                 
@@ -422,11 +429,12 @@ def execute_operation(op, trigger_reason, current_val_loss, iter_num):
             
             # Calculate the new concrete rank from the divisor
             new_rank = int(unwrapped_model.config.n_embd // vocab_lora_rank_divisor) if vocab_lora_rank_divisor > 0 else 0
-            
+        
             # Call the model's resize method with the new rank
             unwrapped_model.resize_embedding_rank(new_rank)
 
             if master_process:
+                wandb.log({"iter": iter_num, "embedding_rank": new_rank})  
                 training_logger.log_operation_success(iter_num, op_name, 
                     {'old_divisor': old_val, 'new_divisor': vocab_lora_rank_divisor, 'new_rank': new_rank})
                 
@@ -473,6 +481,8 @@ def execute_operation(op, trigger_reason, current_val_loss, iter_num):
             return False
         old_val = lr_multiplier
         lr_multiplier *= op_value
+        if master_process:
+            wandb.log({"iter": iter_num, "lr_multiplier": lr_multiplier}) 
         if master_process: print(f"LR multiplier: {old_val:.4f} -> {lr_multiplier:.4f}"); training_logger.log_operation_success(iter_num, op_name, {'old': old_val, 'new': lr_multiplier})
     elif op_name == 'change_batch_size':
         if op_value <= 0:
@@ -482,6 +492,8 @@ def execute_operation(op, trigger_reason, current_val_loss, iter_num):
         old_val = batch_size; old_mult = batch_size_multiplier
         batch_size_multiplier *= op_value
         batch_size = max(1, int(batch_size * op_value))
+        if master_process:
+            wandb.log({"iter": iter_num, "batch_size": batch_size}) 
         if master_process: print(f"Batch size: {old_val} -> {batch_size}"); training_logger.log_operation_success(iter_num, op_name, {'old': old_val, 'new': batch_size})
     elif op_name == 'change_grad_accum':
         if op_value <= 0:
@@ -493,6 +505,8 @@ def execute_operation(op, trigger_reason, current_val_loss, iter_num):
         
         # FIX: Calculate the new value based on the old value and the operator value
         new_grad_accum = max(1, int(old_val * op_value))
+        if master_process:
+            wandb.log({"iter": iter_num, "grad_accum": grad_accum}) 
         gradient_accumulation_steps = new_grad_accum
         
         if master_process: 
@@ -509,6 +523,9 @@ def execute_operation(op, trigger_reason, current_val_loss, iter_num):
             return False
         old_val = warmup_iters_multiplier
         warmup_iters_multiplier *= op_value
+        if master_process:
+            wandb.log({"iter": iter_num, "warmup_iters_multiplier": warmup_iters_multiplier}) 
+        gradient_accumulation_steps = new_grad_accum
         if master_process: print(f"Warmup iters multiplier: {old_val:.4f} -> {warmup_iters_multiplier:.4f}"); training_logger.log_operation_success(iter_num, op_name, {'old': old_val, 'new': warmup_iters_multiplier})
     elif op_name == 'change_eval_iters':
         if op_value <= 0:
