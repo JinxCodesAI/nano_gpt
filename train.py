@@ -10,7 +10,11 @@ from datetime import datetime
 import numpy as np
 import torch
 import torch._dynamo
-torch._dynamo.config.recompile_limit = 1000000 # or a higher number
+try:
+    torch._dynamo.config.recompile_limit = 1000000 # or a higher number
+except AttributeError:
+    # recompile_limit doesn't exist in this version of PyTorch
+    pass
 from torch.nn.parallel import DistributedDataParallel as DDP
 from torch.distributed import init_process_group, destroy_process_group
 
@@ -96,6 +100,7 @@ eval_interval_multiplier = 1.0 # Multiplier for evaluation frequency
 # scaling schedule configuration
 scaling_schedule_file = None # Path to scaling schedule config file (YAML/JSON)
 scaling_schedule = [] # Will be loaded from file or set programmatically
+target_architecture_config = None # Global state for target architecture
 # -----------------------------------------------------------------------------
 config_keys = [k for k,v in globals().items() if not k.startswith('_') and isinstance(v, (int, float, bool, str))]
 exec(open('configurator.py').read()) # overrides from command line or config file
@@ -168,25 +173,29 @@ def log_model_architecture(model, iter_num, is_initial=False, is_target=False):
         wandb.log(wandb_log_data)
 
 def calculate_and_log_target_architecture(initial_config, schedule):
-    """Simulates the scaling schedule to determine and log the final architecture."""
+    """
+    Simulates the schedule to determine the final target architecture,
+    logs it, and returns it as a dictionary for later use.
+    """
     if not master_process:
-        return
+        return None
 
-    # Use a dictionary to avoid modifying the actual config object
+    # --- THIS SECTION IS REFINED TO BE LORA-AGNOSTIC ---
+    # The target config reflects the final, deployed model, which has no LoRA.
     target_config = {
         'n_layer': initial_config['n_layer'],
         'n_hidden': initial_config['n_hidden'] if initial_config['n_hidden'] is not None else 4 * initial_config['n_embd'],
-        # Add other relevant initial parameters
         'n_head': initial_config['n_head'],
         'n_embd': initial_config['n_embd'],
         'block_size': initial_config['block_size'],
         'vocab_size': initial_config['vocab_size'],
         'dropout': initial_config['dropout'],
         'bias': initial_config['bias'],
-        'embedding_mode': initial_config.get('embedding_mode', 'standard'), # Assume standard at start
-        'attn_lora_rank': initial_config.get('attn_lora_rank', 0), # Assume 0 at start
-        'embedding_rank': initial_config.get('embedding_rank', 0),
-        'lora_alpha': initial_config.get('lora_alpha', 1.0),
+        # Hardcode final state for LoRA-related params
+        'embedding_mode': 'standard',
+        'attn_lora_rank': 0,
+        'embedding_rank': 0,
+        'lora_alpha': 0.0,
     }
 
     print("Calculating target architecture based on schedule...")
@@ -198,13 +207,15 @@ def calculate_and_log_target_architecture(initial_config, schedule):
         elif op_name == 'widen_mlp' and op_value > 1:
             target_config['n_hidden'] = int(target_config['n_hidden'] * op_value)
 
-    # Log this calculated target architecture using our new function
-    # We pass the dictionary directly since we don't have a full model object for the target
+    # Log this calculated target architecture
     log_model_architecture(
-        type('FakeConfig', (), target_config)(), # Create a temporary object with a .config attribute
+        type('FakeConfig', (), target_config)(),
         iter_num=0,
         is_target=True
     )
+
+    # Return the dictionary to be stored
+    return target_config
 
 # Load scaling schedule if specified
 def load_scaling_schedule(file_path):
@@ -433,7 +444,7 @@ def transfer_optimizer_state(new_optimizer, old_state_dict, old_param_dict, mode
     total_params = len(list(model.parameters()))
     print(f"Transferred optimizer state for {transferred_count} / {total_params} parameters")
 
-def execute_operation(op, trigger_reason, current_val_loss, iter_num):
+def execute_operation(op, trigger_reason, current_val_loss, iter_num, target_architecture_config):
     global lr_multiplier, batch_size_multiplier, grad_accum_multiplier, lr_schedule_offset
     global warmup_iters_multiplier, eval_iters_multiplier, eval_interval_multiplier
     global gradient_accumulation_steps, batch_size, training_logger, master_process
@@ -467,9 +478,17 @@ def execute_operation(op, trigger_reason, current_val_loss, iter_num):
         
         # Perform the architectural operation
         if op_name == 'stack_layers':
+            current_layers = unwrapped_model.config.n_layer
+            # Check if the target has been defined and if we already meet or exceed it
+            if target_architecture_config and current_layers >= target_architecture_config['n_layer']:
+                if master_process:
+                    print(f"Skipping '{op_name}': Current layers ({current_layers}) already meet or exceed target ({target_architecture_config['n_layer']}).")
+                    training_logger.log_operation_error(iter_num, op_name, "Cancelled: Target architecture already reached.")
+                return False # Cancel the operation
+
             if op_value <= 1:
                 error_msg = f"Invalid stack_layers value {op_value}, must be > 1"
-                if master_process: 
+                if master_process:
                     print(f"Error: {error_msg}")
                     training_logger.log_operation_error(iter_num, op_name, error_msg)
                 return False
@@ -482,9 +501,17 @@ def execute_operation(op, trigger_reason, current_val_loss, iter_num):
                     {'old_divisor': old_val, 'new_divisor': n_layer_divisor, 'new_layers': unwrapped_model.config.n_layer})
                 
         elif op_name == 'widen_mlp':
+            current_hidden_dim = unwrapped_model.config.n_hidden
+            # Check if the target has been defined and if we already meet or exceed it
+            if target_architecture_config and current_hidden_dim >= target_architecture_config['n_hidden']:
+                 if master_process:
+                    print(f"Skipping '{op_name}': Current hidden dim ({current_hidden_dim}) already meets or exceeds target ({target_architecture_config['n_hidden']}).")
+                    training_logger.log_operation_error(iter_num, op_name, "Cancelled: Target architecture already reached.")
+                 return False # Cancel the operation
+
             if op_value <= 1:
                 error_msg = f"Invalid widen_mlp value {op_value}, must be > 1"
-                if master_process: 
+                if master_process:
                     print(f"Error: {error_msg}")
                     training_logger.log_operation_error(iter_num, op_name, error_msg)
                 return False
@@ -676,8 +703,8 @@ raw_model = model.module if ddp else model
 
 # Add logging for initial and target architecture
 if master_process:
-    # Calculate and log the target architecture before training starts
-    calculate_and_log_target_architecture(model_args, scaling_schedule)
+    # Calculate and store the target architecture
+    target_architecture_config = calculate_and_log_target_architecture(model_args, scaling_schedule)
     # Log the initial model architecture
     log_model_architecture(raw_model, iter_num=0, is_initial=True)
 
@@ -740,7 +767,7 @@ while True:
                     print(f"Current val loss: {current_val_loss:.4f}, Trigger loss: {next_op['trigger_loss']:.4f}")
                     print(f"Iterations since last op: {iter_num - iter_of_last_op}, Max wait: {next_op['max_wait_iters']}")
 
-                operation_succeeded = execute_operation(next_op, trigger_reason, current_val_loss, iter_num)
+                operation_succeeded = execute_operation(next_op, trigger_reason, current_val_loss, iter_num, target_architecture_config)
                 if operation_succeeded:
                     scaling_schedule.pop(0)
                     iter_of_last_op = iter_num
