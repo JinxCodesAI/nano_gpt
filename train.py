@@ -574,6 +574,7 @@ local_iter_num = 0
 raw_model = model.module if ddp else model
 log_detailed_params(raw_model)
 running_mfu = -1.0
+print(f"eval every:{ int(eval_interval * eval_interval_multiplier)}")
 while True:
     lr = get_lr(iter_num)
     for param_group in optimizer.param_groups:
@@ -605,6 +606,8 @@ while True:
                 if loss_triggered or timeout_triggered:
                     trigger_reason = 'Loss threshold' if loss_triggered else 'Timeout'
                     op_to_run[0] = {'op': next_op, 'reason': trigger_reason, 'loss': current_val_loss}
+                else:
+                    print(f"{next_op['name']} {current_val_loss} {next_op['trigger_loss']} {next_op['max_wait_iters']}")
             
             if ddp:
                 torch.distributed.broadcast_object_list(op_to_run, src=0)

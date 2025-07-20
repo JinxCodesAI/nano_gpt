@@ -24,20 +24,20 @@
       "name": "merge_lora_weights",
       "value": null,
       "desc":"second burn",
-      "trigger_loss": 7.2,
+      "trigger_loss": 7.4,
       "max_wait_iters": 300,
       "reevaluate": false
     },
     {
       "name": "change_lr",
-      "value": 0.7,
+      "value": 0.2,
       "trigger_loss": 100,
       "max_wait_iters": 1,
       "reevaluate": false
     },
     {
       "name": "change_warmup_iters",
-      "value": 1.5,
+      "value": 5,
       "trigger_loss": 100.0,
       "max_wait_iters": 1,
       "reevaluate": false
@@ -78,7 +78,7 @@
       "reevaluate": false
     },
     {
-      "name": "stack_layers",
+      "name": "decrease_vocab_lora_scaling",
       "value": 2,
       "desc":"first resize",
       "trigger_loss": 100.0,
@@ -88,7 +88,7 @@
     {
       "name": "merge_lora_weights",
       "value": null,
-      "trigger_loss": 6.8,
+      "trigger_loss": 7.0,
       "desc":"third burn",
       "max_wait_iters": 700,
       "reevaluate": false
@@ -108,10 +108,9 @@
       "reevaluate": false
     },
     {
-      "name": "widen_mlp",
-      "value": 2,
-      "trigger_loss": 100,
-      "desc":"second resize",
+      "name": "decrease_vocab_lora_scaling",
+      "value": 0.5,
+      "trigger_loss": 100.0,
       "max_wait_iters": 1,
       "reevaluate": true
     },
@@ -144,6 +143,14 @@
       "desc":"fourth burn",
       "max_wait_iters": 600,
       "reevaluate": false
+    },
+    {
+      "name": "widen_mlp",
+      "value": 2,
+      "trigger_loss": 100,
+      "desc":"second resize",
+      "max_wait_iters": 1,
+      "reevaluate": true
     },
     {
       "name": "change_batch_size",

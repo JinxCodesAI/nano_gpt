@@ -4,7 +4,6 @@
 
 wandb_log = True
 wandb_project = 'owt'
-wandb_run_name = 'gpt2-124M-LoRA-Expansion-Growth'
 
 # --- Final Target Architectural Parameters (for reference) ---
 # n_layer = 12, n_head = 12, n_embd = 768, n_hidden = 3072
@@ -47,6 +46,6 @@ learning_rate = 1e-3
 warmup_iters = 200
 
 # --- Link to the Schedule ---
-scaling_schedule_file = 'configs/L4_LoRA_Expansion_schedule.json'
+scaling_schedule_file = 'configs/L4_TrainGrowAdapt_schedule2.json'
 
     
