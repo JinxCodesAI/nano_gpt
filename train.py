@@ -20,6 +20,7 @@ from torch.distributed import init_process_group, destroy_process_group
 
 from model import GPTConfig, GPT
 from logger import TrainingLogger
+from analyzer import ModelAnalyzer
 
 # -----------------------------------------------------------------------------
 # default config values designed to train a gpt2 (124M) on OpenWebText
@@ -724,17 +725,42 @@ while True:
         losses = estimate_loss()
         if master_process:
             print(f"step {iter_num}: train loss {losses['train']:.4f}, val loss {losses['val']:.4f}")
+
+            # --- Model Analysis ---
+            analyzer = ModelAnalyzer(raw_model)
+
+            # 1. Analyze MLP Rank
+            eff_rank, full_rank, rank_util = analyzer.analyze_mlp_weight_rank(layer_idx=0)
+
+            # 2. Analyze Attention Entropy
+            X_val, _ = get_batch('val') # Get a batch for analysis
+            avg_entropy = analyzer.analyze_attention_entropy(X_val)
+
+            # 3. Display the results in a formatted block
+            print("--- Model Analysis ---")
+            if rank_util != -1.0:
+                print(f"  MLP Rank Utilization (L0): {rank_util:.2%} ({eff_rank}/{full_rank})")
+            if avg_entropy != -1.0:
+                print(f"  Average Attention Entropy:  {avg_entropy:.4f}")
+            print("----------------------")
+
             training_logger.log_step(iter_num, losses['train'], losses['val'])
             if wandb_log:
                 elapsed_time_seconds = time.time() - start_time
-                wandb.log({
+                wandb_metrics = {
                     "iter": iter_num,
                     "train/loss": losses['train'],
                     "val/loss": losses['val'],
                     "lr": lr,
                     "mfu": running_mfu*100,
                     "time/elapsed_seconds": elapsed_time_seconds, # Log elapsed time
-                })
+                }
+                # Add analysis metrics if they were computed successfully
+                if rank_util != -1.0:
+                    wandb_metrics["analysis/mlp_rank_utilization"] = rank_util
+                if avg_entropy != -1.0:
+                    wandb_metrics["analysis/attention_entropy"] = avg_entropy
+                wandb.log(wandb_metrics)
             if losses['val'] < best_val_loss or always_save_checkpoint:
                 best_val_loss = losses['val']
                 if iter_num > 0:
