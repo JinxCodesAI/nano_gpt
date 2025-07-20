@@ -30,7 +30,7 @@ log_interval = 1
 eval_iters = 200
 eval_only = False # if True, script exits right after the first eval
 always_save_checkpoint = True # if True, always save a checkpoint after each eval
-init_from = 'scratch' # 'scratch' or 'resume' or 'gpt2*'
+init_from = 'resume' # 'scratch' or 'resume' or 'gpt2*'
 # file logging
 log_dir = 'logs' # directory for log files
 file_logging = True # enable file logging
@@ -89,8 +89,8 @@ lora_alpha = 1.0 # scaling factor for LoRA layers
 attn_lora_rank_divisor = 0 # Divisor for attention LoRA rank (0 disables LoRA)
 vocab_lora_rank_divisor = 0 # Divisor for embedding LoRA rank (0 disables LoRA)
 lora_alpha_multiplier = 1.0 # Multiplier for LoRA alpha
-n_layer_divisor = 1.0 # Divisor for model depth
-n_hidden_divisor = 1.0 # Divisor for MLP width
+n_layer_divisor = 1 # Divisor for model depth
+n_hidden_divisor = 1 # Divisor for MLP width
 batch_size_multiplier = 1.0 # Multiplier for batch size
 grad_accum_multiplier = 1.0 # Multiplier for accumulation steps
 lr_multiplier = 1.0 # Multiplier for learning rate
@@ -113,6 +113,8 @@ if n_hidden_divisor is not None:
         n_hidden = 4 * n_embd // n_hidden_divisor
 
 
+if n_layer_divisor is not None:
+    n_layer = n_layer // n_layer_divisor
       
 def log_detailed_params(model_to_log):
     """Logs the detailed parameter count of the provided model."""

@@ -78,7 +78,7 @@
       "reevaluate": false
     },
     {
-      "name": "decrease_vocab_lora_scaling",
+      "name": "stack_layers",
       "value": 2,
       "desc":"first resize",
       "trigger_loss": 100.0,
@@ -108,8 +108,8 @@
       "reevaluate": false
     },
     {
-      "name": "decrease_vocab_lora_scaling",
-      "value": 0.5,
+      "name": "widen_mlp",
+      "value": 2,
       "trigger_loss": 100.0,
       "max_wait_iters": 1,
       "reevaluate": true
@@ -167,7 +167,7 @@
       "reevaluate": false
     },
     {
-      "name": "widen_mlp",
+      "name": "stack_layers",
       "value": 2,
       "trigger_loss": 100,
       "desc":"fourth resize",
