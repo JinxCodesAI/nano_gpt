@@ -2,14 +2,14 @@
     {
       "name": "merge_lora_weights",
       "value": null,
-      "trigger_loss": 9.2,
-      "max_wait_iters": 300,
+      "trigger_loss": 8.0,
+      "max_wait_iters": 500,
       "desc":"first burn",
       "reevaluate": false
     },
     {
       "name": "change_lr",
-      "value": 0.5,
+      "value": 0.7,
       "trigger_loss": 100,
       "max_wait_iters": 1,
       "reevaluate": false
@@ -24,13 +24,13 @@
       "name": "merge_lora_weights",
       "value": null,
       "desc":"second burn",
-      "trigger_loss": 8.4,
+      "trigger_loss": 7.2,
       "max_wait_iters": 300,
       "reevaluate": false
     },
     {
       "name": "change_lr",
-      "value": 0.5,
+      "value": 0.7,
       "trigger_loss": 100,
       "max_wait_iters": 1,
       "reevaluate": false
@@ -65,7 +65,7 @@
     },
     {
       "name": "change_lr",
-      "value": 0.5,
+      "value": 0.7,
       "trigger_loss": 100,
       "max_wait_iters": 1,
       "reevaluate": false
@@ -88,9 +88,9 @@
     {
       "name": "merge_lora_weights",
       "value": null,
-      "trigger_loss": 7.8,
+      "trigger_loss": 6.8,
       "desc":"third burn",
-      "max_wait_iters": 300,
+      "max_wait_iters": 700,
       "reevaluate": false
     },
     {
@@ -117,7 +117,7 @@
     },
     {
       "name": "change_lr",
-      "value": 0.5,
+      "value": 0.7,
       "trigger_loss": 100,
       "max_wait_iters": 1,
       "reevaluate": false
@@ -140,16 +140,9 @@
     {
       "name": "merge_lora_weights",
       "value": null,
-      "trigger_loss": 1.0,
-      "max_wait_iters": 100,
-      "reevaluate": false
-    },
-    {
-      "name": "merge_lora_weights",
-      "value": null,
-      "trigger_loss": 6.9,
+      "trigger_loss": 6.0,
       "desc":"fourth burn",
-      "max_wait_iters": 400,
+      "max_wait_iters": 600,
       "reevaluate": false
     },
     {
@@ -177,7 +170,7 @@
     {
       "name": "merge_lora_weights",
       "value": null,
-      "trigger_loss": 6.0,
+      "trigger_loss": 5.2,
       "desc":"fifth burn",
       "max_wait_iters": 1000,
       "reevaluate": false
@@ -191,7 +184,7 @@
     },
     {
       "name": "change_lr",
-      "value": 0.5,
+      "value": 0.7,
       "trigger_loss": 100,
       "max_wait_iters": 1,
       "reevaluate": true
@@ -220,8 +213,8 @@
     {
       "name": "decrease_attn_lora_scaling",
       "value": 0.5,
-      "trigger_loss": 7.0,
-      "max_wait_iters": 1000,
+      "trigger_loss": 100,
+      "max_wait_iters": 1,
       "reevaluate": false
     },
     {
@@ -260,10 +253,18 @@
     "reevaluate": false
   },
   {
+    "name": "merge_lora_weights",
+    "value": null,
+    "trigger_loss": 4.7,
+    "desc":"fifth burn",
+    "max_wait_iters": 1000,
+    "reevaluate": false
+  },
+  {
     "name": "decrease_attn_lora_scaling",
     "value": 0.5,
-    "trigger_loss": 6.5,
-    "max_wait_iters": 1000,
+    "trigger_loss": 100,
+    "max_wait_iters": 1,
     "reevaluate": true
   },
   {
@@ -276,7 +277,7 @@
   {
     "name": "merge_lora_weights",
     "value": null,
-    "trigger_loss": 5.5,
+    "trigger_loss": 4.2,
     "max_wait_iters": 2000,
     "reevaluate": false
   },
@@ -311,8 +312,8 @@
     {
       "name": "decrease_attn_lora_scaling",
       "value": 0.5,
-      "trigger_loss": 6.5,
-      "max_wait_iters": 1000,
+      "trigger_loss": 100.0,
+      "max_wait_iters": 1,
       "reevaluate": true
     },
     {
@@ -325,7 +326,7 @@
     {
       "name": "merge_lora_weights",
       "value": null,
-      "trigger_loss": 4.5,
+      "trigger_loss": 3.8,
       "max_wait_iters": 5000,
       "reevaluate": false
     },
@@ -361,14 +362,14 @@
       "name": "change_lr",
       "value": 0.5,
       "trigger_loss": 3.5,
-      "max_wait_iters": 100000,
+      "max_wait_iters": 50000,
       "reevaluate": false
     },
     {
       "name": "change_lr",
       "value": 0.5,
       "trigger_loss": 3.2,
-      "max_wait_iters": 150000,
+      "max_wait_iters": 50000,
       "reevaluate": false
     }
   ]

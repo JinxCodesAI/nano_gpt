@@ -8,6 +8,8 @@ import yaml
 from contextlib import nullcontext
 import numpy as np
 import torch
+import torch._dynamo
+torch._dynamo.config.recompile_limit = 1000000 # or a higher number
 from torch.nn.parallel import DistributedDataParallel as DDP
 from torch.distributed import init_process_group, destroy_process_group
 
@@ -297,7 +299,7 @@ def get_lr(it):
     actual_lr_decay_iters = int(lr_decay_iters * warmup_iters_multiplier)
     
     if master_process:
-        wandb.log({"iter": it, "effective_it": effective_it, "warmup_iters": actual_warmup_iters, "lr_decay_iters": actual_lr_decay_iters }) 
+        wandb.log({"iter": it, "effective_it": effective_it, "warmup_iters": actual_warmup_iters, "lr_decay_iters": actual_lr_decay_iters, "gradient_accumulation_steps":gradient_accumulation_steps, "batch_size":batch_size }) 
     if effective_it < actual_warmup_iters:
         return learning_rate * lr_multiplier * (effective_it + 1) / (actual_warmup_iters + 1)
     if effective_it > actual_lr_decay_iters:
@@ -346,12 +348,13 @@ def execute_operation(op, trigger_reason, current_val_loss, iter_num):
     global attn_lora_rank_divisor, vocab_lora_rank_divisor, lora_alpha_multiplier
     global n_layer_divisor, n_hidden_divisor
     
-    op_desc = op['desc']  if op['desc'] is not None else ''
-    op_name = f"{op['name']} {op_desc}"
+    op_desc = op.get('desc', '')
+    op_name = op['name']
+    op_label = f"{op_name} {op_desc}"
     op_value = op['value']
     if master_process:
-        print(f"Executing operation: {op_name} with value: {op_value}")
-        training_logger.log_operation_start(iter_num, op_name, op_value, trigger_reason, current_val_loss,
+        print(f"Executing operation: {op_label} with value: {op_value}")
+        training_logger.log_operation_start(iter_num, op_label, op_value, trigger_reason, current_val_loss,
                                           op['trigger_loss'], op['max_wait_iters'])
     
     # Check if this is an architectural operation that requires model changes
@@ -506,7 +509,7 @@ def execute_operation(op, trigger_reason, current_val_loss, iter_num):
         # FIX: Calculate the new value based on the old value and the operator value
         new_grad_accum = max(1, int(old_val * op_value))
         if master_process:
-            wandb.log({"iter": iter_num, "grad_accum": grad_accum}) 
+            wandb.log({"iter": iter_num, "grad_accum": new_grad_accum}) 
         gradient_accumulation_steps = new_grad_accum
         
         if master_process: 
@@ -525,7 +528,6 @@ def execute_operation(op, trigger_reason, current_val_loss, iter_num):
         warmup_iters_multiplier *= op_value
         if master_process:
             wandb.log({"iter": iter_num, "warmup_iters_multiplier": warmup_iters_multiplier}) 
-        gradient_accumulation_steps = new_grad_accum
         if master_process: print(f"Warmup iters multiplier: {old_val:.4f} -> {warmup_iters_multiplier:.4f}"); training_logger.log_operation_success(iter_num, op_name, {'old': old_val, 'new': warmup_iters_multiplier})
     elif op_name == 'change_eval_iters':
         if op_value <= 0:
