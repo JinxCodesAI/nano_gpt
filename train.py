@@ -6,6 +6,7 @@ import pickle
 import json
 import yaml
 from contextlib import nullcontext
+from datetime import datetime
 import numpy as np
 import torch
 import torch._dynamo
@@ -112,6 +113,92 @@ def log_detailed_params(model_to_log):
             trainable_str = f"{counts['trainable']:,}"
             print(f"  {component:<22} | Total: {total_str:>12} | Trainable: {trainable_str:>12}")
         print("-" * 60) # Add a separator for clarity
+
+def log_model_architecture(model, iter_num, is_initial=False, is_target=False):
+    """Logs the model's current or target architecture to the console and W&B."""
+    if not master_process:
+        return
+
+    # Determine the header based on the context
+    if is_target:
+        header = "TARGET MODEL ARCHITECTURE (at end of schedule)"
+    elif is_initial:
+        header = f"INITIAL MODEL ARCHITECTURE (at Iter {iter_num})"
+    else:
+        header = f"ARCHITECTURE CHANGE (at Iter {iter_num})"
+
+    # Get the raw model config
+    config = model.config if hasattr(model, 'config') else model
+
+    print("\n" + "="*60)
+    print(f"{header:^60}")
+    print("="*60)
+
+    arch_info = {
+        'n_layer': config.n_layer,
+        'n_head': config.n_head,
+        'n_embd': config.n_embd,
+        'n_hidden': config.n_hidden if config.n_hidden is not None else 4 * config.n_embd,
+        'block_size': config.block_size,
+        'vocab_size': config.vocab_size,
+        'dropout': config.dropout,
+        'bias': config.bias,
+        'embedding_mode': config.embedding_mode,
+        'attn_lora_rank': config.attn_lora_rank,
+        'embedding_rank': config.embedding_rank,
+        'lora_alpha': config.lora_alpha
+    }
+
+    # Print to console
+    for key, value in arch_info.items():
+        print(f"  {key:<22} | {value}")
+    print("="*60 + "\n")
+
+    # Log to Weights & Biases
+    if wandb_log:
+        # We prefix with 'arch/' to group these parameters in the W&B UI
+        wandb_log_data = {f"arch/{k}": v for k, v in arch_info.items()}
+        wandb_log_data['iter'] = iter_num
+        wandb.log(wandb_log_data)
+
+def calculate_and_log_target_architecture(initial_config, schedule):
+    """Simulates the scaling schedule to determine and log the final architecture."""
+    if not master_process:
+        return
+
+    # Use a dictionary to avoid modifying the actual config object
+    target_config = {
+        'n_layer': initial_config['n_layer'],
+        'n_hidden': initial_config['n_hidden'] if initial_config['n_hidden'] is not None else 4 * initial_config['n_embd'],
+        # Add other relevant initial parameters
+        'n_head': initial_config['n_head'],
+        'n_embd': initial_config['n_embd'],
+        'block_size': initial_config['block_size'],
+        'vocab_size': initial_config['vocab_size'],
+        'dropout': initial_config['dropout'],
+        'bias': initial_config['bias'],
+        'embedding_mode': initial_config.get('embedding_mode', 'standard'), # Assume standard at start
+        'attn_lora_rank': initial_config.get('attn_lora_rank', 0), # Assume 0 at start
+        'embedding_rank': initial_config.get('embedding_rank', 0),
+        'lora_alpha': initial_config.get('lora_alpha', 1.0),
+    }
+
+    print("Calculating target architecture based on schedule...")
+    for op in schedule:
+        op_name = op['name']
+        op_value = op['value']
+        if op_name == 'stack_layers' and op_value > 1:
+            target_config['n_layer'] = int(target_config['n_layer'] * op_value)
+        elif op_name == 'widen_mlp' and op_value > 1:
+            target_config['n_hidden'] = int(target_config['n_hidden'] * op_value)
+
+    # Log this calculated target architecture using our new function
+    # We pass the dictionary directly since we don't have a full model object for the target
+    log_model_architecture(
+        type('FakeConfig', (), target_config)(), # Create a temporary object with a .config attribute
+        iter_num=0,
+        is_target=True
+    )
 
 # Load scaling schedule if specified
 def load_scaling_schedule(file_path):
@@ -471,7 +558,10 @@ def execute_operation(op, trigger_reason, current_val_loss, iter_num):
             model = DDP(model, device_ids=[ddp_local_rank])
         
         raw_model = model.module if ddp else model
-        
+
+        # Log the new architecture after the change is complete
+        log_model_architecture(raw_model, iter_num)
+
         if master_process:
             print("Architectural operation completed successfully.")
         return True
@@ -566,14 +656,28 @@ def execute_operation(op, trigger_reason, current_val_loss, iter_num):
 
 if wandb_log and master_process:
     import wandb
-    wandb.init(project=wandb_project, name=wandb_run_name, config=config)
+    # Create a compact timestamp
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    final_wandb_run_name = f"{wandb_run_name}_{timestamp}"
+
+    print(f"Initializing W&B run with name: {final_wandb_run_name}")
+    wandb.init(project=wandb_project, name=final_wandb_run_name, config=config)
 
 X, Y = get_batch('train')
 t0 = time.time()
 local_iter_num = 0
 raw_model = model.module if ddp else model
+
+# Add logging for initial and target architecture
+if master_process:
+    # Calculate and log the target architecture before training starts
+    calculate_and_log_target_architecture(model_args, scaling_schedule)
+    # Log the initial model architecture
+    log_model_architecture(raw_model, iter_num=0, is_initial=True)
+
 log_detailed_params(raw_model)
 running_mfu = -1.0
+start_time = time.time() # Start the timer for elapsed time tracking
 print(f"eval every:{ int(eval_interval * eval_interval_multiplier)}")
 while True:
     lr = get_lr(iter_num)
@@ -587,7 +691,15 @@ while True:
             print(f"step {iter_num}: train loss {losses['train']:.4f}, val loss {losses['val']:.4f}")
             training_logger.log_step(iter_num, losses['train'], losses['val'])
             if wandb_log:
-                wandb.log({"iter": iter_num, "train/loss": losses['train'], "val/loss": losses['val'], "lr": lr, "mfu": running_mfu*100})
+                elapsed_time_seconds = time.time() - start_time
+                wandb.log({
+                    "iter": iter_num,
+                    "train/loss": losses['train'],
+                    "val/loss": losses['val'],
+                    "lr": lr,
+                    "mfu": running_mfu*100,
+                    "time/elapsed_seconds": elapsed_time_seconds, # Log elapsed time
+                })
             if losses['val'] < best_val_loss or always_save_checkpoint:
                 best_val_loss = losses['val']
                 if iter_num > 0:
@@ -635,7 +747,15 @@ while True:
                             training_logger.log_operation_reevaluation(iter_num, next_op['name'], current_val_loss, new_val_loss)
                             training_logger.log_step(iter_num, losses['train'], new_val_loss)
                             if wandb_log:
-                                wandb.log({"iter": iter_num, "train/loss": losses['train'], "val/loss": new_val_loss, "lr": lr, "mfu": running_mfu*100})
+                                elapsed_time_seconds = time.time() - start_time
+                                wandb.log({
+                                    "iter": iter_num,
+                                    "train/loss": losses['train'],
+                                    "val/loss": new_val_loss,
+                                    "lr": lr,
+                                    "mfu": running_mfu*100,
+                                    "time/elapsed_seconds": elapsed_time_seconds, # Log elapsed time
+                                })
                         break # Exit the while loop after a blocking re-evaluation
                 if master_process: print(f"=== SCALING OPERATION COMPLETE ===\n")
             else:
