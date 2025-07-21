@@ -835,7 +835,8 @@ class GPT(nn.Module):
                 key = f"{name}.weight"
 
                 # Calculate the merged weight for LoRAEmbedding
-                lora_update = (module.lora_A.weight @ module.lora_B.weight.T).T
+                # Fixed: Removed erroneous .T at the end - the result is already (vocab_size, n_embd)
+                lora_update = module.lora_A.weight @ module.lora_B.weight.T
                 merged_weight = module.main_weight.weight.data + lora_update * (module.alpha / module.rank)
                 final_sd[key] = merged_weight
 
