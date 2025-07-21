@@ -77,30 +77,11 @@ device = 'cuda' # examples: 'cpu', 'cuda', 'cuda:0', 'cuda:1' etc., or try 'mps'
 dtype = 'bfloat16' if torch.cuda.is_available() and torch.cuda.is_bf16_supported() else 'float16' # 'float32', 'bfloat16', or 'float16', the latter will auto implement a GradScaler
 compile = True # use PyTorch 2.0 to compile the model to be faster
 # -----------------------------------------------------------------------------
-# Dynamic State Parameters for Training Orchestrator
-# These parameters hold the current state of the dynamic configuration
-# They are multipliers/divisors that modify the final values
-      
-# In train.py, Dynamic State Parameters section
-
-# ... (after lora_alpha_multiplier) ...
-# --- ADD THESE LINES ---
-# Concrete LoRA architectural parameters. These will be overridden by config files.
+# LoRA architectural parameters. These will be overridden by config files.
 embedding_mode = 'standard'
 attn_lora_rank = 0 # rank for attention LoRA, 0 disables
 embedding_rank = 0 # rank for embedding LoRA, 0 disables
 lora_alpha = 1.0 # scaling factor for LoRA layers
-attn_lora_rank_divisor = 0 # Divisor for attention LoRA rank (0 disables LoRA)
-vocab_lora_rank_divisor = 0 # Divisor for embedding LoRA rank (0 disables LoRA)
-lora_alpha_multiplier = 1.0 # Multiplier for LoRA alpha
-n_layer_divisor = 1 # Divisor for model depth
-n_hidden_divisor = 1 # Divisor for MLP width
-batch_size_multiplier = 1.0 # Multiplier for batch size
-grad_accum_multiplier = 1.0 # Multiplier for accumulation steps
-lr_multiplier = 1.0 # Multiplier for learning rate
-warmup_iters_multiplier = 1.0 # Multiplier for warmup iterations
-eval_iters_multiplier = 1.0 # Multiplier for evaluation iterations
-eval_interval_multiplier = 1.0 # Multiplier for evaluation frequency
 # scaling schedule configuration
 scaling_schedule_file = None # Path to scaling schedule config file (YAML/JSON)
 scaling_schedule = [] # Will be loaded from file or set programmatically
@@ -110,15 +91,7 @@ config_keys = [k for k,v in globals().items() if not k.startswith('_') and isins
 exec(open('configurator.py').read()) # overrides from command line or config file
 config = {k: globals()[k] for k in config_keys} # will be useful for logging
 
-if n_hidden_divisor is not None and n_hidden_divisor>0:
-    if n_hidden is not None:
-        n_hidden = n_hidden // n_hidden_divisor
-    else:
-        n_hidden = 4 * n_embd // n_hidden_divisor
 
-
-if n_layer_divisor is not None and n_layer_divisor>0:
-    n_layer = n_layer // n_layer_divisor
 
 
 if(dataset == 'fineweb10B'):
@@ -470,7 +443,7 @@ if ddp:
 def estimate_loss():
     out = {}
     model.eval()
-    actual_eval_iters = int(eval_iters * eval_iters_multiplier)
+    actual_eval_iters = eval_iters
     for split in ['train', 'val']:
         losses = torch.zeros(actual_eval_iters)
         for k in range(actual_eval_iters):
@@ -484,19 +457,19 @@ def estimate_loss():
 
 def get_lr(it):
     effective_it = it - lr_schedule_offset
-    actual_warmup_iters = int(warmup_iters * warmup_iters_multiplier)
-    actual_lr_decay_iters = int(lr_decay_iters * warmup_iters_multiplier)
-    
+    actual_warmup_iters = warmup_iters
+    actual_lr_decay_iters = lr_decay_iters
+
     if master_process and wandb_log:
-        wandb.log({"iter": it, "effective_it": effective_it, "warmup_iters": actual_warmup_iters, "lr_decay_iters": actual_lr_decay_iters, "gradient_accumulation_steps":gradient_accumulation_steps, "batch_size":batch_size }) 
+        wandb.log({"iter": it, "effective_it": effective_it, "warmup_iters": actual_warmup_iters, "lr_decay_iters": actual_lr_decay_iters, "gradient_accumulation_steps":gradient_accumulation_steps, "batch_size":batch_size })
     if effective_it < actual_warmup_iters:
-        return learning_rate * lr_multiplier * (effective_it + 1) / (actual_warmup_iters + 1)
+        return learning_rate * (effective_it + 1) / (actual_warmup_iters + 1)
     if effective_it > actual_lr_decay_iters:
-        return min_lr * lr_multiplier
+        return min_lr
     decay_ratio = (effective_it - actual_warmup_iters) / (actual_lr_decay_iters - actual_warmup_iters)
     assert 0 <= decay_ratio <= 1
     coeff = 0.5 * (1.0 + math.cos(math.pi * decay_ratio))
-    return (min_lr + coeff * (learning_rate - min_lr)) * lr_multiplier
+    return (min_lr + coeff * (learning_rate - min_lr))
 
 def transfer_optimizer_state(new_optimizer, old_state_dict, old_param_dict, model):
     """
@@ -530,247 +503,112 @@ def transfer_optimizer_state(new_optimizer, old_state_dict, old_param_dict, mode
     print(f"Transferred optimizer state for {transferred_count} / {total_params} parameters")
 
 def execute_operation(op, trigger_reason, current_val_loss, iter_num, target_architecture_config):
-    global lr_multiplier, batch_size_multiplier, grad_accum_multiplier, lr_schedule_offset
-    global warmup_iters_multiplier, eval_iters_multiplier, eval_interval_multiplier
-    global gradient_accumulation_steps, batch_size, training_logger, master_process
-    global model, optimizer, raw_model, unoptimized_model
-    global attn_lora_rank_divisor, vocab_lora_rank_divisor, lora_alpha_multiplier
-    global n_layer_divisor, n_hidden_divisor
-    
+    # Make globals mutable within this function
+    global learning_rate, batch_size, gradient_accumulation_steps, warmup_iters, eval_iters, eval_interval
+    global lr_schedule_offset, training_logger, master_process, model, optimizer, raw_model, unoptimized_model
+
     op_desc = op.get('desc', '')
     op_name = op['name']
     op_label = f"{op_name} {op_desc}"
     op_value = op['value']
+
     if master_process:
-        print(f"Executing operation: {op_label} with value: {op_value}")
-        training_logger.log_operation_start(iter_num, op_label, op_value, trigger_reason, current_val_loss,
-                                          op['trigger_loss'], op['max_wait_iters'])
-    
-    # Check if this is an architectural operation that requires model changes
-    architectural_ops = ['stack_layers', 'widen_mlp', 'decrease_attn_lora_scaling', 
-                        'decrease_vocab_lora_scaling', 'merge_lora_weights']
-    
-    if op_name in architectural_ops:
-        if master_process:
-            print(f"Performing architectural operation: {op_name}")
-        
-        # Get the raw, unwrapped model instance
-        unwrapped_model = unoptimized_model if compile else (model.module if ddp else model)
-        
-        # Store old optimizer state for potential transfer
-        old_optimizer_state = optimizer.state_dict()
-        old_param_dict = {name: p for name, p in unwrapped_model.named_parameters()}
-        
-        # Perform the architectural operation
-        if op_name == 'stack_layers':
-            current_layers = unwrapped_model.config.n_layer
-            # Check if the target has been defined and if we already meet or exceed it
-            if target_architecture_config and current_layers >= target_architecture_config['n_layer']:
-                if master_process:
-                    print(f"Skipping '{op_name}': Current layers ({current_layers}) already meet or exceed target ({target_architecture_config['n_layer']}).")
-                    training_logger.log_operation_error(iter_num, op_name, "Cancelled: Target architecture already reached.")
-                return False # Cancel the operation
+        print(f"\n--- EXECUTING OPERATION: {op_label} | Value: {op_value} ---")
+        log_details = {
+            'trigger_reason': trigger_reason,
+            'current_val_loss': current_val_loss,
+            'trigger_loss': op['trigger_loss'],
+            'max_wait_iters': op['max_wait_iters']
+        }
+        training_logger.log_operation_start(iter_num, op_label, op_value, log_details)
 
-            if op_value <= 1:
-                error_msg = f"Invalid stack_layers value {op_value}, must be > 1"
-                if master_process:
-                    print(f"Error: {error_msg}")
-                    training_logger.log_operation_error(iter_num, op_name, error_msg)
-                return False
-            unwrapped_model.stack_layers(op_value)
-            old_val = n_layer_divisor
-            n_layer_divisor = n_layer_divisor / op_value
-            if master_process:
-                wandb.log({"iter": iter_num, "layer_count": unwrapped_model.config.n_layer})            
-                training_logger.log_operation_success(iter_num, op_name, 
-                    {'old_divisor': old_val, 'new_divisor': n_layer_divisor, 'new_layers': unwrapped_model.config.n_layer})
-                
-        elif op_name == 'widen_mlp':
-            current_hidden_dim = unwrapped_model.config.n_hidden
-            # Check if the target has been defined and if we already meet or exceed it
-            if target_architecture_config and current_hidden_dim >= target_architecture_config['n_hidden']:
-                 if master_process:
-                    print(f"Skipping '{op_name}': Current hidden dim ({current_hidden_dim}) already meets or exceeds target ({target_architecture_config['n_hidden']}).")
-                    training_logger.log_operation_error(iter_num, op_name, "Cancelled: Target architecture already reached.")
-                 return False # Cancel the operation
+    try:
+        # Check if this is an architectural operation
+        architectural_ops = ['stack_layers', 'widen_mlp', 'set_attn_lora_rank',
+                             'set_embedding_lora_rank', 'merge_lora_weights']
 
-            if op_value <= 1:
-                error_msg = f"Invalid widen_mlp value {op_value}, must be > 1"
-                if master_process:
-                    print(f"Error: {error_msg}")
-                    training_logger.log_operation_error(iter_num, op_name, error_msg)
-                return False
-            unwrapped_model.widen_mlp(op_value)
-            old_val = n_hidden_divisor
-            n_hidden_divisor = n_hidden_divisor / op_value    
+        if op_name in architectural_ops:
             if master_process:
-                wandb.log({"iter": iter_num, "n_hidden": unwrapped_model.config.n_hidden}) 
-                training_logger.log_operation_success(iter_num, op_name, 
-                    {'old_divisor': old_val, 'new_divisor': n_hidden_divisor, 'new_hidden': unwrapped_model.config.n_hidden})
-                
-        elif op_name == 'decrease_attn_lora_scaling':
-            if op_value <= 0:
-                error_msg = f"Invalid decrease_attn_lora_scaling divisor {op_value}"
-                if master_process: print(f"Error: {error_msg}"); training_logger.log_operation_error(iter_num, op_name, error_msg)
-                return False
-            old_val = attn_lora_rank_divisor
-            attn_lora_rank_divisor /= op_value
-            
-            # Calculate the new concrete rank from the divisor
-            new_rank = int(unwrapped_model.config.n_embd // attn_lora_rank_divisor) if attn_lora_rank_divisor > 0 else 0
-            
-            # Call the model's resize method with the new rank
-            unwrapped_model.resize_lora_rank(new_rank)
-            
-            if master_process:
-                wandb.log({"iter": iter_num, "attn_lora_rank_divisor": attn_lora_rank_divisor, "attn_lora_rank":unwrapped_model.config.attn_lora_rank})  
-                training_logger.log_operation_success(iter_num, op_name, 
-                    {'old_divisor': old_val, 'new_divisor': attn_lora_rank_divisor, 'new_rank': new_rank})
-                
-        elif op_name == 'decrease_vocab_lora_scaling':
-            if op_value <= 0:
-                error_msg = f"Invalid decrease_vocab_lora_scaling divisor {op_value}"
-                if master_process: print(f"Error: {error_msg}"); training_logger.log_operation_error(iter_num, op_name, error_msg)
-                return False
-            old_val = vocab_lora_rank_divisor
-            vocab_lora_rank_divisor /= op_value
-            
-            # Calculate the new concrete rank from the divisor
-            new_rank = int(unwrapped_model.config.n_embd // vocab_lora_rank_divisor) if vocab_lora_rank_divisor > 0 else 0
-        
-            # Call the model's resize method with the new rank
-            unwrapped_model.resize_embedding_rank(new_rank)
+                print(f"Performing architectural operation: {op_name}")
 
-            if master_process:
-                wandb.log({"iter": iter_num, "embedding_rank": new_rank})  
-                training_logger.log_operation_success(iter_num, op_name, 
-                    {'old_divisor': old_val, 'new_divisor': vocab_lora_rank_divisor, 'new_rank': new_rank})
-                
-        elif op_name == 'merge_lora_weights':
-            unwrapped_model.merge_lora_weights()
-            if master_process:
-                training_logger.log_operation_success(iter_num, op_name, {'status': 'merged'})
-        
-        log_detailed_params(unwrapped_model)
-        
-        # Re-create optimizer for the modified model
-        if master_process:
-            print("Re-configuring optimizer after architectural change...")
-        optimizer = unwrapped_model.configure_optimizers(weight_decay, learning_rate, (beta1, beta2), device_type)
-        
-        # Transfer optimizer state for parameters that still exist
-        if master_process:
-            print("Transferring optimizer state for existing parameters...")
-        transfer_optimizer_state(optimizer, old_optimizer_state, old_param_dict, unwrapped_model)
-        
-        # Re-apply wrappers like torch.compile and DDP
-        model = unwrapped_model
-        if compile:
-            if master_process:
-                print("Re-compiling the model...")
-            model = torch.compile(model)
-            
-        if ddp:
-            if master_process:
-                print("Re-wrapping model in DDP...")
-            model = DDP(model, device_ids=[ddp_local_rank])
-        
-        raw_model = model.module if ddp else model
+            unwrapped_model = unoptimized_model if compile else (model.module if ddp else model)
+            old_optimizer_state = optimizer.state_dict()
+            old_param_dict = {name: p for name, p in unwrapped_model.named_parameters()}
 
-        # Log the new architecture after the change is complete
-        log_model_architecture(raw_model, iter_num)
+            # --- Perform the absolute architectural operation ---
+            if op_name == 'stack_layers':
+                unwrapped_model.stack_layers(op_value)
+            elif op_name == 'widen_mlp':
+                unwrapped_model.widen_mlp(op_value)
+            elif op_name == 'set_attn_lora_rank':
+                unwrapped_model.resize_lora_rank(op_value)
+            elif op_name == 'set_embedding_lora_rank':
+                unwrapped_model.resize_embedding_rank(op_value)
+            elif op_name == 'merge_lora_weights':
+                unwrapped_model.merge_lora_weights()
 
-        if master_process:
-            print("Architectural operation completed successfully.")
+            # --- Re-create optimizer and wrappers (this logic remains the same) ---
+            log_detailed_params(unwrapped_model)
+            if master_process: print("Re-configuring optimizer...")
+            optimizer = unwrapped_model.configure_optimizers(weight_decay, learning_rate, (beta1, beta2), device_type)
+            if master_process: print("Transferring optimizer state...")
+            transfer_optimizer_state(optimizer, old_optimizer_state, old_param_dict, unwrapped_model)
+
+            model = unwrapped_model
+            if compile:
+                if master_process: print("Re-compiling the model...")
+                model = torch.compile(model)
+            if ddp:
+                if master_process: print("Re-wrapping model in DDP...")
+                model = DDP(model, device_ids=[ddp_local_rank])
+
+            raw_model = model.module if ddp else model
+            log_model_architecture(raw_model, iter_num)
+            if master_process: training_logger.log_operation_success(iter_num, op_name, {'new_config': raw_model.config.__dict__})
+
+
+        # --- Handle non-architectural (hyperparameter) operations ---
+        else:
+            if op_name == 'set_lr':
+                if master_process: print(f"Learning rate: {learning_rate:.6f} -> {op_value:.6f}")
+                learning_rate = op_value
+            elif op_name == 'set_batch_size':
+                if master_process: print(f"Batch size: {batch_size} -> {op_value}")
+                batch_size = op_value
+            elif op_name == 'set_grad_accum':
+                if master_process: print(f"Grad accum steps: {gradient_accumulation_steps} -> {op_value}")
+                gradient_accumulation_steps = op_value
+            elif op_name == 'set_warmup_iters':
+                if master_process: print(f"Warmup iters: {warmup_iters} -> {op_value}")
+                warmup_iters = op_value
+            elif op_name == 'set_eval_iters':
+                if master_process: print(f"Eval iters: {eval_iters} -> {op_value}")
+                eval_iters = op_value
+            elif op_name == 'set_eval_interval':
+                if master_process: print(f"Eval interval: {eval_interval} -> {op_value}")
+                eval_interval = op_value
+            elif op_name == 'reset_lr_schedule':
+                if master_process: print(f"Resetting LR schedule at iter {iter_num}")
+                lr_schedule_offset = iter_num
+            else:
+                raise ValueError(f"Unknown operation '{op_name}'")
+            if master_process: training_logger.log_operation_success(iter_num, op_name, {'new_value': op_value})
+
         return True
-    
-    # Handle non-architectural operations
-    if op_name == 'change_lr':
-        if op_value <= 0:
-            error_msg = f"Invalid lr multiplier {op_value}"
-            if master_process: print(f"Error: {error_msg}"); training_logger.log_operation_error(iter_num, op_name, error_msg)
-            return False
-        old_val = lr_multiplier
-        lr_multiplier *= op_value
-        if master_process and wandb_log:
-            wandb.log({"iter": iter_num, "lr_multiplier": lr_multiplier}) 
-        if master_process: print(f"LR multiplier: {old_val:.4f} -> {lr_multiplier:.4f}"); training_logger.log_operation_success(iter_num, op_name, {'old': old_val, 'new': lr_multiplier})
-    elif op_name == 'change_batch_size':
-        if op_value <= 0:
-            error_msg = f"Invalid batch size multiplier {op_value}"
-            if master_process: print(f"Error: {error_msg}"); training_logger.log_operation_error(iter_num, op_name, error_msg)
-            return False
-        old_val = batch_size; old_mult = batch_size_multiplier
-        batch_size_multiplier *= op_value
-        batch_size = max(1, int(batch_size * op_value))
-        if master_proces and wandb_log:
-            wandb.log({"iter": iter_num, "batch_size": batch_size}) 
-        if master_process: print(f"Batch size: {old_val} -> {batch_size}"); training_logger.log_operation_success(iter_num, op_name, {'old': old_val, 'new': batch_size})
-    elif op_name == 'change_grad_accum':
-        if op_value <= 0:
-            error_msg = f"Invalid grad accum multiplier {op_value}"
-            if master_process: print(f"Error: {error_msg}"); training_logger.log_operation_error(iter_num, op_name, error_msg)
-            return False
-        old_val = gradient_accumulation_steps
-        grad_accum_multiplier *= op_value # Update the multiplier tracking the state
-        
-        # FIX: Calculate the new value based on the old value and the operator value
-        new_grad_accum = max(1, int(old_val * op_value))
-        if master_process and wandb_log:
-            wandb.log({"iter": iter_num, "grad_accum": new_grad_accum}) 
-        gradient_accumulation_steps = new_grad_accum
-        
-        if master_process: 
-            print(f"Grad accum steps: {old_val} -> {gradient_accumulation_steps}")
-            training_logger.log_operation_success(iter_num, op_name, {'old': old_val, 'new': gradient_accumulation_steps})
-    elif op_name == 'reset_lr_schedule':
-        old_val = lr_schedule_offset
-        lr_schedule_offset = iter_num
-        if master_process: print(f"LR schedule offset: {old_val} -> {lr_schedule_offset}"); training_logger.log_operation_success(iter_num, op_name, {'old': old_val, 'new': lr_schedule_offset})
-    elif op_name == 'change_warmup_iters':
-        if op_value <= 0:
-            error_msg = f"Invalid warmup iters multiplier {op_value}"
-            if master_process: print(f"Error: {error_msg}"); training_logger.log_operation_error(iter_num, op_name, error_msg)
-            return False
-        old_val = warmup_iters_multiplier
-        warmup_iters_multiplier *= op_value
-        if master_process and wandb_log:
-            wandb.log({"iter": iter_num, "warmup_iters_multiplier": warmup_iters_multiplier}) 
-        if master_process: print(f"Warmup iters multiplier: {old_val:.4f} -> {warmup_iters_multiplier:.4f}"); training_logger.log_operation_success(iter_num, op_name, {'old': old_val, 'new': warmup_iters_multiplier})
-    elif op_name == 'change_eval_iters':
-        if op_value <= 0:
-            error_msg = f"Invalid eval iters multiplier {op_value}"
-            if master_process: print(f"Error: {error_msg}"); training_logger.log_operation_error(iter_num, op_name, error_msg)
-            return False
-        old_val = eval_iters_multiplier
-        eval_iters_multiplier *= op_value
-        if master_process: print(f"Eval iters multiplier: {old_val:.4f} -> {eval_iters_multiplier:.4f}  current evals: {eval_iters * eval_iters_multiplier}"); training_logger.log_operation_success(iter_num, op_name, {'old': old_val, 'new': eval_iters_multiplier})
-    elif op_name == 'change_eval_interval':
-        if op_value <= 0:
-            error_msg = f"Invalid eval interval multiplier {op_value}"
-            if master_process: print(f"Error: {error_msg}"); training_logger.log_operation_error(iter_num, op_name, error_msg)
-            return False
-        old_val = eval_interval_multiplier
-        eval_interval_multiplier *= op_value
-        if master_process: print(f"Eval interval multiplier: {old_val:.4f} -> {eval_interval_multiplier:.4f} current interval: {eval_interval_multiplier * eval_interval}"); training_logger.log_operation_success(iter_num, op_name, {'old': old_val, 'new': eval_interval_multiplier})
-    elif op_name == 'change_lora_alpha':
-        if op_value <= 0:
-            error_msg = f"Invalid lora alpha multiplier {op_value}"
-            if master_process: print(f"Error: {error_msg}"); training_logger.log_operation_error(iter_num, op_name, error_msg)
-            return False
-        old_val = lora_alpha_multiplier
-        lora_alpha_multiplier *= op_value
-        
-        # Update model config as well
-        unwrapped_model = unoptimized_model if compile else (model.module if ddp else model)
-        unwrapped_model.config.lora_alpha = unwrapped_model.config.lora_alpha * op_value
-        
-        if master_process: print(f"LoRA alpha multiplier: {old_val:.4f} -> {lora_alpha_multiplier:.4f}, model alpha: {unwrapped_model.config.lora_alpha:.4f}"); training_logger.log_operation_success(iter_num, op_name, {'old': old_val, 'new': lora_alpha_multiplier})
-    else:
-        error_msg = f"Unknown operation '{op_name}'"
-        if master_process: print(f"Warning: {error_msg} - skipping"); training_logger.log_operation_error(iter_num, op_name, error_msg)
+
+    except ValueError as e:
+        # Catch validation errors from the model methods (e.g., widening to smaller dim)
+        error_msg = f"Operation '{op_name}' failed validation: {e}"
+        if master_process:
+            print(f"ERROR: {error_msg}")
+            training_logger.log_operation_error(iter_num, op_name, error_msg)
+        # We will not mark this operation as complete and let the program exit or continue
+        # depending on your desired failure mode. For safety, we return False.
+        # Consider adding `sys.exit(1)` if failure should be fatal.
         return False
-    return True
+
+
+
 
 if wandb_log and master_process:
     import wandb
@@ -796,14 +634,13 @@ if master_process:
 log_detailed_params(raw_model)
 running_mfu = -1.0
 start_time = time.time() # Start the timer for elapsed time tracking
-print(f"eval every:{ int(eval_interval * eval_interval_multiplier)}")
+print(f"eval every: {eval_interval}")
 while True:
     lr = get_lr(iter_num)
     for param_group in optimizer.param_groups:
         param_group['lr'] = lr
 
-    actual_eval_interval = int(eval_interval * eval_interval_multiplier)
-    if iter_num % actual_eval_interval == 0:
+    if iter_num % eval_interval == 0:
         losses = estimate_loss()
         if master_process:
             print(f"step {iter_num}: train loss {losses['train']:.4f}, val loss {losses['val']:.4f}")

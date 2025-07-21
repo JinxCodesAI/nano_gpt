@@ -623,86 +623,82 @@ class GPT(nn.Module):
 
         return idx
 
-    def stack_layers(self, num_copies):
+    def stack_layers(self, layer_map):
         """
-        Stack layers by duplicating the existing layers num_copies times.
-        This implements the layer stacking operation for dynamic model growth.
+        Reconstructs the transformer stack based on an explicit layer map.
+        The map is a list of source indices. e.g., [0, 0, 1] creates a 3-layer model
+        with two copies of the original layer 0 and one copy of the original layer 1.
+
+        Throws a ValueError if any source index is out of bounds.
         """
-        if num_copies <= 1:
-            return
-        
-        print(f"Stacking layers: current depth {self.config.n_layer}, creating {self.config.n_layer * num_copies} total layers.")
-        original_layers = self.transformer.h
+        print(f"Re-stacking layers based on map: {layer_map}. New depth will be {len(layer_map)}.")
+        original_n_layer = self.config.n_layer
+
+        # --- Validation First ---
+        if not layer_map: # Cannot stack to zero layers this way
+            raise ValueError("Layer map cannot be empty.")
+        if max(layer_map) >= original_n_layer:
+            raise ValueError(f"Invalid layer map: index {max(layer_map)} is out of bounds for current model with {original_n_layer} layers.")
+
+        # Deepcopy original layers to use as a clean source palette
+        original_layers = copy.deepcopy(self.transformer.h)
         new_layers = nn.ModuleList()
-        
-        for _ in range(num_copies):
-            for layer in original_layers:
-                new_layers.append(copy.deepcopy(layer))
-        
+
+        # Build the new stack layer by layer
+        for source_idx in layer_map:
+            new_layers.append(copy.deepcopy(original_layers[source_idx]))
+
         self.transformer.h = new_layers
         self.config.n_layer = len(new_layers)
         print(f"Model now has {self.config.n_layer} layers.")
 
-    def widen_mlp(self, scale_factor):
+    def widen_mlp(self, new_hidden_dim):
         """
-        Widen MLP layers using Net2WiderNet algorithm with noise injection.
-        This implements the MLP widening operation for dynamic model growth.
+        Widens MLP layers to a new absolute dimension using Net2WiderNet.
+        Throws a ValueError if the new dimension is not larger than the current one.
         """
-        if scale_factor <= 1:
-            return
-            
-        print(f"Widening MLP layers by a factor of {scale_factor}.")
-        new_hidden_dim = 0
-        
+        print(f"Widening MLP hidden dimension to {new_hidden_dim}.")
+
+        # Validation is the first step
+        original_hidden_dim = self.config.n_hidden if self.config.n_hidden is not None else 4 * self.config.n_embd
+        if not new_hidden_dim > original_hidden_dim:
+            raise ValueError(f"New hidden dimension ({new_hidden_dim}) must be greater than the original ({original_hidden_dim}).")
+
         for block in self.transformer.h:
             mlp = block.mlp
             w_fc, b_fc, w_proj = mlp.c_fc.weight, mlp.c_fc.bias, mlp.c_proj.weight
-            
-            # Get the correct device from an existing parameter
             device = w_fc.device
-            
-            original_hidden_dim = w_fc.shape[0]
-            new_hidden_dim = int(original_hidden_dim * scale_factor)
 
-            # Create new layers on the CPU
-            new_c_fc = nn.Linear(self.config.n_embd, new_hidden_dim, bias=self.config.bias)
-            new_c_proj = nn.Linear(new_hidden_dim, self.config.n_embd, bias=self.config.bias)
-            
-            # Net2WiderNet mapping, created on the correct device
+            new_c_fc = nn.Linear(self.config.n_embd, new_hidden_dim, bias=self.config.bias).to(device)
+            new_c_proj = nn.Linear(new_hidden_dim, self.config.n_embd, bias=self.config.bias).to(device)
+
+            # Net2WiderNet mapping
             mapping = torch.randint(0, original_hidden_dim, (new_hidden_dim,), device=device)
             mapping[:original_hidden_dim] = torch.arange(original_hidden_dim, device=device)
-            
-            # === FIX STARTS HERE ===
-            # Move the new layers to the correct device BEFORE operating on their weights.
-            new_c_fc = new_c_fc.to(device)
-            new_c_proj = new_c_proj.to(device)
-            # === FIX ENDS HERE ===
-            
-            # Now all tensors (new_c_fc.weight, w_fc, mapping) are on the same device.
+
+            # Copy weights for the first part of the mapping
             new_c_fc.weight.data.copy_(w_fc.data[mapping])
             if b_fc is not None:
                 new_c_fc.bias.data.copy_(b_fc.data[mapping])
-            
-            # Break symmetry for new neurons by adding small noise
-            if new_hidden_dim > original_hidden_dim:
-                noise = torch.randn_like(new_c_fc.weight.data[original_hidden_dim:]) * 1e-4
-                new_c_fc.weight.data[original_hidden_dim:] += noise
-            
-            # replication_factors tensor, created on the correct device
+
+            # Add noise to break symmetry for the new neurons
+            noise = torch.randn_like(new_c_fc.weight.data[original_hidden_dim:]) * 1e-4
+            new_c_fc.weight.data[original_hidden_dim:] += noise
+
+            # Calculate replication factors for adjusting the output layer
             replication_factors = torch.zeros(original_hidden_dim, device=device)
             for i in range(original_hidden_dim):
                 replication_factors[i] = (mapping == i).sum()
-            
-            # All tensors (new_c_proj.weight, w_proj, mapping, replication_factors) are now on the same device.
+
+            # Copy and scale the output projection weights
             new_c_proj.weight.data.copy_(w_proj.data[:, mapping])
             new_c_proj.weight.data /= replication_factors[mapping].view(1, -1)
-            
-            # Assign the new, fully-formed, and device-correct layers
+
             mlp.c_fc = new_c_fc
             mlp.c_proj = new_c_proj
-            
+
         self.config.n_hidden = new_hidden_dim
-        print(f"MLP hidden dimension widened to {new_hidden_dim}.")
+        print(f"MLP hidden dimension successfully widened to {new_hidden_dim}.")
 
     def resize_lora_rank(self, new_rank):
         """
