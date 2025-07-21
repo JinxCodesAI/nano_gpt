@@ -427,8 +427,14 @@ if init_from == 'resume':
     except (ValueError, RuntimeError) as e:
         print(f"Direct optimizer loading failed: {e}")
         print("This is expected when switching between LoRA and non-LoRA models.")
-        print("Optimizer will start fresh with the configured learning rate.")
-        print("This is safe but may reset training momentum, which is an acceptable trade-off for architectural flexibility.")
+
+        # Attempt to transfer optimizer state using parameter names
+        if 'param_names' in checkpoint:
+            print("Attempting to transfer optimizer state using saved parameter names...")
+            transfer_optimizer_state(optimizer, checkpoint['optimizer'], checkpoint['param_names'], model)
+        else:
+            print("No parameter names saved in checkpoint - this is an older checkpoint format.")
+            print("Optimizer will start fresh. Consider re-saving checkpoints to enable state transfer.")
 
 checkpoint = None # free up memory
 
@@ -708,9 +714,14 @@ while True:
                     # Always save a universal, merged checkpoint
                     print("Creating universal checkpoint by merging LoRA weights...")
                     universal_state_dict = raw_model.get_merged_state_dict()
+
+                    # Save parameter names to enable optimizer state transfer
+                    param_names = {name: param for name, param in raw_model.named_parameters()}
+
                     checkpoint = {
                         'model': universal_state_dict, # Use the merged state dict
                         'optimizer': optimizer.state_dict(),
+                        'param_names': param_names,  # Save parameter names for optimizer state transfer
                         'model_args': model_args,
                         'iter_num': iter_num,
                         'best_val_loss': best_val_loss,
