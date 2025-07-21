@@ -41,6 +41,9 @@ wandb_project = 'owt'
 wandb_run_name = 'gpt2' # 'run' + str(time.time())
 # data
 dataset = 'fineweb10B'
+train_shard_filenames = ['train.bin']
+num_train_shards = 1
+
 gradient_accumulation_steps = 5 * 8 # used to simulate larger batch sizes
 batch_size = 12 # if gradient_accumulation_steps > 1, this is the micro-batch size
 block_size = 1024
@@ -116,6 +119,13 @@ if n_hidden_divisor is not None and n_hidden_divisor>0:
 
 if n_layer_divisor is not None and n_layer_divisor>0:
     n_layer = n_layer // n_layer_divisor
+
+
+if(dataset == 'fineweb10B'):
+    num_train_shards = 103
+    train_shard_filenames = [f"fineweb_train_{i:06d}.bin" for i in range(1, num_train_shards + 1)]
+else:
+    num_train_shards = len(train_shard_filenames)
       
 def log_detailed_params(model_to_log):
     """Logs the detailed parameter count of the provided model."""
@@ -327,8 +337,6 @@ ctx = nullcontext() if device_type == 'cpu' else torch.amp.autocast(device_type=
 
 # poor man's data loader
 data_dir = os.path.join('data', dataset)
-num_train_shards = 103
-train_shard_filenames = [f"fineweb_train_{i:06d}.bin" for i in range(1, num_train_shards + 1)]
 
 def get_batch(split):
     if split == 'train':
@@ -439,7 +447,7 @@ def get_lr(it):
     actual_warmup_iters = int(warmup_iters * warmup_iters_multiplier)
     actual_lr_decay_iters = int(lr_decay_iters * warmup_iters_multiplier)
     
-    if master_process:
+    if master_process and wandb_log:
         wandb.log({"iter": it, "effective_it": effective_it, "warmup_iters": actual_warmup_iters, "lr_decay_iters": actual_lr_decay_iters, "gradient_accumulation_steps":gradient_accumulation_steps, "batch_size":batch_size }) 
     if effective_it < actual_warmup_iters:
         return learning_rate * lr_multiplier * (effective_it + 1) / (actual_warmup_iters + 1)
@@ -644,7 +652,7 @@ def execute_operation(op, trigger_reason, current_val_loss, iter_num, target_arc
             return False
         old_val = lr_multiplier
         lr_multiplier *= op_value
-        if master_process:
+        if master_process and wandb_log:
             wandb.log({"iter": iter_num, "lr_multiplier": lr_multiplier}) 
         if master_process: print(f"LR multiplier: {old_val:.4f} -> {lr_multiplier:.4f}"); training_logger.log_operation_success(iter_num, op_name, {'old': old_val, 'new': lr_multiplier})
     elif op_name == 'change_batch_size':
@@ -655,7 +663,7 @@ def execute_operation(op, trigger_reason, current_val_loss, iter_num, target_arc
         old_val = batch_size; old_mult = batch_size_multiplier
         batch_size_multiplier *= op_value
         batch_size = max(1, int(batch_size * op_value))
-        if master_process:
+        if master_proces and wandb_log:
             wandb.log({"iter": iter_num, "batch_size": batch_size}) 
         if master_process: print(f"Batch size: {old_val} -> {batch_size}"); training_logger.log_operation_success(iter_num, op_name, {'old': old_val, 'new': batch_size})
     elif op_name == 'change_grad_accum':
@@ -668,7 +676,7 @@ def execute_operation(op, trigger_reason, current_val_loss, iter_num, target_arc
         
         # FIX: Calculate the new value based on the old value and the operator value
         new_grad_accum = max(1, int(old_val * op_value))
-        if master_process:
+        if master_process and wandb_log:
             wandb.log({"iter": iter_num, "grad_accum": new_grad_accum}) 
         gradient_accumulation_steps = new_grad_accum
         
@@ -686,7 +694,7 @@ def execute_operation(op, trigger_reason, current_val_loss, iter_num, target_arc
             return False
         old_val = warmup_iters_multiplier
         warmup_iters_multiplier *= op_value
-        if master_process:
+        if master_process and wandb_log:
             wandb.log({"iter": iter_num, "warmup_iters_multiplier": warmup_iters_multiplier}) 
         if master_process: print(f"Warmup iters multiplier: {old_val:.4f} -> {warmup_iters_multiplier:.4f}"); training_logger.log_operation_success(iter_num, op_name, {'old': old_val, 'new': warmup_iters_multiplier})
     elif op_name == 'change_eval_iters':

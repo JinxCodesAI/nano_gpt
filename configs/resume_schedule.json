@@ -1,0 +1,45 @@
+[
+  {
+    "name": "merge_lora_weights",
+    "value": null,
+    "trigger_loss": 1.5,
+    "max_wait_iters": 500,
+    "desc": "first burn",
+    "reevaluate": false,
+    "completed": true
+  },
+  {
+    "name": "change_lr",
+    "value": 0.7,
+    "trigger_loss": 100,
+    "max_wait_iters": 1,
+    "reevaluate": false,
+    "completed": true
+  },
+  {
+    "name": "merge_lora_weights",
+    "value": null,
+    "trigger_loss": 1.5,
+    "max_wait_iters": 500,
+    "desc": "first burn",
+    "reevaluate": false,
+    "completed": false
+  },
+  {
+    "name": "change_lr",
+    "value": 0.7,
+    "trigger_loss": 100,
+    "max_wait_iters": 1,
+    "reevaluate": false,
+    "completed": false
+  },
+  {
+    "name": "merge_lora_weights",
+    "value": null,
+    "trigger_loss": 1.5,
+    "max_wait_iters": 500,
+    "desc": "first burn",
+    "reevaluate": false,
+    "completed": false
+  }
+]
