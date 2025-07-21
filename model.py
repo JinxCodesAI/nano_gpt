@@ -789,43 +789,54 @@ class GPT(nn.Module):
 
         print("LoRA weights merged and reset.")
 
+    @torch.no_grad()
     def get_merged_state_dict(self):
         """
-        Returns a state_dict with all LoRA weights merged into their main weights.
-        This is useful for saving a single, consolidated checkpoint.
+        Returns a state_dict with all LoRA weights merged into their main weights,
+        ready for saving a universal checkpoint.
+        This method is decorated with @torch.no_grad() to prevent gradient tracking.
         """
-        # Start with a copy of the current state_dict
-        merged_sd = self.state_dict()
-        keys_to_delete = []
+        # Create a new state_dict to populate
+        final_sd = {}
 
+        # Get a fresh copy of the model's current state_dict
+        source_sd = self.state_dict()
+
+        for key, value in source_sd.items():
+            # This is a LoRA layer's main weight, it will be handled by the merge logic below. Skip it.
+            if 'main_weight' in key:
+                continue
+
+            # These are the LoRA-specific weights. We are merging them, so we don't include them in the final dict.
+            if 'lora_A' in key or 'lora_B' in key:
+                continue
+
+            # It's a standard parameter, so copy it directly.
+            final_sd[key] = value
+
+        # Now, explicitly find LoRA modules and perform the merge, adding the result to our final_sd
         for name, module in self.named_modules():
             if isinstance(module, LoRALinear) and module.rank > 0:
-                # Calculate the merged weight for LoRALinear
+                # The key for the final dict should be the standard layer name
+                key = f"{name}.weight"
+                # Get the bias from the main_weight linear layer
+                bias_key = f"{name}.bias"
+
+                # Calculate the merged weight
                 lora_update = module.lora_B.weight @ module.lora_A.weight * (module.alpha / module.rank)
                 merged_weight = module.main_weight.weight.data + lora_update
+                final_sd[key] = merged_weight
 
-                # Update the state_dict with the merged weight
-                merged_sd[f'{name}.main_weight.weight'] = merged_weight
-
-                # Mark LoRA-specific keys for deletion
-                keys_to_delete.extend([f'{name}.lora_A.weight', f'{name}.lora_B.weight'])
+                # Copy the bias if it exists
+                if module.main_weight.bias is not None:
+                    final_sd[bias_key] = module.main_weight.bias.data
 
             elif isinstance(module, LoRAEmbedding) and module.rank > 0:
+                key = f"{name}.weight"
+
                 # Calculate the merged weight for LoRAEmbedding
-                lora_update = module.lora_A.weight @ module.lora_B.weight.T
+                lora_update = (module.lora_A.weight @ module.lora_B.weight.T).T
                 merged_weight = module.main_weight.weight.data + lora_update * (module.alpha / module.rank)
-
-                # Update the state_dict with the merged weight
-                merged_sd[f'{name}.main_weight.weight'] = merged_weight
-
-                # Mark LoRA-specific keys for deletion
-                keys_to_delete.extend([f'{name}.lora_A.weight', f'{name}.lora_B.weight'])
-
-        # Now, remap the merged weights from 'main_weight.weight' to just '.weight'
-        final_sd = {}
-        for k, v in merged_sd.items():
-            if k not in keys_to_delete:
-                new_key = k.replace('main_weight.weight', 'weight')
-                final_sd[new_key] = v
+                final_sd[key] = merged_weight
 
         return final_sd

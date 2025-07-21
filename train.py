@@ -363,49 +363,45 @@ elif init_from == 'resume':
     checkpoint = torch.load(ckpt_path, map_location=device)
     checkpoint_model_args = checkpoint['model_args']
 
-    # --- Force an update of the model args from the checkpoint ---
-    # This ensures that the base architecture (n_layer, n_embd, etc.) matches the checkpoint,
-    # while allowing the new config file to specify LoRA ranks.
+    # Force an update of the model args from the checkpoint for base architecture
     for k in ['n_layer', 'n_head', 'n_embd', 'block_size', 'bias', 'vocab_size', 'n_hidden']:
         model_args[k] = checkpoint_model_args[k]
 
-    # Create the model with the potentially new LoRA configuration
+    # Create the model with the potentially new LoRA configuration from the config file
     gptconf = GPTConfig(**model_args)
     model = GPT(gptconf)
 
     state_dict = checkpoint['model']
 
     # --- SMART LOADER LOGIC ---
-    # This block intelligently handles loading a standard checkpoint into a LoRA-enabled model.
-    model_state_dict = model.state_dict()
+    print("Applying smart loader logic for model weights...")
+    model_sd = model.state_dict()
     final_state_dict = {}
 
-    print("Applying smart loader logic...")
     for k, v in state_dict.items():
-        # Check if we are trying to load a standard weight into a LoRA layer
-        lora_key_equivalent = k.replace('.weight', '.main_weight.weight')
-        if k in model_state_dict:
-            # Key exists in both, direct copy
+        # Case 1: The key from the checkpoint exists directly in the new model (e.g., non-LoRA to non-LoRA)
+        if k in model_sd:
             final_state_dict[k] = v
-        elif lora_key_equivalent in model_state_dict:
-            # Key is from a standard model, but we need to load it into a LoRA layer's main_weight
-            print(f"  Remapping standard weight to LoRA main weight: {k} -> {lora_key_equivalent}")
-            final_state_dict[lora_key_equivalent] = v
+        # Case 2: We are loading a standard weight into a LoRA layer's main_weight
         else:
-            # This key from the checkpoint is not needed in the new model
-            print(f"  Skipping unexpected key from checkpoint: {k}")
+            lora_key_equivalent = k.replace('.weight', '.main_weight.weight')
+            if lora_key_equivalent in model_sd:
+                print(f"  Remapping standard weight to LoRA: {k} -> {lora_key_equivalent}")
+                final_state_dict[lora_key_equivalent] = v
+            else:
+                print(f"  Skipping unexpected key from checkpoint: {k}")
 
-    # The unwanted prefix logic remains useful for compiled models
+    # Remove the compilation wrapper prefix if it exists
     unwanted_prefix = '_orig_mod.'
-    for k,v in list(final_state_dict.items()):
+    for k, v in list(final_state_dict.items()):
         if k.startswith(unwanted_prefix):
             final_state_dict[k[len(unwanted_prefix):]] = final_state_dict.pop(k)
 
-    # Use strict=False because LoRA-specific weights (lora_A, lora_B) will be
-    # missing from the checkpoint, which is expected. They are initialized from scratch.
+    # Load the prepared state dict.
+    # strict=False is essential, as LoRA A/B weights are expected to be missing.
     model.load_state_dict(final_state_dict, strict=False)
 
-    # Load the rest of the checkpoint data
+    # Load the rest of the training state
     iter_num = checkpoint['iter_num']
     best_val_loss = checkpoint['best_val_loss']
 elif init_from.startswith('gpt2'):
@@ -421,15 +417,19 @@ model.to(device)
 
 scaler = torch.cuda.amp.GradScaler(enabled=(dtype == 'float16'))
 optimizer = model.configure_optimizers(weight_decay, learning_rate, (beta1, beta2), device_type)
+
 if init_from == 'resume':
+    print("Attempting to load and transfer optimizer state...")
     try:
+        # Try direct loading first
         optimizer.load_state_dict(checkpoint['optimizer'])
-        print("Successfully loaded optimizer state from checkpoint")
+        print("Successfully loaded optimizer state directly from checkpoint")
     except (ValueError, RuntimeError) as e:
-        print(f"WARNING: Could not load optimizer state from checkpoint: {e}")
-        print("   This is expected when switching between LoRA and non-LoRA models.")
-        print("   Optimizer will start fresh with the configured learning rate.")
-checkpoint = None
+        print(f"Direct optimizer loading failed: {e}")
+        print("This is expected when switching between LoRA and non-LoRA models.")
+        print("Optimizer will start fresh with the configured learning rate.")
+
+checkpoint = None # free up memory
 
 if compile:
     print("compiling the model... (takes a ~minute)")
