@@ -449,7 +449,13 @@ model.to(device)
 scaler = torch.cuda.amp.GradScaler(enabled=(dtype == 'float16'))
 optimizer = model.configure_optimizers(weight_decay, learning_rate, (beta1, beta2), device_type)
 if init_from == 'resume':
-    optimizer.load_state_dict(checkpoint['optimizer'])
+    try:
+        optimizer.load_state_dict(checkpoint['optimizer'])
+        print("Successfully loaded optimizer state from checkpoint")
+    except (ValueError, RuntimeError) as e:
+        print(f"WARNING: Could not load optimizer state from checkpoint: {e}")
+        print("   This is expected when switching between LoRA and non-LoRA models.")
+        print("   Optimizer will start fresh with the configured learning rate.")
 checkpoint = None
 
 if compile:
