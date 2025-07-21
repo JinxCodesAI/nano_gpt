@@ -637,6 +637,8 @@ class GPT(nn.Module):
         # --- Validation First ---
         if not layer_map: # Cannot stack to zero layers this way
             raise ValueError("Layer map cannot be empty.")
+        if min(layer_map) < 0:
+            raise ValueError(f"Invalid layer map: negative index {min(layer_map)} is not allowed.")
         if max(layer_map) >= original_n_layer:
             raise ValueError(f"Invalid layer map: index {max(layer_map)} is out of bounds for current model with {original_n_layer} layers.")
 

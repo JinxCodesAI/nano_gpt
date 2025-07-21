@@ -188,10 +188,10 @@ def calculate_and_log_target_architecture(initial_config, schedule):
     for op in schedule:
         op_name = op['name']
         op_value = op['value']
-        if op_name == 'stack_layers' and op_value > 1:
-            target_config['n_layer'] = int(target_config['n_layer'] * op_value)
-        elif op_name == 'widen_mlp' and op_value > 1:
-            target_config['n_hidden'] = int(target_config['n_hidden'] * op_value)
+        if op_name == 'stack_layers' and isinstance(op_value, list):
+            target_config['n_layer'] = len(op_value)
+        elif op_name == 'widen_mlp' and isinstance(op_value, (int, float)):
+            target_config['n_hidden'] = int(op_value)
 
     # Log this calculated target architecture
     log_model_architecture(
@@ -520,7 +520,8 @@ def execute_operation(op, trigger_reason, current_val_loss, iter_num, target_arc
             'trigger_loss': op['trigger_loss'],
             'max_wait_iters': op['max_wait_iters']
         }
-        training_logger.log_operation_start(iter_num, op_label, op_value, log_details)
+        training_logger.log_operation_start(iter_num, op_label, op_value, trigger_reason, current_val_loss,
+                                          op['trigger_loss'], op['max_wait_iters'])
 
     try:
         # Check if this is an architectural operation
