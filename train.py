@@ -218,9 +218,29 @@ def calculate_and_log_target_architecture(initial_config, schedule):
     # Return the dictionary to be stored
     return target_config
 
+def save_scaling_schedule(file_path, schedule_data):
+    """Saves the updated schedule data back to its file (YAML or JSON).
+    Automatically adds 'completed' field to operations that don't have it."""
+    if not file_path or not os.path.exists(file_path):
+        return
+    try:
+        # Ensure all operations have a 'completed' field before saving
+        for op in schedule_data:
+            if 'completed' not in op:
+                op['completed'] = False
+
+        with open(file_path, 'w') as f:
+            if file_path.endswith('.yaml') or file_path.endswith('.yml'):
+                yaml.dump(schedule_data, f, sort_keys=False)
+            elif file_path.endswith('.json'):
+                json.dump(schedule_data, f, indent=2)
+        # print(f"Updated scaling schedule saved to {file_path}")
+    except Exception as e:
+        print(f"Error saving scaling schedule to {file_path}: {e}")
+
 # Load scaling schedule if specified
-def load_scaling_schedule(file_path):
-    """Load scaling schedule from YAML or JSON file"""
+def load_scaling_schedule(file_path, init_from):
+    """Load scaling schedule and reset 'completed' status if starting from scratch."""
     if not file_path or not os.path.exists(file_path):
         return []
     try:
@@ -240,6 +260,20 @@ def load_scaling_schedule(file_path):
             if not all(key in op for key in required_keys):
                 print(f"Warning: Operation {i} missing required keys: {required_keys}")
                 return []
+
+        # Handle completion status based on init_from parameter
+        # Note: Missing 'completed' fields are treated as False automatically
+        if init_from == 'scratch':
+            print("Starting from scratch, resetting schedule completion status.")
+            for op in schedule:
+                op['completed'] = False
+        else:
+            print("Resuming run, honoring existing schedule completion status.")
+            # Ensure operations have 'completed' field for consistency (will be added on next save)
+            for op in schedule:
+                if 'completed' not in op:
+                    op['completed'] = False
+
         print(f"Loaded scaling schedule with {len(schedule)} operations from {file_path}")
         return schedule
     except Exception as e:
@@ -248,7 +282,7 @@ def load_scaling_schedule(file_path):
 
 # Load scaling schedule
 if scaling_schedule_file:
-    scaling_schedule = load_scaling_schedule(scaling_schedule_file)
+    scaling_schedule = load_scaling_schedule(scaling_schedule_file, init_from)
 
 # Training Orchestrator State
 iter_of_last_op = 0 # Iteration number when last operation was executed
@@ -770,16 +804,30 @@ while True:
         while True:
             op_to_run = [None]
             if master_process and scaling_schedule:
-                next_op = scaling_schedule[0]
-                current_val_loss = losses['val']
-                loss_triggered = current_val_loss < next_op['trigger_loss']
-                timeout_triggered = (iter_num - iter_of_last_op) >= next_op['max_wait_iters']
-                if loss_triggered or timeout_triggered:
-                    trigger_reason = 'Loss threshold' if loss_triggered else 'Timeout'
-                    op_to_run[0] = {'op': next_op, 'reason': trigger_reason, 'loss': current_val_loss}
+                # Find next uncompleted operation
+                next_op = None
+                for op in scaling_schedule:
+                    if not op.get('completed', False):
+                        next_op = op
+                        break # Found the next operation to consider
+
+                # If next_op is still None, all operations are complete
+                if next_op is None:
+                    if 'all_ops_done' not in globals(): # Log this message only once
+                        print("All scheduled operations have been completed.")
+                        globals()['all_ops_done'] = True
                 else:
-                    print(f"{next_op['name']} {current_val_loss} {next_op['trigger_loss']} {next_op['max_wait_iters']}")
-            
+                    # We have an operation to consider, now check its trigger conditions
+                    current_val_loss = losses['val']
+                    loss_triggered = current_val_loss < next_op['trigger_loss']
+                    timeout_triggered = (iter_num - iter_of_last_op) >= next_op['max_wait_iters']
+
+                    if loss_triggered or timeout_triggered:
+                        trigger_reason = 'Loss threshold' if loss_triggered else 'Timeout'
+                        op_to_run[0] = {'op': next_op, 'reason': trigger_reason, 'loss': current_val_loss}
+                    else:
+                        print(f"{next_op['name']} {current_val_loss} {next_op['trigger_loss']} {next_op['max_wait_iters']}")
+
             if ddp:
                 torch.distributed.broadcast_object_list(op_to_run, src=0)
 
@@ -795,8 +843,13 @@ while True:
 
                 operation_succeeded = execute_operation(next_op, trigger_reason, current_val_loss, iter_num, target_architecture_config)
                 if operation_succeeded:
-                    scaling_schedule.pop(0)
+                    # Instead of popping, we mark the operation as complete in our in-memory list
+                    next_op['completed'] = True
                     iter_of_last_op = iter_num
+
+                    # Save the updated schedule back to the file
+                    if master_process:
+                        save_scaling_schedule(scaling_schedule_file, scaling_schedule)
                     if next_op['reevaluate']:
                         if master_process: print("Re-evaluating validation loss after operation...")
                         losses = estimate_loss() # All processes re-evaluate to stay in sync
