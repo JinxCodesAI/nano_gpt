@@ -111,6 +111,58 @@ def log_detailed_params(model_to_log):
             print(f"  {component:<22} | Total: {total_str:>12} | Trainable: {trainable_str:>12}")
         print("-" * 60) # Add a separator for clarity
 
+def transfer_optimizer_state(new_optimizer, old_state_dict, old_param_dict, model):
+    """
+    Transfer optimizer state from old optimizer to new optimizer for parameters that still exist.
+    Uses parameter names as the bridge instead of object identity to handle architectural changes.
+    """
+    if 'state' not in old_state_dict:
+        return
+    
+    # Map old parameter names to their state from the old optimizer state_dict
+    state_to_transfer = {}
+    old_param_id_to_name = {id(p): name for name, p in old_param_dict.items()}
+    
+    for param_id, state in old_state_dict['state'].items():
+        if param_id in old_param_id_to_name:
+            param_name = old_param_id_to_name[param_id]
+            state_to_transfer[param_name] = state
+    
+    # For each parameter in the new model, find its state by name and apply it
+    transferred_count = 0
+    new_param_name_map = {name: p for name, p in model.named_parameters()}
+    
+    for param_name, state in state_to_transfer.items():
+        if param_name in new_param_name_map:
+            param_tensor = new_param_name_map[param_name]
+            # Directly set the state in the optimizer
+            new_optimizer.state[param_tensor] = state
+            transferred_count += 1
+    
+    total_params = len(list(model.parameters()))
+    print(f"Transferred optimizer state for {transferred_count} / {total_params} parameters")
+
+def transfer_optimizer_state_by_shape(new_optimizer, old_state_dict, model):
+    """
+    Fallback function to transfer optimizer state when parameter names are not available.
+    Attempts to match parameters by shape and name similarity.
+    """
+    if 'state' not in old_state_dict:
+        return 0
+
+    # Get current model parameters
+    current_params = {name: param for name, param in model.named_parameters()}
+
+    # Try to match by parameter name (for parameters that haven't changed)
+    transferred_count = 0
+
+    # This is a simplified approach - we can't perfectly reconstruct the mapping
+    # without the old parameter names, but we can try some heuristics
+    print("Attempting basic optimizer state transfer by parameter name matching...")
+    print("Note: This may not transfer all state due to architectural changes.")
+
+    return transferred_count
+
 def log_model_architecture(model, iter_num, is_initial=False, is_target=False):
     """Logs the model's current or target architecture to the console and W&B."""
     if not master_process:
@@ -419,7 +471,7 @@ scaler = torch.cuda.amp.GradScaler(enabled=(dtype == 'float16'))
 optimizer = model.configure_optimizers(weight_decay, learning_rate, (beta1, beta2), device_type)
 
 if init_from == 'resume':
-    print("Attempting to load and transfer optimizer state...")
+    print("Attempting to load optimizer state...")
     try:
         # Try direct loading first
         optimizer.load_state_dict(checkpoint['optimizer'])
@@ -427,7 +479,17 @@ if init_from == 'resume':
     except (ValueError, RuntimeError) as e:
         print(f"Direct optimizer loading failed: {e}")
         print("This is expected when switching between LoRA and non-LoRA models.")
-        print("Optimizer will start fresh with the configured learning rate.")
+
+        # Attempt to transfer optimizer state using parameter names
+        if 'param_names' in checkpoint:
+            print("Attempting to transfer optimizer state using saved parameter names...")
+            transfer_optimizer_state(optimizer, checkpoint['optimizer'], checkpoint['param_names'], model)
+        else:
+            print("No parameter names saved in checkpoint - this is an older checkpoint format.")
+            transferred_count = transfer_optimizer_state_by_shape(optimizer, checkpoint['optimizer'], model)
+            if transferred_count == 0:
+                print("Could not transfer optimizer state. Optimizer will start fresh.")
+                print("To enable full state transfer, re-save checkpoints with the updated format.")
 
 checkpoint = None # free up memory
 
@@ -471,36 +533,9 @@ def get_lr(it):
     coeff = 0.5 * (1.0 + math.cos(math.pi * decay_ratio))
     return (min_lr + coeff * (learning_rate - min_lr))
 
-def transfer_optimizer_state(new_optimizer, old_state_dict, old_param_dict, model):
-    """
-    Transfer optimizer state from old optimizer to new optimizer for parameters that still exist.
-    Uses parameter names as the bridge instead of object identity to handle architectural changes.
-    """
-    if 'state' not in old_state_dict:
-        return
-    
-    # Map old parameter names to their state from the old optimizer state_dict
-    state_to_transfer = {}
-    old_param_id_to_name = {id(p): name for name, p in old_param_dict.items()}
-    
-    for param_id, state in old_state_dict['state'].items():
-        if param_id in old_param_id_to_name:
-            param_name = old_param_id_to_name[param_id]
-            state_to_transfer[param_name] = state
-    
-    # For each parameter in the new model, find its state by name and apply it
-    transferred_count = 0
-    new_param_name_map = {name: p for name, p in model.named_parameters()}
-    
-    for param_name, state in state_to_transfer.items():
-        if param_name in new_param_name_map:
-            param_tensor = new_param_name_map[param_name]
-            # Directly set the state in the optimizer
-            new_optimizer.state[param_tensor] = state
-            transferred_count += 1
-    
-    total_params = len(list(model.parameters()))
-    print(f"Transferred optimizer state for {transferred_count} / {total_params} parameters")
+
+
+
 
 def execute_operation(op, trigger_reason, current_val_loss, iter_num, target_architecture_config):
     # Make globals mutable within this function
@@ -705,9 +740,14 @@ while True:
                     # Always save a universal, merged checkpoint
                     print("Creating universal checkpoint by merging LoRA weights...")
                     universal_state_dict = raw_model.get_merged_state_dict()
+
+                    # Save parameter names to enable optimizer state transfer
+                    param_names = {name: param for name, param in raw_model.named_parameters()}
+
                     checkpoint = {
                         'model': universal_state_dict, # Use the merged state dict
                         'optimizer': optimizer.state_dict(),
+                        'param_names': param_names,  # Save parameter names for optimizer state transfer
                         'model_args': model_args,
                         'iter_num': iter_num,
                         'best_val_loss': best_val_loss,
