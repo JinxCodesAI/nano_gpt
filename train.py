@@ -31,7 +31,7 @@ log_interval = 1
 eval_iters = 200
 eval_only = False # if True, script exits right after the first eval
 always_save_checkpoint = True # if True, always save a checkpoint after each eval
-init_from = 'resume' # 'scratch' or 'resume' or 'gpt2*'
+init_from = 'scratch' # 'scratch' or 'resume' or 'gpt2*'
 # file logging
 log_dir = 'logs' # directory for log files
 file_logging = True # enable file logging
@@ -107,14 +107,14 @@ config_keys = [k for k,v in globals().items() if not k.startswith('_') and isins
 exec(open('configurator.py').read()) # overrides from command line or config file
 config = {k: globals()[k] for k in config_keys} # will be useful for logging
 
-if n_hidden_divisor is not None:
+if n_hidden_divisor is not None and n_hidden_divisor>0:
     if n_hidden is not None:
         n_hidden = n_hidden // n_hidden_divisor
     else:
         n_hidden = 4 * n_embd // n_hidden_divisor
 
 
-if n_layer_divisor is not None:
+if n_layer_divisor is not None and n_layer_divisor>0:
     n_layer = n_layer // n_layer_divisor
       
 def log_detailed_params(model_to_log):
@@ -728,18 +728,35 @@ while True:
 
             # --- Model Analysis ---
             analyzer = ModelAnalyzer(raw_model)
+            print (f"raw_model.config.n_layer={raw_model.config.n_layer}")
 
-            # 1. Analyze MLP Rank
-            eff_rank, full_rank, rank_util = analyzer.analyze_mlp_weight_rank(layer_idx=0)
+            for idx in range(raw_model.config.n_layer):
+                print(f"doing something {idx}")
+                attn_lora_layer = analyzer.model.transformer.h[idx].attn.c_attn
+                attn_lora_res = analyzer.analyze_lora_update_rank(attn_lora_layer)
+                eff_rank, full_rank, rank_util = analyzer.analyze_mlp_weight_rank(layer_idx=idx)
+                if rank_util != -1.0:
+                    print(f"  MLP Rank Utilization (L{idx}): {rank_util:.2%} ({eff_rank}/{full_rank})")
 
-            # 2. Analyze Attention Entropy
-            X_val, _ = get_batch('val') # Get a batch for analysis
-            avg_entropy = analyzer.analyze_attention_entropy(X_val)
+                if attn_lora_res[2] != -1.0:
+                    print(f"{'Attn LoRA':<12} | {str(attn_lora_res[0])+'/'+str(attn_lora_res[1]):<15} | {attn_lora_res[2]:<12.2%}")
 
-            # 3. Display the results in a formatted block
+            # 5. Analyze Embedding Rank
+            eff_rank, full_rank, rank_util = analyzer.analyze_embedding_rank()
+            # 6. Display the results in a formatted block
             print("--- Model Analysis ---")
             if rank_util != -1.0:
-                print(f"  MLP Rank Utilization (L0): {rank_util:.2%} ({eff_rank}/{full_rank})")
+                print(f"  Embedding Utilization: {rank_util:.2%} ({eff_rank}/{full_rank})")
+            
+            # 1. Analyze Embedding LoRA
+            emb_lora_layer = analyzer.model.transformer.wte
+            emb_lora_res = analyzer.analyze_lora_update_rank(emb_lora_layer)
+            if emb_lora_res[2] != -1.0:
+                 print(f"{'Embed LoRA':<12} | {str(emb_lora_res[0])+'/'+str(emb_lora_res[1]):<15} | {emb_lora_res[2]:<12.2%}")
+
+            X_val, _ = get_batch('val')
+            avg_entropy = analyzer.analyze_attention_entropy(X_val)
+
             if avg_entropy != -1.0:
                 print(f"  Average Attention Entropy:  {avg_entropy:.4f}")
             print("----------------------")
