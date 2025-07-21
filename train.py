@@ -389,16 +389,50 @@ elif init_from == 'resume':
     ckpt_path = os.path.join(out_dir, 'ckpt.pt')
     checkpoint = torch.load(ckpt_path, map_location=device)
     checkpoint_model_args = checkpoint['model_args']
+
+    # --- Force an update of the model args from the checkpoint ---
+    # This ensures that the base architecture (n_layer, n_embd, etc.) matches the checkpoint,
+    # while allowing the new config file to specify LoRA ranks.
     for k in ['n_layer', 'n_head', 'n_embd', 'block_size', 'bias', 'vocab_size', 'n_hidden']:
         model_args[k] = checkpoint_model_args[k]
+
+    # Create the model with the potentially new LoRA configuration
     gptconf = GPTConfig(**model_args)
     model = GPT(gptconf)
+
     state_dict = checkpoint['model']
+
+    # --- SMART LOADER LOGIC ---
+    # This block intelligently handles loading a standard checkpoint into a LoRA-enabled model.
+    model_state_dict = model.state_dict()
+    final_state_dict = {}
+
+    print("Applying smart loader logic...")
+    for k, v in state_dict.items():
+        # Check if we are trying to load a standard weight into a LoRA layer
+        lora_key_equivalent = k.replace('.weight', '.main_weight.weight')
+        if k in model_state_dict:
+            # Key exists in both, direct copy
+            final_state_dict[k] = v
+        elif lora_key_equivalent in model_state_dict:
+            # Key is from a standard model, but we need to load it into a LoRA layer's main_weight
+            print(f"  Remapping standard weight to LoRA main weight: {k} -> {lora_key_equivalent}")
+            final_state_dict[lora_key_equivalent] = v
+        else:
+            # This key from the checkpoint is not needed in the new model
+            print(f"  Skipping unexpected key from checkpoint: {k}")
+
+    # The unwanted prefix logic remains useful for compiled models
     unwanted_prefix = '_orig_mod.'
-    for k,v in list(state_dict.items()):
+    for k,v in list(final_state_dict.items()):
         if k.startswith(unwanted_prefix):
-            state_dict[k[len(unwanted_prefix):]] = state_dict.pop(k)
-    model.load_state_dict(state_dict)
+            final_state_dict[k[len(unwanted_prefix):]] = final_state_dict.pop(k)
+
+    # Use strict=False because LoRA-specific weights (lora_A, lora_B) will be
+    # missing from the checkpoint, which is expected. They are initialized from scratch.
+    model.load_state_dict(final_state_dict, strict=False)
+
+    # Load the rest of the checkpoint data
     iter_num = checkpoint['iter_num']
     best_val_loss = checkpoint['best_val_loss']
 elif init_from.startswith('gpt2'):
@@ -823,7 +857,19 @@ while True:
             if losses['val'] < best_val_loss or always_save_checkpoint:
                 best_val_loss = losses['val']
                 if iter_num > 0:
-                    checkpoint = {'model': raw_model.state_dict(), 'optimizer': optimizer.state_dict(), 'model_args': model_args, 'iter_num': iter_num, 'best_val_loss': best_val_loss, 'config': config}
+                    # --- MODIFICATION START ---
+                    # Always save a universal, merged checkpoint
+                    print("Creating universal checkpoint by merging LoRA weights...")
+                    universal_state_dict = raw_model.get_merged_state_dict()
+                    checkpoint = {
+                        'model': universal_state_dict, # Use the merged state dict
+                        'optimizer': optimizer.state_dict(),
+                        'model_args': model_args,
+                        'iter_num': iter_num,
+                        'best_val_loss': best_val_loss,
+                        'config': config,
+                    }
+                    # --- MODIFICATION END ---
                     print(f"saving checkpoint to {out_dir}")
                     torch.save(checkpoint, os.path.join(out_dir, 'ckpt.pt'))
         

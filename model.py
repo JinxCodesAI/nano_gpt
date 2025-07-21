@@ -777,16 +777,57 @@ class GPT(nn.Module):
         Merge LoRA weights into the main weights and reset LoRA adapters.
         """
         print("Merging LoRA weights into main weights...")
-        
+
         # Merge embedding LoRA if it exists
         if hasattr(self.transformer.wte, 'merge_and_reset'):
             self.transformer.wte.merge_and_reset()
-            
+
         # Merge attention LoRA weights in all blocks
         for block in self.transformer.h:
             if hasattr(block.attn.c_attn, 'merge_and_reset'):
                 block.attn.c_attn.merge_and_reset()
             if hasattr(block.attn.c_proj, 'merge_and_reset'):
                 block.attn.c_proj.merge_and_reset()
-        
+
         print("LoRA weights merged and reset.")
+
+    def get_merged_state_dict(self):
+        """
+        Returns a state_dict with all LoRA weights merged into their main weights.
+        This is useful for saving a single, consolidated checkpoint.
+        """
+        # Start with a copy of the current state_dict
+        merged_sd = self.state_dict()
+        keys_to_delete = []
+
+        for name, module in self.named_modules():
+            if isinstance(module, LoRALinear) and module.rank > 0:
+                # Calculate the merged weight for LoRALinear
+                lora_update = module.lora_B.weight @ module.lora_A.weight * (module.alpha / module.rank)
+                merged_weight = module.main_weight.weight.data + lora_update
+
+                # Update the state_dict with the merged weight
+                merged_sd[f'{name}.main_weight.weight'] = merged_weight
+
+                # Mark LoRA-specific keys for deletion
+                keys_to_delete.extend([f'{name}.lora_A.weight', f'{name}.lora_B.weight'])
+
+            elif isinstance(module, LoRAEmbedding) and module.rank > 0:
+                # Calculate the merged weight for LoRAEmbedding
+                lora_update = module.lora_A.weight @ module.lora_B.weight.T
+                merged_weight = module.main_weight.weight.data + lora_update * (module.alpha / module.rank)
+
+                # Update the state_dict with the merged weight
+                merged_sd[f'{name}.main_weight.weight'] = merged_weight
+
+                # Mark LoRA-specific keys for deletion
+                keys_to_delete.extend([f'{name}.lora_A.weight', f'{name}.lora_B.weight'])
+
+        # Now, remap the merged weights from 'main_weight.weight' to just '.weight'
+        final_sd = {}
+        for k, v in merged_sd.items():
+            if k not in keys_to_delete:
+                new_key = k.replace('main_weight.weight', 'weight')
+                final_sd[new_key] = v
+
+        return final_sd
