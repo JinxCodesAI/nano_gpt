@@ -505,10 +505,9 @@ if ddp:
 def estimate_loss():
     out = {}
     model.eval()
-    actual_eval_iters = eval_iters
     for split in ['train', 'val']:
-        losses = torch.zeros(actual_eval_iters)
-        for k in range(actual_eval_iters):
+        losses = torch.zeros(eval_iters)
+        for k in range(eval_iters):
             X, Y = get_batch(split)
             with ctx:
                 logits, loss = model(X, Y)
@@ -519,16 +518,16 @@ def estimate_loss():
 
 def get_lr(it):
     effective_it = it - lr_schedule_offset
-    actual_warmup_iters = warmup_iters
-    actual_lr_decay_iters = lr_decay_iters
+    warmup_iters
+    lr_decay_iters
 
     if master_process and wandb_log:
-        wandb.log({"iter": it, "effective_it": effective_it, "warmup_iters": actual_warmup_iters, "lr_decay_iters": actual_lr_decay_iters, "gradient_accumulation_steps":gradient_accumulation_steps, "batch_size":batch_size })
-    if effective_it < actual_warmup_iters:
-        return learning_rate * (effective_it + 1) / (actual_warmup_iters + 1)
-    if effective_it > actual_lr_decay_iters:
+        wandb.log({"iter": it, "effective_it": effective_it, "warmup_iters": warmup_iters, "lr_decay_iters": lr_decay_iters, "gradient_accumulation_steps":gradient_accumulation_steps, "batch_size":batch_size })
+    if effective_it < warmup_iters:
+        return learning_rate * (effective_it + 1) / (warmup_iters + 1)
+    if effective_it > lr_decay_iters:
         return min_lr
-    decay_ratio = (effective_it - actual_warmup_iters) / (actual_lr_decay_iters - actual_warmup_iters)
+    decay_ratio = (effective_it - warmup_iters) / (lr_decay_iters - warmup_iters)
     assert 0 <= decay_ratio <= 1
     coeff = 0.5 * (1.0 + math.cos(math.pi * decay_ratio))
     return (min_lr + coeff * (learning_rate - min_lr))

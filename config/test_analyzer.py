@@ -49,20 +49,7 @@ compile = False  # Disable compilation for testing
 
 # Dynamic State Parameters - all set to 1.0 for no scaling
 embedding_mode = 'standard'
-attn_lora_rank = 0
-embedding_rank = 0
 lora_alpha = 1.0
-attn_lora_rank_divisor = 0
-vocab_lora_rank_divisor = 0
-lora_alpha_multiplier = 1.0
-n_layer_divisor = 1.0
-n_hidden_divisor = 1.0
-batch_size_multiplier = 1.0
-grad_accum_multiplier = 1.0
-lr_multiplier = 1.0
-warmup_iters_multiplier = 1.0
-eval_iters_multiplier = 1.0
-eval_interval_multiplier = 1.0
 
 # scaling schedule configuration
 scaling_schedule_file = None  # No scaling for testing
