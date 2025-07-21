@@ -60,19 +60,5 @@ compile = False # use PyTorch 2.0 to compile the model to be faster
 # --- ADD THESE LINES ---
 # Concrete LoRA architectural parameters. These will be overridden by config files.
 embedding_mode = 'standard'
-attn_lora_rank = 0 # rank for attention LoRA, 0 disables
-embedding_rank = 0 # rank for embedding LoRA, 0 disables
-lora_alpha = 1.0 # scaling factor for LoRA layers
-attn_lora_rank_divisor = 0 # Divisor for attention LoRA rank (0 disables LoRA)
-vocab_lora_rank_divisor = 0 # Divisor for embedding LoRA rank (0 disables LoRA)
-lora_alpha_multiplier = 1.0 # Multiplier for LoRA alpha
-n_layer_divisor = 1 # Divisor for model depth
-n_hidden_divisor = 1 # Divisor for MLP width
-batch_size_multiplier = 1.0 # Multiplier for batch size
-grad_accum_multiplier = 1.0 # Multiplier for accumulation steps
-lr_multiplier = 1.0 # Multiplier for learning rate
-warmup_iters_multiplier = 1.0 # Multiplier for warmup iterations
-eval_iters_multiplier = 1.0 # Multiplier for evaluation iterations
-eval_interval_multiplier = 1.0 # Multiplier for evaluation frequency
 # scaling schedule configuration
 scaling_schedule_file = 'configs/resume_schedule.json' # Path to scaling schedule config file (YAML/JSON)
