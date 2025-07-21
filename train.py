@@ -419,7 +419,7 @@ scaler = torch.cuda.amp.GradScaler(enabled=(dtype == 'float16'))
 optimizer = model.configure_optimizers(weight_decay, learning_rate, (beta1, beta2), device_type)
 
 if init_from == 'resume':
-    print("Attempting to load and transfer optimizer state...")
+    print("Attempting to load optimizer state...")
     try:
         # Try direct loading first
         optimizer.load_state_dict(checkpoint['optimizer'])
@@ -428,6 +428,7 @@ if init_from == 'resume':
         print(f"Direct optimizer loading failed: {e}")
         print("This is expected when switching between LoRA and non-LoRA models.")
         print("Optimizer will start fresh with the configured learning rate.")
+        print("This is safe but may reset training momentum, which is an acceptable trade-off for architectural flexibility.")
 
 checkpoint = None # free up memory
 
@@ -478,29 +479,31 @@ def transfer_optimizer_state(new_optimizer, old_state_dict, old_param_dict, mode
     """
     if 'state' not in old_state_dict:
         return
-    
+
     # Map old parameter names to their state from the old optimizer state_dict
     state_to_transfer = {}
     old_param_id_to_name = {id(p): name for name, p in old_param_dict.items()}
-    
+
     for param_id, state in old_state_dict['state'].items():
         if param_id in old_param_id_to_name:
             param_name = old_param_id_to_name[param_id]
             state_to_transfer[param_name] = state
-    
+
     # For each parameter in the new model, find its state by name and apply it
     transferred_count = 0
     new_param_name_map = {name: p for name, p in model.named_parameters()}
-    
+
     for param_name, state in state_to_transfer.items():
         if param_name in new_param_name_map:
             param_tensor = new_param_name_map[param_name]
             # Directly set the state in the optimizer
             new_optimizer.state[param_tensor] = state
             transferred_count += 1
-    
+
     total_params = len(list(model.parameters()))
     print(f"Transferred optimizer state for {transferred_count} / {total_params} parameters")
+
+
 
 def execute_operation(op, trigger_reason, current_val_loss, iter_num, target_architecture_config):
     # Make globals mutable within this function
