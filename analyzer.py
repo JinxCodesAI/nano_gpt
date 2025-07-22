@@ -135,10 +135,10 @@ class ModelAnalyzer:
         """
         Calculates the average entropy across all attention heads for a given batch.
         This requires the model to have been modified to return attention scores.
-        
+
         Args:
             X_batch: A batch of input data (X) to be fed to the model.
-        
+
         Returns:
             The average entropy value as a float.
         """
@@ -148,22 +148,22 @@ class ModelAnalyzer:
             # This flag tells our modified forward pass to return the attention scores
             _, _, attention_scores = self.model(X_batch, return_attention=True)
             self.model.train() # Set it back to training mode
-            
+
             if not attention_scores:
                 print("Warning: Model did not return attention scores.")
                 return -1.0
-            
+
             all_entropies = []
             # attention_scores is a list of tensors, one for each layer
             for layer_att in attention_scores:
                 # layer_att shape: (B, nh, T, T)
                 # Add a small epsilon for numerical stability to avoid log(0)
                 att_probs = layer_att + 1e-9
-                
+
                 # Entropy = -sum(p * log(p))
                 log_p = torch.log(att_probs)
                 entropy = -torch.sum(att_probs * log_p, dim=-1) # Sum over the sequence length dim
-                
+
                 # Average entropy for this layer and append
                 all_entropies.append(entropy.mean().item())
 
@@ -171,3 +171,151 @@ class ModelAnalyzer:
         except Exception as e:
             print(f"Warning: Could not analyze attention entropy. Error: {e}")
             return -1.0
+
+    @torch.no_grad()
+    def measure_semantic_drift(self, prev_embedding_weights, top_k=50):
+        """
+        Measures the semantic drift of the embedding layer against a previous state
+        using Orthogonal Procrustes alignment. This method is designed to run on CPU tensors.
+
+        Args:
+            prev_embedding_weights (torch.Tensor): The saved CPU embedding weight tensor
+                                                   from a previous checkpoint.
+            top_k (int): The number of most and least drifted tokens to report.
+
+        Returns:
+            A dictionary containing drift metrics or None if an error occurs.
+        """
+        try:
+            # --- Step 1: Get the current embedding weights from the live model ---
+            # This is the only part that touches the live model object.
+            embedding_layer = self.model.transformer.wte
+            if hasattr(embedding_layer, 'main_weight'):
+                current_embedding_weights = embedding_layer.main_weight.weight.clone().detach()
+            else:
+                current_embedding_weights = embedding_layer.weight.clone().detach()
+
+            # --- Step 2: Prepare Tensors for Analysis ---
+            # Ensure both tensors are on the same device and are float32 for SVD stability.
+            # The background task will pass prev_embedding_weights already on CPU.
+            device = current_embedding_weights.device
+            X = prev_embedding_weights.to(device, dtype=torch.float32)
+            Y = current_embedding_weights.to(device, dtype=torch.float32)
+
+            if X.shape != Y.shape:
+                print(f"Warning: Cannot measure drift, embedding shapes mismatch. Prev: {X.shape}, Curr: {Y.shape}")
+                return None
+
+            # --- Step 3: Orthogonal Procrustes Alignment ---
+            # This finds the optimal rotation to align the old space (X) with the new space (Y).
+            # 3a: Center the matrices by subtracting the mean of all vectors.
+            X_centered = X - X.mean(dim=0, keepdim=True)
+            Y_centered = Y - Y.mean(dim=0, keepdim=True)
+
+            # 3b: Compute the covariance matrix M = Y_centered^T @ X_centered
+            M = Y_centered.T @ X_centered
+
+            # 3c: Perform Singular Value Decomposition (SVD) on M to get its core components.
+            U, _, Vh = torch.linalg.svd(M)
+
+            # 3d: Compute the optimal rotation matrix R.
+            R = Vh.T @ U.T
+
+            # --- Step 4: Align and Compare ---
+            # Apply the rotation to the original previous embedding space.
+            X_aligned = X @ R
+
+            # Calculate cosine similarity: measures change in direction (meaning).
+            cosine_sims = F.cosine_similarity(X_aligned, Y, dim=1)
+
+            # Calculate Euclidean distance: measures change in position in the aligned space.
+            euclidean_dists = torch.linalg.norm(X_aligned - Y, dim=1)
+
+            # --- Step 5: Aggregate and Report Results ---
+            # Sort by cosine similarity to find most and least changed tokens.
+            sorted_sims, indices = torch.sort(cosine_sims)
+
+            most_drifted_tokens = [(idx.item(), sim.item()) for idx, sim in zip(indices[:top_k], sorted_sims[:top_k])]
+            least_drifted_tokens = [(idx.item(), sim.item()) for idx, sim in zip(indices[-top_k:], sorted_sims[-top_k:])]
+
+            return {
+                'average_cosine_similarity': cosine_sims.mean().item(),
+                'average_euclidean_distance': euclidean_dists.mean().item(),
+                'most_drifted_tokens': most_drifted_tokens,
+                'least_drifted_tokens': least_drifted_tokens,
+            }
+
+        except Exception as e:
+            print(f"Warning: Could not measure semantic drift. Error: {e}")
+            return None
+
+    @torch.no_grad()
+    def analyze_embedding_geometry(self, embedding_weights, threshold=0.7, chunk_size=512):
+        """
+        Performs a fully automated analysis of the embedding space geometry
+        by calculating the full pairwise similarity matrix in memory-efficient chunks.
+
+        Args:
+            embedding_weights (torch.Tensor): The CPU tensor of embedding weights to analyze.
+            threshold (float): The cosine similarity value to define a "close neighbor".
+            chunk_size (int): How many rows to process at a time to save memory.
+
+        Returns:
+            A dictionary containing key metrics about the embedding space or None on error.
+        """
+        try:
+            # --- Step 1: Prepare Weights ---
+            # The input is already a CPU tensor, so we just ensure it's float32.
+            weights = embedding_weights.clone().float()
+
+            # L2 normalize the vectors. After this, a matrix multiplication (A @ B.T)
+            # is equivalent to calculating the cosine similarity between vectors in A and B.
+            weights_norm = F.normalize(weights, p=2, dim=1)
+            vocab_size, _ = weights_norm.shape
+
+            # --- Step 2: Calculate Metrics in Chunks to Conserve Memory ---
+            total_neighbors = 0
+            all_sim_values = []
+
+            print(f"(Async Geo Analysis) Analyzing {vocab_size} tokens (chunk size: {chunk_size})...")
+            for i in range(0, vocab_size, chunk_size):
+                chunk_end = min(i + chunk_size, vocab_size)
+                chunk = weights_norm[i:chunk_end, :]
+
+                # Calculate similarity for this chunk against the whole vocabulary.
+                sim_matrix_chunk = torch.matmul(chunk, weights_norm.T)
+
+                # Avoid counting self-similarity (which is always 1.0) by setting
+                # the diagonal elements to a low value before counting neighbors.
+                for j in range(chunk.shape[0]):
+                    global_idx = i + j
+                    sim_matrix_chunk[j, global_idx] = -1.0
+
+                # Metric 1: Count "close neighbors" for this chunk.
+                total_neighbors += (sim_matrix_chunk > threshold).sum().item()
+
+                # Metric 2: Collect all similarity values for the final histogram.
+                all_sim_values.append(sim_matrix_chunk.flatten())
+
+            # --- Step 3: Finalize and Return Results ---
+            full_sim_distribution = torch.cat(all_sim_values)
+
+            avg_neighborhood_size = total_neighbors / vocab_size
+            hist = torch.histogram(full_sim_distribution, bins=100, range=(-0.5, 1.0))
+
+            return {
+                'local_density': {
+                    'average_neighborhood_size': avg_neighborhood_size,
+                    'threshold': threshold
+                },
+                'global_sparsity': {
+                    'histogram_counts': hist.hist.tolist(),
+                    'histogram_bins': hist.bin_edges.tolist(),
+                    'mean_similarity': full_sim_distribution.mean().item(),
+                    'std_similarity': full_sim_distribution.std().item()
+                }
+            }
+
+        except Exception as e:
+            print(f"Warning: Could not analyze embedding geometry. Error: {e}")
+            return None
