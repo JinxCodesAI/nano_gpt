@@ -5,7 +5,7 @@
 wandb_log = False
 wandb_project = 'owt'
 wandb_run_name='gpt2-124M-fast'
-init_from = 'resume' #'resume' /'scratch' 
+init_from = 'scratch' #'resume' /'scratch' 
 
 # these make the total batch size be ~0.5M
 # 12 batch size * 1024 block size * 5 gradaccum * 8 GPUs = 491,520
