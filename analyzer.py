@@ -1,5 +1,3 @@
-# <<< REPLACE THE ENTIRE CONTENTS OF analyzer.py WITH THIS CODE >>>
-
 import torch
 import math
 from torch.nn import functional as F
@@ -150,6 +148,8 @@ class ModelAnalyzer:
         """
         Memory-efficient analysis of embedding geometry using streaming statistics.
         This method is now a private helper.
+        Optimized for CPU to leverage PyTorch's internal parallelism for matmul
+        and vectorized operations.
         """
         try:
             weights = embedding_weights.clone().float()
@@ -158,19 +158,30 @@ class ModelAnalyzer:
 
             # --- Streaming statistics variables ---
             total_neighbors = 0
-            total_elements = 0
             running_sum = 0.0
             running_sum_sq = 0.0
-            # Keep a small, fixed-size random sample for percentile calculation
+            total_elements_processed = 0 # Track actual elements processed for correct mean/variance
+
+            # Initialize a tensor to store a fixed-size sample of similarities
             max_samples = 20000
-            similarity_samples = []
+            # Pre-allocate buffer for samples
+            similarity_samples_buffer = torch.zeros(max_samples, dtype=torch.float32)
+            current_sample_idx = 0
 
             for i in range(0, vocab_size, chunk_size):
                 chunk = weights_norm[i:i+chunk_size, :]
+                # This matmul is the primary operation that gets parallelized internally by PyTorch on CPU
                 sim_matrix_chunk = torch.matmul(chunk, weights_norm.T)
 
-                for j in range(chunk.shape[0]):
-                    sim_matrix_chunk[j, i+j] = -1.0 # Ignore self-similarity
+                # Vectorized operation to ignore self-similarity
+                # Create indices for the diagonal within the chunk's slice of the full matrix
+                diag_indices_in_chunk = torch.arange(chunk.shape[0], device=sim_matrix_chunk.device)
+                global_col_indices = i + diag_indices_in_chunk
+                
+                # Mask out-of-bounds indices if chunk extends past vocab_size (last chunk)
+                valid_diag_mask = global_col_indices < vocab_size
+                
+                sim_matrix_chunk[diag_indices_in_chunk[valid_diag_mask], global_col_indices[valid_diag_mask]] = -1.0
 
                 total_neighbors += (sim_matrix_chunk > threshold).sum().item()
 
@@ -178,28 +189,47 @@ class ModelAnalyzer:
                 chunk_flat = sim_matrix_chunk.flatten()
                 running_sum += chunk_flat.sum().item()
                 running_sum_sq += (chunk_flat**2).sum().item()
-                total_elements += chunk_flat.numel()
+                total_elements_processed += chunk_flat.numel() # Use processed elements for stats
 
-                # Update samples
-                if len(similarity_samples) < max_samples:
-                    sample_size = min(100, chunk_flat.numel())
-                    indices = torch.randperm(chunk_flat.numel())[:sample_size]
-                    similarity_samples.extend(chunk_flat[indices].tolist())
+                # Update samples using a reservoir-like approach for efficiency
+                sample_size = min(100, chunk_flat.numel())
+                if sample_size > 0:
+                    indices = torch.randperm(chunk_flat.numel(), device=chunk_flat.device)[:sample_size]
+                    current_chunk_samples = chunk_flat[indices]
+
+                    for sample in current_chunk_samples:
+                        if current_sample_idx < max_samples:
+                            similarity_samples_buffer[current_sample_idx] = sample
+                            current_sample_idx += 1
+                        else:
+                            # Simple replacement if buffer is full, for approximation.
+                            # For true reservoir sampling, probability needs adjustment.
+                            replace_idx = torch.randint(0, max_samples, (1,)).item()
+                            similarity_samples_buffer[replace_idx] = sample
 
                 del sim_matrix_chunk, chunk_flat
+                torch.cuda.empty_cache() # In case it was accidentally on GPU, though moved to CPU
 
             # Finalize calculations
             gc.collect() # Force garbage collection
-            avg_neighborhood_size = total_neighbors / vocab_size
-            mean_similarity = running_sum / total_elements
-            variance = (running_sum_sq / total_elements) - (mean_similarity**2)
-            std_similarity = math.sqrt(max(0, variance))
+
+            avg_neighborhood_size = total_neighbors / vocab_size if vocab_size > 0 else 0.0
+            
+            mean_similarity = 0.0
+            variance = 0.0
+            std_similarity = 0.0
+
+            if total_elements_processed > 0:
+                mean_similarity = running_sum / total_elements_processed
+                variance = (running_sum_sq / total_elements_processed) - (mean_similarity**2)
+                std_similarity = math.sqrt(max(0, variance))
 
             sim_10th, sim_90th = 0.0, 0.0
-            if similarity_samples:
-                similarity_samples = torch.tensor(similarity_samples)
-                sim_10th = torch.quantile(similarity_samples, 0.1).item()
-                sim_90th = torch.quantile(similarity_samples, 0.9).item()
+            # Use only the filled part of the buffer for quantile calculation
+            similarity_samples_final = similarity_samples_buffer[:current_sample_idx]
+            if similarity_samples_final.numel() > 0:
+                sim_10th = torch.quantile(similarity_samples_final, 0.1).item()
+                sim_90th = torch.quantile(similarity_samples_final, 0.9).item()
 
             return {
                 'local_density': {'average_neighborhood_size': avg_neighborhood_size},
