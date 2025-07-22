@@ -540,19 +540,72 @@ def run_analysis_async(analyzer, current_embeddings, prev_embeddings, iter_num):
     This function is executed by the background thread. It runs all analyses
     and returns a single dictionary containing all results.
     """
+    import psutil
+    import gc
+    import time
+
+    start_time = time.time()
+    start_memory = psutil.Process().memory_info().rss / 1024 / 1024  # MB
+
     print(f"(Async Analysis @ iter {iter_num}) Starting job in background...")
+    print(f"(Async Analysis @ iter {iter_num}) Initial memory: {start_memory:.1f} MB")
+    print(f"(Async Analysis @ iter {iter_num}) Current embeddings shape: {current_embeddings.shape}")
+    if prev_embeddings is not None:
+        print(f"(Async Analysis @ iter {iter_num}) Previous embeddings shape: {prev_embeddings.shape}")
+
     results = {'iter_num': iter_num}
 
-    # Run semantic drift if we have a previous state to compare against.
-    if prev_embeddings is not None:
-        # Pass both current and previous CPU snapshots to the pure function.
-        results['drift'] = analyzer.measure_semantic_drift(current_embeddings, prev_embeddings)
+    try:
+        # Run semantic drift if we have a previous state to compare against.
+        if prev_embeddings is not None:
+            print(f"(Async Analysis @ iter {iter_num}) Starting semantic drift analysis...")
+            drift_start_time = time.time()
+            try:
+                # Pass both current and previous CPU snapshots to the pure function.
+                results['drift'] = analyzer.measure_semantic_drift(current_embeddings, prev_embeddings)
+                drift_time = time.time() - drift_start_time
+                drift_memory = psutil.Process().memory_info().rss / 1024 / 1024
+                print(f"(Async Analysis @ iter {iter_num}) Drift analysis completed in {drift_time:.2f}s, memory: {drift_memory:.1f} MB")
+            except Exception as drift_error:
+                print(f"(Async Analysis @ iter {iter_num}) ERROR in drift analysis: {drift_error}")
+                import traceback
+                print(f"(Async Analysis @ iter {iter_num}) Drift traceback: {traceback.format_exc()}")
+                results['drift'] = None
 
-    # Run embedding geometry analysis on the current snapshot.
-    results['geometry'] = analyzer.analyze_embedding_geometry(current_embeddings)
+        # Run embedding geometry analysis on the current snapshot.
+        print(f"(Async Analysis @ iter {iter_num}) Starting geometry analysis...")
+        geometry_start_time = time.time()
+        try:
+            results['geometry'] = analyzer.analyze_embedding_geometry(current_embeddings)
+            geometry_time = time.time() - geometry_start_time
+            geometry_memory = psutil.Process().memory_info().rss / 1024 / 1024
+            print(f"(Async Analysis @ iter {iter_num}) Geometry analysis completed in {geometry_time:.2f}s, memory: {geometry_memory:.1f} MB")
+        except Exception as geometry_error:
+            print(f"(Async Analysis @ iter {iter_num}) ERROR in geometry analysis: {geometry_error}")
+            import traceback
+            print(f"(Async Analysis @ iter {iter_num}) Geometry traceback: {traceback.format_exc()}")
+            results['geometry'] = None
 
-    print(f"(Async Analysis @ iter {iter_num}) Job finished.")
-    return results
+        # Force garbage collection
+        gc.collect()
+
+        total_time = time.time() - start_time
+        final_memory = psutil.Process().memory_info().rss / 1024 / 1024
+        memory_delta = final_memory - start_memory
+
+        print(f"(Async Analysis @ iter {iter_num}) Job finished in {total_time:.2f}s")
+        print(f"(Async Analysis @ iter {iter_num}) Final memory: {final_memory:.1f} MB (delta: {memory_delta:+.1f} MB)")
+
+        return results
+
+    except Exception as e:
+        print(f"(Async Analysis @ iter {iter_num}) CRITICAL ERROR in async analysis: {e}")
+        import traceback
+        print(f"(Async Analysis @ iter {iter_num}) Critical traceback: {traceback.format_exc()}")
+
+        # Clean up and return partial results
+        gc.collect()
+        return {'iter_num': iter_num, 'error': str(e)}
 
 def analysis_done_callback(future):
     """
@@ -562,9 +615,35 @@ def analysis_done_callback(future):
     global training_logger, master_process  # Access global variables for logging
 
     try:
+        print(f"(Async Analysis Callback) Processing results...")
+
         # .result() retrieves the return value from run_analysis_async or raises an exception
-        results = future.result()
+        # Add timeout to prevent hanging
+        try:
+            results = future.result(timeout=5)  # 5 second timeout for getting results
+        except concurrent.futures.TimeoutError:
+            print(f"(Async Analysis Callback) ERROR: Timeout waiting for analysis results")
+            if master_process and training_logger.is_enabled:
+                training_logger.log("ERROR: Async analysis callback timeout")
+            return
+        except Exception as result_error:
+            print(f"(Async Analysis Callback) ERROR getting results: {result_error}")
+            if master_process and training_logger.is_enabled:
+                training_logger.log(f"ERROR: Async analysis result error: {result_error}")
+            return
+
+        if not results or 'iter_num' not in results:
+            print(f"(Async Analysis Callback) ERROR: Invalid results received")
+            return
+
         iter_num = results['iter_num']
+
+        # Check if there was a critical error in the async function
+        if 'error' in results:
+            print(f"(Async Analysis Callback) Analysis failed for iteration {iter_num}: {results['error']}")
+            if master_process and training_logger.is_enabled:
+                training_logger.log(f"ASYNC ANALYSIS FAILED for iteration {iter_num}: {results['error']}")
+            return
 
         # Console output
         print(f"\n--- ASYNC ANALYSIS RESULTS FOR ITERATION {iter_num} ---")
@@ -822,33 +901,70 @@ while True:
             print("----------------------")
 
             # --- NEW ASYNCHRONOUS ANALYSIS DISPATCH LOGIC ---
+            import psutil
+
+            # Check system memory before dispatching analysis
+            memory_info = psutil.virtual_memory()
+            available_memory_gb = memory_info.available / (1024**3)
+            memory_percent = memory_info.percent
+
             print(f"Dispatching async analysis for iter {iter_num}...")
+            print(f"System memory: {memory_percent:.1f}% used, {available_memory_gb:.1f} GB available")
 
-            # 1. Take a snapshot of the current embedding weights and copy it to the CPU.
-            #    This isolates the analysis from the live GPU model, preventing blocking.
-            wte_layer = raw_model.transformer.wte
-            current_embeddings_snapshot = (wte_layer.main_weight.weight.clone().detach().cpu()
-                                           if hasattr(wte_layer, 'main_weight')
-                                           else wte_layer.weight.clone().detach().cpu())
+            # Skip analysis if memory is critically low
+            if memory_percent > 90 or available_memory_gb < 1.0:
+                print(f"WARNING: Skipping async analysis due to low memory (used: {memory_percent:.1f}%, available: {available_memory_gb:.1f} GB)")
+                if master_process and training_logger.is_enabled:
+                    training_logger.log(f"SKIPPED async analysis for iter {iter_num} due to low memory")
+            else:
+                try:
+                    # 1. Take a snapshot of the current embedding weights and copy it to the CPU.
+                    #    This isolates the analysis from the live GPU model, preventing blocking.
+                    print(f"Taking embedding snapshot for iter {iter_num}...")
+                    wte_layer = raw_model.transformer.wte
+                    current_embeddings_snapshot = (wte_layer.main_weight.weight.clone().detach().cpu()
+                                                   if hasattr(wte_layer, 'main_weight')
+                                                   else wte_layer.weight.clone().detach().cpu())
 
-            # 2. Submit the analysis function to the background executor.
-            #    The `analyzer` instance is passed to the task.
-            future = executor.submit(
-                run_analysis_async,
-                analyzer,
-                current_embeddings_snapshot,
-                prev_embeddings, # Will be None on the first run; handled inside the task.
-                iter_num
-            )
+                    vocab_size = current_embeddings_snapshot.shape[0]
+                    embedding_dim = current_embeddings_snapshot.shape[1]
+                    snapshot_memory_mb = (current_embeddings_snapshot.numel() * 4) / (1024 * 1024)  # 4 bytes per float32
 
-            # 3. Attach the callback function that will handle reporting when the job is done.
-            future.add_done_callback(analysis_done_callback)
+                    print(f"Embedding snapshot: {vocab_size} x {embedding_dim}, {snapshot_memory_mb:.1f} MB")
 
-            # 4. CRITICAL: Update the state variable with the current snapshot for the *next* analysis cycle.
-            prev_embeddings = current_embeddings_snapshot
+                    # Skip analysis for very large vocabularies to prevent OOM
+                    if vocab_size > 100000:  # More than 100K tokens
+                        print(f"WARNING: Skipping async analysis due to large vocabulary ({vocab_size} tokens)")
+                        if master_process and training_logger.is_enabled:
+                            training_logger.log(f"SKIPPED async analysis for iter {iter_num} due to large vocabulary ({vocab_size} tokens)")
+                    else:
+                        # 2. Submit the analysis function to the background executor.
+                        #    The `analyzer` instance is passed to the task.
+                        print(f"Submitting analysis job to executor...")
+                        future = executor.submit(
+                            run_analysis_async,
+                            analyzer,
+                            current_embeddings_snapshot,
+                            prev_embeddings, # Will be None on the first run; handled inside the task.
+                            iter_num
+                        )
+
+                        # 3. Attach the callback function that will handle reporting when the job is done.
+                        future.add_done_callback(analysis_done_callback)
+                        print("Async analysis job dispatched successfully.")
+
+                        # 4. CRITICAL: Update the state variable with the current snapshot for the *next* analysis cycle.
+                        prev_embeddings = current_embeddings_snapshot
+
+                except Exception as dispatch_error:
+                    print(f"ERROR dispatching async analysis for iter {iter_num}: {dispatch_error}")
+                    import traceback
+                    print(f"Dispatch error traceback: {traceback.format_exc()}")
+                    if master_process and training_logger.is_enabled:
+                        training_logger.log(f"ERROR dispatching async analysis for iter {iter_num}: {dispatch_error}")
 
             # The main loop continues immediately without waiting for the analysis to finish.
-            print("Async analysis job dispatched. Training continues without blocking.")
+            print("Training continues without blocking.")
             # --- END OF NEW LOGIC ---
 
             training_logger.log_step(iter_num, losses['train'], losses['val'])
