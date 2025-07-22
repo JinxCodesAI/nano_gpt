@@ -933,7 +933,7 @@ while True:
 
                     # Skip analysis for very large vocabularies to prevent OOM
                     # For 50K vocab: ~10GB memory needed, so we need to be more conservative
-                    if vocab_size > 30000:  # More than 30K tokens
+                    if vocab_size > 300000:  # More than 30K tokens
                         print(f"WARNING: Skipping async analysis due to large vocabulary ({vocab_size} tokens)")
                         if master_process and training_logger.is_enabled:
                             training_logger.log(f"SKIPPED async analysis for iter {iter_num} due to large vocabulary ({vocab_size} tokens)")
