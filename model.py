@@ -308,6 +308,7 @@ class GPT(nn.Module):
         assert config.vocab_size is not None
         assert config.block_size is not None
         self.config = config
+        self.embedding_finetune_mode = False # Flag for embedding fine-tuning mode
 
         # FIX: Dynamically choose the embedding layer type based on the config
         if config.embedding_mode == 'lora' and config.embedding_rank > 0:
@@ -559,6 +560,11 @@ class GPT(nn.Module):
         param_dict = {pn: p for pn, p in self.named_parameters()}
         # filter out those that do not require grad
         param_dict = {pn: p for pn, p in param_dict.items() if p.requires_grad}
+
+        # If in embedding finetune mode, only optimize the embedding and lm_head layers
+        if self.embedding_finetune_mode:
+            print("Optimizer configured for embedding fine-tuning mode.")
+            param_dict = {pn: p for pn, p in param_dict.items() if 'wte' in pn or 'lm_head' in pn}
         # create optim groups. Any parameters that is 2D will be weight decayed, otherwise no.
         # i.e. all weight tensors in matmuls + embeddings decay, all biases and layernorms don't.
         decay_params = [p for n, p in param_dict.items() if p.dim() >= 2]
@@ -841,3 +847,56 @@ class GPT(nn.Module):
                 final_sd[key] = merged_weight
 
         return final_sd
+
+    def resize_vocabulary(self, new_vocab_size, source_token_id, noise_std=0.01):
+        """
+        Grows the vocabulary size of the model in a function-preserving way.
+        New token embeddings are initialized from a source token plus noise.
+        """
+        print(f"Resizing vocabulary from {self.config.vocab_size} to {new_vocab_size}.")
+        if new_vocab_size <= self.config.vocab_size:
+            raise ValueError("New vocabulary size must be larger than the current one.")
+
+        old_wte = self.transformer.wte
+        old_lm_head = self.lm_head
+        device = old_wte.weight.device
+
+        # Create new, larger layers
+        self.transformer.wte = nn.Embedding(new_vocab_size, self.config.n_embd).to(device)
+        self.lm_head = nn.Linear(self.config.n_embd, new_vocab_size, bias=False).to(device)
+
+        # Copy old weights
+        self.transformer.wte.weight.data[:self.config.vocab_size, :] = old_wte.weight.data
+        self.lm_head.weight.data[:self.config.vocab_size, :] = old_lm_head.weight.data
+
+        # Initialize new weights from the source token
+        source_embedding = old_wte.weight.data[source_token_id, :]
+        source_lm_head = old_lm_head.weight.data[source_token_id, :]
+
+        # Add noise to break symmetry
+        noise_embedding = torch.randn(new_vocab_size - self.config.vocab_size, self.config.n_embd, device=device) * noise_std
+        noise_lm_head = torch.randn(new_vocab_size - self.config.vocab_size, self.config.n_embd, device=device) * noise_std
+
+        self.transformer.wte.weight.data[self.config.vocab_size:, :] = source_embedding + noise_embedding
+        self.lm_head.weight.data[self.config.vocab_size:, :] = source_lm_head + noise_lm_head
+
+        # Update config and re-tie weights
+        self.config.vocab_size = new_vocab_size
+        self.transformer.wte.weight = self.lm_head.weight
+
+        print("Vocabulary resized successfully.")
+
+    def set_embedding_finetune_mode(self, enabled: bool):
+        """
+        Sets the model to fine-tune only embedding-related layers.
+        When enabled, all parameters except wte and lm_head are frozen.
+        """
+        self.embedding_finetune_mode = enabled
+
+        # Freeze or unfreeze the model backbone
+        for name, param in self.named_parameters():
+            if 'wte' not in name and 'lm_head' not in name:
+                param.requires_grad = not enabled
+
+        status = "ENABLED" if enabled else "DISABLED"
+        print(f"Embedding fine-tuning mode is now {status}.")

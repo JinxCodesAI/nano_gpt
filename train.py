@@ -87,7 +87,12 @@ scaling_schedule_file = None # Path to scaling schedule config file (YAML/JSON)
 scaling_schedule = [] # Will be loaded from file or set programmatically
 target_architecture_config = None # Global state for target architecture
 # -----------------------------------------------------------------------------
-config_keys = [k for k,v in globals().items() if not k.startswith('_') and isinstance(v, (int, float, bool, str))]
+# Shrunken vocabulary training parameters
+shrunken_vocab_size = None # If set, enables training with a smaller vocab to save memory
+vocab_remapping_file = None # Path to .pt file with the remapping tensor, required if shrunken_vocab_size is set
+RARE_TOKEN_ID = None # The token ID in the shrunken vocab for all out-of-vocab tokens
+# -----------------------------------------------------------------------------
+config_keys = [k for k,v in globals().items() if not k.startswith('_') and isinstance(v, (int, float, bool, str, type(None)))]
 exec(open('configurator.py').read()) # overrides from command line or config file
 config = {k: globals()[k] for k in config_keys} # will be useful for logging
 
@@ -351,6 +356,35 @@ else:
 tokens_per_iter = gradient_accumulation_steps * ddp_world_size * batch_size * block_size
 print(f"tokens per iteration will be: {tokens_per_iter:,}")
 
+# Vocabulary remapping setup
+remapping_vector = None
+remapping_active = False # Global flag to control remapping
+if master_process and shrunken_vocab_size is not None:
+    if not vocab_remapping_file or not os.path.exists(vocab_remapping_file):
+        raise ValueError("`shrunken_vocab_size` is set, but `vocab_remapping_file` is missing or invalid.")
+    if RARE_TOKEN_ID is None:
+        raise ValueError("`shrunken_vocab_size` is set, but `RARE_TOKEN_ID` is not.")
+
+    print(f"Loading vocabulary remapping from {vocab_remapping_file}")
+    remapping_vector = torch.load(vocab_remapping_file)
+    remapping_active = True # Initially active if configured
+
+if ddp:
+    # Broadcast the remapping_active flag and the tensor itself to all processes
+    active_flag_tensor = torch.tensor([1.0 if remapping_active else 0.0], device=device)
+    torch.distributed.broadcast(active_flag_tensor, src=0)
+    remapping_active = active_flag_tensor.item() == 1.0
+
+    if remapping_active:
+        if ddp_rank != 0: # If not master, create a placeholder tensor
+            # Use the meta_vocab_size or default if not available
+            full_vocab_size = meta_vocab_size if meta_vocab_size is not None else 57664
+            remapping_vector = torch.zeros(full_vocab_size, dtype=torch.long)
+        remapping_vector = remapping_vector.to(device)
+        torch.distributed.broadcast(remapping_vector, src=0)
+elif remapping_vector is not None:
+    remapping_vector = remapping_vector.to(device)
+
 if master_process:
     os.makedirs(out_dir, exist_ok=True)
     training_logger.setup(config)
@@ -408,7 +442,14 @@ model_args = dict(n_layer=n_layer, n_head=n_head, n_embd=n_embd, block_size=bloc
             )
 if init_from == 'scratch':
     print("Initializing a new model from scratch")
-    model_args['vocab_size'] = meta_vocab_size if meta_vocab_size is not None else 50304
+    # Determine the active vocabulary size for model instantiation
+    if shrunken_vocab_size is not None:
+        print(f"Using shrunken vocabulary of size: {shrunken_vocab_size}")
+        active_vocab_size = shrunken_vocab_size
+    else:
+        active_vocab_size = meta_vocab_size if meta_vocab_size is not None else 50304
+
+    model_args['vocab_size'] = active_vocab_size
     gptconf = GPTConfig(**model_args)
     model = GPT(gptconf)
 elif init_from == 'resume':
@@ -509,12 +550,42 @@ def estimate_loss():
     model.eval()
     for split in ['train', 'val']:
         losses = torch.zeros(eval_iters)
+        # Initialize core accuracy tracking
+        core_token_correct = 0
+        core_token_total = 0
+
         for k in range(eval_iters):
             X, Y = get_batch(split)
-            with ctx:
-                logits, loss = model(X, Y)
+
+            # If remapping is active, we need to handle metrics carefully
+            if remapping_active:
+                remapped_X = remapping_vector[X]
+                remapped_Y = remapping_vector[Y]
+                with ctx:
+                    logits, loss = model(remapped_X, remapped_Y)
+
+                # Calculate Core Accuracy on the validation set
+                if split == 'val':
+                    probs = torch.nn.functional.softmax(logits, dim=-1)
+                    preds = torch.argmax(probs, dim=-1)
+
+                    # Mask to ignore the RARE_TOKEN_ID in accuracy calculation
+                    is_core_token = (remapped_Y != RARE_TOKEN_ID)
+
+                    core_token_correct += ((preds == remapped_Y) & is_core_token).sum().item()
+                    core_token_total += is_core_token.sum().item()
+            else:
+                # Standard loss calculation
+                with ctx:
+                    logits, loss = model(X, Y)
+
             losses[k] = loss.item()
+
         out[split] = losses.mean()
+        # Add core accuracy if remapping is active and we have core tokens
+        if remapping_active and core_token_total > 0 and split == 'val':
+            out['val_core_acc'] = core_token_correct / core_token_total
+
     model.train()
     return out
 
@@ -542,6 +613,7 @@ def execute_operation(op, trigger_reason, current_val_loss, iter_num, target_arc
     # Make globals mutable within this function
     global learning_rate, batch_size, gradient_accumulation_steps, warmup_iters, eval_iters, eval_interval
     global lr_schedule_offset, training_logger, master_process, model, optimizer, raw_model, unoptimized_model
+    global remapping_active # Add this global
 
     op_desc = op.get('desc', '')
     op_name = op['name']
@@ -562,7 +634,8 @@ def execute_operation(op, trigger_reason, current_val_loss, iter_num, target_arc
     try:
         # Check if this is an architectural operation
         architectural_ops = ['stack_layers', 'widen_mlp', 'set_attn_lora_rank',
-                             'set_embedding_lora_rank', 'merge_lora_weights']
+                             'set_embedding_lora_rank', 'merge_lora_weights',
+                             'resize_vocabulary', 'set_embedding_finetune_mode']
 
         if op_name in architectural_ops:
             if master_process:
@@ -583,6 +656,18 @@ def execute_operation(op, trigger_reason, current_val_loss, iter_num, target_arc
                 unwrapped_model.resize_embedding_rank(op_value)
             elif op_name == 'merge_lora_weights':
                 unwrapped_model.merge_lora_weights()
+            elif op_name == 'resize_vocabulary':
+                # op_value is expected to be [source_token_id, noise_std]
+                source_token_id, noise_std = op_value
+                # The target vocab size is derived from the meta file
+                meta_path = os.path.join(data_dir, 'meta.pkl')
+                with open(meta_path, 'rb') as f:
+                    meta = pickle.load(f)
+                full_vocab_size = meta['vocab_size']
+                unwrapped_model.resize_vocabulary(full_vocab_size, source_token_id, noise_std)
+            elif op_name == 'set_embedding_finetune_mode':
+                # op_value is expected to be True or False
+                unwrapped_model.set_embedding_finetune_mode(op_value)
 
             # --- Re-create optimizer and wrappers (this logic remains the same) ---
             log_detailed_params(unwrapped_model)
@@ -627,6 +712,9 @@ def execute_operation(op, trigger_reason, current_val_loss, iter_num, target_arc
             elif op_name == 'reset_lr_schedule':
                 if master_process: print(f"Resetting LR schedule at iter {iter_num}")
                 lr_schedule_offset = iter_num
+            elif op_name == 'disable_vocab_remapping':
+                if master_process: print("Disabling vocabulary remapping.")
+                remapping_active = False
             else:
                 raise ValueError(f"Unknown operation '{op_name}'")
             if master_process: training_logger.log_operation_success(iter_num, op_name, {'new_value': op_value})
@@ -657,6 +745,10 @@ if wandb_log and master_process:
     wandb.init(project=wandb_project, name=final_wandb_run_name, config=config)
 
 X, Y = get_batch('train')
+# Apply initial remapping if active
+if remapping_active:
+    X, Y = remapping_vector[X], remapping_vector[Y]
+
 t0 = time.time()
 local_iter_num = 0
 raw_model = model.module if ddp else model
@@ -733,6 +825,9 @@ while True:
                     wandb_metrics["analysis/mlp_rank_utilization"] = rank_util
                 if avg_entropy != -1.0:
                     wandb_metrics["analysis/attention_entropy"] = avg_entropy
+                # Add core accuracy if available
+                if 'val_core_acc' in losses:
+                    wandb_metrics["val/core_accuracy"] = losses['val_core_acc']
                 wandb.log(wandb_metrics)
             if losses['val'] < best_val_loss or always_save_checkpoint:
                 best_val_loss = losses['val']
@@ -840,6 +935,11 @@ while True:
     for micro_step in range(gradient_accumulation_steps):
         if ddp:
             model.require_backward_grad_sync = (micro_step == gradient_accumulation_steps - 1)
+
+        # Remap vocabulary on-the-fly if active
+        if remapping_active:
+            X, Y = remapping_vector[X], remapping_vector[Y]
+
         with ctx:
             logits, loss = model(X, Y)
             loss = loss / gradient_accumulation_steps
