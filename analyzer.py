@@ -283,11 +283,18 @@ class ModelAnalyzer:
                 chunk_size = max(64, min(chunk_size, vocab_size // 10))  # Reduce chunk size for large vocabs
                 print(f"(Async Geo Analysis) Adjusted chunk size to: {chunk_size}")
 
-            # --- Step 2: Calculate Metrics in Chunks to Conserve Memory ---
-            print(f"(Async Geo Analysis) Step 2: Processing in chunks...")
+            # --- Step 2: Calculate Metrics in Chunks with Streaming Statistics ---
+            print(f"(Async Geo Analysis) Step 2: Processing in chunks with streaming statistics...")
             total_neighbors = 0
-            all_sim_values = []
             processed_chunks = 0
+
+            # Streaming statistics - compute incrementally to avoid memory accumulation
+            total_elements = 0
+            running_sum = 0.0
+            running_sum_sq = 0.0
+            similarity_samples = []  # Keep only a small sample for percentiles
+            max_samples = 10000  # Limit samples to prevent memory growth
+            sample_size_used = 0  # Track how many samples we actually collected
 
             print(f"(Async Geo Analysis) Analyzing {vocab_size} tokens (chunk size: {chunk_size})...")
             for i in range(0, vocab_size, chunk_size):
@@ -312,15 +319,31 @@ class ModelAnalyzer:
                     neighbors_in_chunk = (sim_matrix_chunk > threshold).sum().item()
                     total_neighbors += neighbors_in_chunk
 
-                    # Metric 2: Collect all similarity values for the final histogram.
-                    all_sim_values.append(sim_matrix_chunk.flatten())
+                    # Metric 2: Update streaming statistics instead of storing all values
+                    chunk_flat = sim_matrix_chunk.flatten()
+                    chunk_elements = chunk_flat.numel()
 
-                    # Clean up chunk to free memory
-                    del sim_matrix_chunk
+                    # Update running statistics
+                    total_elements += chunk_elements
+                    running_sum += chunk_flat.sum().item()
+                    running_sum_sq += (chunk_flat ** 2).sum().item()
+
+                    # Keep a random sample for percentile calculation (memory-bounded)
+                    if len(similarity_samples) < max_samples:
+                        # Take a random sample from this chunk
+                        sample_size = min(100, chunk_elements)  # Max 100 samples per chunk
+                        if sample_size > 0:
+                            indices = torch.randperm(chunk_elements)[:sample_size]
+                            samples = chunk_flat[indices].tolist()
+                            similarity_samples.extend(samples)
+                            sample_size_used = len(similarity_samples)
+
+                    # Clean up chunk immediately to prevent memory accumulation
+                    del sim_matrix_chunk, chunk_flat
                     processed_chunks += 1
 
-                    # Force garbage collection every 20 chunks
-                    if processed_chunks % 20 == 0:
+                    # Force garbage collection every 10 chunks to keep memory stable
+                    if processed_chunks % 10 == 0:
                         gc.collect()
 
                 except Exception as chunk_error:
@@ -328,34 +351,46 @@ class ModelAnalyzer:
                     # Continue with next chunk instead of failing completely
                     continue
 
-            print(f"(Async Geo Analysis) Step 3: Finalizing results...")
-            # --- Step 3: Finalize and Return Results ---
-            if not all_sim_values:
-                print(f"(Async Geo Analysis) ERROR: No similarity values collected!")
+            print(f"(Async Geo Analysis) Step 3: Computing final statistics...")
+            # --- Step 3: Compute Final Statistics from Streaming Data ---
+            if total_elements == 0:
+                print(f"(Async Geo Analysis) ERROR: No similarity values processed!")
                 return None
 
-            memory_before_concat = psutil.Process().memory_info().rss / 1024 / 1024
-            print(f"(Async Geo Analysis) Memory before concatenation: {memory_before_concat:.1f} MB")
+            # Compute mean and std from streaming statistics
+            mean_similarity = running_sum / total_elements
+            variance = (running_sum_sq / total_elements) - (mean_similarity ** 2)
+            std_similarity = math.sqrt(max(0, variance))  # Ensure non-negative
 
-            full_sim_distribution = torch.cat(all_sim_values)
-
-            memory_after_concat = psutil.Process().memory_info().rss / 1024 / 1024
-            print(f"(Async Geo Analysis) Memory after concatenation: {memory_after_concat:.1f} MB")
-            print(f"(Async Geo Analysis) Full similarity distribution shape: {full_sim_distribution.shape}")
+            # Compute percentiles from sample (approximate but memory-efficient)
+            if similarity_samples:
+                similarity_samples.sort()
+                n_samples = len(similarity_samples)
+                sim_10th = similarity_samples[int(0.1 * n_samples)]
+                sim_90th = similarity_samples[int(0.9 * n_samples)]
+            else:
+                sim_10th = mean_similarity - std_similarity
+                sim_90th = mean_similarity + std_similarity
 
             avg_neighborhood_size = total_neighbors / vocab_size
-            hist = torch.histogram(full_sim_distribution, bins=100, range=(-0.5, 1.0))
 
-            # Calculate percentiles and statistics before cleanup
-            mean_similarity = full_sim_distribution.mean().item()
-            std_similarity = full_sim_distribution.std().item()
-            sim_10th = torch.quantile(full_sim_distribution, 0.1).item()
-            sim_90th = torch.quantile(full_sim_distribution, 0.9).item()
+            # Create a simple histogram from samples instead of full data
+            hist_counts = [0] * 100
+            hist_bins = torch.linspace(-0.5, 1.0, 101).tolist()
+
+            if similarity_samples:
+                for val in similarity_samples:
+                    if -0.5 <= val <= 1.0:
+                        bin_idx = min(99, int((val + 0.5) / 1.5 * 100))
+                        hist_counts[bin_idx] += 1
 
             print(f"(Async Geo Analysis) Analysis complete. Avg neighbors: {avg_neighborhood_size:.2f}")
+            print(f"(Async Geo Analysis) Processed {total_elements:,} similarity values from {processed_chunks} chunks")
 
-            # Clean up large tensors
-            del full_sim_distribution, all_sim_values, weights_norm, weights
+            # Clean up remaining tensors
+            del weights_norm, weights
+            if 'similarity_samples' in locals():
+                del similarity_samples
             gc.collect()
 
             final_memory = psutil.Process().memory_info().rss / 1024 / 1024
@@ -367,12 +402,14 @@ class ModelAnalyzer:
                     'threshold': threshold
                 },
                 'global_sparsity': {
-                    'histogram_counts': hist.hist.tolist(),
-                    'histogram_bins': hist.bin_edges.tolist(),
+                    'histogram_counts': hist_counts,
+                    'histogram_bins': hist_bins,
                     'mean_similarity': mean_similarity,
                     'std_similarity': std_similarity,
                     'similarity_10th_percentile': sim_10th,
-                    'similarity_90th_percentile': sim_90th
+                    'similarity_90th_percentile': sim_90th,
+                    'total_elements_processed': total_elements,
+                    'sample_size_used': sample_size_used
                 }
             }
 

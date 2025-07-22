@@ -932,7 +932,8 @@ while True:
                     print(f"Embedding snapshot: {vocab_size} x {embedding_dim}, {snapshot_memory_mb:.1f} MB")
 
                     # Skip analysis for very large vocabularies to prevent OOM
-                    if vocab_size > 100000:  # More than 100K tokens
+                    # For 50K vocab: ~10GB memory needed, so we need to be more conservative
+                    if vocab_size > 30000:  # More than 30K tokens
                         print(f"WARNING: Skipping async analysis due to large vocabulary ({vocab_size} tokens)")
                         if master_process and training_logger.is_enabled:
                             training_logger.log(f"SKIPPED async analysis for iter {iter_num} due to large vocabulary ({vocab_size} tokens)")
