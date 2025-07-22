@@ -248,49 +248,118 @@ class ModelAnalyzer:
         Returns:
             A dictionary containing key metrics about the embedding space or None on error.
         """
+        import psutil
+        import gc
+
         try:
+            print(f"(Async Geo Analysis) Starting analysis...")
+
             # --- Step 1: Prepare Weights ---
+            print(f"(Async Geo Analysis) Step 1: Preparing weights...")
             # The input is already a CPU tensor, so we just ensure it's float32.
             weights = embedding_weights.clone().float()
+            print(f"(Async Geo Analysis) Weights shape: {weights.shape}, dtype: {weights.dtype}")
+
+            # Check memory before normalization
+            memory_before = psutil.Process().memory_info().rss / 1024 / 1024  # MB
+            print(f"(Async Geo Analysis) Memory before normalization: {memory_before:.1f} MB")
 
             # L2 normalize the vectors. After this, a matrix multiplication (A @ B.T)
             # is equivalent to calculating the cosine similarity between vectors in A and B.
             weights_norm = F.normalize(weights, p=2, dim=1)
-            vocab_size, _ = weights_norm.shape
+            vocab_size, embedding_dim = weights_norm.shape
+
+            memory_after_norm = psutil.Process().memory_info().rss / 1024 / 1024  # MB
+            print(f"(Async Geo Analysis) Memory after normalization: {memory_after_norm:.1f} MB")
+            print(f"(Async Geo Analysis) Vocab size: {vocab_size}, Embedding dim: {embedding_dim}")
+
+            # Calculate expected memory usage for similarity matrix
+            expected_memory_mb = (vocab_size * vocab_size * 4) / (1024 * 1024)  # 4 bytes per float32
+            print(f"(Async Geo Analysis) Expected full similarity matrix memory: {expected_memory_mb:.1f} MB")
+
+            # If the expected memory is too large, increase chunk size or skip analysis
+            if expected_memory_mb > 2000:  # More than 2GB
+                print(f"(Async Geo Analysis) WARNING: Large vocabulary ({vocab_size}), adjusting chunk size...")
+                chunk_size = max(64, min(chunk_size, vocab_size // 10))  # Reduce chunk size for large vocabs
+                print(f"(Async Geo Analysis) Adjusted chunk size to: {chunk_size}")
 
             # --- Step 2: Calculate Metrics in Chunks to Conserve Memory ---
+            print(f"(Async Geo Analysis) Step 2: Processing in chunks...")
             total_neighbors = 0
             all_sim_values = []
+            processed_chunks = 0
 
             print(f"(Async Geo Analysis) Analyzing {vocab_size} tokens (chunk size: {chunk_size})...")
             for i in range(0, vocab_size, chunk_size):
-                chunk_end = min(i + chunk_size, vocab_size)
-                chunk = weights_norm[i:chunk_end, :]
+                try:
+                    chunk_end = min(i + chunk_size, vocab_size)
+                    chunk = weights_norm[i:chunk_end, :]
 
-                # Calculate similarity for this chunk against the whole vocabulary.
-                sim_matrix_chunk = torch.matmul(chunk, weights_norm.T)
+                    if processed_chunks % 10 == 0:  # Log every 10 chunks
+                        current_memory = psutil.Process().memory_info().rss / 1024 / 1024
+                        print(f"(Async Geo Analysis) Processing chunk {processed_chunks}, tokens {i}-{chunk_end}, memory: {current_memory:.1f} MB")
 
-                # Avoid counting self-similarity (which is always 1.0) by setting
-                # the diagonal elements to a low value before counting neighbors.
-                for j in range(chunk.shape[0]):
-                    global_idx = i + j
-                    sim_matrix_chunk[j, global_idx] = -1.0
+                    # Calculate similarity for this chunk against the whole vocabulary.
+                    sim_matrix_chunk = torch.matmul(chunk, weights_norm.T)
 
-                # Metric 1: Count "close neighbors" for this chunk.
-                total_neighbors += (sim_matrix_chunk > threshold).sum().item()
+                    # Avoid counting self-similarity (which is always 1.0) by setting
+                    # the diagonal elements to a low value before counting neighbors.
+                    for j in range(chunk.shape[0]):
+                        global_idx = i + j
+                        sim_matrix_chunk[j, global_idx] = -1.0
 
-                # Metric 2: Collect all similarity values for the final histogram.
-                all_sim_values.append(sim_matrix_chunk.flatten())
+                    # Metric 1: Count "close neighbors" for this chunk.
+                    neighbors_in_chunk = (sim_matrix_chunk > threshold).sum().item()
+                    total_neighbors += neighbors_in_chunk
 
+                    # Metric 2: Collect all similarity values for the final histogram.
+                    all_sim_values.append(sim_matrix_chunk.flatten())
+
+                    # Clean up chunk to free memory
+                    del sim_matrix_chunk
+                    processed_chunks += 1
+
+                    # Force garbage collection every 20 chunks
+                    if processed_chunks % 20 == 0:
+                        gc.collect()
+
+                except Exception as chunk_error:
+                    print(f"(Async Geo Analysis) ERROR in chunk {processed_chunks} (tokens {i}-{chunk_end}): {chunk_error}")
+                    # Continue with next chunk instead of failing completely
+                    continue
+
+            print(f"(Async Geo Analysis) Step 3: Finalizing results...")
             # --- Step 3: Finalize and Return Results ---
+            if not all_sim_values:
+                print(f"(Async Geo Analysis) ERROR: No similarity values collected!")
+                return None
+
+            memory_before_concat = psutil.Process().memory_info().rss / 1024 / 1024
+            print(f"(Async Geo Analysis) Memory before concatenation: {memory_before_concat:.1f} MB")
+
             full_sim_distribution = torch.cat(all_sim_values)
+
+            memory_after_concat = psutil.Process().memory_info().rss / 1024 / 1024
+            print(f"(Async Geo Analysis) Memory after concatenation: {memory_after_concat:.1f} MB")
+            print(f"(Async Geo Analysis) Full similarity distribution shape: {full_sim_distribution.shape}")
 
             avg_neighborhood_size = total_neighbors / vocab_size
             hist = torch.histogram(full_sim_distribution, bins=100, range=(-0.5, 1.0))
 
-            # Calculate percentiles for similarity distribution
+            # Calculate percentiles and statistics before cleanup
+            mean_similarity = full_sim_distribution.mean().item()
+            std_similarity = full_sim_distribution.std().item()
             sim_10th = torch.quantile(full_sim_distribution, 0.1).item()
             sim_90th = torch.quantile(full_sim_distribution, 0.9).item()
+
+            print(f"(Async Geo Analysis) Analysis complete. Avg neighbors: {avg_neighborhood_size:.2f}")
+
+            # Clean up large tensors
+            del full_sim_distribution, all_sim_values, weights_norm, weights
+            gc.collect()
+
+            final_memory = psutil.Process().memory_info().rss / 1024 / 1024
+            print(f"(Async Geo Analysis) Final memory after cleanup: {final_memory:.1f} MB")
 
             return {
                 'local_density': {
@@ -300,13 +369,29 @@ class ModelAnalyzer:
                 'global_sparsity': {
                     'histogram_counts': hist.hist.tolist(),
                     'histogram_bins': hist.bin_edges.tolist(),
-                    'mean_similarity': full_sim_distribution.mean().item(),
-                    'std_similarity': full_sim_distribution.std().item(),
+                    'mean_similarity': mean_similarity,
+                    'std_similarity': std_similarity,
                     'similarity_10th_percentile': sim_10th,
                     'similarity_90th_percentile': sim_90th
                 }
             }
 
         except Exception as e:
-            print(f"Warning: Could not analyze embedding geometry. Error: {e}")
+            print(f"(Async Geo Analysis) CRITICAL ERROR: Could not analyze embedding geometry. Error: {e}")
+            print(f"(Async Geo Analysis) Error type: {type(e).__name__}")
+            import traceback
+            print(f"(Async Geo Analysis) Traceback: {traceback.format_exc()}")
+
+            # Clean up any remaining tensors
+            try:
+                if 'weights' in locals():
+                    del weights
+                if 'weights_norm' in locals():
+                    del weights_norm
+                if 'all_sim_values' in locals():
+                    del all_sim_values
+                gc.collect()
+            except:
+                pass
+
             return None
