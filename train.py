@@ -304,6 +304,7 @@ def load_scaling_schedule(file_path, init_from):
             print("Starting from scratch, resetting schedule completion status.")
             for op in schedule:
                 op['completed'] = False
+            save_scaling_schedule(file_path, schedule)
         else:
             print("Resuming run, honoring existing schedule completion status.")
             # Ensure operations have 'completed' field for consistency (will be added on next save)
@@ -357,6 +358,8 @@ torch.manual_seed(1337 + seed_offset)
 torch.backends.cuda.matmul.allow_tf32 = True # allow tf32 on matmul
 torch.backends.cudnn.allow_tf32 = True # allow tf32 on cudnn
 device_type = 'cuda' if 'cuda' in device else 'cpu' # for later use in torch.autocast
+
+print (f"Using : {device_type}")
 ptdtype = {'float32': torch.float32, 'bfloat16': torch.bfloat16, 'float16': torch.float16}[dtype]
 ctx = nullcontext() if device_type == 'cpu' else torch.amp.autocast(device_type=device_type, dtype=ptdtype)
 
@@ -851,14 +854,16 @@ while True:
     optimizer.zero_grad(set_to_none=True)
 
     t1 = time.time()
-    dt = t1 - t0
-    t0 = t1
     if iter_num % log_interval == 0 and master_process:
+        
         lossf = loss.item() * gradient_accumulation_steps
         if local_iter_num >= 5:
-            mfu = raw_model.estimate_mfu(batch_size * gradient_accumulation_steps, dt)
+            mfu = raw_model.estimate_mfu(batch_size * gradient_accumulation_steps, dt/log_interval)
             running_mfu = mfu if running_mfu == -1.0 else 0.9*running_mfu + 0.1*mfu
-        print(f"iter {iter_num}: loss {lossf:.4f}, lr {lr:.5f}, time {dt*1000:.2f}ms, mfu {running_mfu*100:.2f}%")
+        
+        dt = t1 - t0
+        t0 = t1
+        print(f"iter {iter_num}: loss {lossf:.4f}, lr {lr:.5f}, time {dt/log_interval*1000:.2f}ms, mfu {running_mfu*100:.2f}%")
     iter_num += 1
     local_iter_num += 1
 
