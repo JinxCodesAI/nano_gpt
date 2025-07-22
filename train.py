@@ -11,6 +11,8 @@ from datetime import datetime
 import numpy as np
 import torch
 import psutil
+import threading
+from collections import deque
 import torch._dynamo
 try:
     torch._dynamo.config.recompile_limit = 1000000 # or a higher number
@@ -364,16 +366,174 @@ print(f"Device type: {device_type}")
 ptdtype = {'float32': torch.float32, 'bfloat16': torch.bfloat16, 'float16': torch.float16}[dtype]
 ctx = nullcontext() if device_type == 'cpu' else torch.amp.autocast(device_type=device_type, dtype=ptdtype)
 
-# poor man's data loader
+# High-performance data loader with curriculum learning
 data_dir = os.path.join('data', dataset)
 
-def get_batch(split):
-    if split == 'train':
-        shard_name = random.choice(train_shard_filenames)
-        shard_path = os.path.join(data_dir, shard_name)
-        data = np.memmap(shard_path, dtype=np.uint16, mode='r')
-    else:
-        data = np.memmap(os.path.join(data_dir, 'val.bin'), dtype=np.uint16, mode='r')
+class BatchManager:
+    def __init__(self, data_dir, shard_filenames, vocab_size, batch_size, block_size, device, device_type,
+                 starting_estimation_token_count=100_000_000, buffer_size=2000):
+        print("Initializing High-Performance BatchManager (V2)...")
+        self.data_dir = data_dir
+        self.shard_filenames = shard_filenames
+        self.vocab_size = vocab_size
+        self.batch_size = batch_size
+        self.block_size = block_size
+        self.device = device
+        self.device_type = device_type
+        self.buffer_size = buffer_size
+
+        # 1. Approximate or load the corpus token distribution
+        self.corpus_distribution = self._get_corpus_distribution(starting_estimation_token_count)
+        self.uniform_distribution = torch.ones(self.vocab_size, dtype=torch.float32) / self.vocab_size
+
+        # 2. Initialize state for tracking served tokens
+        self.served_token_counts = torch.zeros(self.vocab_size, dtype=torch.float64)
+        self.total_tokens_served = 0
+
+        # 3. Thread-safe candidate buffer and control variables for the worker
+        self.candidate_buffer = deque()
+        self.buffer_lock = threading.Lock()
+        self.rescore_event = threading.Event()
+        self.shutdown_event = threading.Event()
+
+        # 4. Initialize the curriculum and target distribution
+        self.alpha = 1.0
+        self.target_distribution = self.uniform_distribution.clone()
+
+        # 5. Start the background worker thread
+        self.worker_thread = threading.Thread(target=self._buffer_management_worker, daemon=True)
+        self.worker_thread.start()
+        print("BatchManager initialized and background worker started.")
+
+    def _get_corpus_distribution(self, estimation_tokens):
+        """Calculates an approximate token distribution from a sample of the dataset and caches it."""
+        cache_path = os.path.join(self.data_dir, f'corpus_dist_approx_{estimation_tokens}.pt')
+        if os.path.exists(cache_path):
+            print(f"Loading cached approximate corpus distribution from {cache_path}")
+            return torch.load(cache_path)
+
+        print(f"Approximating corpus distribution from {estimation_tokens:,} tokens...")
+        total_counts = torch.zeros(self.vocab_size, dtype=torch.int64)
+        tokens_per_shard = estimation_tokens // len(self.shard_filenames)
+
+        for shard_name in self.shard_filenames:
+            shard_path = os.path.join(self.data_dir, shard_name)
+            data = np.memmap(shard_path, dtype=np.uint16, mode='r')
+            if len(data) > tokens_per_shard:
+                sample = data[:tokens_per_shard]
+                shard_counts = torch.from_numpy(np.bincount(sample, minlength=self.vocab_size))
+                total_counts += shard_counts
+
+        distribution = total_counts.float() / total_counts.sum()
+        print(f"Saving approximate corpus distribution to {cache_path}")
+        torch.save(distribution, cache_path)
+        return distribution
+
+    def _buffer_management_worker(self):
+        """
+        Runs in a background thread to continuously read, score, and manage the candidate buffer.
+        """
+        shard_cycle = iter(self.shard_filenames * 1000) # Loop over the dataset many times
+
+        while not self.shutdown_event.is_set():
+            # --- Phase 1: Refill the buffer if it has space ---
+            if len(self.candidate_buffer) < self.buffer_size:
+                try:
+                    shard_name = next(shard_cycle)
+                    shard_path = os.path.join(self.data_dir, shard_name)
+                    data = np.memmap(shard_path, dtype=np.uint16, mode='r')
+
+                    # Create multiple batches from a large sequential chunk for I/O efficiency
+                    num_batches_to_create = 50
+                    chunk_size = num_batches_to_create * self.batch_size * self.block_size
+                    start_idx = random.randint(0, max(0, len(data) - chunk_size))
+                    chunk = data[start_idx : start_idx + chunk_size]
+
+                    new_candidates = []
+                    # Create non-overlapping batches from the chunk
+                    for i in range(0, len(chunk), self.batch_size * self.block_size):
+                        if i + self.batch_size * self.block_size + 1 > len(chunk): continue
+                        x = torch.from_numpy(chunk[i : i + self.batch_size * self.block_size].astype(np.int64)).view(self.batch_size, self.block_size)
+                        y = torch.from_numpy(chunk[i+1 : i+1 + self.batch_size * self.block_size].astype(np.int64)).view(self.batch_size, self.block_size)
+                        new_candidates.append({'x': x, 'y': y, 'score': -1.0})
+
+                    with self.buffer_lock:
+                        self.candidate_buffer.extend(new_candidates)
+
+                except StopIteration:
+                    print("Worker has finished all shard cycles.")
+                    break
+                except Exception as e:
+                    print(f"Error in buffer refill worker: {e}")
+                    time.sleep(1)
+
+            # --- Phase 2: Re-score and sort the entire buffer if signaled ---
+            if self.rescore_event.is_set():
+                with self.buffer_lock:
+                    print("(Async Worker) Re-scoring candidate buffer...")
+                    served_dist = (self.served_token_counts / (self.total_tokens_served + 1e-9)).to(torch.float32)
+
+                    temp_list = list(self.candidate_buffer)
+                    for batch_data in temp_list:
+                        tokens, counts = torch.unique(batch_data['x'], return_counts=True)
+                        neglect_score = self.target_distribution[tokens] / (served_dist[tokens] + 1e-9)
+                        batch_data['score'] = (neglect_score * counts).sum().item()
+
+                    # Sort the buffer by score (highest first) and trim excess
+                    temp_list.sort(key=lambda b: b['score'], reverse=True)
+                    self.candidate_buffer = deque(temp_list[:self.buffer_size])
+
+                    self.rescore_event.clear() # Mark re-scoring as done
+                    print(f"(Async Worker) Buffer re-scored. Size: {len(self.candidate_buffer)}")
+
+            time.sleep(0.1) # Prevent busy-looping, yield to other threads
+
+    def update_target_distribution(self, alpha):
+        """Updates the target distribution and signals the worker to re-score."""
+        print(f"Updating batch manager alpha to {alpha:.3f}")
+        self.alpha = alpha
+        # Blend corpus and uniform distributions
+        self.target_distribution = (1 - alpha) * self.corpus_distribution + alpha * self.uniform_distribution
+        self.rescore_event.set() # Signal the worker thread to re-score all candidates
+
+    def get_next_batch(self):
+        """Waits for and retrieves the highest-scoring batch from the buffer."""
+        # Wait for the buffer to be populated, especially at the start
+        while not self.candidate_buffer:
+            print("Main thread is waiting for the batch buffer to fill...")
+            time.sleep(0.5)
+            if self.shutdown_event.is_set(): return None, None
+
+        with self.buffer_lock:
+            # The buffer is kept sorted by the worker, so the best is always at the front
+            best_batch_data = self.candidate_buffer.popleft()
+
+        best_x, best_y = best_batch_data['x'], best_batch_data['y']
+
+        # Update the state of served tokens
+        unique_tokens, counts = torch.unique(best_x, return_counts=True)
+        self.served_token_counts[unique_tokens] += counts.to(self.served_token_counts.dtype)
+        self.total_tokens_served += best_x.numel()
+
+        # Move the chosen batch to the correct GPU/CPU device
+        if self.device_type == 'cuda':
+            best_x = best_x.pin_memory().to(self.device, non_blocking=True)
+            best_y = best_y.pin_memory().to(self.device, non_blocking=True)
+        else:
+            best_x, best_y = best_x.to(self.device), best_y.to(self.device)
+
+        return best_x, best_y
+
+    def shutdown(self):
+        """Signals the background worker to stop and waits for it to exit."""
+        print("Shutting down BatchManager background worker...")
+        self.shutdown_event.set()
+        self.worker_thread.join(timeout=5)
+        print("BatchManager shut down.")
+
+# Simple validation batch function (unchanged from original)
+def get_val_batch():
+    data = np.memmap(os.path.join(data_dir, 'val.bin'), dtype=np.uint16, mode='r')
     ix = torch.randint(len(data) - block_size, (batch_size,))
     x = torch.stack([torch.from_numpy((data[i:i+block_size]).astype(np.int64)) for i in ix])
     y = torch.stack([torch.from_numpy((data[i+1:i+1+block_size]).astype(np.int64)) for i in ix])
@@ -512,7 +672,10 @@ def estimate_loss():
     for split in ['train', 'val']:
         losses = torch.zeros(eval_iters)
         for k in range(eval_iters):
-            X, Y = get_batch(split)
+            if split == 'train':
+                X, Y = batch_manager.get_next_batch()
+            else:
+                X, Y = get_val_batch()
             with ctx:
                 logits, loss = model(X, Y)
             losses[k] = loss.item()
@@ -550,58 +713,125 @@ def analysis_done_callback(future):
     """
     The new callback, rewritten to handle the rich, nested results dictionary.
     """
+    global training_logger, master_process  # Access global variables for logging
+
     try:
         results = future.result()
         iter_num = results['iter_num']
 
         print(f"\n--- ASYNC ANALYSIS RESULTS FOR ITERATION {iter_num} ---")
 
+        # Prepare log messages for file logging
+        log_messages = []
+        log_messages.append(f"--- ASYNC ANALYSIS RESULTS FOR ITERATION {iter_num} ---")
+
         # --- Report Geometry & Rank Results ---
         if 'geometry' in results:
             geo = results['geometry']
+
+            # Embedding Geometry Analysis
             if 'embeddings' in geo and geo['embeddings']:
                 emb_geo = geo['embeddings']
                 avg_neighbors = emb_geo['local_density']['average_neighborhood_size']
                 mean_sim = emb_geo['global_sparsity']['mean_similarity']
-                print(f"  [Embeddings Geometry] Avg Neighbors: {avg_neighbors:.2f} | Mean Similarity: {mean_sim:.4f}")
+                std_sim = emb_geo['global_sparsity']['std_similarity']
+                sim_10th = emb_geo['global_sparsity']['similarity_10th_percentile']
+                sim_90th = emb_geo['global_sparsity']['similarity_90th_percentile']
+
+                geom_msg1 = f"  [Embeddings Geometry] Avg Neighbors: {avg_neighbors:.2f} | Mean Similarity: {mean_sim:.4f}"
+                geom_msg2 = f"  [Embeddings Geometry] Std Similarity: {std_sim:.4f} | 10th-90th Percentile: {sim_10th:.4f} - {sim_90th:.4f}"
+                print(geom_msg1)
+                print(geom_msg2)
+                log_messages.append(geom_msg1)
+                log_messages.append(geom_msg2)
+
                 if wandb_log:
                     wandb.log({
                         "analysis/embed/geom_avg_neighbors": avg_neighbors,
-                        "analysis/embed/geom_mean_sim": mean_sim
+                        "analysis/embed/geom_mean_sim": mean_sim,
+                        "analysis/embed/geom_std_sim": std_sim,
+                        "analysis/embed/geom_sim_10th": sim_10th,
+                        "analysis/embed/geom_sim_90th": sim_90th
                     }, step=iter_num)
 
+            # FFN Rank Analysis
             if 'ffn_ranks' in geo:
-                # Report rank for the first, middle, and last FFN layers for brevity
                 num_layers = len(geo['ffn_ranks'])
                 layers_to_log = {0, num_layers // 2, num_layers - 1}
                 for i in layers_to_log:
                     rank_info = geo['ffn_ranks'].get(f'layer_{i}')
                     if rank_info:
                         util = rank_info['utilization']
-                        print(f"  [FFN Rank L{i}] Utilization: {util:.2%}")
+                        eff_rank = rank_info['effective_rank']
+                        full_rank = rank_info['full_rank']
+                        ffn_msg = f"  [FFN Rank L{i}] Utilization: {util:.2%} ({eff_rank}/{full_rank})"
+                        print(ffn_msg)
+                        log_messages.append(ffn_msg)
                         if wandb_log: wandb.log({f"analysis/ffn/rank_util_L{i}": util}, step=iter_num)
+
+            # Attention Rank Analysis
+            if 'attn_ranks' in geo:
+                num_layers = len(geo['attn_ranks'])
+                layers_to_log = {0, num_layers // 2, num_layers - 1}
+                for i in layers_to_log:
+                    attn_info = geo['attn_ranks'].get(f'layer_{i}')
+                    if attn_info:
+                        for component in ['Q', 'K', 'V']:
+                            comp_info = attn_info.get(component)
+                            if comp_info:
+                                util = comp_info['utilization']
+                                eff_rank = comp_info['effective_rank']
+                                full_rank = comp_info['full_rank']
+                                attn_msg = f"  [Attn {component} L{i}] Utilization: {util:.2%} ({eff_rank}/{full_rank})"
+                                print(attn_msg)
+                                log_messages.append(attn_msg)
+                                if wandb_log: wandb.log({f"analysis/attn/{component.lower()}_rank_util_L{i}": util}, step=iter_num)
 
         # --- Report Drift Results ---
         if 'drift' in results:
             drift = results['drift']
-            if 'embeddings' in drift and drift['embeddings']:
-                emb_drift = drift['embeddings']['avg_cosine_similarity']
-                print(f"  [Embeddings Drift] Avg Cosine Sim: {emb_drift:.4f}")
-                if wandb_log: wandb.log({"analysis/embed/drift_avg_sim": emb_drift}, step=iter_num)
 
-            # Report drift for the first FFN layer for brevity
+            # Embedding Drift
+            if 'embeddings' in drift and drift['embeddings']:
+                emb_drift_avg = drift['embeddings']['avg_cosine_similarity']
+                emb_drift_10th = drift['embeddings']['cosine_sim_10th_percentile']
+                drift_msg1 = f"  [Embeddings Drift] Avg Cosine Sim: {emb_drift_avg:.4f} | 10th Percentile: {emb_drift_10th:.4f}"
+                print(drift_msg1)
+                log_messages.append(drift_msg1)
+                if wandb_log: wandb.log({
+                    "analysis/embed/drift_avg_sim": emb_drift_avg,
+                    "analysis/embed/drift_10th_sim": emb_drift_10th
+                }, step=iter_num)
+
+            # FFN Drift (report first layer for brevity)
             ffn0_drift = drift.get('ffn.0.c_fc.weight')
             if ffn0_drift:
-                ffn_drift_sim = ffn0_drift['avg_cosine_similarity']
-                print(f"  [FFN L0 Drift] Avg Cosine Sim: {ffn_drift_sim:.4f}")
-                if wandb_log: wandb.log({"analysis/ffn/drift_avg_sim_L0": ffn_drift_sim}, step=iter_num)
+                ffn_drift_avg = ffn0_drift['avg_cosine_similarity']
+                ffn_drift_10th = ffn0_drift['cosine_sim_10th_percentile']
+                drift_msg2 = f"  [FFN L0 Drift] Avg Cosine Sim: {ffn_drift_avg:.4f} | 10th Percentile: {ffn_drift_10th:.4f}"
+                print(drift_msg2)
+                log_messages.append(drift_msg2)
+                if wandb_log: wandb.log({
+                    "analysis/ffn/drift_avg_sim_L0": ffn_drift_avg,
+                    "analysis/ffn/drift_10th_sim_L0": ffn_drift_10th
+                }, step=iter_num)
 
-        print("--- END OF ASYNC ANALYSIS RESULTS ---\n")
+        end_msg = "--- END OF ASYNC ANALYSIS RESULTS ---"
+        print(end_msg + "\n")
+        log_messages.append(end_msg)
+
+        # Log to file if logging is enabled and we're the master process
+        if master_process and training_logger.is_enabled:
+            for msg in log_messages:
+                training_logger.log(msg)
 
     except Exception as e:
         print(f"\n--- ERROR in analysis_done_callback: {e} ---\n")
         import traceback
         traceback.print_exc()
+        # Also log errors to file if logging is enabled
+        if master_process and training_logger.is_enabled:
+            training_logger.log(f"ERROR DURING ASYNC ANALYSIS: {e}")
 
 
 
@@ -696,6 +926,10 @@ def execute_operation(op, trigger_reason, current_val_loss, iter_num, target_arc
             elif op_name == 'reset_lr_schedule':
                 if master_process: print(f"Resetting LR schedule at iter {iter_num}")
                 lr_schedule_offset = iter_num
+            elif op_name == 'set_curriculum_alpha':
+                if master_process: print(f"Setting curriculum alpha: {op_value}")
+                # This calls the method in our new BatchManager to update the target and trigger a re-score
+                batch_manager.update_target_distribution(op_value)
             else:
                 raise ValueError(f"Unknown operation '{op_name}'")
             if master_process: training_logger.log_operation_success(iter_num, op_name, {'new_value': op_value})
@@ -725,7 +959,19 @@ if wandb_log and master_process:
     print(f"Initializing W&B run with name: {final_wandb_run_name}")
     wandb.init(project=wandb_project, name=final_wandb_run_name, config=config)
 
-X, Y = get_batch('train')
+# Initialize the BatchManager for the training set
+batch_manager = BatchManager(
+    data_dir=data_dir,
+    shard_filenames=train_shard_filenames,
+    vocab_size=meta_vocab_size if meta_vocab_size is not None else 50304,
+    batch_size=batch_size,
+    block_size=block_size,
+    device=device,
+    device_type=device_type,
+    starting_estimation_token_count=100_000_000  # ~100M tokens for approximation
+)
+
+X, Y = batch_manager.get_next_batch()
 t0 = time.time()
 local_iter_num = 0
 raw_model = model.module if ddp else model
@@ -919,7 +1165,7 @@ while True:
         with ctx:
             logits, loss = model(X, Y)
             loss = loss / gradient_accumulation_steps
-        X, Y = get_batch('train')
+        X, Y = batch_manager.get_next_batch()
         scaler.scale(loss).backward()
     if grad_clip != 0.0:
         scaler.unscale_(optimizer)
@@ -944,6 +1190,7 @@ while True:
         break
 
 if master_process:
+    batch_manager.shutdown() # Add this line to stop the background worker
     print("Training finished. Shutting down analysis executor (waiting for any pending jobs)...")
     executor.shutdown(wait=True) # wait=True is important for a clean exit
     training_logger.close()
