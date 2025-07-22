@@ -1,7 +1,7 @@
 [
   {
     "name": "set_grad_accum",
-    "value": 10,
+    "value": 2,
     "trigger_loss": 100,
     "max_wait_iters": 1,
     "desc": "first burn",
@@ -42,7 +42,7 @@
     "max_wait_iters": 1000,
     "desc": "first burn",
     "reevaluate": true,
-    "completed": true
+    "completed": false
   },
   {
     "name": "set_warmup_iters",
@@ -51,7 +51,7 @@
     "max_wait_iters": 1,
     "desc": "first burn",
     "reevaluate": false,
-    "completed": true
+    "completed": false
   },
   {
     "name": "set_lr",
@@ -60,7 +60,7 @@
     "max_wait_iters": 1,
     "desc": "first burn",
     "reevaluate": false,
-    "completed": true
+    "completed": false
   },
   {
     "name": "reset_lr_schedule",
@@ -69,7 +69,7 @@
     "max_wait_iters": 1,
     "desc": "first burn",
     "reevaluate": false,
-    "completed": true
+    "completed": false
   },
   {
     "name": "merge_lora_weights",
