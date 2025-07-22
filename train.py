@@ -544,8 +544,8 @@ def run_analysis_async(analyzer, current_embeddings, prev_embeddings, iter_num):
 
     # Run semantic drift if we have a previous state to compare against.
     if prev_embeddings is not None:
-        # We call the analyzer method on the live model instance, but pass it the CPU tensor.
-        results['drift'] = analyzer.measure_semantic_drift(prev_embeddings)
+        # Pass both current and previous CPU snapshots to the pure function.
+        results['drift'] = analyzer.measure_semantic_drift(current_embeddings, prev_embeddings)
 
     # Run embedding geometry analysis on the current snapshot.
     results['geometry'] = analyzer.analyze_embedding_geometry(current_embeddings)
@@ -558,39 +558,79 @@ def analysis_done_callback(future):
     This function is automatically called when the background job is done.
     It handles formatting and reporting the results.
     """
+    global training_logger, master_process  # Access global variables for logging
+
     try:
         # .result() retrieves the return value from run_analysis_async or raises an exception
         results = future.result()
         iter_num = results['iter_num']
 
+        # Console output
         print(f"\n--- ASYNC ANALYSIS RESULTS FOR ITERATION {iter_num} ---")
+
+        # Prepare log messages for file logging
+        log_messages = []
+        log_messages.append(f"--- ASYNC ANALYSIS RESULTS FOR ITERATION {iter_num} ---")
 
         # Safely retrieve and report Drift Results
         drift_results = results.get('drift')
         if drift_results:
             avg_sim = drift_results['average_cosine_similarity']
-            print(f"  [Drift] Average Cosine Similarity vs Prev: {avg_sim:.4f}")
+            sim_10th = drift_results['cosine_similarity_10th_percentile']
+            sim_90th = drift_results['cosine_similarity_90th_percentile']
+            drift_msg1 = f"  [Drift] Average Cosine Similarity vs Prev: {avg_sim:.4f}"
+            drift_msg2 = f"  [Drift] Cosine Similarity 10th-90th percentile: {sim_10th:.4f} - {sim_90th:.4f}"
+            print(drift_msg1)
+            print(drift_msg2)
+            log_messages.append(drift_msg1)
+            log_messages.append(drift_msg2)
             if wandb_log:
-                wandb.log({"analysis/drift_cosine_sim": avg_sim}, step=iter_num)
+                wandb.log({
+                    "analysis/drift_cosine_sim": avg_sim,
+                    "analysis/drift_cosine_sim_10th": sim_10th,
+                    "analysis/drift_cosine_sim_90th": sim_90th
+                }, step=iter_num)
 
         # Safely retrieve and report Geometry Results
         geometry_results = results.get('geometry')
         if geometry_results:
             avg_neighbors = geometry_results['local_density']['average_neighborhood_size']
             mean_sim = geometry_results['global_sparsity']['mean_similarity']
-            print(f"  [Geometry] Avg Neighbors (Galaxy Size): {avg_neighbors:.2f}")
-            print(f"  [Geometry] Mean Similarity (Universe Sparsity): {mean_sim:.4f}")
+            sim_10th = geometry_results['global_sparsity']['similarity_10th_percentile']
+            sim_90th = geometry_results['global_sparsity']['similarity_90th_percentile']
+            geom_msg1 = f"  [Geometry] Avg Neighbors (Galaxy Size): {avg_neighbors:.2f}"
+            geom_msg2 = f"  [Geometry] Mean Similarity (Universe Sparsity): {mean_sim:.4f}"
+            geom_msg3 = f"  [Geometry] Similarity 10th-90th percentile: {sim_10th:.4f} - {sim_90th:.4f}"
+            print(geom_msg1)
+            print(geom_msg2)
+            print(geom_msg3)
+            log_messages.append(geom_msg1)
+            log_messages.append(geom_msg2)
+            log_messages.append(geom_msg3)
             if wandb_log:
                 wandb.log({
                     "analysis/geom_avg_neighbors": avg_neighbors,
                     "analysis/geom_mean_similarity": mean_sim,
+                    "analysis/geom_similarity_10th": sim_10th,
+                    "analysis/geom_similarity_90th": sim_90th,
                 }, step=iter_num)
 
-        print("--- END OF ASYNC ANALYSIS RESULTS ---\n")
+        end_msg = "--- END OF ASYNC ANALYSIS RESULTS ---"
+        print(end_msg + "\n")
+        log_messages.append(end_msg)
+
+        # Log to file if logging is enabled and we're the master process
+        if master_process and training_logger.is_enabled:
+            for msg in log_messages:
+                training_logger.log(msg)
 
     except Exception as e:
         # This will catch and print any errors that occurred in the background thread
-        print(f"\n--- ERROR DURING ASYNC ANALYSIS ---\n{e}\n---------------------------------\n")
+        error_msg = f"\n--- ERROR DURING ASYNC ANALYSIS ---\n{e}\n---------------------------------\n"
+        print(error_msg)
+        # Also log errors to file if logging is enabled
+        if master_process and training_logger.is_enabled:
+            training_logger.log(f"ERROR DURING ASYNC ANALYSIS: {e}")
 
 
 
