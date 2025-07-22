@@ -577,27 +577,43 @@ def analysis_done_callback(future):
         drift_results = results.get('drift')
         if drift_results:
             avg_sim = drift_results['average_cosine_similarity']
-            drift_msg = f"  [Drift] Average Cosine Similarity vs Prev: {avg_sim:.4f}"
-            print(drift_msg)
-            log_messages.append(drift_msg)
+            sim_10th = drift_results['cosine_similarity_10th_percentile']
+            sim_90th = drift_results['cosine_similarity_90th_percentile']
+            drift_msg1 = f"  [Drift] Average Cosine Similarity vs Prev: {avg_sim:.4f}"
+            drift_msg2 = f"  [Drift] Cosine Similarity 10th-90th percentile: {sim_10th:.4f} - {sim_90th:.4f}"
+            print(drift_msg1)
+            print(drift_msg2)
+            log_messages.append(drift_msg1)
+            log_messages.append(drift_msg2)
             if wandb_log:
-                wandb.log({"analysis/drift_cosine_sim": avg_sim}, step=iter_num)
+                wandb.log({
+                    "analysis/drift_cosine_sim": avg_sim,
+                    "analysis/drift_cosine_sim_10th": sim_10th,
+                    "analysis/drift_cosine_sim_90th": sim_90th
+                }, step=iter_num)
 
         # Safely retrieve and report Geometry Results
         geometry_results = results.get('geometry')
         if geometry_results:
             avg_neighbors = geometry_results['local_density']['average_neighborhood_size']
             mean_sim = geometry_results['global_sparsity']['mean_similarity']
+            sim_10th = geometry_results['global_sparsity']['similarity_10th_percentile']
+            sim_90th = geometry_results['global_sparsity']['similarity_90th_percentile']
             geom_msg1 = f"  [Geometry] Avg Neighbors (Galaxy Size): {avg_neighbors:.2f}"
             geom_msg2 = f"  [Geometry] Mean Similarity (Universe Sparsity): {mean_sim:.4f}"
+            geom_msg3 = f"  [Geometry] Similarity 10th-90th percentile: {sim_10th:.4f} - {sim_90th:.4f}"
             print(geom_msg1)
             print(geom_msg2)
+            print(geom_msg3)
             log_messages.append(geom_msg1)
             log_messages.append(geom_msg2)
+            log_messages.append(geom_msg3)
             if wandb_log:
                 wandb.log({
                     "analysis/geom_avg_neighbors": avg_neighbors,
                     "analysis/geom_mean_similarity": mean_sim,
+                    "analysis/geom_similarity_10th": sim_10th,
+                    "analysis/geom_similarity_90th": sim_90th,
                 }, step=iter_num)
 
         end_msg = "--- END OF ASYNC ANALYSIS RESULTS ---"

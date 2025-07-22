@@ -213,9 +213,19 @@ class ModelAnalyzer:
             most_drifted_tokens = [(idx.item(), sim.item()) for idx, sim in zip(indices[:top_k], sorted_sims[:top_k])]
             least_drifted_tokens = [(idx.item(), sim.item()) for idx, sim in zip(indices[-top_k:], sorted_sims[-top_k:])]
 
+            # Calculate percentiles for more detailed statistics
+            cosine_10th = torch.quantile(cosine_sims, 0.1).item()
+            cosine_90th = torch.quantile(cosine_sims, 0.9).item()
+            euclidean_10th = torch.quantile(euclidean_dists, 0.1).item()
+            euclidean_90th = torch.quantile(euclidean_dists, 0.9).item()
+
             return {
                 'average_cosine_similarity': cosine_sims.mean().item(),
+                'cosine_similarity_10th_percentile': cosine_10th,
+                'cosine_similarity_90th_percentile': cosine_90th,
                 'average_euclidean_distance': euclidean_dists.mean().item(),
+                'euclidean_distance_10th_percentile': euclidean_10th,
+                'euclidean_distance_90th_percentile': euclidean_90th,
                 'most_drifted_tokens': most_drifted_tokens,
                 'least_drifted_tokens': least_drifted_tokens,
             }
@@ -278,6 +288,10 @@ class ModelAnalyzer:
             avg_neighborhood_size = total_neighbors / vocab_size
             hist = torch.histogram(full_sim_distribution, bins=100, range=(-0.5, 1.0))
 
+            # Calculate percentiles for similarity distribution
+            sim_10th = torch.quantile(full_sim_distribution, 0.1).item()
+            sim_90th = torch.quantile(full_sim_distribution, 0.9).item()
+
             return {
                 'local_density': {
                     'average_neighborhood_size': avg_neighborhood_size,
@@ -287,7 +301,9 @@ class ModelAnalyzer:
                     'histogram_counts': hist.hist.tolist(),
                     'histogram_bins': hist.bin_edges.tolist(),
                     'mean_similarity': full_sim_distribution.mean().item(),
-                    'std_similarity': full_sim_distribution.std().item()
+                    'std_similarity': full_sim_distribution.std().item(),
+                    'similarity_10th_percentile': sim_10th,
+                    'similarity_90th_percentile': sim_90th
                 }
             }
 
