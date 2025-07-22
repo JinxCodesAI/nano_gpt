@@ -5,6 +5,7 @@ import math
 import pickle
 import json
 import yaml
+import concurrent.futures
 from contextlib import nullcontext
 from datetime import datetime
 import numpy as np
@@ -534,6 +535,64 @@ def get_lr(it):
     coeff = 0.5 * (1.0 + math.cos(math.pi * decay_ratio))
     return (min_lr + coeff * (learning_rate - min_lr))
 
+def run_analysis_async(analyzer, current_embeddings, prev_embeddings, iter_num):
+    """
+    This function is executed by the background thread. It runs all analyses
+    and returns a single dictionary containing all results.
+    """
+    print(f"(Async Analysis @ iter {iter_num}) Starting job in background...")
+    results = {'iter_num': iter_num}
+
+    # Run semantic drift if we have a previous state to compare against.
+    if prev_embeddings is not None:
+        # We call the analyzer method on the live model instance, but pass it the CPU tensor.
+        results['drift'] = analyzer.measure_semantic_drift(prev_embeddings)
+
+    # Run embedding geometry analysis on the current snapshot.
+    results['geometry'] = analyzer.analyze_embedding_geometry(current_embeddings)
+
+    print(f"(Async Analysis @ iter {iter_num}) Job finished.")
+    return results
+
+def analysis_done_callback(future):
+    """
+    This function is automatically called when the background job is done.
+    It handles formatting and reporting the results.
+    """
+    try:
+        # .result() retrieves the return value from run_analysis_async or raises an exception
+        results = future.result()
+        iter_num = results['iter_num']
+
+        print(f"\n--- ASYNC ANALYSIS RESULTS FOR ITERATION {iter_num} ---")
+
+        # Safely retrieve and report Drift Results
+        drift_results = results.get('drift')
+        if drift_results:
+            avg_sim = drift_results['average_cosine_similarity']
+            print(f"  [Drift] Average Cosine Similarity vs Prev: {avg_sim:.4f}")
+            if wandb_log:
+                wandb.log({"analysis/drift_cosine_sim": avg_sim}, step=iter_num)
+
+        # Safely retrieve and report Geometry Results
+        geometry_results = results.get('geometry')
+        if geometry_results:
+            avg_neighbors = geometry_results['local_density']['average_neighborhood_size']
+            mean_sim = geometry_results['global_sparsity']['mean_similarity']
+            print(f"  [Geometry] Avg Neighbors (Galaxy Size): {avg_neighbors:.2f}")
+            print(f"  [Geometry] Mean Similarity (Universe Sparsity): {mean_sim:.4f}")
+            if wandb_log:
+                wandb.log({
+                    "analysis/geom_avg_neighbors": avg_neighbors,
+                    "analysis/geom_mean_similarity": mean_sim,
+                }, step=iter_num)
+
+        print("--- END OF ASYNC ANALYSIS RESULTS ---\n")
+
+    except Exception as e:
+        # This will catch and print any errors that occurred in the background thread
+        print(f"\n--- ERROR DURING ASYNC ANALYSIS ---\n{e}\n---------------------------------\n")
+
 
 
 
@@ -672,6 +731,11 @@ log_detailed_params(raw_model)
 running_mfu = -1.0
 start_time = time.time() # Start the timer for elapsed time tracking
 print(f"eval every: {eval_interval}")
+
+# Initialize thread pool executor for asynchronous analysis
+executor = concurrent.futures.ThreadPoolExecutor(max_workers=1)
+prev_embeddings = None  # This will store the CPU snapshot for semantic drift
+
 while True:
     lr = get_lr(iter_num)
     for param_group in optimizer.param_groups:
@@ -716,6 +780,36 @@ while True:
             if avg_entropy != -1.0:
                 print(f"  Average Attention Entropy:  {avg_entropy:.4f}")
             print("----------------------")
+
+            # --- NEW ASYNCHRONOUS ANALYSIS DISPATCH LOGIC ---
+            print(f"Dispatching async analysis for iter {iter_num}...")
+
+            # 1. Take a snapshot of the current embedding weights and copy it to the CPU.
+            #    This isolates the analysis from the live GPU model, preventing blocking.
+            wte_layer = raw_model.transformer.wte
+            current_embeddings_snapshot = (wte_layer.main_weight.weight.clone().detach().cpu()
+                                           if hasattr(wte_layer, 'main_weight')
+                                           else wte_layer.weight.clone().detach().cpu())
+
+            # 2. Submit the analysis function to the background executor.
+            #    The `analyzer` instance is passed to the task.
+            future = executor.submit(
+                run_analysis_async,
+                analyzer,
+                current_embeddings_snapshot,
+                prev_embeddings, # Will be None on the first run; handled inside the task.
+                iter_num
+            )
+
+            # 3. Attach the callback function that will handle reporting when the job is done.
+            future.add_done_callback(analysis_done_callback)
+
+            # 4. CRITICAL: Update the state variable with the current snapshot for the *next* analysis cycle.
+            prev_embeddings = current_embeddings_snapshot
+
+            # The main loop continues immediately without waiting for the analysis to finish.
+            print("Async analysis job dispatched. Training continues without blocking.")
+            # --- END OF NEW LOGIC ---
 
             training_logger.log_step(iter_num, losses['train'], losses['val'])
             if wandb_log:
@@ -868,6 +962,9 @@ while True:
         break
 
 if master_process:
+    print("Training finished. Shutting down analysis executor (waiting for any pending jobs)...")
+    executor.shutdown(wait=True) # wait=True is important for a clean exit
     training_logger.close()
+
 if ddp:
     destroy_process_group()
