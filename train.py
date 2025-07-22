@@ -737,8 +737,10 @@ def analysis_done_callback(future):
                 std_sim = emb_geo['global_sparsity']['std_similarity']
                 sim_10th = emb_geo['global_sparsity']['similarity_10th_percentile']
                 sim_90th = emb_geo['global_sparsity']['similarity_90th_percentile']
+                nbhd_10th = emb_geo['global_sparsity']['neighbor_10th_percentile']
+                nbhd_90th = emb_geo['global_sparsity']['neighbor_90th_percentile']
 
-                geom_msg1 = f"  [Embeddings Geometry] Avg Neighbors: {avg_neighbors:.2f} | Mean Similarity: {mean_sim:.4f}"
+                geom_msg1 = f"  [Embeddings Geometry] Avg Neighbors: {avg_neighbors:.2f} | Mean Similarity: {mean_sim:.4f} 10th-90th Percentile: {nbhd_10th:.4f} - {nbhd_90th:.4f}"
                 geom_msg2 = f"  [Embeddings Geometry] Std Similarity: {std_sim:.4f} | 10th-90th Percentile: {sim_10th:.4f} - {sim_90th:.4f}"
                 print(geom_msg1)
                 print(geom_msg2)

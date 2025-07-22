@@ -149,7 +149,7 @@ class ModelAnalyzer:
         Memory-efficient analysis of embedding geometry using streaming statistics.
         This method is now a private helper.
         Optimized for CPU to leverage PyTorch's internal parallelism for matmul
-        and vectorized operations.
+        and vectorized operations, and calculates neighbor count percentiles.
         """
         try:
             weights = embedding_weights.clone().float()
@@ -164,9 +164,13 @@ class ModelAnalyzer:
 
             # Initialize a tensor to store a fixed-size sample of similarities
             max_samples = 20000
-            # Pre-allocate buffer for samples
             similarity_samples_buffer = torch.zeros(max_samples, dtype=torch.float32)
             current_sample_idx = 0
+
+            # Tensor to store the number of neighbors for each embedding vector
+            # This is key for calculating neighbor count percentiles
+            per_vector_neighbor_counts = torch.zeros(vocab_size, dtype=torch.int32)
+
 
             for i in range(0, vocab_size, chunk_size):
                 chunk = weights_norm[i:i+chunk_size, :]
@@ -181,11 +185,19 @@ class ModelAnalyzer:
                 # Mask out-of-bounds indices if chunk extends past vocab_size (last chunk)
                 valid_diag_mask = global_col_indices < vocab_size
                 
+                # Apply the -1.0 to ignore self-similarity
                 sim_matrix_chunk[diag_indices_in_chunk[valid_diag_mask], global_col_indices[valid_diag_mask]] = -1.0
 
-                total_neighbors += (sim_matrix_chunk > threshold).sum().item()
+                # --- Calculate and store per-vector neighbor counts for this chunk ---
+                # Count neighbors for each row in sim_matrix_chunk
+                chunk_neighbor_counts = (sim_matrix_chunk > threshold).sum(dim=1)
+                # Store these counts in the pre-allocated tensor
+                # .cpu() ensures it stays on CPU if sim_matrix_chunk was temporarily on GPU
+                per_vector_neighbor_counts[i : i + chunk.shape[0]] = chunk_neighbor_counts.cpu()
 
-                # Update streaming stats
+                total_neighbors += chunk_neighbor_counts.sum().item() # Sum of all neighbors in this chunk
+
+                # Update streaming stats for global similarity
                 chunk_flat = sim_matrix_chunk.flatten()
                 running_sum += chunk_flat.sum().item()
                 running_sum_sq += (chunk_flat**2).sum().item()
@@ -207,7 +219,7 @@ class ModelAnalyzer:
                             replace_idx = torch.randint(0, max_samples, (1,)).item()
                             similarity_samples_buffer[replace_idx] = sample
 
-                del sim_matrix_chunk, chunk_flat
+                del sim_matrix_chunk, chunk_flat, chunk_neighbor_counts
                 torch.cuda.empty_cache() # In case it was accidentally on GPU, though moved to CPU
 
             # Finalize calculations
@@ -225,14 +237,27 @@ class ModelAnalyzer:
                 std_similarity = math.sqrt(max(0, variance))
 
             sim_10th, sim_90th = 0.0, 0.0
-            # Use only the filled part of the buffer for quantile calculation
+            # Use only the filled part of the buffer for global similarity quantile calculation
             similarity_samples_final = similarity_samples_buffer[:current_sample_idx]
             if similarity_samples_final.numel() > 0:
                 sim_10th = torch.quantile(similarity_samples_final, 0.1).item()
                 sim_90th = torch.quantile(similarity_samples_final, 0.9).item()
 
+            # --- Calculate percentiles for neighbor counts ---
+            neighbor_10th_percentile = 0.0
+            neighbor_90th_percentile = 0.0
+            if vocab_size > 0: # Ensure there are embeddings to process
+                # Ensure the tensor is float for quantile calculation, then convert back to item
+                neighbor_10th_percentile = torch.quantile(per_vector_neighbor_counts.float(), 0.1).item()
+                neighbor_90th_percentile = torch.quantile(per_vector_neighbor_counts.float(), 0.9).item()
+
+
             return {
-                'local_density': {'average_neighborhood_size': avg_neighborhood_size},
+                'local_density': {
+                    'average_neighborhood_size': avg_neighborhood_size,
+                    'neighbor_10th_percentile': neighbor_10th_percentile,
+                    'neighbor_90th_percentile': neighbor_90th_percentile
+                },
                 'global_sparsity': {
                     'mean_similarity': mean_similarity,
                     'std_similarity': std_similarity,
