@@ -93,6 +93,48 @@ class ModelAnalyzer:
         return snapshot
 
     @torch.no_grad()
+    def analyze_attention_entropy(self, X_batch):
+        """
+        Calculates the average entropy across all attention heads for a given batch.
+        This requires the model to have been modified to return attention scores.
+
+        Args:
+            X_batch: A batch of input data (X) to be fed to the model.
+
+        Returns:
+            The average entropy value as a float.
+        """
+        try:
+            # Set the model to evaluation mode and enable attention score return
+            self.model.eval()
+            # This flag tells our modified forward pass to return the attention scores
+            _, _, attention_scores = self.model(X_batch, return_attention=True)
+            self.model.train() # Set it back to training mode
+
+            if not attention_scores:
+                print("Warning: Model did not return attention scores.")
+                return -1.0
+
+            all_entropies = []
+            # attention_scores is a list of tensors, one for each layer
+            for layer_att in attention_scores:
+                # layer_att shape: (B, nh, T, T)
+                # Add a small epsilon for numerical stability to avoid log(0)
+                att_probs = layer_att + 1e-9
+
+                # Entropy = -sum(p * log(p))
+                log_p = torch.log(att_probs)
+                entropy = -torch.sum(att_probs * log_p, dim=-1) # Sum over the sequence length dim
+
+                # Average entropy for this layer and append
+                all_entropies.append(entropy.mean().item())
+
+            return sum(all_entropies) / len(all_entropies) if all_entropies else 0.0
+        except Exception as e:
+            print(f"Warning: Could not analyze attention entropy. Error: {e}")
+            return -1.0
+
+    @torch.no_grad()
     def run_full_analysis(self, current_snapshot, prev_snapshot=None):
         """
         Runs a full suite of analyses on the provided model snapshots.
@@ -103,7 +145,6 @@ class ModelAnalyzer:
         # --- GEOMETRY & RANK ANALYSIS (on current snapshot) ---
         geometry_results = {}
         # 1. Embedding Galaxy Model Analysis (the most complex)
-        geometry_results['embeddings'] = self._analyze_embedding_geometry(current_snapshot['embeddings'])
 
         # 2. FFN and Attention Rank Analysis
         ffn_ranks = {}
@@ -144,7 +185,7 @@ class ModelAnalyzer:
     # --------------------------------------------------------------------------
 
     @torch.no_grad()
-    def _analyze_embedding_geometry(self, embedding_weights, threshold=0.7, chunk_size=512):
+    def _analyze_embedding_geometry(self, embedding_weights, threshold=0.7, chunk_size=512*16):
         """
         Memory-efficient analysis of embedding geometry using streaming statistics.
         This method is now a private helper.
@@ -170,7 +211,6 @@ class ModelAnalyzer:
             # Tensor to store the number of neighbors for each embedding vector
             # This is key for calculating neighbor count percentiles
             per_vector_neighbor_counts = torch.zeros(vocab_size, dtype=torch.int32)
-
 
             for i in range(0, vocab_size, chunk_size):
                 chunk = weights_norm[i:i+chunk_size, :]
@@ -206,7 +246,27 @@ class ModelAnalyzer:
                 # Update samples using a reservoir-like approach for efficiency
                 sample_size = min(100, chunk_flat.numel())
                 if sample_size > 0:
-                    indices = torch.randperm(chunk_flat.numel(), device=chunk_flat.device)[:sample_size]
+                    # ---- START: Fast & Unique Sampling ----
+                    
+                    # 1. Define how much to over-sample. A 20% buffer plus a constant is very safe.
+                    oversample_size = int(sample_size * 1.2) + 5
+
+                    # 2. Generate the slightly larger sample. This is fast but may have duplicates.
+                    indices = torch.randint(0, chunk_flat.numel(), (oversample_size,), device=chunk_flat.device)
+
+                    # 3. Remove duplicates.
+                    indices = torch.unique(indices)
+
+                    # 4. Check if we have enough unique samples. If not, fall back to the guaranteed (but slow) method.
+                    # This fallback will likely never be triggered, but ensures correctness.
+                    if indices.numel() < sample_size:
+                        indices = torch.randperm(chunk_flat.numel(), device=chunk_flat.device)[:sample_size]
+                    else:
+                        # 5. Trim the unique indices down to the exact sample_size we need.
+                        indices = indices[:sample_size]
+                    
+                    # ---- END: Fast & Unique Sampling ----
+
                     current_chunk_samples = chunk_flat[indices]
 
                     for sample in current_chunk_samples:
@@ -246,9 +306,11 @@ class ModelAnalyzer:
             # --- Calculate percentiles for neighbor counts ---
             neighbor_10th_percentile = 0.0
             neighbor_90th_percentile = 0.0
+            neighbor_50th_percentile = 0.0
             if vocab_size > 0: # Ensure there are embeddings to process
                 # Ensure the tensor is float for quantile calculation, then convert back to item
                 neighbor_10th_percentile = torch.quantile(per_vector_neighbor_counts.float(), 0.1).item()
+                neighbor_50th_percentile = torch.quantile(per_vector_neighbor_counts.float(), 0.5).item()
                 neighbor_90th_percentile = torch.quantile(per_vector_neighbor_counts.float(), 0.9).item()
 
 
@@ -256,6 +318,7 @@ class ModelAnalyzer:
                 'local_density': {
                     'average_neighborhood_size': avg_neighborhood_size,
                     'neighbor_10th_percentile': neighbor_10th_percentile,
+                    'neighbor_50th_percentile' : neighbor_50th_percentile,
                     'neighbor_90th_percentile': neighbor_90th_percentile
                 },
                 'global_sparsity': {

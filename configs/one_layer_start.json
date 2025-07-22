@@ -9,6 +9,15 @@
     "completed": true
   },
   {
+    "name": "set_curriculum_alpha",
+    "value": 0.99,
+    "trigger_loss": 100,
+    "max_wait_iters": 1,
+    "desc": "first burn",
+    "reevaluate": false,
+    "completed": true
+  },
+  {
     "name": "set_warmup_iters",
     "value": 500,
     "trigger_loss": 100,
@@ -100,6 +109,15 @@
     "max_wait_iters": 1,
     "desc": "first burn",
     "reevaluate": true,
+    "completed": true
+  },
+  {
+    "name": "set_curriculum_alpha",
+    "value": 0.9,
+    "trigger_loss": 100,
+    "max_wait_iters": 1,
+    "desc": "first burn",
+    "reevaluate": false,
     "completed": true
   },
   {

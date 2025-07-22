@@ -414,12 +414,14 @@ class BatchManager:
         print(f"Approximating corpus distribution from {estimation_tokens:,} tokens...")
         total_counts = torch.zeros(self.vocab_size, dtype=torch.int64)
         tokens_per_shard = estimation_tokens // len(self.shard_filenames)
+        unknown_token_id = self.vocab_size - 1
 
         for shard_name in self.shard_filenames:
             shard_path = os.path.join(self.data_dir, shard_name)
             data = np.memmap(shard_path, dtype=np.uint16, mode='r')
             if len(data) > tokens_per_shard:
                 sample = data[:tokens_per_shard]
+                sample = np.clip(sample, 0, unknown_token_id)
                 shard_counts = torch.from_numpy(np.bincount(sample, minlength=self.vocab_size))
                 total_counts += shard_counts
 
@@ -698,12 +700,13 @@ def get_lr(it):
     coeff = 0.5 * (1.0 + math.cos(math.pi * decay_ratio))
     return (min_lr + coeff * (learning_rate - min_lr))
 
-def run_full_analysis_async(analyzer, current_snapshot, prev_snapshot, iter_num):
+def run_full_analysis_async(analyzer, current_snapshot, prev_snapshot, val_batch, iter_num):
     """
     The new async task function. It calls the main analysis method of the analyzer.
     """
     print(f"(Async Analysis @ iter {iter_num}) Starting full model analysis job...")
     results = analyzer.run_full_analysis(current_snapshot, prev_snapshot)
+    enthropy = analyzer.analyze_attention_entropy
     results['iter_num'] = iter_num # Tag results with the iteration number
     print(f"(Async Analysis @ iter {iter_num}) Job finished.")
     return results
@@ -736,10 +739,11 @@ def analysis_done_callback(future):
                 std_sim = emb_geo['global_sparsity']['std_similarity']
                 sim_10th = emb_geo['global_sparsity']['similarity_10th_percentile']
                 sim_90th = emb_geo['global_sparsity']['similarity_90th_percentile']
-                nbhd_10th = emb_geo['global_sparsity']['neighbor_10th_percentile']
-                nbhd_90th = emb_geo['global_sparsity']['neighbor_90th_percentile']
+                nbhd_10th = emb_geo['local_density']['neighbor_10th_percentile']
+                nbhd_50th = emb_geo['local_density']['neighbor_50th_percentile']
+                nbhd_90th = emb_geo['local_density']['neighbor_90th_percentile']
 
-                geom_msg1 = f"  [Embeddings Geometry] Avg Neighbors: {avg_neighbors:.2f} | Mean Similarity: {mean_sim:.4f} 10th-90th Percentile: {nbhd_10th:.4f} - {nbhd_90th:.4f}"
+                geom_msg1 = f"  [Embeddings Geometry] Avg Neighbors: {avg_neighbors:.2f} | Mean Similarity: {mean_sim:.4f} 10th-50th-90th Percentile: {nbhd_10th:.4f} - {nbhd_50th:.4f} - {nbhd_90th:.4f}"
                 geom_msg2 = f"  [Embeddings Geometry] Std Similarity: {std_sim:.4f} | 10th-90th Percentile: {sim_10th:.4f} - {sim_90th:.4f}"
                 print(geom_msg1)
                 print(geom_msg2)
@@ -1005,11 +1009,6 @@ while True:
 
             # --- Model Analysis ---
             analyzer = ModelAnalyzer(raw_model)
-            print("--- Model Analysis (Refactored) ---")
-            print("Synchronous analysis has been replaced with asynchronous analysis.")
-            print("Full analysis results will be available via async callback.")
-            print("----------------------")
-
             # --- NEW ROBUST ASYNCHRONOUS ANALYSIS DISPATCH LOGIC ---
             # Check system memory before dispatching analysis to prevent OOM
             memory_info = psutil.virtual_memory()
@@ -1027,6 +1026,7 @@ while True:
                         analyzer,
                         current_snapshot,
                         prev_embeddings, # Will be None on the first run.
+                        get_val_batch,
                         iter_num
                     )
                     future.add_done_callback(analysis_done_callback)
