@@ -173,68 +173,43 @@ class ModelAnalyzer:
             return -1.0
 
     @torch.no_grad()
-    def measure_semantic_drift(self, prev_embedding_weights, top_k=50):
+    def measure_semantic_drift(self, current_embedding_weights, prev_embedding_weights, top_k=50):
         """
-        Measures the semantic drift of the embedding layer against a previous state
-        using Orthogonal Procrustes alignment. This method is designed to run on CPU tensors.
+        Measures the semantic drift of the embedding layer by comparing two CPU snapshots
+        using Orthogonal Procrustes alignment.
 
         Args:
-            prev_embedding_weights (torch.Tensor): The saved CPU embedding weight tensor
-                                                   from a previous checkpoint.
+            current_embedding_weights (torch.Tensor): The CPU snapshot of the current weights.
+            prev_embedding_weights (torch.Tensor): The CPU snapshot of the previous weights.
             top_k (int): The number of most and least drifted tokens to report.
 
         Returns:
             A dictionary containing drift metrics or None if an error occurs.
         """
         try:
-            # --- Step 1: Get the current embedding weights from the live model ---
-            # This is the only part that touches the live model object.
-            embedding_layer = self.model.transformer.wte
-            if hasattr(embedding_layer, 'main_weight'):
-                current_embedding_weights = embedding_layer.main_weight.weight.clone().detach()
-            else:
-                current_embedding_weights = embedding_layer.weight.clone().detach()
-
-            # --- Step 2: Prepare Tensors for Analysis ---
-            # Ensure both tensors are on the same device and are float32 for SVD stability.
-            # The background task will pass prev_embedding_weights already on CPU.
-            device = current_embedding_weights.device
-            X = prev_embedding_weights.to(device, dtype=torch.float32)
-            Y = current_embedding_weights.to(device, dtype=torch.float32)
+            # --- Step 1: Prepare Tensors for Analysis ---
+            # The tensors are already CPU snapshots, so we just ensure they are float32.
+            X = prev_embedding_weights.clone().float()  # Previous state
+            Y = current_embedding_weights.clone().float()  # Current state
 
             if X.shape != Y.shape:
                 print(f"Warning: Cannot measure drift, embedding shapes mismatch. Prev: {X.shape}, Curr: {Y.shape}")
                 return None
 
-            # --- Step 3: Orthogonal Procrustes Alignment ---
-            # This finds the optimal rotation to align the old space (X) with the new space (Y).
-            # 3a: Center the matrices by subtracting the mean of all vectors.
+            # --- Step 2: Orthogonal Procrustes Alignment ---
             X_centered = X - X.mean(dim=0, keepdim=True)
             Y_centered = Y - Y.mean(dim=0, keepdim=True)
-
-            # 3b: Compute the covariance matrix M = Y_centered^T @ X_centered
             M = Y_centered.T @ X_centered
-
-            # 3c: Perform Singular Value Decomposition (SVD) on M to get its core components.
             U, _, Vh = torch.linalg.svd(M)
-
-            # 3d: Compute the optimal rotation matrix R.
             R = Vh.T @ U.T
 
-            # --- Step 4: Align and Compare ---
-            # Apply the rotation to the original previous embedding space.
+            # --- Step 3: Align and Compare ---
             X_aligned = X @ R
-
-            # Calculate cosine similarity: measures change in direction (meaning).
             cosine_sims = F.cosine_similarity(X_aligned, Y, dim=1)
-
-            # Calculate Euclidean distance: measures change in position in the aligned space.
             euclidean_dists = torch.linalg.norm(X_aligned - Y, dim=1)
 
-            # --- Step 5: Aggregate and Report Results ---
-            # Sort by cosine similarity to find most and least changed tokens.
+            # --- Step 4: Aggregate and Report Results ---
             sorted_sims, indices = torch.sort(cosine_sims)
-
             most_drifted_tokens = [(idx.item(), sim.item()) for idx, sim in zip(indices[:top_k], sorted_sims[:top_k])]
             least_drifted_tokens = [(idx.item(), sim.item()) for idx, sim in zip(indices[-top_k:], sorted_sims[-top_k:])]
 
