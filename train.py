@@ -10,6 +10,7 @@ from contextlib import nullcontext
 from datetime import datetime
 import numpy as np
 import torch
+import psutil
 import torch._dynamo
 try:
     torch._dynamo.config.recompile_limit = 1000000 # or a higher number
@@ -535,182 +536,72 @@ def get_lr(it):
     coeff = 0.5 * (1.0 + math.cos(math.pi * decay_ratio))
     return (min_lr + coeff * (learning_rate - min_lr))
 
-def run_analysis_async(analyzer, current_embeddings, prev_embeddings, iter_num):
+def run_full_analysis_async(analyzer, current_snapshot, prev_snapshot, iter_num):
     """
-    This function is executed by the background thread. It runs all analyses
-    and returns a single dictionary containing all results.
+    The new async task function. It calls the main analysis method of the analyzer.
     """
-    import psutil
-    import gc
-    import time
-
-    start_time = time.time()
-    start_memory = psutil.Process().memory_info().rss / 1024 / 1024  # MB
-
-    print(f"(Async Analysis @ iter {iter_num}) Starting job in background...")
-    print(f"(Async Analysis @ iter {iter_num}) Initial memory: {start_memory:.1f} MB")
-    print(f"(Async Analysis @ iter {iter_num}) Current embeddings shape: {current_embeddings.shape}")
-    if prev_embeddings is not None:
-        print(f"(Async Analysis @ iter {iter_num}) Previous embeddings shape: {prev_embeddings.shape}")
-
-    results = {'iter_num': iter_num}
-
-    try:
-        # Run semantic drift if we have a previous state to compare against.
-        if prev_embeddings is not None:
-            print(f"(Async Analysis @ iter {iter_num}) Starting semantic drift analysis...")
-            drift_start_time = time.time()
-            try:
-                # Pass both current and previous CPU snapshots to the pure function.
-                results['drift'] = analyzer.measure_semantic_drift(current_embeddings, prev_embeddings)
-                drift_time = time.time() - drift_start_time
-                drift_memory = psutil.Process().memory_info().rss / 1024 / 1024
-                print(f"(Async Analysis @ iter {iter_num}) Drift analysis completed in {drift_time:.2f}s, memory: {drift_memory:.1f} MB")
-            except Exception as drift_error:
-                print(f"(Async Analysis @ iter {iter_num}) ERROR in drift analysis: {drift_error}")
-                import traceback
-                print(f"(Async Analysis @ iter {iter_num}) Drift traceback: {traceback.format_exc()}")
-                results['drift'] = None
-
-        # Run embedding geometry analysis on the current snapshot.
-        print(f"(Async Analysis @ iter {iter_num}) Starting geometry analysis...")
-        geometry_start_time = time.time()
-        try:
-            results['geometry'] = analyzer.analyze_embedding_geometry(current_embeddings)
-            geometry_time = time.time() - geometry_start_time
-            geometry_memory = psutil.Process().memory_info().rss / 1024 / 1024
-            print(f"(Async Analysis @ iter {iter_num}) Geometry analysis completed in {geometry_time:.2f}s, memory: {geometry_memory:.1f} MB")
-        except Exception as geometry_error:
-            print(f"(Async Analysis @ iter {iter_num}) ERROR in geometry analysis: {geometry_error}")
-            import traceback
-            print(f"(Async Analysis @ iter {iter_num}) Geometry traceback: {traceback.format_exc()}")
-            results['geometry'] = None
-
-        # Force garbage collection
-        gc.collect()
-
-        total_time = time.time() - start_time
-        final_memory = psutil.Process().memory_info().rss / 1024 / 1024
-        memory_delta = final_memory - start_memory
-
-        print(f"(Async Analysis @ iter {iter_num}) Job finished in {total_time:.2f}s")
-        print(f"(Async Analysis @ iter {iter_num}) Final memory: {final_memory:.1f} MB (delta: {memory_delta:+.1f} MB)")
-
-        return results
-
-    except Exception as e:
-        print(f"(Async Analysis @ iter {iter_num}) CRITICAL ERROR in async analysis: {e}")
-        import traceback
-        print(f"(Async Analysis @ iter {iter_num}) Critical traceback: {traceback.format_exc()}")
-
-        # Clean up and return partial results
-        gc.collect()
-        return {'iter_num': iter_num, 'error': str(e)}
+    print(f"(Async Analysis @ iter {iter_num}) Starting full model analysis job...")
+    results = analyzer.run_full_analysis(current_snapshot, prev_snapshot)
+    results['iter_num'] = iter_num # Tag results with the iteration number
+    print(f"(Async Analysis @ iter {iter_num}) Job finished.")
+    return results
 
 def analysis_done_callback(future):
     """
-    This function is automatically called when the background job is done.
-    It handles formatting and reporting the results.
+    The new callback, rewritten to handle the rich, nested results dictionary.
     """
-    global training_logger, master_process  # Access global variables for logging
-
     try:
-        print(f"(Async Analysis Callback) Processing results...")
-
-        # .result() retrieves the return value from run_analysis_async or raises an exception
-        # Add timeout to prevent hanging
-        try:
-            results = future.result(timeout=5)  # 5 second timeout for getting results
-        except concurrent.futures.TimeoutError:
-            print(f"(Async Analysis Callback) ERROR: Timeout waiting for analysis results")
-            if master_process and training_logger.is_enabled:
-                training_logger.log("ERROR: Async analysis callback timeout")
-            return
-        except Exception as result_error:
-            print(f"(Async Analysis Callback) ERROR getting results: {result_error}")
-            if master_process and training_logger.is_enabled:
-                training_logger.log(f"ERROR: Async analysis result error: {result_error}")
-            return
-
-        if not results or 'iter_num' not in results:
-            print(f"(Async Analysis Callback) ERROR: Invalid results received")
-            return
-
+        results = future.result()
         iter_num = results['iter_num']
 
-        # Check if there was a critical error in the async function
-        if 'error' in results:
-            print(f"(Async Analysis Callback) Analysis failed for iteration {iter_num}: {results['error']}")
-            if master_process and training_logger.is_enabled:
-                training_logger.log(f"ASYNC ANALYSIS FAILED for iteration {iter_num}: {results['error']}")
-            return
-
-        # Console output
         print(f"\n--- ASYNC ANALYSIS RESULTS FOR ITERATION {iter_num} ---")
 
-        # Prepare log messages for file logging
-        log_messages = []
-        log_messages.append(f"--- ASYNC ANALYSIS RESULTS FOR ITERATION {iter_num} ---")
+        # --- Report Geometry & Rank Results ---
+        if 'geometry' in results:
+            geo = results['geometry']
+            if 'embeddings' in geo and geo['embeddings']:
+                emb_geo = geo['embeddings']
+                avg_neighbors = emb_geo['local_density']['average_neighborhood_size']
+                mean_sim = emb_geo['global_sparsity']['mean_similarity']
+                print(f"  [Embeddings Geometry] Avg Neighbors: {avg_neighbors:.2f} | Mean Similarity: {mean_sim:.4f}")
+                if wandb_log:
+                    wandb.log({
+                        "analysis/embed/geom_avg_neighbors": avg_neighbors,
+                        "analysis/embed/geom_mean_sim": mean_sim
+                    }, step=iter_num)
 
-        # Safely retrieve and report Drift Results
-        drift_results = results.get('drift')
-        if drift_results:
-            avg_sim = drift_results['average_cosine_similarity']
-            sim_10th = drift_results['cosine_similarity_10th_percentile']
-            sim_90th = drift_results['cosine_similarity_90th_percentile']
-            drift_msg1 = f"  [Drift] Average Cosine Similarity vs Prev: {avg_sim:.4f}"
-            drift_msg2 = f"  [Drift] Cosine Similarity 10th-90th percentile: {sim_10th:.4f} - {sim_90th:.4f}"
-            print(drift_msg1)
-            print(drift_msg2)
-            log_messages.append(drift_msg1)
-            log_messages.append(drift_msg2)
-            if wandb_log:
-                wandb.log({
-                    "analysis/drift_cosine_sim": avg_sim,
-                    "analysis/drift_cosine_sim_10th": sim_10th,
-                    "analysis/drift_cosine_sim_90th": sim_90th
-                }, step=iter_num)
+            if 'ffn_ranks' in geo:
+                # Report rank for the first, middle, and last FFN layers for brevity
+                num_layers = len(geo['ffn_ranks'])
+                layers_to_log = {0, num_layers // 2, num_layers - 1}
+                for i in layers_to_log:
+                    rank_info = geo['ffn_ranks'].get(f'layer_{i}')
+                    if rank_info:
+                        util = rank_info['utilization']
+                        print(f"  [FFN Rank L{i}] Utilization: {util:.2%}")
+                        if wandb_log: wandb.log({f"analysis/ffn/rank_util_L{i}": util}, step=iter_num)
 
-        # Safely retrieve and report Geometry Results
-        geometry_results = results.get('geometry')
-        if geometry_results:
-            avg_neighbors = geometry_results['local_density']['average_neighborhood_size']
-            mean_sim = geometry_results['global_sparsity']['mean_similarity']
-            sim_10th = geometry_results['global_sparsity']['similarity_10th_percentile']
-            sim_90th = geometry_results['global_sparsity']['similarity_90th_percentile']
-            geom_msg1 = f"  [Geometry] Avg Neighbors (Galaxy Size): {avg_neighbors:.2f}"
-            geom_msg2 = f"  [Geometry] Mean Similarity (Universe Sparsity): {mean_sim:.4f}"
-            geom_msg3 = f"  [Geometry] Similarity 10th-90th percentile: {sim_10th:.4f} - {sim_90th:.4f}"
-            print(geom_msg1)
-            print(geom_msg2)
-            print(geom_msg3)
-            log_messages.append(geom_msg1)
-            log_messages.append(geom_msg2)
-            log_messages.append(geom_msg3)
-            if wandb_log:
-                wandb.log({
-                    "analysis/geom_avg_neighbors": avg_neighbors,
-                    "analysis/geom_mean_similarity": mean_sim,
-                    "analysis/geom_similarity_10th": sim_10th,
-                    "analysis/geom_similarity_90th": sim_90th,
-                }, step=iter_num)
+        # --- Report Drift Results ---
+        if 'drift' in results:
+            drift = results['drift']
+            if 'embeddings' in drift and drift['embeddings']:
+                emb_drift = drift['embeddings']['avg_cosine_similarity']
+                print(f"  [Embeddings Drift] Avg Cosine Sim: {emb_drift:.4f}")
+                if wandb_log: wandb.log({"analysis/embed/drift_avg_sim": emb_drift}, step=iter_num)
 
-        end_msg = "--- END OF ASYNC ANALYSIS RESULTS ---"
-        print(end_msg + "\n")
-        log_messages.append(end_msg)
+            # Report drift for the first FFN layer for brevity
+            ffn0_drift = drift.get('ffn.0.c_fc.weight')
+            if ffn0_drift:
+                ffn_drift_sim = ffn0_drift['avg_cosine_similarity']
+                print(f"  [FFN L0 Drift] Avg Cosine Sim: {ffn_drift_sim:.4f}")
+                if wandb_log: wandb.log({"analysis/ffn/drift_avg_sim_L0": ffn_drift_sim}, step=iter_num)
 
-        # Log to file if logging is enabled and we're the master process
-        if master_process and training_logger.is_enabled:
-            for msg in log_messages:
-                training_logger.log(msg)
+        print("--- END OF ASYNC ANALYSIS RESULTS ---\n")
 
     except Exception as e:
-        # This will catch and print any errors that occurred in the background thread
-        error_msg = f"\n--- ERROR DURING ASYNC ANALYSIS ---\n{e}\n---------------------------------\n"
-        print(error_msg)
-        # Also log errors to file if logging is enabled
-        if master_process and training_logger.is_enabled:
-            training_logger.log(f"ERROR DURING ASYNC ANALYSIS: {e}")
+        print(f"\n--- ERROR in analysis_done_callback: {e} ---\n")
+        import traceback
+        traceback.print_exc()
 
 
 
@@ -867,105 +758,39 @@ while True:
 
             # --- Model Analysis ---
             analyzer = ModelAnalyzer(raw_model)
-            print (f"raw_model.config.n_layer={raw_model.config.n_layer}")
-
-            for idx in range(raw_model.config.n_layer):
-                print(f"doing something {idx}")
-                attn_lora_layer = analyzer.model.transformer.h[idx].attn.c_attn
-                attn_lora_res = analyzer.analyze_lora_update_rank(attn_lora_layer)
-                eff_rank, full_rank, rank_util = analyzer.analyze_mlp_weight_rank(layer_idx=idx)
-                if rank_util != -1.0:
-                    print(f"  MLP Rank Utilization (L{idx}): {rank_util:.2%} ({eff_rank}/{full_rank})")
-
-                if attn_lora_res[2] != -1.0:
-                    print(f"{'Attn LoRA':<12} | {str(attn_lora_res[0])+'/'+str(attn_lora_res[1]):<15} | {attn_lora_res[2]:<12.2%}")
-
-            # 5. Analyze Embedding Rank
-            eff_rank, full_rank, rank_util = analyzer.analyze_embedding_rank()
-            # 6. Display the results in a formatted block
-            print("--- Model Analysis ---")
-            if rank_util != -1.0:
-                print(f"  Embedding Utilization: {rank_util:.2%} ({eff_rank}/{full_rank})")
-            
-            # 1. Analyze Embedding LoRA
-            emb_lora_layer = analyzer.model.transformer.wte
-            emb_lora_res = analyzer.analyze_lora_update_rank(emb_lora_layer)
-            if emb_lora_res[2] != -1.0:
-                 print(f"{'Embed LoRA':<12} | {str(emb_lora_res[0])+'/'+str(emb_lora_res[1]):<15} | {emb_lora_res[2]:<12.2%}")
-
-            X_val, _ = get_batch('val')
-            avg_entropy = analyzer.analyze_attention_entropy(X_val)
-
-            if avg_entropy != -1.0:
-                print(f"  Average Attention Entropy:  {avg_entropy:.4f}")
+            print("--- Model Analysis (Refactored) ---")
+            print("Synchronous analysis has been replaced with asynchronous analysis.")
+            print("Full analysis results will be available via async callback.")
             print("----------------------")
 
-            # --- NEW ASYNCHRONOUS ANALYSIS DISPATCH LOGIC ---
-            import psutil
-
-            # Check system memory before dispatching analysis
+            # --- NEW ROBUST ASYNCHRONOUS ANALYSIS DISPATCH LOGIC ---
+            # Check system memory before dispatching analysis to prevent OOM
             memory_info = psutil.virtual_memory()
-            available_memory_gb = memory_info.available / (1024**3)
-            memory_percent = memory_info.percent
-
-            print(f"Dispatching async analysis for iter {iter_num}...")
-            print(f"System memory: {memory_percent:.1f}% used, {available_memory_gb:.1f} GB available")
-
-            # Skip analysis if memory is critically low
-            if memory_percent > 90 or available_memory_gb < 1.0:
-                print(f"WARNING: Skipping async analysis due to low memory (used: {memory_percent:.1f}%, available: {available_memory_gb:.1f} GB)")
-                if master_process and training_logger.is_enabled:
-                    training_logger.log(f"SKIPPED async analysis for iter {iter_num} due to low memory")
+            if memory_info.percent > 90.0:
+                print(f"WARNING: Skipping async analysis due to high system memory usage ({memory_info.percent:.1f}%)")
             else:
+                print(f"Dispatching async analysis for iter {iter_num}...")
                 try:
-                    # 1. Take a snapshot of the current embedding weights and copy it to the CPU.
-                    #    This isolates the analysis from the live GPU model, preventing blocking.
-                    print(f"Taking embedding snapshot for iter {iter_num}...")
-                    wte_layer = raw_model.transformer.wte
-                    current_embeddings_snapshot = (wte_layer.main_weight.weight.clone().detach().cpu()
-                                                   if hasattr(wte_layer, 'main_weight')
-                                                   else wte_layer.weight.clone().detach().cpu())
+                    # 1. Create a full snapshot of the model state on CPU.
+                    current_snapshot = analyzer.get_model_state_snapshot()
 
-                    vocab_size = current_embeddings_snapshot.shape[0]
-                    embedding_dim = current_embeddings_snapshot.shape[1]
-                    snapshot_memory_mb = (current_embeddings_snapshot.numel() * 4) / (1024 * 1024)  # 4 bytes per float32
+                    # 2. Submit the new, generic analysis task to the executor.
+                    future = executor.submit(
+                        run_full_analysis_async,
+                        analyzer,
+                        current_snapshot,
+                        prev_embeddings, # Will be None on the first run.
+                        iter_num
+                    )
+                    future.add_done_callback(analysis_done_callback)
 
-                    print(f"Embedding snapshot: {vocab_size} x {embedding_dim}, {snapshot_memory_mb:.1f} MB")
-
-                    # Skip analysis for very large vocabularies to prevent OOM
-                    # For 50K vocab: ~10GB memory needed, so we need to be more conservative
-                    if vocab_size > 30000:  # More than 30K tokens
-                        print(f"WARNING: Skipping async analysis due to large vocabulary ({vocab_size} tokens)")
-                        if master_process and training_logger.is_enabled:
-                            training_logger.log(f"SKIPPED async analysis for iter {iter_num} due to large vocabulary ({vocab_size} tokens)")
-                    else:
-                        # 2. Submit the analysis function to the background executor.
-                        #    The `analyzer` instance is passed to the task.
-                        print(f"Submitting analysis job to executor...")
-                        future = executor.submit(
-                            run_analysis_async,
-                            analyzer,
-                            current_embeddings_snapshot,
-                            prev_embeddings, # Will be None on the first run; handled inside the task.
-                            iter_num
-                        )
-
-                        # 3. Attach the callback function that will handle reporting when the job is done.
-                        future.add_done_callback(analysis_done_callback)
-                        print("Async analysis job dispatched successfully.")
-
-                        # 4. CRITICAL: Update the state variable with the current snapshot for the *next* analysis cycle.
-                        prev_embeddings = current_embeddings_snapshot
+                    # 4. CRITICAL: Update state for the next analysis cycle.
+                    prev_embeddings = current_snapshot
+                    print("Async analysis job dispatched. Training continues.")
 
                 except Exception as dispatch_error:
                     print(f"ERROR dispatching async analysis for iter {iter_num}: {dispatch_error}")
-                    import traceback
-                    print(f"Dispatch error traceback: {traceback.format_exc()}")
-                    if master_process and training_logger.is_enabled:
-                        training_logger.log(f"ERROR dispatching async analysis for iter {iter_num}: {dispatch_error}")
 
-            # The main loop continues immediately without waiting for the analysis to finish.
-            print("Training continues without blocking.")
             # --- END OF NEW LOGIC ---
 
             training_logger.log_step(iter_num, losses['train'], losses['val'])
