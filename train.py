@@ -1212,7 +1212,7 @@ while True:
             training_logger.log_step(iter_num, losses['train'], losses['val'], tokens_per_second)
 
             # Log detailed timing breakdown to file
-            avg_timing_percentages = timing_profiler.get_average_percentages(last_n=10)
+            avg_timing_percentages = timing_profiler.get_average_percentages(last_n=eval_interval)
             if avg_timing_percentages:
                 timing_breakdown = ", ".join([f"{section} {pct:.1f}%" for section, pct in avg_timing_percentages.items()])
                 training_logger.log(f"  timing breakdown (avg last 10): {timing_breakdown}")
