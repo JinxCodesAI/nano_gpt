@@ -1,6 +1,4 @@
-Of course. Here is the detailed functional specification and implementation plan for the "Shrunken Vocabulary Training" feature.
 
----
 
 # Dynamic Vocabulary Resizing for Efficient Training
 

@@ -893,6 +893,7 @@ checkpoint = None # free up memory
 if compile:
     print("compiling the model... (takes a ~minute)")
     unoptimized_model = model
+    torch._dynamo.reset()
     model = torch.compile(model)
 
 if ddp:
@@ -1227,6 +1228,7 @@ def execute_operation(op, trigger_reason, current_val_loss, iter_num, target_arc
             model = unwrapped_model
             if compile:
                 if master_process: print("Re-compiling the model...")
+                torch._dynamo.reset()
                 model = torch.compile(model)
             if ddp:
                 if master_process: print("Re-wrapping model in DDP...")
