@@ -9,11 +9,78 @@ https://github.com/huggingface/transformers/blob/main/src/transformers/models/gp
 
 import math
 import inspect
+import copy
 from dataclasses import dataclass
 
 import torch
 import torch.nn as nn
 from torch.nn import functional as F
+
+class LoRAEmbedding(nn.Module):
+    """LoRA adapter for embedding layers"""
+    
+    def __init__(self, vocab_size, n_embd, rank, alpha):
+        super().__init__()
+        self.main_weight = nn.Embedding(vocab_size, n_embd)
+        self.lora_A = nn.Embedding(vocab_size, rank) if rank > 0 else None
+        self.lora_B = nn.Linear(rank, n_embd, bias=False) if rank > 0 else None
+        self.rank = rank
+        self.alpha = alpha
+        
+        if self.rank > 0:
+            self.main_weight.requires_grad_(False)
+            nn.init.normal_(self.lora_A.weight, std=0.02)
+            nn.init.zeros_(self.lora_B.weight)
+
+    def forward(self, idx):
+        main_output = self.main_weight(idx)
+        if self.rank == 0 or self.lora_A is None or self.lora_B is None:
+            return main_output
+        lora_output = self.lora_B(self.lora_A(idx))
+        return main_output + (self.alpha / self.rank) * lora_output
+
+    def merge_and_reset(self):
+        if self.rank == 0 or self.lora_A is None or self.lora_B is None:
+            return
+        # Correct matrix multiplication order: A @ B
+        lora_update = self.lora_A.weight @ self.lora_B.weight.T
+        # The result is already (vocab_size, n_embd), so no transpose is needed.
+        self.main_weight.weight.data += lora_update * (self.alpha / self.rank)
+        # Reset LoRA weights
+        nn.init.normal_(self.lora_A.weight, std=0.02)
+        nn.init.zeros_(self.lora_B.weight)
+
+class LoRALinear(nn.Module):
+    """LoRA adapter for linear layers"""
+    
+    def __init__(self, in_features, out_features, rank, alpha, bias=True):
+        super().__init__()
+        self.main_weight = nn.Linear(in_features, out_features, bias=bias)
+        self.lora_A = nn.Linear(in_features, rank, bias=False) if rank > 0 else None
+        self.lora_B = nn.Linear(rank, out_features, bias=False) if rank > 0 else None
+        self.rank = rank
+        self.alpha = alpha
+        
+        if self.rank > 0:
+            self.main_weight.requires_grad_(False)
+            nn.init.kaiming_uniform_(self.lora_A.weight, a=math.sqrt(5))
+            nn.init.zeros_(self.lora_B.weight)
+
+    def forward(self, x):
+        main_output = self.main_weight(x)
+        if self.rank == 0 or self.lora_A is None or self.lora_B is None:
+            return main_output
+        lora_output = self.lora_B(self.lora_A(x))
+        return main_output + (self.alpha / self.rank) * lora_output
+
+    def merge_and_reset(self):
+        if self.rank == 0 or self.lora_A is None or self.lora_B is None:
+            return
+        # Calculate W_0 + B @ A
+        self.main_weight.weight.data += self.lora_B.weight @ self.lora_A.weight * (self.alpha / self.rank)
+        # Reset LoRA weights
+        nn.init.kaiming_uniform_(self.lora_A.weight, a=math.sqrt(5))
+        nn.init.zeros_(self.lora_B.weight)
 
 class RotaryPositionalEmbedding(nn.Module):
     """ Rotary Position Embedding (RoPE) implementation """
@@ -88,9 +155,17 @@ class CausalSelfAttention(nn.Module):
     def __init__(self, config):
         super().__init__()
         assert config.n_embd % config.n_head == 0
-        # key, query, value projections for all heads, but in a batch
-        self.c_attn = nn.Linear(config.n_embd, 3 * config.n_embd, bias=config.bias)
-        # output projection
+
+        # FIX: Dynamically choose between LoRALinear and nn.Linear for the QKV projection
+        if config.attn_lora_rank > 0:
+            self.c_attn = LoRALinear(config.n_embd, 3 * config.n_embd,
+                                     rank=config.attn_lora_rank,
+                                     alpha=config.lora_alpha,
+                                     bias=config.bias)
+        else:
+            self.c_attn = nn.Linear(config.n_embd, 3 * config.n_embd, bias=config.bias)
+
+        # Output projection (typically not adapted with LoRA, but could be)
         self.c_proj = nn.Linear(config.n_embd, config.n_embd, bias=config.bias)
         # regularization
         self.attn_dropout = nn.Dropout(config.dropout)
@@ -112,11 +187,13 @@ class CausalSelfAttention(nn.Module):
         self.flash = hasattr(torch.nn.functional, 'scaled_dot_product_attention')
         if not self.flash:
             print("WARNING: using slow attention. Flash Attention requires PyTorch >= 2.0")
-            # causal mask to ensure that attention is only applied to the left in the input sequence
-            self.register_buffer("bias", torch.tril(torch.ones(config.block_size, config.block_size))
-                                        .view(1, 1, config.block_size, config.block_size))
 
-    def forward(self, x):
+        # causal mask to ensure that attention is only applied to the left in the input sequence
+        # Always create this buffer as we need it for return_attention=True even with flash attention
+        self.register_buffer("bias", torch.tril(torch.ones(config.block_size, config.block_size))
+                                    .view(1, 1, config.block_size, config.block_size))
+
+    def forward(self, x, return_attention=False):
         B, T, C = x.size() # batch size, sequence length, embedding dimensionality (n_embd)
 
         # calculate query, key, values for all heads in batch and move head forward to be the batch dim
@@ -130,20 +207,36 @@ class CausalSelfAttention(nn.Module):
             q, k = self.rotary_emb(q, k, seq_len=T)
 
         # causal self-attention; Self-attend: (B, nh, T, hs) x (B, nh, hs, T) -> (B, nh, T, T)
+        att_scores = None # Initialize as None
         if self.flash:
-            # efficient attention using Flash Attention CUDA kernels
-            y = torch.nn.functional.scaled_dot_product_attention(q, k, v, attn_mask=None, dropout_p=self.dropout if self.training else 0, is_causal=True)
+            # Problem: Flash Attention doesn't return attention scores by default.
+            # We must use the manual path when analysis is needed.
+            if return_attention:
+                # Fallback to manual implementation for analysis
+                att = (q @ k.transpose(-2, -1)) * (1.0 / math.sqrt(k.size(-1)))
+                att = att.masked_fill(self.bias[:,:,:T,:T] == 0, float('-inf'))
+                att = F.softmax(att, dim=-1)
+                att_scores = att # Capture scores
+                y = att @ v
+            else:
+                # Default fast path
+                y = torch.nn.functional.scaled_dot_product_attention(q, k, v, attn_mask=None, dropout_p=self.dropout if self.training else 0, is_causal=True)
         else:
             # manual implementation of attention
             att = (q @ k.transpose(-2, -1)) * (1.0 / math.sqrt(k.size(-1)))
             att = att.masked_fill(self.bias[:,:,:T,:T] == 0, float('-inf'))
             att = F.softmax(att, dim=-1)
+            att_scores = att # Capture scores
             att = self.attn_dropout(att)
             y = att @ v # (B, nh, T, T) x (B, nh, T, hs) -> (B, nh, T, hs)
+
         y = y.transpose(1, 2).contiguous().view(B, T, C) # re-assemble all head outputs side by side
 
         # output projection
         y = self.resid_dropout(self.c_proj(y))
+
+        if return_attention:
+            return y, att_scores
         return y
 
 class MLP(nn.Module):
@@ -173,15 +266,21 @@ class Block(nn.Module):
         self.ln_2 = LayerNorm(config.n_embd, bias=config.bias)
         self.mlp = MLP(config)
 
-    def forward(self, x):
-        x = x + self.attn(self.ln_1(x))
-        x = x + self.mlp(self.ln_2(x))
-        return x
+    def forward(self, x, return_attention=False):
+        if return_attention:
+            attn_output, attn_scores = self.attn(self.ln_1(x), return_attention=True)
+            x = x + attn_output
+            x = x + self.mlp(self.ln_2(x))
+            return x, attn_scores
+        else:
+            x = x + self.attn(self.ln_1(x))
+            x = x + self.mlp(self.ln_2(x))
+            return x
 
 @dataclass
 class GPTConfig:
     block_size: int = 1024
-    vocab_size: int = 50304 # GPT-2 vocab_size of 50257, padded up to nearest multiple of 64 for efficiency
+    vocab_size: int = 57664 # GPT-2 vocab_size of 50257, padded up to nearest multiple of 64 for efficiency
     n_layer: int = 12
     n_head: int = 12
     n_embd: int = 768
@@ -195,6 +294,12 @@ class GPTConfig:
     use_rotary_embeddings: bool = False
     rotary_base: float = 10000.0
     rotary_max_position_embeddings: int = 2048
+    
+    # LoRA parameters
+    embedding_mode: str = 'standard' # 'standard' or 'lora'
+    embedding_rank: int = 0 # rank for embedding LoRA, 0 disables
+    attn_lora_rank: int = 0 # rank for attention LoRA, 0 disables
+    lora_alpha: float = 1.0 # scaling factor for LoRA layers
 
 class GPT(nn.Module):
 
@@ -203,10 +308,19 @@ class GPT(nn.Module):
         assert config.vocab_size is not None
         assert config.block_size is not None
         self.config = config
+        self.embedding_finetune_mode = False # Flag for embedding fine-tuning mode
+
+        # FIX: Dynamically choose the embedding layer type based on the config
+        if config.embedding_mode == 'lora' and config.embedding_rank > 0:
+            wte_module = LoRAEmbedding(config.vocab_size, config.n_embd,
+                                       rank=config.embedding_rank,
+                                       alpha=config.lora_alpha)
+        else:
+            wte_module = nn.Embedding(config.vocab_size, config.n_embd)
 
         # Build transformer components
         transformer_dict = dict(
-            wte = nn.Embedding(config.vocab_size, config.n_embd),
+            wte = wte_module,  # Use the dynamically chosen module
             drop = nn.Dropout(config.dropout),
             h = nn.ModuleList([Block(config) for _ in range(config.n_layer)]),
             ln_f = LayerNorm(config.n_embd, bias=config.bias),
@@ -219,11 +333,15 @@ class GPT(nn.Module):
         self.transformer = nn.ModuleDict(transformer_dict)
         self.lm_head = nn.Linear(config.n_embd, config.vocab_size, bias=False)
         
-        # with weight tying when using torch.compile() some warnings get generated:
-        # "UserWarning: functional_call was passed multiple values for tied weights.
-        # This behavior is deprecated and will be an error in future versions"
-        # not 100% sure what this is, so far seems to be harmless. TODO investigate
-        self.transformer.wte.weight = self.lm_head.weight # https://paperswithcode.com/method/weight-tying
+        if isinstance(self.transformer.wte, LoRAEmbedding):
+            # For LoRA embeddings, tie the main_weight with lm_head
+            self.transformer.wte.main_weight.weight = self.lm_head.weight
+            # CRITICAL FIX: After tying, explicitly freeze the lm_head as well,
+            # since it now shares the same (supposedly frozen) weight tensor.
+            self.lm_head.requires_grad_(False)
+        else:
+            # Standard weight tying for regular embeddings
+            self.transformer.wte.weight = self.lm_head.weight
 
         # init all weights
         self.apply(self._init_weights)
@@ -250,95 +368,70 @@ class GPT(nn.Module):
 
     def get_detailed_param_count(self):
         """
-        Return detailed parameter count broken down by component type.
-        Returns a dictionary with parameter counts for each component.
+        Return a detailed parameter count broken down by component type.
+        This version distinguishes between total and trainable parameters and correctly
+        handles shared weights (weight tying) to avoid double-counting.
         """
         param_counts = {
-            'token_embeddings': 0,
-            'position_embeddings': 0,
-            'attention_layers': 0,
-            'feed_forward_layers': 0,
-            'layer_norms': 0,
-            'final_layer_norm': 0,
-            'language_model_head': 0,
-            'rotary_embeddings': 0,
-            'total': 0
+            'total': {'total': 0, 'trainable': 0},
+            'token_embeddings': {'total': 0, 'trainable': 0},
+            'position_embeddings': {'total': 0, 'trainable': 0},
+            'attention_layers': {'total': 0, 'trainable': 0},
+            'feed_forward_layers': {'total': 0, 'trainable': 0},
+            'layer_norms': {'total': 0, 'trainable': 0},
+            'final_layer_norm': {'total': 0, 'trainable': 0},
+            'language_model_head': {'total': 0, 'trainable': 0},
         }
         
-        # Token embeddings
-        param_counts['token_embeddings'] = self.transformer.wte.weight.numel()
+        # Use a set to keep track of parameter IDs that have already been counted
+        counted_param_ids = set()
+
+        # Helper function to update counts for a module's parameters
+        def _update_counts(module, component_name):
+            for p in module.parameters():
+                # Only count a parameter if its ID hasn't been seen before
+                if id(p) not in counted_param_ids:
+                    total_params = p.numel()
+                    trainable_params = p.numel() if p.requires_grad else 0
+                    
+                    param_counts[component_name]['total'] += total_params
+                    param_counts[component_name]['trainable'] += trainable_params
+                    
+                    # Add the parameter's ID to the set of counted parameters
+                    counted_param_ids.add(id(p))
+
+        # --- Count parameters component by component ---
         
+        # IMPORTANT: The order matters due to weight tying.
+        # We count the language_model_head first.
+        _update_counts(self.lm_head, 'language_model_head')
+        
+        # Now count the token embeddings. If weights are tied, the main embedding
+        # parameter will already be in counted_param_ids and will be skipped.
+        _update_counts(self.transformer.wte, 'token_embeddings')
+
         # Position embeddings (if they exist)
         if not self.config.use_rotary_embeddings and hasattr(self.transformer, 'wpe'):
-            param_counts['position_embeddings'] = self.transformer.wpe.weight.numel()
-        
-        # Rotary embeddings (if used)
-        if self.config.use_rotary_embeddings:
-            # Rotary embeddings don't have trainable parameters, but we'll track the buffer
-            for block in self.transformer.h:
-                if hasattr(block.attn, 'rotary_emb'):
-                    # Count any parameters in rotary embedding (usually none)
-                    for p in block.attn.rotary_emb.parameters():
-                        param_counts['rotary_embeddings'] += p.numel()
-        
-        # Attention layers across all blocks
-        attention_params = 0
+            _update_counts(self.transformer.wpe, 'position_embeddings')
+
+        # Iterate through all blocks for attention, MLP, and layer norms
         for block in self.transformer.h:
-            # Query, Key, Value projections
-            attention_params += block.attn.c_attn.weight.numel()
-            if block.attn.c_attn.bias is not None:
-                attention_params += block.attn.c_attn.bias.numel()
-            
-            # Output projection
-            attention_params += block.attn.c_proj.weight.numel()
-            if block.attn.c_proj.bias is not None:
-                attention_params += block.attn.c_proj.bias.numel()
-        
-        param_counts['attention_layers'] = attention_params
-        
-        # Feed-forward layers across all blocks
-        ff_params = 0
-        for block in self.transformer.h:
-            # First linear layer
-            ff_params += block.mlp.c_fc.weight.numel()
-            if block.mlp.c_fc.bias is not None:
-                ff_params += block.mlp.c_fc.bias.numel()
-            
-            # Second linear layer
-            ff_params += block.mlp.c_proj.weight.numel()
-            if block.mlp.c_proj.bias is not None:
-                ff_params += block.mlp.c_proj.bias.numel()
-        
-        param_counts['feed_forward_layers'] = ff_params
-        
-        # Layer norms across all blocks
-        layer_norm_params = 0
-        for block in self.transformer.h:
-            # Attention layer norm
-            layer_norm_params += block.ln_1.weight.numel()
-            if block.ln_1.bias is not None:
-                layer_norm_params += block.ln_1.bias.numel()
-            
-            # Feed-forward layer norm
-            layer_norm_params += block.ln_2.weight.numel()
-            if block.ln_2.bias is not None:
-                layer_norm_params += block.ln_2.bias.numel()
-        
-        param_counts['layer_norms'] = layer_norm_params
-        
+            _update_counts(block.attn, 'attention_layers')
+            _update_counts(block.mlp, 'feed_forward_layers')
+            _update_counts(block.ln_1, 'layer_norms')
+            _update_counts(block.ln_2, 'layer_norms')
+
         # Final layer norm
-        param_counts['final_layer_norm'] = self.transformer.ln_f.weight.numel()
-        if self.transformer.ln_f.bias is not None:
-            param_counts['final_layer_norm'] += self.transformer.ln_f.bias.numel()
+        _update_counts(self.transformer.ln_f, 'final_layer_norm')
         
-        # Language model head
-        param_counts['language_model_head'] = self.lm_head.weight.numel()
-        if self.lm_head.bias is not None:
-            param_counts['language_model_head'] += self.lm_head.bias.numel()
-        
-        # Calculate total
-        param_counts['total'] = sum(param_counts.values()) - param_counts.get('rotary_embeddings', 0)
-        
+        # --- Final Aggregation ---
+        # Now, sum up the component counts to get the grand total.
+        # This is now correct because double-counting has been prevented.
+        for component in param_counts:
+            if component != 'total':
+                param_counts['total']['total'] += param_counts[component]['total']
+                param_counts['total']['trainable'] += param_counts[component]['trainable']
+
         return param_counts
 
     def _init_weights(self, module):
@@ -349,7 +442,7 @@ class GPT(nn.Module):
         elif isinstance(module, nn.Embedding):
             torch.nn.init.normal_(module.weight, mean=0.0, std=0.02)
 
-    def forward(self, idx, targets=None):
+    def forward(self, idx, targets=None, return_attention=False):
         device = idx.device
         b, t = idx.size()
         assert t <= self.config.block_size, f"Cannot forward sequence of length {t}, block size is only {self.config.block_size}"
@@ -357,7 +450,7 @@ class GPT(nn.Module):
 
         # forward the GPT model itself
         tok_emb = self.transformer.wte(idx) # token embeddings of shape (b, t, n_embd)
-        
+
         # Handle position embeddings based on rotary embedding setting
         if self.config.use_rotary_embeddings:
             # No position embeddings when using rotary embeddings
@@ -365,9 +458,14 @@ class GPT(nn.Module):
         else:
             pos_emb = self.transformer.wpe(pos) # position embeddings of shape (t, n_embd)
             x = self.transformer.drop(tok_emb + pos_emb)
-            
+
+        all_attention_scores = []
         for block in self.transformer.h:
-            x = block(x)
+            if return_attention:
+                x, attn_scores = block(x, return_attention=True)
+                all_attention_scores.append(attn_scores)
+            else:
+                x = block(x)
         x = self.transformer.ln_f(x)
 
         if targets is not None:
@@ -378,6 +476,10 @@ class GPT(nn.Module):
             # inference-time mini-optimization: only forward the lm_head on the very last position
             logits = self.lm_head(x[:, [-1], :]) # note: using list [-1] to preserve the time dim
             loss = None
+
+        # Return the collected scores if requested
+        if return_attention:
+            return logits, loss, all_attention_scores
 
         return logits, loss
 
@@ -458,6 +560,11 @@ class GPT(nn.Module):
         param_dict = {pn: p for pn, p in self.named_parameters()}
         # filter out those that do not require grad
         param_dict = {pn: p for pn, p in param_dict.items() if p.requires_grad}
+
+        # If in embedding finetune mode, only optimize the embedding and lm_head layers
+        if self.embedding_finetune_mode:
+            print("Optimizer configured for embedding fine-tuning mode.")
+            param_dict = {pn: p for pn, p in param_dict.items() if 'wte' in pn or 'lm_head' in pn}
         # create optim groups. Any parameters that is 2D will be weight decayed, otherwise no.
         # i.e. all weight tensors in matmuls + embeddings decay, all biases and layernorms don't.
         decay_params = [p for n, p in param_dict.items() if p.dim() >= 2]
@@ -491,7 +598,7 @@ class GPT(nn.Module):
         flops_per_iter = flops_per_fwdbwd * fwdbwd_per_iter
         # express our flops throughput as ratio of A100 bfloat16 peak flops
         flops_achieved = flops_per_iter * (1.0/dt) # per second
-        flops_promised = 312e12 # A100 GPU bfloat16 peak flops is 312 TFLOPS
+        flops_promised = 121e12 # L4 GPU bfloat16 peak flops is 312 TFLOPS
         mfu = flops_achieved / flops_promised
         return mfu
 
@@ -521,3 +628,290 @@ class GPT(nn.Module):
             idx = torch.cat((idx, idx_next), dim=1)
 
         return idx
+
+    def stack_layers(self, layer_map):
+        """
+        Reconstructs the transformer stack based on an explicit layer map.
+        The map is a list of source indices. e.g., [0, 0, 1] creates a 3-layer model
+        with two copies of the original layer 0 and one copy of the original layer 1.
+
+        Throws a ValueError if any source index is out of bounds.
+        """
+        print(f"Re-stacking layers based on map: {layer_map}. New depth will be {len(layer_map)}.")
+        original_n_layer = self.config.n_layer
+
+        # --- Validation First ---
+        if not layer_map: # Cannot stack to zero layers this way
+            raise ValueError("Layer map cannot be empty.")
+        if min(layer_map) < 0:
+            raise ValueError(f"Invalid layer map: negative index {min(layer_map)} is not allowed.")
+        if max(layer_map) >= original_n_layer:
+            raise ValueError(f"Invalid layer map: index {max(layer_map)} is out of bounds for current model with {original_n_layer} layers.")
+
+        # Deepcopy original layers to use as a clean source palette
+        original_layers = copy.deepcopy(self.transformer.h)
+        new_layers = nn.ModuleList()
+
+        # Build the new stack layer by layer
+        for source_idx in layer_map:
+            new_layers.append(copy.deepcopy(original_layers[source_idx]))
+
+        self.transformer.h = new_layers
+        self.config.n_layer = len(new_layers)
+        print(f"Model now has {self.config.n_layer} layers.")
+
+    def widen_mlp(self, new_hidden_dim):
+        """
+        Widens MLP layers to a new absolute dimension using Net2WiderNet.
+        Throws a ValueError if the new dimension is not larger than the current one.
+        """
+        print(f"Widening MLP hidden dimension to {new_hidden_dim}.")
+
+        # Validation is the first step
+        original_hidden_dim = self.config.n_hidden if self.config.n_hidden is not None else 4 * self.config.n_embd
+        if not new_hidden_dim > original_hidden_dim:
+            raise ValueError(f"New hidden dimension ({new_hidden_dim}) must be greater than the original ({original_hidden_dim}).")
+
+        for block in self.transformer.h:
+            mlp = block.mlp
+            w_fc, b_fc, w_proj = mlp.c_fc.weight, mlp.c_fc.bias, mlp.c_proj.weight
+            device = w_fc.device
+
+            new_c_fc = nn.Linear(self.config.n_embd, new_hidden_dim, bias=self.config.bias).to(device)
+            new_c_proj = nn.Linear(new_hidden_dim, self.config.n_embd, bias=self.config.bias).to(device)
+
+            # Net2WiderNet mapping
+            mapping = torch.randint(0, original_hidden_dim, (new_hidden_dim,), device=device)
+            mapping[:original_hidden_dim] = torch.arange(original_hidden_dim, device=device)
+
+            # Copy weights for the first part of the mapping
+            new_c_fc.weight.data.copy_(w_fc.data[mapping])
+            if b_fc is not None:
+                new_c_fc.bias.data.copy_(b_fc.data[mapping])
+
+            # Add noise to break symmetry for the new neurons
+            noise = torch.randn_like(new_c_fc.weight.data[original_hidden_dim:]) * 1e-4
+            new_c_fc.weight.data[original_hidden_dim:] += noise
+
+            # Calculate replication factors for adjusting the output layer
+            replication_factors = torch.zeros(original_hidden_dim, device=device)
+            for i in range(original_hidden_dim):
+                replication_factors[i] = (mapping == i).sum()
+
+            # Copy and scale the output projection weights
+            new_c_proj.weight.data.copy_(w_proj.data[:, mapping])
+            new_c_proj.weight.data /= replication_factors[mapping].view(1, -1)
+
+            mlp.c_fc = new_c_fc
+            mlp.c_proj = new_c_proj
+
+        self.config.n_hidden = new_hidden_dim
+        print(f"MLP hidden dimension successfully widened to {new_hidden_dim}.")
+
+    def resize_lora_rank(self, new_rank):
+        """
+        Function-preserving resize of the attention LoRA rank.
+        Merges existing adapter, then creates a new one with the specified rank.
+        """
+        new_rank = int(new_rank)  # Ensure rank is an integer
+        print(f"Resizing attention LoRA rank to {new_rank}.")
+        self.config.attn_lora_rank = new_rank
+        device = self.lm_head.weight.device
+
+        for block in self.transformer.h:
+            # Check if the attention projection is a LoRA layer
+            if not isinstance(block.attn.c_attn, LoRALinear):
+                print("Warning: c_attn is not a LoRALinear layer. Skipping resize.")
+                continue
+            
+            # 1. Merge existing knowledge into the main weight
+            block.attn.c_attn.merge_and_reset()
+            
+            # 2. Create a new LoRA layer with the new rank
+            new_c_attn = LoRALinear(
+                in_features=self.config.n_embd,
+                out_features=3 * self.config.n_embd,
+                rank=new_rank,
+                alpha=self.config.lora_alpha,
+                bias=self.config.bias
+            )
+            
+            # 3. Copy the merged main weights from the old layer to the new one
+            new_c_attn.main_weight.load_state_dict(block.attn.c_attn.main_weight.state_dict())
+            
+            # 4. Replace the old layer with the new, resized layer
+            block.attn.c_attn = new_c_attn.to(device)
+        
+    def resize_embedding_rank(self, new_rank):
+        """
+        Function-preserving resize of the embedding LoRA rank.
+        Merges existing adapter, then creates a new one with the specified rank.
+        """
+        if not isinstance(self.transformer.wte, LoRAEmbedding):
+            print("Warning: wte is not a LoRAEmbedding layer. Skipping resize.")
+            return
+            
+        new_rank = int(new_rank)  # Ensure rank is an integer
+        print(f"Resizing embedding LoRA rank to {new_rank}.")
+        self.config.embedding_rank = new_rank
+        device = self.lm_head.weight.device
+        
+        # 1. Merge existing knowledge
+        self.transformer.wte.merge_and_reset()
+        
+        # 2. Create new module with the new rank
+        new_wte = LoRAEmbedding(
+            vocab_size=self.config.vocab_size,
+            n_embd=self.config.n_embd,
+            rank=new_rank,
+            alpha=self.config.lora_alpha
+        )
+        
+        # 3. Copy merged main weights
+        new_wte.main_weight.load_state_dict(self.transformer.wte.main_weight.state_dict())
+        
+        # 4. Replace module and re-tie weights to the language model head
+        self.transformer.wte = new_wte.to(device)
+        self.transformer.wte.main_weight.weight = self.lm_head.weight
+        # Re-freeze the head after re-tying to maintain parameter efficiency
+        self.lm_head.requires_grad_(False)
+
+    def merge_lora_weights(self):
+        """
+        Merge LoRA weights into the main weights and reset LoRA adapters.
+        """
+        print("Merging LoRA weights into main weights...")
+
+        # Merge embedding LoRA if it exists
+        if hasattr(self.transformer.wte, 'merge_and_reset'):
+            self.transformer.wte.merge_and_reset()
+
+        # Merge attention LoRA weights in all blocks
+        for block in self.transformer.h:
+            if hasattr(block.attn.c_attn, 'merge_and_reset'):
+                block.attn.c_attn.merge_and_reset()
+            if hasattr(block.attn.c_proj, 'merge_and_reset'):
+                block.attn.c_proj.merge_and_reset()
+
+        print("LoRA weights merged and reset.")
+
+    @torch.no_grad()
+    def get_merged_state_dict(self):
+        """
+        Returns a state_dict with all LoRA weights merged into their main weights,
+        ready for saving a universal checkpoint.
+        This method is decorated with @torch.no_grad() to prevent gradient tracking.
+        """
+        # Create a new state_dict to populate
+        final_sd = {}
+
+        # Get a fresh copy of the model's current state_dict
+        source_sd = self.state_dict()
+
+        for key, value in source_sd.items():
+            # This is a LoRA layer's main weight, it will be handled by the merge logic below. Skip it.
+            if 'main_weight' in key:
+                continue
+
+            # These are the LoRA-specific weights. We are merging them, so we don't include them in the final dict.
+            if 'lora_A' in key or 'lora_B' in key:
+                continue
+
+            # It's a standard parameter, so copy it directly.
+            final_sd[key] = value
+
+        # Now, explicitly find LoRA modules and perform the merge, adding the result to our final_sd
+        for name, module in self.named_modules():
+            if isinstance(module, LoRALinear) and module.rank > 0:
+                # The key for the final dict should be the standard layer name
+                key = f"{name}.weight"
+                # Get the bias from the main_weight linear layer
+                bias_key = f"{name}.bias"
+
+                # Calculate the merged weight
+                lora_update = module.lora_B.weight @ module.lora_A.weight * (module.alpha / module.rank)
+                merged_weight = module.main_weight.weight.data + lora_update
+                final_sd[key] = merged_weight
+
+                # Copy the bias if it exists
+                if module.main_weight.bias is not None:
+                    final_sd[bias_key] = module.main_weight.bias.data
+
+            elif isinstance(module, LoRAEmbedding) and module.rank > 0:
+                key = f"{name}.weight"
+
+                # Calculate the merged weight for LoRAEmbedding
+                # Fixed: Removed erroneous .T at the end - the result is already (vocab_size, n_embd)
+                lora_update = module.lora_A.weight @ module.lora_B.weight.T
+                merged_weight = module.main_weight.weight.data + lora_update * (module.alpha / module.rank)
+                final_sd[key] = merged_weight
+
+        return final_sd
+
+    def resize_vocabulary(self, new_vocab_size, source_token_id, noise_std=0.01):
+        """
+        Grows the vocabulary size of the model in a function-preserving way.
+        New token embeddings are initialized from a source token plus noise.
+        """
+        print(f"Resizing vocabulary from {self.config.vocab_size} to {new_vocab_size}.")
+        if new_vocab_size <= self.config.vocab_size:
+            raise ValueError("New vocabulary size must be larger than the current one.")
+
+        old_wte = self.transformer.wte
+        old_lm_head = self.lm_head
+        device = old_wte.weight.device
+
+        # Create new, larger layers
+        self.transformer.wte = nn.Embedding(new_vocab_size, self.config.n_embd).to(device)
+        self.lm_head = nn.Linear(self.config.n_embd, new_vocab_size, bias=False).to(device)
+
+        # Copy old weights
+        self.transformer.wte.weight.data[:self.config.vocab_size, :] = old_wte.weight.data
+        self.lm_head.weight.data[:self.config.vocab_size, :] = old_lm_head.weight.data
+
+        # Initialize new weights from the source token
+        source_embedding = old_wte.weight.data[source_token_id, :]
+        source_lm_head = old_lm_head.weight.data[source_token_id, :]
+
+        # Add noise to break symmetry
+        noise_embedding = torch.randn(new_vocab_size - self.config.vocab_size, self.config.n_embd, device=device) * noise_std
+        noise_lm_head = torch.randn(new_vocab_size - self.config.vocab_size, self.config.n_embd, device=device) * noise_std
+
+        self.transformer.wte.weight.data[self.config.vocab_size:, :] = source_embedding + noise_embedding
+        self.lm_head.weight.data[self.config.vocab_size:, :] = source_lm_head + noise_lm_head
+
+        # Update config and re-tie weights
+        self.config.vocab_size = new_vocab_size
+        self.transformer.wte.weight = self.lm_head.weight
+
+        print("Vocabulary resized successfully.")
+
+    def set_embedding_freeze_mode(self, enabled: bool):
+        """
+        Sets the model to fine-tune only embedding-related layers.
+        When enabled, all parameters except wte and lm_head are frozen.
+        """
+        self.embedding_finetune_mode = enabled
+
+        # Freeze or unfreeze the model backbone
+        for name, param in self.named_parameters():
+            if 'wte' == name or 'lm_head' == name:
+                param.requires_grad = not enabled
+
+        status = "ENABLED" if enabled else "DISABLED"
+        print(f"Embedding Freezing mode is now {status}.")
+
+    def set_embedding_finetune_mode(self, enabled: bool):
+        """
+        Sets the model to fine-tune only embedding-related layers.
+        When enabled, all parameters except wte and lm_head are frozen.
+        """
+        self.embedding_finetune_mode = enabled
+
+        # Freeze or unfreeze the model backbone
+        for name, param in self.named_parameters():
+            if 'wte' not in name and 'lm_head' not in name:
+                param.requires_grad = not enabled
+
+        status = "ENABLED" if enabled else "DISABLED"
+        print(f"Embedding fine-tuning mode is now {status}.")

@@ -1,0 +1,53 @@
+[
+    {
+      "name": "reset_lr_schedule",
+      "value": null,
+      "trigger_loss": 100.0,
+      "max_wait_iters": 1,
+      "reevaluate": false
+    },
+    {
+      "name": "change_batch_size",
+      "value": 0.5,
+      "trigger_loss": 100.0,
+      "max_wait_iters": 1,
+      "reevaluate": false
+    },
+    {
+      "name": "change_grad_accum",
+      "value": 2.0,
+      "trigger_loss": 100.0,
+      "max_wait_iters": 1,
+      "reevaluate": false
+    },
+    {
+      "name": "stack_layers",
+      "value": 2,
+      "trigger_loss": 100,
+      "max_wait_iters": 1,
+      "desc":"first burn",
+      "reevaluate": true
+    },
+    {
+      "name": "change_lr",
+      "value": 0.5,
+      "trigger_loss": 100,
+      "max_wait_iters": 1,
+      "reevaluate": false
+    },
+    {
+      "name": "reset_lr_schedule",
+      "value": null,
+      "trigger_loss": 100.0,
+      "max_wait_iters": 1,
+      "reevaluate": false
+    },
+    {
+      "name": "merge_lora_weights",
+      "value": null,
+      "trigger_loss": 5.5,
+      "max_wait_iters": 2500,
+      "desc":"first burn",
+      "reevaluate": false
+    }
+  ]

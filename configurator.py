@@ -38,8 +38,13 @@ for arg in sys.argv[1:]:
             except (SyntaxError, ValueError):
                 # if that goes wrong, just use the string
                 attempt = val
-            # ensure the types match ok
-            assert type(attempt) == type(globals()[key])
+            
+            # FIX: Allow overriding None with a different type
+            # The new assertion checks if the original value is None OR if the types match.
+            original_value = globals()[key]
+            type_match_ok = (original_value is None) or (type(attempt) == type(original_value))
+            assert type_match_ok, f"Type mismatch for key {key}: cannot override {type(original_value)} with {type(attempt)}"
+            
             # cross fingers
             print(f"Overriding: {key} = {attempt}")
             globals()[key] = attempt

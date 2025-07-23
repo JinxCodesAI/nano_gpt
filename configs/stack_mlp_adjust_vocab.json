@@ -1,0 +1,390 @@
+[
+    {
+      "name": "merge_lora_weights",
+      "value": null,
+      "trigger_loss": 8.0,
+      "max_wait_iters": 500,
+      "desc":"first burn",
+      "reevaluate": false
+    },
+    {
+      "name": "change_lr",
+      "value": 0.7,
+      "trigger_loss": 100,
+      "max_wait_iters": 1,
+      "reevaluate": false
+    },
+    {
+      "name": "reset_lr_schedule",
+      "value": null,
+      "trigger_loss": 100.0,
+      "max_wait_iters": 1,
+      "reevaluate": false
+    },{
+      "name": "merge_lora_weights",
+      "value": null,
+      "desc":"second burn",
+      "trigger_loss": 7.4,
+      "max_wait_iters": 300,
+      "reevaluate": false
+    },
+    {
+      "name": "change_lr",
+      "value": 0.2,
+      "trigger_loss": 100,
+      "max_wait_iters": 1,
+      "reevaluate": false
+    },
+    {
+      "name": "change_warmup_iters",
+      "value": 5,
+      "trigger_loss": 100.0,
+      "max_wait_iters": 1,
+      "reevaluate": false
+    },
+    {
+      "name": "reset_lr_schedule",
+      "value": null,
+      "trigger_loss": 100.0,
+      "max_wait_iters": 1,
+      "reevaluate": false
+    },
+    {
+      "name": "decrease_vocab_lora_scaling",
+      "value": 2,
+      "desc":"pre resize",
+      "trigger_loss": 100.0,
+      "max_wait_iters": 1,
+      "reevaluate": true
+    },
+    {
+      "name": "decrease_attn_lora_scaling",
+      "value": 2,
+      "desc":"pre resize2",
+      "trigger_loss": 100.0,
+      "max_wait_iters": 1,
+      "reevaluate": true
+    },
+    {
+      "name": "change_batch_size",
+      "value": 0.25,
+      "trigger_loss": 100.0,
+      "max_wait_iters": 1,
+      "reevaluate": false
+    },
+    {
+      "name": "change_grad_accum",
+      "value": 2.0,
+      "trigger_loss": 100.0,
+      "max_wait_iters": 1,
+      "reevaluate": false
+    },
+    {
+      "name": "change_lr",
+      "value": 0.7,
+      "trigger_loss": 100,
+      "max_wait_iters": 1,
+      "reevaluate": false
+    },
+    {
+      "name": "reset_lr_schedule",
+      "value": null,
+      "trigger_loss": 100.0,
+      "max_wait_iters": 1,
+      "reevaluate": false
+    },
+    {
+      "name": "stack_layers",
+      "value": 2,
+      "desc":"first resize",
+      "trigger_loss": 100.0,
+      "max_wait_iters": 1,
+      "reevaluate": true
+    },
+    {
+      "name": "merge_lora_weights",
+      "value": null,
+      "trigger_loss": 7.1,
+      "desc":"third burn",
+      "max_wait_iters": 700,
+      "reevaluate": false
+    },
+    {
+      "name": "change_batch_size",
+      "value": 0.5,
+      "trigger_loss": 100.0,
+      "max_wait_iters": 1,
+      "reevaluate": false
+    },
+    {
+      "name": "change_grad_accum",
+      "value": 2.0,
+      "trigger_loss": 100.0,
+      "max_wait_iters": 1,
+      "reevaluate": false
+    },
+    {
+      "name": "widen_mlp",
+      "value": 2,
+      "trigger_loss": 100.0,
+      "max_wait_iters": 1,
+      "reevaluate": true
+    },
+    {
+      "name": "change_lr",
+      "value": 0.7,
+      "trigger_loss": 100,
+      "max_wait_iters": 1,
+      "reevaluate": false
+    },
+    {
+      "name": "reset_lr_schedule",
+      "value": null,
+      "trigger_loss": 100.0,
+      "max_wait_iters": 1,
+      "reevaluate": false
+    },
+    {
+      "name": "stack_layers",
+      "value": 2,
+      "desc":"third resize",
+      "trigger_loss": 100.0,
+      "max_wait_iters": 1,
+      "reevaluate": true
+    },
+    {
+      "name": "merge_lora_weights",
+      "value": null,
+      "trigger_loss": 6.0,
+      "desc":"fourth burn",
+      "max_wait_iters": 600,
+      "reevaluate": false
+    },
+    {
+      "name": "widen_mlp",
+      "value": 2,
+      "trigger_loss": 100,
+      "desc":"second resize",
+      "max_wait_iters": 1,
+      "reevaluate": true
+    },
+    {
+      "name": "change_batch_size",
+      "value": 0.5,
+      "trigger_loss": 100.0,
+      "max_wait_iters": 1,
+      "reevaluate": false
+    },
+    {
+      "name": "change_grad_accum",
+      "value": 2.0,
+      "trigger_loss": 100.0,
+      "max_wait_iters": 1,
+      "reevaluate": false
+    },
+    {
+      "name": "merge_lora_weights",
+      "value": null,
+      "trigger_loss": 5.2,
+      "desc":"fifth burn",
+      "max_wait_iters": 1000,
+      "reevaluate": false
+    },
+    {
+      "name": "change_warmup_iters",
+      "value": 1.5,
+      "trigger_loss": 100.0,
+      "max_wait_iters": 1,
+      "reevaluate": false
+    },
+    {
+      "name": "change_lr",
+      "value": 0.7,
+      "trigger_loss": 100,
+      "max_wait_iters": 1,
+      "reevaluate": true
+    },
+    {
+      "name": "change_eval_iters",
+      "value": 2,
+      "trigger_loss": 100.0,
+      "max_wait_iters": 1,
+      "reevaluate": false
+    },
+    {
+      "name": "change_eval_interval",
+      "value": 2,
+      "trigger_loss": 100.0,
+      "max_wait_iters": 1,
+      "reevaluate": false
+    },
+    {
+      "name": "reset_lr_schedule",
+      "value": null,
+      "trigger_loss": 100.0,
+      "max_wait_iters": 1,
+      "reevaluate": false
+    },
+    {
+      "name": "decrease_attn_lora_scaling",
+      "value": 0.5,
+      "trigger_loss": 100,
+      "max_wait_iters": 1,
+      "reevaluate": false
+    },
+    {
+      "name": "decrease_vocab_lora_scaling",
+      "value": 0.5,
+      "trigger_loss": 100.0,
+      "max_wait_iters": 1,
+      "reevaluate": true
+    },
+  {
+    "name": "change_warmup_iters",
+    "value": 2.0,
+    "trigger_loss": 100.0,
+    "max_wait_iters": 1,
+    "reevaluate": false
+  },
+  {
+    "name": "reset_lr_schedule",
+    "value": null,
+    "trigger_loss": 100.0,
+    "max_wait_iters": 1,
+    "reevaluate": false
+  },
+  {
+    "name": "change_batch_size",
+    "value": 0.5,
+    "trigger_loss": 100.0,
+    "max_wait_iters": 1,
+    "reevaluate": false
+  },
+  {
+    "name": "change_grad_accum",
+    "value": 2.0,
+    "trigger_loss": 100.0,
+    "max_wait_iters": 1,
+    "reevaluate": false
+  },
+  {
+    "name": "merge_lora_weights",
+    "value": null,
+    "trigger_loss": 4.7,
+    "desc":"fifth burn",
+    "max_wait_iters": 1000,
+    "reevaluate": false
+  },
+  {
+    "name": "decrease_attn_lora_scaling",
+    "value": 0.5,
+    "trigger_loss": 100,
+    "max_wait_iters": 1,
+    "reevaluate": true
+  },
+  {
+    "name": "decrease_vocab_lora_scaling",
+    "value": 0.5,
+    "trigger_loss": 100.0,
+    "max_wait_iters": 1,
+    "reevaluate": true
+  },
+  {
+    "name": "merge_lora_weights",
+    "value": null,
+    "trigger_loss": 4.2,
+    "max_wait_iters": 2000,
+    "reevaluate": false
+  },
+  {
+    "name": "change_warmup_iters",
+    "value": 1.5,
+    "trigger_loss": 100.0,
+    "max_wait_iters": 1,
+    "reevaluate": false
+  },
+  {
+    "name": "reset_lr_schedule",
+    "value": null,
+    "trigger_loss": 100.0,
+    "max_wait_iters": 1,
+    "reevaluate": false
+  },
+{
+  "name": "change_batch_size",
+  "value": 0.5,
+  "trigger_loss": 100.0,
+  "max_wait_iters": 1,
+  "reevaluate": false
+},
+{
+  "name": "change_grad_accum",
+  "value": 2.0,
+  "trigger_loss": 100.0,
+  "max_wait_iters": 1,
+  "reevaluate": false
+},
+    {
+      "name": "decrease_attn_lora_scaling",
+      "value": 0.5,
+      "trigger_loss": 100.0,
+      "max_wait_iters": 1,
+      "reevaluate": true
+    },
+    {
+      "name": "decrease_vocab_lora_scaling",
+      "value": 0.5,
+      "trigger_loss": 100.0,
+      "max_wait_iters": 1,
+      "reevaluate": true
+    },
+    {
+      "name": "merge_lora_weights",
+      "value": null,
+      "trigger_loss": 3.8,
+      "max_wait_iters": 5000,
+      "reevaluate": false
+    },
+    {
+      "name": "change_batch_size",
+      "value": 0.5,
+      "trigger_loss": 100.0,
+      "max_wait_iters": 1,
+      "reevaluate": false
+    },
+    {
+      "name": "change_grad_accum",
+      "value": 2,
+      "trigger_loss": 100.0,
+      "max_wait_iters": 1,
+      "reevaluate": false
+    },
+    {
+      "name": "reset_lr_schedule",
+      "value": null,
+      "trigger_loss": 100.0,
+      "max_wait_iters": 1,
+      "reevaluate": false
+    },
+    {
+      "name": "change_lr",
+      "value": 0.5,
+      "trigger_loss": 3.8,
+      "max_wait_iters": 50000,
+      "reevaluate": false
+    },
+    {
+      "name": "change_lr",
+      "value": 0.5,
+      "trigger_loss": 3.5,
+      "max_wait_iters": 50000,
+      "reevaluate": false
+    },
+    {
+      "name": "change_lr",
+      "value": 0.5,
+      "trigger_loss": 3.2,
+      "max_wait_iters": 50000,
+      "reevaluate": false
+    }
+  ]

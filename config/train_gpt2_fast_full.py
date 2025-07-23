@@ -4,25 +4,34 @@
 
 wandb_log = True
 wandb_project = 'owt'
-wandb_run_name='gpt2-124M'
+wandb_run_name='gpt2-124M-fast'
+init_from = 'scratch' #'resume' /'scratch' 
 
 # these make the total batch size be ~0.5M
 # 12 batch size * 1024 block size * 5 gradaccum * 8 GPUs = 491,520
-batch_size = 12
+n_layer = 1
+embedding_mode = 'standard'
+
+batch_size = 32
 block_size = 1024
-gradient_accumulation_steps = 128
+gradient_accumulation_steps = 1
 
 # this makes total number of tokens be 300B
 max_iters = 600000
 lr_decay_iters = 600000
 
 # eval stuff
-eval_interval = 1000
-eval_iters = 200
+eval_interval = 200
+eval_iters = 10
 log_interval = 10
+
+n_hidden = 768
 
 # weight decay
 weight_decay = 1e-1
+scaling_schedule_file = 'configs/one_layer_start.json'
 #overrides
 
 use_rotary_embeddings = True
+device='cuda'
+

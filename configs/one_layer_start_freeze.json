@@ -1,0 +1,247 @@
+[
+  {
+    "name": "set_grad_accum",
+    "value": 2,
+    "trigger_loss": 100,
+    "max_wait_iters": 1,
+    "desc": "wild ride",
+    "reevaluate": false,
+    "completed": false
+  },
+  {
+    "name": "set_curriculum_alpha",
+    "value": 0.99,
+    "trigger_loss": 100,
+    "max_wait_iters": 1,
+    "desc": "wild ride",
+    "reevaluate": false,
+    "completed": false
+  },
+  {
+    "name": "set_warmup_iters",
+    "value": 100,
+    "trigger_loss": 100,
+    "max_wait_iters": 1,
+    "desc": "wild ride",
+    "reevaluate": false,
+    "completed": false
+  },
+  {
+    "name": "set_lr",
+    "value": 0.002,
+    "trigger_loss": 100,
+    "max_wait_iters": 1,
+    "desc": "wild ride",
+    "reevaluate": true,
+    "completed": false
+  },
+  {
+    "name": "reset_lr_schedule",
+    "value": null,
+    "trigger_loss": 4.5,
+    "max_wait_iters": 1000,
+    "desc": "wild ride",
+    "reevaluate": false,
+    "completed": false
+  },
+  {
+    "name": "widen_mlp",
+    "value": 3072,
+    "trigger_loss": 1000,
+    "max_wait_iters": 1,
+    "desc": "help for embedings",
+    "reevaluate": false,
+    "completed": false
+  },
+  {
+    "name": "set_warmup_iters",
+    "value": 500,
+    "trigger_loss": 1000,
+    "max_wait_iters": 1,
+    "desc": "help for embedings",
+    "reevaluate": false,
+    "completed": false
+  },
+  {
+    "name": "set_lr",
+    "value": 0.0004,
+    "trigger_loss": 100,
+    "max_wait_iters": 1,
+    "desc": "help for embedings",
+    "reevaluate": true,
+    "completed": false
+  },
+  {
+    "name": "reset_lr_schedule",
+    "value": null,
+    "trigger_loss": 1.0,
+    "max_wait_iters": 600,
+    "desc": "before embeding freeze",
+    "reevaluate": false,
+    "completed": false
+  },
+  {
+    "name": "set_embedding_freeze_mode",
+    "value": true,
+    "trigger_loss": 100.0,
+    "max_wait_iters": 1,
+    "desc": "freeze embedings",
+    "reevaluate": true,
+    "completed": false
+  },
+  {
+    "name": "reset_lr_schedule",
+    "value": null,
+    "trigger_loss": 4.0,
+    "max_wait_iters": 2000,
+    "desc": "challenge single layer",
+    "reevaluate": false,
+    "completed": false
+  },
+  {
+    "name": "set_batch_size",
+    "value": 12,
+    "trigger_loss": 100,
+    "max_wait_iters": 1,
+    "desc": "prepare expansion",
+    "reevaluate": false,
+    "completed": false
+  },
+  {
+    "name": "stack_layers",
+    "value": [
+      0,
+      0,
+      0
+    ],
+    "trigger_loss": 1000,
+    "max_wait_iters": 1,
+    "desc": "expand network",
+    "reevaluate": true,
+    "completed": false
+  },
+  {
+    "name": "set_warmup_iters",
+    "value": 2000,
+    "trigger_loss": 1000,
+    "max_wait_iters": 1,
+    "desc": "expand network",
+    "reevaluate": false,
+    "completed": false
+  },
+  {
+    "name": "set_curriculum_alpha",
+    "value": 0.8,
+    "trigger_loss": 100,
+    "max_wait_iters": 1,
+    "desc": "expand network",
+    "reevaluate": false,
+    "completed": false
+  },
+  {
+    "name": "set_grad_accum",
+    "value": 10,
+    "trigger_loss": 100,
+    "max_wait_iters": 1,
+    "desc": "expand network",
+    "reevaluate": false,
+    "completed": false
+  },
+  {
+    "name": "set_eval_iters",
+    "value": 100,
+    "trigger_loss": 100,
+    "max_wait_iters": 1,
+    "desc": "expand network",
+    "reevaluate": false,
+    "completed": false
+  },
+  {
+    "name": "set_eval_interval",
+    "value": 1000,
+    "trigger_loss": 100,
+    "max_wait_iters": 1,
+    "desc": "expand network",
+    "reevaluate": false,
+    "completed": false
+  },
+  {
+    "name": "reset_lr_schedule",
+    "value": null,
+    "trigger_loss": 3.5,
+    "max_wait_iters": 2000,
+    "desc": "challenge half network",
+    "reevaluate": false,
+    "completed": false
+  },
+  {
+    "name": "set_batch_size",
+    "value": 6,
+    "trigger_loss": 100,
+    "max_wait_iters": 1,
+    "desc": "prepare final expansion",
+    "reevaluate": false,
+    "completed": false
+  },
+  {
+    "name": "stack_layers",
+    "value": [
+      0,
+      0,
+      0,
+      1,
+      1,
+      2
+    ],
+    "trigger_loss": 1000,
+    "max_wait_iters": 1,
+    "desc": "expand network",
+    "reevaluate": true,
+    "completed": false
+  },
+  {
+    "name": "set_curriculum_alpha",
+    "value": 0.5,
+    "trigger_loss": 100,
+    "max_wait_iters": 1,
+    "desc": "expand network",
+    "reevaluate": false,
+    "completed": false
+  },
+  {
+    "name": "reset_lr_schedule",
+    "value": null,
+    "trigger_loss": 3.27,
+    "max_wait_iters": 3000,
+    "desc": "before embeding freeze",
+    "reevaluate": false,
+    "completed": false
+  },
+  {
+    "name": "set_embedding_freeze_mode",
+    "value": false,
+    "trigger_loss": 100.0,
+    "max_wait_iters": 1,
+    "desc": "free embedings",
+    "reevaluate": true,
+    "completed": false
+  },
+  {
+    "name": "set_curriculum_alpha",
+    "value": 0,
+    "trigger_loss": 100,
+    "max_wait_iters": 1,
+    "desc": "learn freely",
+    "reevaluate": true,
+    "completed": false
+  },
+  {
+    "name": "reset_lr_schedule",
+    "value": null,
+    "trigger_loss": 3.27,
+    "max_wait_iters": 200000,
+    "desc": "first burn",
+    "reevaluate": false,
+    "completed": false
+  }
+]

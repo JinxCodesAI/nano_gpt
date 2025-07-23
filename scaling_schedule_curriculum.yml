@@ -1,0 +1,91 @@
+# Scaling Schedule with Curriculum Learning
+# This schedule demonstrates the new curriculum learning capabilities
+# with the high-performance BatchManager V2
+
+# Initialize with uniform target distribution (alpha=1.0)
+- name: set_curriculum_alpha
+  value: 1.0
+  desc: "Initialize with uniform target distribution for training stability"
+  trigger_loss: 99.0  # Trigger immediately at the start
+  max_wait_iters: 1
+  reevaluate: false
+
+# Start annealing towards natural distribution when loss drops
+- name: set_curriculum_alpha
+  value: 0.7
+  desc: "Begin annealing towards natural distribution (70% uniform, 30% corpus)"
+  trigger_loss: 4.5
+  max_wait_iters: 20000
+  reevaluate: false
+
+# Continue annealing
+- name: set_curriculum_alpha
+  value: 0.5
+  desc: "Balanced curriculum (50% uniform, 50% corpus distribution)"
+  trigger_loss: 4.0
+  max_wait_iters: 30000
+  reevaluate: false
+
+# More towards natural distribution
+- name: set_curriculum_alpha
+  value: 0.3
+  desc: "Favor corpus distribution (30% uniform, 70% corpus)"
+  trigger_loss: 3.5
+  max_wait_iters: 40000
+  reevaluate: false
+
+# Nearly full natural distribution
+- name: set_curriculum_alpha
+  value: 0.1
+  desc: "Almost natural distribution (10% uniform, 90% corpus)"
+  trigger_loss: 3.0
+  max_wait_iters: 50000
+  reevaluate: false
+
+# Full natural distribution
+- name: set_curriculum_alpha
+  value: 0.0
+  desc: "Switch to fully natural corpus distribution"
+  trigger_loss: 2.8
+  max_wait_iters: 60000
+  reevaluate: false
+
+# Example architectural operations that can be combined with curriculum learning
+- name: stack_layers
+  value: 2
+  desc: "Add 2 layers when model has learned basic patterns"
+  trigger_loss: 2.5
+  max_wait_iters: 80000
+  reevaluate: true
+
+# Adjust curriculum after architectural change
+- name: set_curriculum_alpha
+  value: 0.2
+  desc: "Temporarily increase uniformity after architectural change"
+  trigger_loss: 2.4
+  max_wait_iters: 10000
+  reevaluate: false
+
+# Return to natural distribution
+- name: set_curriculum_alpha
+  value: 0.0
+  desc: "Return to natural distribution after model adaptation"
+  trigger_loss: 2.2
+  max_wait_iters: 20000
+  reevaluate: false
+
+# Example of widening MLP
+- name: widen_mlp
+  value: 1.5
+  desc: "Widen MLP by 50% for increased capacity"
+  trigger_loss: 2.0
+  max_wait_iters: 100000
+  reevaluate: true
+
+# Final curriculum adjustment
+- name: set_curriculum_alpha
+  value: 0.0
+  desc: "Maintain natural distribution for final training phase"
+  trigger_loss: 1.8
+  max_wait_iters: 20000
+  reevaluate: false
