@@ -710,71 +710,25 @@ class GPT(nn.Module):
 
     def resize_lora_rank(self, new_rank):
         """
-        Function-preserving resize of the attention LoRA rank.
-        Merges existing adapter, then creates a new one with the specified rank.
+        Legacy function for backward compatibility. 
+        Use set_layer_lora_rank("attn.X", rank) for specific layers.
         """
-        new_rank = int(new_rank)  # Ensure rank is an integer
-        print(f"Resizing attention LoRA rank to {new_rank}.")
+        print("Warning: resize_lora_rank is deprecated. Use set_layer_lora_rank('attn.X', rank) instead.")
+        new_rank = int(new_rank)
         self.config.attn_lora_rank = new_rank
-        device = self.lm_head.weight.device
-
-        for block in self.transformer.h:
-            # Check if the attention projection is a LoRA layer
-            if not isinstance(block.attn.c_attn, LoRALinear):
-                print("Warning: c_attn is not a LoRALinear layer. Skipping resize.")
-                continue
-            
-            # 1. Merge existing knowledge into the main weight
-            block.attn.c_attn.merge_and_reset()
-            
-            # 2. Create a new LoRA layer with the new rank
-            new_c_attn = LoRALinear(
-                in_features=self.config.n_embd,
-                out_features=3 * self.config.n_embd,
-                rank=new_rank,
-                alpha=self.config.lora_alpha,
-                bias=self.config.bias
-            )
-            
-            # 3. Copy the merged main weights from the old layer to the new one
-            new_c_attn.main_weight.load_state_dict(block.attn.c_attn.main_weight.state_dict())
-            
-            # 4. Replace the old layer with the new, resized layer
-            block.attn.c_attn = new_c_attn.to(device)
+        
+        for i in range(self.config.n_layer):
+            self.set_layer_lora_rank(f"attn.{i}", new_rank)
         
     def resize_embedding_rank(self, new_rank):
         """
-        Function-preserving resize of the embedding LoRA rank.
-        Merges existing adapter, then creates a new one with the specified rank.
+        Legacy function for backward compatibility.
+        Use set_layer_lora_rank("wte", rank) instead.
         """
-        if not isinstance(self.transformer.wte, LoRAEmbedding):
-            print("Warning: wte is not a LoRAEmbedding layer. Skipping resize.")
-            return
-            
-        new_rank = int(new_rank)  # Ensure rank is an integer
-        print(f"Resizing embedding LoRA rank to {new_rank}.")
+        print("Warning: resize_embedding_rank is deprecated. Use set_layer_lora_rank('wte', rank) instead.")
+        new_rank = int(new_rank)
         self.config.embedding_rank = new_rank
-        device = self.lm_head.weight.device
-        
-        # 1. Merge existing knowledge
-        self.transformer.wte.merge_and_reset()
-        
-        # 2. Create new module with the new rank
-        new_wte = LoRAEmbedding(
-            vocab_size=self.config.vocab_size,
-            n_embd=self.config.n_embd,
-            rank=new_rank,
-            alpha=self.config.lora_alpha
-        )
-        
-        # 3. Copy merged main weights
-        new_wte.main_weight.load_state_dict(self.transformer.wte.main_weight.state_dict())
-        
-        # 4. Replace module and re-tie weights to the language model head
-        self.transformer.wte = new_wte.to(device)
-        self.transformer.wte.main_weight.weight = self.lm_head.weight
-        # Re-freeze the head after re-tying to maintain parameter efficiency
-        self.lm_head.requires_grad_(False)
+        self.set_layer_lora_rank("wte", new_rank)
 
     def merge_lora_weights(self):
         """
@@ -888,30 +842,274 @@ class GPT(nn.Module):
 
     def set_embedding_freeze_mode(self, enabled: bool):
         """
-        Sets the model to fine-tune only embedding-related layers.
-        When enabled, all parameters except wte and lm_head are frozen.
+        Legacy function for backward compatibility.
+        Use freeze_layer("wte") and freeze_layer("lm_head") instead.
         """
+        print("Warning: set_embedding_freeze_mode is deprecated. Use freeze_layer/unfreeze_layer instead.")
         self.embedding_finetune_mode = enabled
 
-        # Freeze or unfreeze the model backbone
-        for name, param in self.named_parameters():
-            if 'wte' == name or 'lm_head' == name:
-                param.requires_grad = not enabled
-
-        status = "ENABLED" if enabled else "DISABLED"
-        print(f"Embedding Freezing mode is now {status}.")
+        if enabled:
+            # Freeze all layers except embeddings
+            for i in range(self.config.n_layer):
+                self.freeze_layer(f"attn.{i}")
+                self.freeze_layer(f"mlp.{i}")
+                self.freeze_layer(f"ln_1.{i}")
+                self.freeze_layer(f"ln_2.{i}")
+            self.freeze_layer("ln_f")
+        else:
+            # Unfreeze all layers
+            for i in range(self.config.n_layer):
+                self.unfreeze_layer(f"attn.{i}")
+                self.unfreeze_layer(f"mlp.{i}")
+                self.unfreeze_layer(f"ln_1.{i}")
+                self.unfreeze_layer(f"ln_2.{i}")
+            self.unfreeze_layer("ln_f")
+            self.unfreeze_layer("wte")
+            self.unfreeze_layer("lm_head")
 
     def set_embedding_finetune_mode(self, enabled: bool):
         """
-        Sets the model to fine-tune only embedding-related layers.
-        When enabled, all parameters except wte and lm_head are frozen.
+        Legacy function for backward compatibility.
+        Use freeze_layer/unfreeze_layer for specific control.
         """
+        print("Warning: set_embedding_finetune_mode is deprecated. Use freeze_layer/unfreeze_layer instead.")
         self.embedding_finetune_mode = enabled
 
-        # Freeze or unfreeze the model backbone
-        for name, param in self.named_parameters():
-            if 'wte' not in name and 'lm_head' not in name:
-                param.requires_grad = not enabled
+        if enabled:
+            # Freeze all layers except embeddings and lm_head
+            for i in range(self.config.n_layer):
+                self.freeze_layer(f"attn.{i}")
+                self.freeze_layer(f"mlp.{i}")
+                self.freeze_layer(f"ln_1.{i}")
+                self.freeze_layer(f"ln_2.{i}")
+            self.freeze_layer("ln_f")
+        else:
+            # Unfreeze all layers
+            for i in range(self.config.n_layer):
+                self.unfreeze_layer(f"attn.{i}")
+                self.unfreeze_layer(f"mlp.{i}")
+                self.unfreeze_layer(f"ln_1.{i}")
+                self.unfreeze_layer(f"ln_2.{i}")
+            self.unfreeze_layer("ln_f")
+            self.unfreeze_layer("wte")
+            self.unfreeze_layer("lm_head")
 
-        status = "ENABLED" if enabled else "DISABLED"
-        print(f"Embedding fine-tuning mode is now {status}.")
+    def freeze_layer(self, layer_name: str):
+        """
+        Freeze a specific layer by name. Supports patterns like:
+        - "attn.2" for attention in layer 2 (0-based)
+        - "mlp.0" for MLP in layer 0
+        - "ln_1.5" for first LayerNorm in layer 5
+        - "ln_2.3" for second LayerNorm in layer 3
+        - "wte" for token embeddings
+        - "wpe" for position embeddings (if not using rotary)
+        - "ln_f" for final layer norm
+        - "lm_head" for language model head
+        """
+        if '.' in layer_name:
+            component, layer_idx = layer_name.split('.', 1)
+            try:
+                layer_idx = int(layer_idx)
+            except ValueError:
+                print(f"Invalid layer index in '{layer_name}'. Expected format: component.layer_index")
+                return
+            
+            if layer_idx >= self.config.n_layer:
+                print(f"Layer index {layer_idx} out of range. Model has {self.config.n_layer} layers.")
+                return
+            
+            if component == "attn":
+                for param in self.transformer.h[layer_idx].attn.parameters():
+                    param.requires_grad_(False)
+                print(f"Frozen attention layer {layer_idx}")
+            elif component == "mlp":
+                for param in self.transformer.h[layer_idx].mlp.parameters():
+                    param.requires_grad_(False)
+                print(f"Frozen MLP layer {layer_idx}")
+            elif component == "ln_1":
+                for param in self.transformer.h[layer_idx].ln_1.parameters():
+                    param.requires_grad_(False)
+                print(f"Frozen first LayerNorm in layer {layer_idx}")
+            elif component == "ln_2":
+                for param in self.transformer.h[layer_idx].ln_2.parameters():
+                    param.requires_grad_(False)
+                print(f"Frozen second LayerNorm in layer {layer_idx}")
+            else:
+                print(f"Unknown component '{component}'. Valid components: attn, mlp, ln_1, ln_2")
+        else:
+            # Handle global components
+            if layer_name == "wte":
+                for param in self.transformer.wte.parameters():
+                    param.requires_grad_(False)
+                print("Frozen token embeddings")
+            elif layer_name == "wpe" and not self.config.use_rotary_embeddings:
+                for param in self.transformer.wpe.parameters():
+                    param.requires_grad_(False)
+                print("Frozen position embeddings")
+            elif layer_name == "ln_f":
+                for param in self.transformer.ln_f.parameters():
+                    param.requires_grad_(False)
+                print("Frozen final layer norm")
+            elif layer_name == "lm_head":
+                for param in self.lm_head.parameters():
+                    param.requires_grad_(False)
+                print("Frozen language model head")
+            else:
+                print(f"Unknown layer '{layer_name}'. Valid global layers: wte, wpe, ln_f, lm_head")
+
+    def unfreeze_layer(self, layer_name: str):
+        """
+        Unfreeze a specific layer by name. Uses same naming convention as freeze_layer.
+        """
+        if '.' in layer_name:
+            component, layer_idx = layer_name.split('.', 1)
+            try:
+                layer_idx = int(layer_idx)
+            except ValueError:
+                print(f"Invalid layer index in '{layer_name}'. Expected format: component.layer_index")
+                return
+            
+            if layer_idx >= self.config.n_layer:
+                print(f"Layer index {layer_idx} out of range. Model has {self.config.n_layer} layers.")
+                return
+            
+            if component == "attn":
+                for param in self.transformer.h[layer_idx].attn.parameters():
+                    param.requires_grad_(True)
+                print(f"Unfrozen attention layer {layer_idx}")
+            elif component == "mlp":
+                for param in self.transformer.h[layer_idx].mlp.parameters():
+                    param.requires_grad_(True)
+                print(f"Unfrozen MLP layer {layer_idx}")
+            elif component == "ln_1":
+                for param in self.transformer.h[layer_idx].ln_1.parameters():
+                    param.requires_grad_(True)
+                print(f"Unfrozen first LayerNorm in layer {layer_idx}")
+            elif component == "ln_2":
+                for param in self.transformer.h[layer_idx].ln_2.parameters():
+                    param.requires_grad_(True)
+                print(f"Unfrozen second LayerNorm in layer {layer_idx}")
+            else:
+                print(f"Unknown component '{component}'. Valid components: attn, mlp, ln_1, ln_2")
+        else:
+            # Handle global components
+            if layer_name == "wte":
+                for param in self.transformer.wte.parameters():
+                    param.requires_grad_(True)
+                print("Unfrozen token embeddings")
+            elif layer_name == "wpe" and not self.config.use_rotary_embeddings:
+                for param in self.transformer.wpe.parameters():
+                    param.requires_grad_(True)
+                print("Unfrozen position embeddings")
+            elif layer_name == "ln_f":
+                for param in self.transformer.ln_f.parameters():
+                    param.requires_grad_(True)
+                print("Unfrozen final layer norm")
+            elif layer_name == "lm_head":
+                for param in self.lm_head.parameters():
+                    param.requires_grad_(True)
+                print("Unfrozen language model head")
+            else:
+                print(f"Unknown layer '{layer_name}'. Valid global layers: wte, wpe, ln_f, lm_head")
+
+    def set_layer_lora_rank(self, layer_name: str, rank: int):
+        """
+        Set LoRA rank for a specific layer. Supports patterns like:
+        - "attn.2" for attention in layer 2 (0-based)
+        - "wte" for token embeddings
+        """
+        rank = int(rank)
+        
+        if '.' in layer_name:
+            component, layer_idx = layer_name.split('.', 1)
+            try:
+                layer_idx = int(layer_idx)
+            except ValueError:
+                print(f"Invalid layer index in '{layer_name}'. Expected format: component.layer_index")
+                return
+            
+            if layer_idx >= self.config.n_layer:
+                print(f"Layer index {layer_idx} out of range. Model has {self.config.n_layer} layers.")
+                return
+            
+            if component == "attn":
+                block = self.transformer.h[layer_idx]
+                device = block.attn.c_attn.weight.device if hasattr(block.attn.c_attn, 'weight') else next(block.attn.c_attn.parameters()).device
+                
+                # Merge existing LoRA weights if it's already a LoRA layer
+                if isinstance(block.attn.c_attn, LoRALinear):
+                    block.attn.c_attn.merge_and_reset()
+                
+                # Create new LoRA layer with specified rank
+                if rank > 0:
+                    new_c_attn = LoRALinear(
+                        in_features=self.config.n_embd,
+                        out_features=3 * self.config.n_embd,
+                        rank=rank,
+                        alpha=self.config.lora_alpha,
+                        bias=self.config.bias
+                    )
+                    
+                    # Copy weights from existing layer
+                    if isinstance(block.attn.c_attn, LoRALinear):
+                        new_c_attn.main_weight.load_state_dict(block.attn.c_attn.main_weight.state_dict())
+                    else:
+                        new_c_attn.main_weight.weight.data.copy_(block.attn.c_attn.weight.data)
+                        if block.attn.c_attn.bias is not None:
+                            new_c_attn.main_weight.bias.data.copy_(block.attn.c_attn.bias.data)
+                    
+                    block.attn.c_attn = new_c_attn.to(device)
+                    print(f"Set attention layer {layer_idx} LoRA rank to {rank}")
+                else:
+                    # Convert to regular Linear layer
+                    if isinstance(block.attn.c_attn, LoRALinear):
+                        new_c_attn = nn.Linear(
+                            self.config.n_embd, 
+                            3 * self.config.n_embd, 
+                            bias=self.config.bias
+                        )
+                        new_c_attn.weight.data.copy_(block.attn.c_attn.main_weight.weight.data)
+                        if block.attn.c_attn.main_weight.bias is not None:
+                            new_c_attn.bias.data.copy_(block.attn.c_attn.main_weight.bias.data)
+                        block.attn.c_attn = new_c_attn.to(device)
+                    print(f"Disabled LoRA for attention layer {layer_idx}")
+            else:
+                print(f"LoRA only supported for 'attn' component, not '{component}'")
+        else:
+            if layer_name == "wte":
+                device = self.transformer.wte.weight.device
+                
+                # Merge existing LoRA weights if it's already a LoRA layer
+                if isinstance(self.transformer.wte, LoRAEmbedding):
+                    self.transformer.wte.merge_and_reset()
+                
+                if rank > 0:
+                    new_wte = LoRAEmbedding(
+                        vocab_size=self.config.vocab_size,
+                        n_embd=self.config.n_embd,
+                        rank=rank,
+                        alpha=self.config.lora_alpha
+                    )
+                    
+                    # Copy weights from existing layer
+                    if isinstance(self.transformer.wte, LoRAEmbedding):
+                        new_wte.main_weight.load_state_dict(self.transformer.wte.main_weight.state_dict())
+                    else:
+                        new_wte.main_weight.weight.data.copy_(self.transformer.wte.weight.data)
+                    
+                    self.transformer.wte = new_wte.to(device)
+                    # Re-tie weights with lm_head
+                    self.transformer.wte.main_weight.weight = self.lm_head.weight
+                    self.lm_head.requires_grad_(False)
+                    print(f"Set token embeddings LoRA rank to {rank}")
+                else:
+                    # Convert to regular Embedding layer
+                    if isinstance(self.transformer.wte, LoRAEmbedding):
+                        new_wte = nn.Embedding(self.config.vocab_size, self.config.n_embd)
+                        new_wte.weight.data.copy_(self.transformer.wte.main_weight.weight.data)
+                        self.transformer.wte = new_wte.to(device)
+                        # Re-tie weights with lm_head
+                        self.transformer.wte.weight = self.lm_head.weight
+                    print("Disabled LoRA for token embeddings")
+            else:
+                print(f"LoRA only supported for 'wte' and 'attn.X' layers, not '{layer_name}'")

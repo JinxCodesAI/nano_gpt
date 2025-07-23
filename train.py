@@ -1308,7 +1308,8 @@ def execute_operation(op, trigger_reason, current_val_loss, iter_num, target_arc
         # Check if this is an architectural operation
         architectural_ops = ['stack_layers', 'widen_mlp', 'set_attn_lora_rank',
                              'set_embedding_lora_rank', 'merge_lora_weights',
-                             'resize_vocabulary', 'set_embedding_finetune_mode', 'set_embedding_freeze_mode']
+                             'resize_vocabulary', 'set_embedding_finetune_mode', 'set_embedding_freeze_mode',
+                             'freeze_layer', 'unfreeze_layer', 'set_layer_lora_rank']
 
         if op_name in architectural_ops:
             if master_process:
@@ -1348,6 +1349,16 @@ def execute_operation(op, trigger_reason, current_val_loss, iter_num, target_arc
             elif op_name == 'set_embedding_freeze_mode':
                 # op_value is expected to be True or False
                 unwrapped_model.set_embedding_freeze_mode(op_value)
+            elif op_name == 'freeze_layer':
+                # op_value is expected to be a layer name string like "attn.2" or "wte"
+                unwrapped_model.freeze_layer(op_value)
+            elif op_name == 'unfreeze_layer':
+                # op_value is expected to be a layer name string like "attn.2" or "wte"
+                unwrapped_model.unfreeze_layer(op_value)
+            elif op_name == 'set_layer_lora_rank':
+                # op_value is expected to be [layer_name, rank] like ["attn.2", 16]
+                layer_name, rank = op_value
+                unwrapped_model.set_layer_lora_rank(layer_name, rank)
 
             # --- Re-create optimizer and wrappers (this logic remains the same) ---
             log_detailed_params(unwrapped_model)
