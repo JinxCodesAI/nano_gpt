@@ -25,11 +25,12 @@ eval_interval = 200
 eval_iters = 10
 log_interval = 10
 
-n_hidden = 768
+n_hidden = 24
+n_embd = 24
 
 # weight decay
 weight_decay = 1e-1
-scaling_schedule_file = 'configs/one_layer_start.json'
+scaling_schedule_file = 'configs/one_layer_start_freeze.json'
 #overrides
 
 use_rotary_embeddings = True

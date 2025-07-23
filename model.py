@@ -886,6 +886,21 @@ class GPT(nn.Module):
 
         print("Vocabulary resized successfully.")
 
+    def set_embedding_freeze_mode(self, enabled: bool):
+        """
+        Sets the model to fine-tune only embedding-related layers.
+        When enabled, all parameters except wte and lm_head are frozen.
+        """
+        self.embedding_finetune_mode = enabled
+
+        # Freeze or unfreeze the model backbone
+        for name, param in self.named_parameters():
+            if 'wte' == name or 'lm_head' == name:
+                param.requires_grad = not enabled
+
+        status = "ENABLED" if enabled else "DISABLED"
+        print(f"Embedding Freezing mode is now {status}.")
+
     def set_embedding_finetune_mode(self, enabled: bool):
         """
         Sets the model to fine-tune only embedding-related layers.

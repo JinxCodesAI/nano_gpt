@@ -1176,7 +1176,7 @@ def execute_operation(op, trigger_reason, current_val_loss, iter_num, target_arc
         # Check if this is an architectural operation
         architectural_ops = ['stack_layers', 'widen_mlp', 'set_attn_lora_rank',
                              'set_embedding_lora_rank', 'merge_lora_weights',
-                             'resize_vocabulary', 'set_embedding_finetune_mode']
+                             'resize_vocabulary', 'set_embedding_finetune_mode', 'set_embedding_freeze_mode']
 
         if op_name in architectural_ops:
             if master_process:
@@ -1213,6 +1213,9 @@ def execute_operation(op, trigger_reason, current_val_loss, iter_num, target_arc
             elif op_name == 'set_embedding_finetune_mode':
                 # op_value is expected to be True or False
                 unwrapped_model.set_embedding_finetune_mode(op_value)
+            elif op_name == 'set_embedding_freeze_mode':
+                # op_value is expected to be True or False
+                unwrapped_model.set_embedding_freeze_mode(op_value)
 
             # --- Re-create optimizer and wrappers (this logic remains the same) ---
             log_detailed_params(unwrapped_model)
