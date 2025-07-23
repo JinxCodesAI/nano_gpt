@@ -1056,7 +1056,7 @@ def analysis_done_callback(future):
             training_logger.log(f"ERROR DURING ASYNC ANALYSIS: {e}")
 
 
-def print_timings(timing_profiler):
+def print_timings(timing_profiler, training_logger):
     
     # Get timing breakdown
     timing_percentages = timing_profiler.get_current_percentages()
@@ -1070,9 +1070,13 @@ def print_timings(timing_profiler):
 
         # Enhanced logging with timing breakdown
     print(f"  timing breakdown: evaluation {evaluation:.1f}%")
+    training_logger.log(f"  timing breakdown: evaluation {evaluation:.1f}%")
     print(f"  timing breakdown: gradient_accumulation {gradient_accumulation:.1f}%")
+    training_logger.log(f"  timing breakdown: gradient_accumulation {gradient_accumulation:.1f}%")
     print(f"  timing breakdown:     forward {forward_pass_pct:.1f}%, backward {backward_pass_pct:.1f}%, data {data_loading_pct:.1f}%, optim {optimizer_step_pct:.1f}%")
+    training_logger.log(f"  timing breakdown:     forward {forward_pass_pct:.1f}%, backward {backward_pass_pct:.1f}%, data {data_loading_pct:.1f}%, optim {optimizer_step_pct:.1f}%")
     print(f"  timing breakdown: gradient_clipping {gradient_clipping:.1f}%")
+    training_logger.log(f"  timing breakdown: gradient_clipping {gradient_clipping:.1f}%")
 
 
 def execute_operation(op, trigger_reason, current_val_loss, iter_num, target_architecture_config):
@@ -1256,7 +1260,7 @@ while True:
                 tokens_per_second = batch_manager.total_tokens_served / elapsed_time_seconds if elapsed_time_seconds > 0 else 0
 
                 print(f"step {iter_num}: train loss {losses['train']:.4f}, val loss {losses['val']:.4f}, lr: {lr:.4f}, tokens/sec {tokens_per_second:.0f}")
-                print_timings(timing_profiler)
+                print_timings(timing_profiler, training_logger)
 
                 # --- Model Analysis ---
                 analyzer = ModelAnalyzer(raw_model)
