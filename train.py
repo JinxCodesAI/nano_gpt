@@ -937,8 +937,8 @@ def analysis_done_callback(future):
                 sim_90th = emb_geo['global_sparsity']['similarity_90th_percentile']
                 avg_neighbors = emb_geo['local_density']['average_neighborhood_size']
                 nbhd_10th = emb_geo['local_density']['neighbor_10th_percentile']
-                nbhd_50th = emb_geo['local_density']['neighbor_50th_percentile']
                 nbhd_90th = emb_geo['local_density']['neighbor_90th_percentile']
+                nbhd_99th = emb_geo['local_density']['neighbor_99th_percentile']
 
                 # Analysis info
                 analysis_info = emb_geo.get('analysis_info', {})
@@ -946,7 +946,7 @@ def analysis_done_callback(future):
                 total_embeddings = analysis_info.get('total_embeddings', 'N/A')
                 is_filtered = analysis_info.get('filtered', False)
 
-                geom_msg1 = f"  [Embeddings Geometry] Avg Neighbors: {avg_neighbors:.2f} 10th-50th-90th Percentile: {nbhd_10th:.4f} - {nbhd_50th:.4f} - {nbhd_90th:.4f}"
+                geom_msg1 = f"  [Embeddings Geometry] Avg Neighbors: {avg_neighbors:.2f} 10th-90th-99th Percentile: {nbhd_10th:.4f} - {nbhd_90th:.4f} - {nbhd_99th:.4f} "
                 geom_msg2 = f"  [Embeddings Geometry] Mean Similarity: {mean_sim:.4f} Std Similarity: {std_sim:.4f} | 10th-90th Percentile: {sim_10th:.4f} - {sim_90th:.4f}"
                 geom_msg3 = f"  [Embeddings Analysis] Analyzed: {num_analyzed}/{total_embeddings} embeddings | Filtered: {is_filtered}"
                 att_msg = f"  [Attention Entropy] Avg Entropy: {attention_entropy:.4f}"

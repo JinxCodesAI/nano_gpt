@@ -330,20 +330,20 @@ class ModelAnalyzer:
             # --- Calculate percentiles for neighbor counts ---
             neighbor_10th_percentile = 0.0
             neighbor_90th_percentile = 0.0
-            neighbor_50th_percentile = 0.0
+            neighbor_99th_percentile = 0.0
             if vocab_size > 0: # Ensure there are embeddings to process
                 # Ensure the tensor is float for quantile calculation, then convert back to item
                 neighbor_10th_percentile = torch.quantile(per_vector_neighbor_counts.float(), 0.1).item()
-                neighbor_50th_percentile = torch.quantile(per_vector_neighbor_counts.float(), 0.5).item()
                 neighbor_90th_percentile = torch.quantile(per_vector_neighbor_counts.float(), 0.9).item()
+                neighbor_99th_percentile = torch.quantile(per_vector_neighbor_counts.float(), 0.99).item()
 
 
             return {
                 'local_density': {
                     'average_neighborhood_size': avg_neighborhood_size,
                     'neighbor_10th_percentile': neighbor_10th_percentile,
-                    'neighbor_50th_percentile' : neighbor_50th_percentile,
-                    'neighbor_90th_percentile': neighbor_90th_percentile
+                    'neighbor_90th_percentile': neighbor_90th_percentile,
+                    'neighbor_99th_percentile': neighbor_99th_percentile,
                 },
                 'global_sparsity': {
                     'mean_similarity': mean_similarity,

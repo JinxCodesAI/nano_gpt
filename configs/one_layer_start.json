@@ -78,7 +78,7 @@
     "max_wait_iters": 2000,
     "desc": "first burn",
     "reevaluate": false,
-    "completed": false
+    "completed": true
   },
   {
     "name": "set_batch_size",
@@ -87,7 +87,7 @@
     "max_wait_iters": 1,
     "desc": "first burn",
     "reevaluate": false,
-    "completed": false
+    "completed": true
   },
   {
     "name": "stack_layers",
@@ -100,7 +100,7 @@
     "max_wait_iters": 1,
     "desc": "first burn",
     "reevaluate": true,
-    "completed": false
+    "completed": true
   },
   {
     "name": "set_warmup_iters",
@@ -109,7 +109,7 @@
     "max_wait_iters": 1,
     "desc": "first burn",
     "reevaluate": false,
-    "completed": false
+    "completed": true
   },
   {
     "name": "set_curriculum_alpha",
@@ -118,7 +118,7 @@
     "max_wait_iters": 1,
     "desc": "first burn",
     "reevaluate": false,
-    "completed": false
+    "completed": true
   },
   {
     "name": "set_grad_accum",
@@ -127,7 +127,7 @@
     "max_wait_iters": 1,
     "desc": "first burn",
     "reevaluate": false,
-    "completed": false
+    "completed": true
   },
   {
     "name": "set_eval_iters",
@@ -136,7 +136,7 @@
     "max_wait_iters": 1,
     "desc": "first burn",
     "reevaluate": false,
-    "completed": false
+    "completed": true
   },
   {
     "name": "set_eval_interval",
@@ -145,7 +145,7 @@
     "max_wait_iters": 1,
     "desc": "first burn",
     "reevaluate": false,
-    "completed": false
+    "completed": true
   },
   {
     "name": "reset_lr_schedule",
