@@ -12,6 +12,8 @@ import numpy as np
 import torch
 import psutil
 import threading
+import signal
+import sys
 from collections import deque, defaultdict
 import torch._dynamo
 try:
@@ -483,9 +485,28 @@ def load_scaling_schedule(file_path, init_from):
         print(f"Error loading scaling schedule from {file_path}: {e}")
         raise e
 
-# Load scaling schedule
+# Check for auto-resume configuration
+auto_resume_marker = os.path.join(out_dir, '.auto_resume') 
+if init_from == 'scratch' and os.path.exists(auto_resume_marker):
+    print("Found auto-resume marker. Switching to 'resume' mode...")
+    init_from = 'resume'
+    # Read the marker file for additional settings
+    try:
+        with open(auto_resume_marker, 'r') as f:
+            for line in f:
+                if line.startswith('init_from='):
+                    pass  # Already handled
+                elif line.startswith('final_wandb_run_name='):
+                    # This will be handled in wandb initialization
+                    pass
+    except Exception as e:
+        print(f"Warning: Could not read auto-resume marker: {e}")
+
+# Load scaling schedule (this will be overridden by checkpoint state if resuming)
 if scaling_schedule_file:
     scaling_schedule = load_scaling_schedule(scaling_schedule_file, init_from)
+else:
+    scaling_schedule = []
 
 # Training Orchestrator State
 iter_of_last_op = 0 # Iteration number when last operation was executed
@@ -809,12 +830,69 @@ if init_from == 'scratch':
 elif init_from == 'resume':
     print(f"Resuming training from {out_dir}")
     ckpt_path = os.path.join(out_dir, 'ckpt.pt')
-    checkpoint = torch.load(ckpt_path, map_location=device)
+    
+    # Check for emergency checkpoints if main checkpoint is corrupted or missing
+    if not os.path.exists(ckpt_path):
+        # Look for emergency checkpoints
+        emergency_files = [f for f in os.listdir(out_dir) if f.startswith('emergency_ckpt_iter_') and f.endswith('.pt')]
+        if emergency_files:
+            # Use the most recent emergency checkpoint
+            emergency_files.sort(key=lambda x: int(x.split('_')[3].split('.')[0]), reverse=True)
+            ckpt_path = os.path.join(out_dir, emergency_files[0])
+            print(f"Main checkpoint not found. Using emergency checkpoint: {ckpt_path}")
+        else:
+            raise FileNotFoundError(f"No checkpoint found in {out_dir}")
+    
+    try:
+        checkpoint = torch.load(ckpt_path, map_location=device)
+        if checkpoint.get('emergency_save', False):
+            print("Loaded from emergency checkpoint - continuing training from emergency save point")
+    except Exception as e:
+        print(f"Error loading checkpoint {ckpt_path}: {e}")
+        # Try emergency checkpoints as fallback
+        emergency_files = [f for f in os.listdir(out_dir) if f.startswith('emergency_ckpt_iter_') and f.endswith('.pt')]
+        if emergency_files:
+            emergency_files.sort(key=lambda x: int(x.split('_')[3].split('.')[0]), reverse=True)
+            ckpt_path = os.path.join(out_dir, emergency_files[0])
+            print(f"Trying emergency checkpoint: {ckpt_path}")
+            checkpoint = torch.load(ckpt_path, map_location=device)
+            print("Successfully loaded from emergency checkpoint")
+        else:
+            raise e
     checkpoint_model_args = checkpoint['model_args']
-
-    # Force an update of the model args from the checkpoint for base architecture
-    for k in ['n_layer', 'n_head', 'n_embd', 'block_size', 'bias', 'vocab_size', 'n_hidden']:
-        model_args[k] = checkpoint_model_args[k]
+    
+    # Compare current config with checkpoint and handle overrides
+    overrideable_params = ['n_hidden', 'n_layer', 'n_head', 'n_embd', 'block_size', 'bias', 'vocab_size',
+                          'dropout', 'use_rotary_embeddings', 'rotary_base', 'rotary_max_position_embeddings',
+                          'embedding_mode', 'embedding_rank', 'attn_lora_rank', 'lora_alpha']
+    
+    config_changes = []
+    for param in overrideable_params:
+        if param in checkpoint_model_args:
+            checkpoint_value = checkpoint_model_args[param]
+            current_value = model_args.get(param)
+            
+            if current_value != checkpoint_value:
+                config_changes.append(f"{param}: {checkpoint_value} -> {current_value}")
+                print(f"Overriding {param}: {checkpoint_value} -> {current_value}")
+                model_args[param] = current_value  # Use current config value
+            else:
+                # Keep checkpoint value if no override specified
+                model_args[param] = checkpoint_value
+    
+    if config_changes:
+        print(f"Applied {len(config_changes)} hyperparameter overrides:")
+        for change in config_changes:
+            print(f"  - {change}")
+        
+        # Log the overrides for tracking
+        if master_process:
+            training_logger.log(f"Resume with hyperparameter overrides: {'; '.join(config_changes)}")
+    else:
+        print("No hyperparameter overrides detected.")
+        # Force an update of the model args from the checkpoint for base architecture
+        for k in ['n_layer', 'n_head', 'n_embd', 'block_size', 'bias', 'vocab_size', 'n_hidden']:
+            model_args[k] = checkpoint_model_args[k]
 
     # Create the model with the potentially new LoRA configuration from the config file
     gptconf = GPTConfig(**model_args)
@@ -853,6 +931,59 @@ elif init_from == 'resume':
     # Load the rest of the training state
     iter_num = checkpoint['iter_num']
     best_val_loss = checkpoint['best_val_loss']
+    
+    # Load execution state variables
+    if 'iter_of_last_op' in checkpoint:
+        iter_of_last_op = checkpoint['iter_of_last_op']
+        print(f"Restored iter_of_last_op: {iter_of_last_op}")
+    if 'lr_schedule_offset' in checkpoint:
+        lr_schedule_offset = checkpoint['lr_schedule_offset']
+        print(f"Restored lr_schedule_offset: {lr_schedule_offset}")
+    
+    # Restore scaling schedule state from checkpoint if available
+    if 'scaling_schedule' in checkpoint and checkpoint['scaling_schedule']:
+        saved_schedule = checkpoint['scaling_schedule']
+        saved_schedule_file = checkpoint.get('scaling_schedule_file')
+        
+        # If we have a current scaling schedule file and it matches the saved one,
+        # use the saved state to preserve completion status
+        if scaling_schedule_file and saved_schedule_file == scaling_schedule_file:
+            print(f"Restoring scaling schedule state from checkpoint (preserving completion status)")
+            scaling_schedule = saved_schedule
+            # Also update the file to match the checkpoint state
+            save_scaling_schedule(scaling_schedule_file, scaling_schedule)
+        elif saved_schedule:
+            print(f"Warning: Checkpoint has scaling schedule but current config doesn't match.")
+            print(f"  Checkpoint file: {saved_schedule_file}")
+            print(f"  Current file: {scaling_schedule_file}")
+            print(f"  Using file-based schedule (some completion status may be lost).")
+    
+    # Override certain training parameters from current config if different
+    training_overrides = ['learning_rate', 'max_iters', 'weight_decay', 'beta1', 'beta2', 'grad_clip',
+                         'decay_lr', 'warmup_iters', 'lr_decay_iters', 'min_lr', 'batch_size', 
+                         'gradient_accumulation_steps', 'eval_interval', 'eval_iters']
+    
+    if 'config' in checkpoint:
+        saved_config = checkpoint['config']
+        training_param_changes = []
+        
+        for param in training_overrides:
+            if param in saved_config:
+                saved_value = saved_config[param]
+                current_value = globals().get(param)
+                
+                if current_value != saved_value:
+                    training_param_changes.append(f"{param}: {saved_value} -> {current_value}")
+                    print(f"Training override {param}: {saved_value} -> {current_value}")
+                    # Keep current value (already in globals())
+        
+        if training_param_changes:
+            print(f"Applied {len(training_param_changes)} training parameter overrides:")
+            for change in training_param_changes:
+                print(f"  - {change}")
+            
+            if master_process:
+                training_logger.log(f"Resume with training parameter overrides: {'; '.join(training_param_changes)}")
 elif init_from.startswith('gpt2'):
     print(f"Initializing from OpenAI GPT-2 weights: {init_from}")
     override_args = dict(dropout=dropout)
@@ -1291,13 +1422,27 @@ def execute_operation(op, trigger_reason, current_val_loss, iter_num, target_arc
 
 
 
+# Initialize or restore wandb run name
+final_wandb_run_name = None
 if wandb_log and master_process:
     import wandb
-    # Create a compact timestamp
-    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    final_wandb_run_name = f"{wandb_run_name}_{timestamp}"
-
-    print(f"Initializing W&B run with name: {final_wandb_run_name}")
+    
+    # Try to restore from checkpoint first
+    if init_from == 'resume':
+        ckpt_path = os.path.join(out_dir, 'ckpt.pt')
+        if os.path.exists(ckpt_path):
+            checkpoint_temp = torch.load(ckpt_path, map_location='cpu')
+            if 'final_wandb_run_name' in checkpoint_temp:
+                final_wandb_run_name = checkpoint_temp['final_wandb_run_name']
+                print(f"Restored W&B run name: {final_wandb_run_name}")
+            del checkpoint_temp  # Free memory
+    
+    # Create new run name if not restored
+    if final_wandb_run_name is None:
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        final_wandb_run_name = f"{wandb_run_name}_{timestamp}"
+        print(f"Created new W&B run name: {final_wandb_run_name}")
+    
     wandb.init(project=wandb_project, name=final_wandb_run_name, config=config)
 
 # Initialize the BatchManager for the training set
@@ -1336,6 +1481,18 @@ prev_embeddings = None  # This will store the CPU snapshot for semantic drift
 
 # Initialize timing profiler for granular performance measurements
 timing_profiler = TimingProfiler()
+
+# Add graceful shutdown handling
+shutdown_requested = False
+
+def signal_handler(signum, frame):
+    global shutdown_requested
+    print(f"\nReceived signal {signum}. Requesting graceful shutdown...")
+    shutdown_requested = True
+
+# Register signal handlers for graceful shutdown
+signal.signal(signal.SIGINT, signal_handler)   # Ctrl+C
+signal.signal(signal.SIGTERM, signal_handler)  # Termination signal
 
 t0 = time.time()
 
@@ -1476,10 +1633,46 @@ while True:
                             'iter_num': iter_num,
                             'best_val_loss': best_val_loss,
                             'config': config,
+                            'final_wandb_run_name': final_wandb_run_name,  # Save wandb run name for continuity
+                            'iter_of_last_op': iter_of_last_op,  # Save operation state
+                            'lr_schedule_offset': lr_schedule_offset,  # Save LR schedule state
+                            'scaling_schedule': scaling_schedule,  # Save current scaling schedule state
+                            'scaling_schedule_file': scaling_schedule_file,  # Save schedule file path
                         }
                         # --- MODIFICATION END ---
                         print(f"saving checkpoint to {out_dir}")
-                        torch.save(checkpoint, os.path.join(out_dir, 'ckpt.pt'))
+                        
+                        # Save to temporary file first, then atomically move to avoid corruption
+                        temp_ckpt_path = os.path.join(out_dir, 'ckpt_temp.pt')
+                        final_ckpt_path = os.path.join(out_dir, 'ckpt.pt')
+                        
+                        try:
+                            torch.save(checkpoint, temp_ckpt_path)
+                            # Atomic move (prevents corruption from abrupt shutdown during save)
+                            os.rename(temp_ckpt_path, final_ckpt_path)
+                            print(f"Checkpoint saved successfully to {final_ckpt_path}")
+                        except Exception as e:
+                            print(f"Error saving checkpoint: {e}")
+                            # Clean up temp file if it exists
+                            if os.path.exists(temp_ckpt_path):
+                                os.remove(temp_ckpt_path)
+                            raise e
+                        
+                        # Auto-switch from 'scratch' to 'resume' after first save
+                        if init_from == 'scratch' and iter_num > 0:
+                            # Update the global config to resume mode for next run
+                            import json
+                            config_update = {'init_from': 'resume'}
+                            config_file = os.path.join(out_dir, 'auto_resume_config.json')
+                            with open(config_file, 'w') as f:
+                                json.dump(config_update, f, indent=2)
+                            print(f"Auto-created resume config at {config_file}. Use --config {config_file} for next run.")
+                            
+                            # Also create a marker file to indicate this run should auto-resume
+                            marker_file = os.path.join(out_dir, '.auto_resume')
+                            with open(marker_file, 'w') as f:
+                                f.write(f"init_from=resume\nfinal_wandb_run_name={final_wandb_run_name}\n")
+                            print(f"Created auto-resume marker at {marker_file}")
             
             # FIX: Wrapped orchestration logic in a while loop to handle consecutive non-blocking operations
             while True:
@@ -1619,6 +1812,37 @@ while True:
 
     iter_num += 1
     local_iter_num += 1
+
+    # Check for graceful shutdown request
+    if shutdown_requested:
+        print("\nGraceful shutdown requested. Saving final checkpoint...")
+        if master_process and iter_num > 0:
+            # Create emergency checkpoint
+            print("Creating emergency checkpoint by merging LoRA weights...")
+            universal_state_dict = raw_model.get_merged_state_dict()
+            param_names = {name: param for name, param in raw_model.named_parameters()}
+            
+            emergency_checkpoint = {
+                'model': universal_state_dict,
+                'optimizer': optimizer.state_dict(),
+                'param_names': param_names,
+                'model_args': model_args,
+                'iter_num': iter_num,
+                'best_val_loss': best_val_loss,
+                'config': config,
+                'final_wandb_run_name': final_wandb_run_name,
+                'iter_of_last_op': iter_of_last_op,
+                'lr_schedule_offset': lr_schedule_offset,
+                'scaling_schedule': scaling_schedule,
+                'scaling_schedule_file': scaling_schedule_file,
+                'emergency_save': True,  # Mark as emergency save
+            }
+            
+            emergency_path = os.path.join(out_dir, f'emergency_ckpt_iter_{iter_num}.pt')
+            torch.save(emergency_checkpoint, emergency_path)
+            print(f"Emergency checkpoint saved to {emergency_path}")
+        print("Graceful shutdown complete. Exiting...")
+        break
 
     if iter_num > max_iters:
         break
