@@ -12,7 +12,7 @@ import numpy as np
 import torch
 import psutil
 import threading
-from collections import deque
+from collections import deque, defaultdict
 import torch._dynamo
 try:
     torch._dynamo.config.recompile_limit = 1000000 # or a higher number
@@ -25,6 +25,108 @@ from torch.distributed import init_process_group, destroy_process_group
 from model import GPTConfig, GPT
 from logger import TrainingLogger
 from analyzer import ModelAnalyzer
+
+# -----------------------------------------------------------------------------
+# Timing utilities
+# -----------------------------------------------------------------------------
+
+class TimingProfiler:
+    """A utility class for measuring and tracking timing of different training loop components."""
+
+    def __init__(self):
+        self.timings = defaultdict(list)
+        self.current_timings = {}
+        self.iteration_start_time = None
+        self.total_iteration_time = 0.0
+
+    def start_iteration(self):
+        """Mark the start of a training iteration."""
+        self.iteration_start_time = time.perf_counter()
+        self.current_timings = {}
+
+    def end_iteration(self):
+        """Mark the end of a training iteration and calculate total time."""
+        if self.iteration_start_time is not None:
+            self.total_iteration_time = time.perf_counter() - self.iteration_start_time
+            return self.total_iteration_time
+        return 0.0
+
+    def time_section(self, section_name):
+        """Context manager for timing a specific section."""
+        return TimingContext(self, section_name)
+
+    def record_timing(self, section_name, duration):
+        """Record a timing measurement for a section."""
+        self.current_timings[section_name] = duration
+        self.timings[section_name].append(duration)
+
+    def get_current_percentages(self):
+        """Get the percentage breakdown of the current iteration."""
+        if self.total_iteration_time == 0:
+            return {}
+
+        percentages = {}
+        for section, duration in self.current_timings.items():
+            percentages[section] = (duration / self.total_iteration_time) * 100
+        return percentages
+
+    def get_average_percentages(self, last_n=10):
+        """Get average percentage breakdown over the last N iterations."""
+        if not self.timings:
+            return {}
+
+        # Calculate average timings over last N iterations
+        avg_timings = {}
+        for section, times in self.timings.items():
+            recent_times = times[-last_n:] if len(times) >= last_n else times
+            avg_timings[section] = sum(recent_times) / len(recent_times)
+
+        # Calculate total average time
+        total_avg = sum(avg_timings.values())
+        if total_avg == 0:
+            return {}
+
+        # Convert to percentages
+        percentages = {}
+        for section, avg_time in avg_timings.items():
+            percentages[section] = (avg_time / total_avg) * 100
+
+        return percentages
+
+    def get_summary_stats(self, section_name, last_n=10):
+        """Get summary statistics for a specific section."""
+        if section_name not in self.timings:
+            return {}
+
+        times = self.timings[section_name]
+        recent_times = times[-last_n:] if len(times) >= last_n else times
+
+        if not recent_times:
+            return {}
+
+        return {
+            'avg_ms': (sum(recent_times) / len(recent_times)) * 1000,
+            'min_ms': min(recent_times) * 1000,
+            'max_ms': max(recent_times) * 1000,
+            'count': len(recent_times)
+        }
+
+class TimingContext:
+    """Context manager for timing a specific section."""
+
+    def __init__(self, profiler, section_name):
+        self.profiler = profiler
+        self.section_name = section_name
+        self.start_time = None
+
+    def __enter__(self):
+        self.start_time = time.perf_counter()
+        return self
+
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        if self.start_time is not None:
+            duration = time.perf_counter() - self.start_time
+            self.profiler.record_timing(self.section_name, duration)
 
 # -----------------------------------------------------------------------------
 # default config values designed to train a gpt2 (124M) on OpenWebText
@@ -1032,7 +1134,6 @@ batch_manager = BatchManager(
 )
 
 X, Y = batch_manager.get_next_batch()
-t0 = time.time()
 local_iter_num = 0
 raw_model = model.module if ddp else model
 
@@ -1051,6 +1152,11 @@ print(f"eval every: {eval_interval}")
 # Initialize thread pool executor for asynchronous analysis
 executor = concurrent.futures.ThreadPoolExecutor(max_workers=1)
 prev_embeddings = None  # This will store the CPU snapshot for semantic drift
+
+# Initialize timing profiler for granular performance measurements
+timing_profiler = TimingProfiler()
+
+t0 = time.time()
 
 while True:
     lr = get_lr(iter_num)
@@ -1106,6 +1212,12 @@ while True:
             # --- END OF NEW LOGIC ---
 
             training_logger.log_step(iter_num, losses['train'], losses['val'], tokens_per_second)
+
+            # Log detailed timing breakdown to file
+            avg_timing_percentages = timing_profiler.get_average_percentages(last_n=eval_interval)
+            if avg_timing_percentages:
+                timing_breakdown = ", ".join([f"{section} {pct:.1f}%" for section, pct in avg_timing_percentages.items()])
+                training_logger.log(f"  timing breakdown (avg last 10): {timing_breakdown}")
             if wandb_log:
                 wandb_metrics = {
                     "iter": iter_num,
@@ -1116,6 +1228,20 @@ while True:
                     "time/elapsed_seconds": elapsed_time_seconds, # Log elapsed time
                     "throughput/tokens_per_second": tokens_per_second, # Log tokens per second
                 }
+
+                # Add timing breakdown metrics
+                avg_timing_percentages = timing_profiler.get_average_percentages(last_n=10)
+                if avg_timing_percentages:
+                    for section, percentage in avg_timing_percentages.items():
+                        wandb_metrics[f"timing/{section}_pct"] = percentage
+
+                # Add absolute timing metrics (in milliseconds)
+                for section in ['forward_pass', 'backward_pass', 'data_loading', 'optimizer_step']:
+                    stats = timing_profiler.get_summary_stats(section, last_n=10)
+                    if stats:
+                        wandb_metrics[f"timing/{section}_avg_ms"] = stats['avg_ms']
+                        wandb_metrics[f"timing/{section}_max_ms"] = stats['max_ms']
+
                 # Add analysis metrics if they were computed successfully
                 if rank_util != -1.0:
                     wandb_metrics["analysis/mlp_rank_utilization"] = rank_util
@@ -1228,32 +1354,65 @@ while True:
     if iter_num == 0 and eval_only:
         break
 
-    for micro_step in range(gradient_accumulation_steps):
-        if ddp:
-            model.require_backward_grad_sync = (micro_step == gradient_accumulation_steps - 1)
-        with ctx:
-            logits, loss = model(X, Y)
-            loss = loss / gradient_accumulation_steps
-        X, Y = batch_manager.get_next_batch()
-        scaler.scale(loss).backward()
-    if grad_clip != 0.0:
-        scaler.unscale_(optimizer)
-        torch.nn.utils.clip_grad_norm_(model.parameters(), grad_clip)
-    scaler.step(optimizer)
-    scaler.update()
-    optimizer.zero_grad(set_to_none=True)
+    # Start timing the training iteration
+    timing_profiler.start_iteration()
+
+    # Time the gradient accumulation loop
+    with timing_profiler.time_section("gradient_accumulation"):
+        for micro_step in range(gradient_accumulation_steps):
+            if ddp:
+                model.require_backward_grad_sync = (micro_step == gradient_accumulation_steps - 1)
+
+            # Time the forward pass specifically
+            with timing_profiler.time_section("forward_pass"):
+                with ctx:
+                    logits, loss = model(X, Y)
+                    loss = loss / gradient_accumulation_steps
+
+            # Time data loading for next batch
+            with timing_profiler.time_section("data_loading"):
+                X, Y = batch_manager.get_next_batch()
+
+            # Time the backward pass
+            with timing_profiler.time_section("backward_pass"):
+                scaler.scale(loss).backward()
+
+    # Time gradient clipping
+    with timing_profiler.time_section("gradient_clipping"):
+        if grad_clip != 0.0:
+            scaler.unscale_(optimizer)
+            torch.nn.utils.clip_grad_norm_(model.parameters(), grad_clip)
+
+    # Time optimizer step
+    with timing_profiler.time_section("optimizer_step"):
+        scaler.step(optimizer)
+        scaler.update()
+        optimizer.zero_grad(set_to_none=True)
+
+    # End timing the training iteration
+    total_iter_time = timing_profiler.end_iteration()
 
     t1 = time.time()
     if iter_num % log_interval == 0 and master_process:
-        
+
         lossf = loss.item() * gradient_accumulation_steps
         if local_iter_num >= 5:
             mfu = raw_model.estimate_mfu(batch_size * gradient_accumulation_steps, dt/log_interval)
             running_mfu = mfu if running_mfu == -1.0 else 0.9*running_mfu + 0.1*mfu
-        
+
         dt = t1 - t0
         t0 = t1
+
+        # Get timing breakdown
+        timing_percentages = timing_profiler.get_current_percentages()
+        forward_pass_pct = timing_percentages.get('forward_pass', 0)
+        backward_pass_pct = timing_percentages.get('backward_pass', 0)
+        data_loading_pct = timing_percentages.get('data_loading', 0)
+        optimizer_step_pct = timing_percentages.get('optimizer_step', 0)
+
+        # Enhanced logging with timing breakdown
         print(f"iter {iter_num}: loss {lossf:.4f}, lr {lr:.5f}, time {dt/log_interval*1000:.2f}ms, mfu {running_mfu*100:.2f}%")
+        print(f"  timing breakdown: forward {forward_pass_pct:.1f}%, backward {backward_pass_pct:.1f}%, data {data_loading_pct:.1f}%, optim {optimizer_step_pct:.1f}%")
     iter_num += 1
     local_iter_num += 1
 
