@@ -1082,13 +1082,15 @@ while True:
                     # 2. Get filtered tokens from BatchManager (non-outliers)
                     filtered_tokens = batch_manager.get_non_outlier_tokens(ignored_outlayers_sum)
 
+                    X, Y = get_val_batch()
+
                     # 3. Submit the new, generic analysis task to the executor.
                     future = executor.submit(
                         run_full_analysis_async,
                         analyzer,
                         current_snapshot,
                         prev_embeddings, # Will be None on the first run.
-                        get_val_batch(),
+                        X,
                         iter_num,
                         filtered_tokens
                     )

@@ -40,7 +40,8 @@ class ModelAnalyzer:
 
         return {
             'avg_cosine_similarity': cosine_sims.mean().item(),
-            'cosine_sim_10th_percentile': torch.quantile(cosine_sims, 0.1).item()
+            'cosine_sim_10th_percentile': torch.quantile(cosine_sims, 0.1).item(),
+            'cosine_sim_90th_percentile': torch.quantile(cosine_sims, 0.9).item()
         }
 
     @torch.no_grad()

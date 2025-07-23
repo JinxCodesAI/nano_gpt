@@ -38,19 +38,10 @@
   {
     "name": "reset_lr_schedule",
     "value": null,
-    "trigger_loss": 100,
-    "max_wait_iters": 1,
-    "desc": "first burn",
-    "reevaluate": false,
-    "completed": true
-  },
-  {
-    "name": "merge_lora_weights",
-    "value": null,
     "trigger_loss": 6.5,
     "max_wait_iters": 1000,
     "desc": "first burn",
-    "reevaluate": true,
+    "reevaluate": false,
     "completed": true
   },
   {
