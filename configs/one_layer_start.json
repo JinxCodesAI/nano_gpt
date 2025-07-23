@@ -19,7 +19,7 @@
   },
   {
     "name": "set_warmup_iters",
-    "value": 500,
+    "value": 100,
     "trigger_loss": 100,
     "max_wait_iters": 1,
     "desc": "first burn",
@@ -28,7 +28,7 @@
   },
   {
     "name": "set_lr",
-    "value": 0.0002,
+    "value": 0.002,
     "trigger_loss": 100,
     "max_wait_iters": 1,
     "desc": "first burn",
@@ -38,20 +38,29 @@
   {
     "name": "reset_lr_schedule",
     "value": null,
-    "trigger_loss": 6.5,
+    "trigger_loss": 5.5,
     "max_wait_iters": 1000,
     "desc": "first burn",
     "reevaluate": false,
-    "completed": true
+    "completed": false
+  },
+  {
+    "name": "widen_mlp",
+    "value": 3072,
+    "trigger_loss": 1000,
+    "max_wait_iters": 1,
+    "desc": "first burn",
+    "reevaluate": true,
+    "completed": false
   },
   {
     "name": "set_warmup_iters",
     "value": 500,
-    "trigger_loss": 500,
+    "trigger_loss": 1000,
     "max_wait_iters": 1,
     "desc": "first burn",
     "reevaluate": false,
-    "completed": true
+    "completed": false
   },
   {
     "name": "set_lr",
@@ -60,25 +69,16 @@
     "max_wait_iters": 1,
     "desc": "first burn",
     "reevaluate": false,
-    "completed": true
+    "completed": false
   },
   {
     "name": "reset_lr_schedule",
     "value": null,
-    "trigger_loss": 100,
-    "max_wait_iters": 1,
+    "trigger_loss": 4.5,
+    "max_wait_iters": 2000,
     "desc": "first burn",
     "reevaluate": false,
-    "completed": true
-  },
-  {
-    "name": "merge_lora_weights",
-    "value": null,
-    "trigger_loss": 5,
-    "max_wait_iters": 1000,
-    "desc": "first burn",
-    "reevaluate": false,
-    "completed": true
+    "completed": false
   },
   {
     "name": "set_batch_size",
@@ -87,7 +87,7 @@
     "max_wait_iters": 1,
     "desc": "first burn",
     "reevaluate": false,
-    "completed": true
+    "completed": false
   },
   {
     "name": "stack_layers",
@@ -100,16 +100,25 @@
     "max_wait_iters": 1,
     "desc": "first burn",
     "reevaluate": true,
-    "completed": true
+    "completed": false
+  },
+  {
+    "name": "set_warmup_iters",
+    "value": 2000,
+    "trigger_loss": 1000,
+    "max_wait_iters": 1,
+    "desc": "first burn",
+    "reevaluate": false,
+    "completed": false
   },
   {
     "name": "set_curriculum_alpha",
-    "value": 0.9,
+    "value": 0.8,
     "trigger_loss": 100,
     "max_wait_iters": 1,
     "desc": "first burn",
     "reevaluate": false,
-    "completed": true
+    "completed": false
   },
   {
     "name": "set_grad_accum",
@@ -118,7 +127,7 @@
     "max_wait_iters": 1,
     "desc": "first burn",
     "reevaluate": false,
-    "completed": true
+    "completed": false
   },
   {
     "name": "set_eval_iters",
@@ -127,7 +136,7 @@
     "max_wait_iters": 1,
     "desc": "first burn",
     "reevaluate": false,
-    "completed": true
+    "completed": false
   },
   {
     "name": "set_eval_interval",
@@ -136,22 +145,38 @@
     "max_wait_iters": 1,
     "desc": "first burn",
     "reevaluate": false,
-    "completed": true
+    "completed": false
   },
   {
     "name": "reset_lr_schedule",
     "value": null,
+    "trigger_loss": 3.8,
+    "max_wait_iters": 2000,
+    "desc": "first burn",
+    "reevaluate": false,
+    "completed": false
+  },
+  {
+    "name": "set_batch_size",
+    "value": 6,
     "trigger_loss": 100,
     "max_wait_iters": 1,
     "desc": "first burn",
     "reevaluate": false,
-    "completed": true
+    "completed": false
   },
   {
-    "name": "merge_lora_weights",
-    "value": null,
-    "trigger_loss": 4.2,
-    "max_wait_iters": 10000,
+    "name": "stack_layers",
+    "value": [
+      0,
+      0,
+      0,
+      1,
+      1,
+      2
+    ],
+    "trigger_loss": 1000,
+    "max_wait_iters": 1,
     "desc": "first burn",
     "reevaluate": true,
     "completed": false

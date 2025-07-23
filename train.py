@@ -29,81 +29,129 @@ from analyzer import ModelAnalyzer
 # -----------------------------------------------------------------------------
 # Timing utilities
 # -----------------------------------------------------------------------------
+from collections import defaultdict
+import time
 
 class TimingProfiler:
-    """A utility class for measuring and tracking timing of different training loop components."""
+    """
+    A utility class for measuring training loop component timing.
+    It supports a hierarchical EMA summary and provides a backward-compatible
+    interface that also uses the smoothed EMA data.
+    """
 
-    def __init__(self):
+    def __init__(self, alpha=0.1):
+        # --- Attributes for EMA calculation ---
+        self.alpha = alpha
+        self.ema_timings = {}
+        self._context_stack = []
+        self._current_raw_timings = {}
+
+        # --- Attributes for full backward compatibility ---
         self.timings = defaultdict(list)
-        self.current_timings = {}
-        self.iteration_start_time = None
+        self.current_timings = {} # Note: This will now be populated with EMA values
         self.total_iteration_time = 0.0
-
-    def start_iteration(self):
-        """Mark the start of a training iteration."""
-        self.iteration_start_time = time.perf_counter()
-        self.current_timings = {}
-
-    def end_iteration(self):
-        """Mark the end of a training iteration and calculate total time."""
-        if self.iteration_start_time is not None:
-            self.total_iteration_time = time.perf_counter() - self.iteration_start_time
-            return self.total_iteration_time
-        return 0.0
 
     def time_section(self, section_name):
         """Context manager for timing a specific section."""
         return TimingContext(self, section_name)
 
-    def record_timing(self, section_name, duration):
-        """Record a timing measurement for a section."""
-        self.current_timings[section_name] = duration
+    def start_iteration(self):
+        """Resets timers for the start of a new iteration."""
+        self.iteration_start_time = time.perf_counter()
+        self._current_raw_timings = {}
+        self._context_stack = []
+
+    def end_iteration(self):
+        """Updates all timers at the end of an iteration."""
+        self.total_iteration_time = time.perf_counter() - self.iteration_start_time
+        self._update_ema(self.ema_timings, self._current_raw_timings)
+        return self.total_iteration_time
+
+    def _record_timing(self, section_name, duration):
+        """Unified recording method called by TimingContext."""
+        # 1. Record raw data for the current iteration in a nested way
+        level = self._current_raw_timings
+        for parent in self._context_stack[:-1]:
+            if parent not in level: level[parent] = {'__duration__': 0.0}
+            level = level[parent]
+        if section_name not in level: level[section_name] = {'__duration__': 0.0}
+        level[section_name]['__duration__'] += duration
+
+        # 2. Record for the simple historical list (for get_summary_stats)
         self.timings[section_name].append(duration)
 
+    def _update_ema(self, ema_level, raw_level):
+        """Recursively updates the EMA timings at the end of an iteration."""
+        all_keys = set(ema_level.keys()) | set(raw_level.keys())
+        for key in all_keys:
+            if key == '__duration__': continue
+            raw_duration = raw_level.get(key, {}).get('__duration__', 0.0)
+            if key not in ema_level:
+                ema_level[key] = {'__ema_duration__': raw_duration, 'children': {}}
+            else:
+                old_ema = ema_level[key]['__ema_duration__']
+                ema_level[key]['__ema_duration__'] = (self.alpha * raw_duration) + (1 - self.alpha) * old_ema
+            self._update_ema(ema_level[key]['children'], raw_level.get(key, {}))
+
+    # --- Public Interface Methods ---
+
     def get_current_percentages(self):
-        """Get the percentage breakdown of the current iteration."""
-        if self.total_iteration_time == 0:
+        """
+        MODIFIED: Returns a flat dictionary of percentages based on the EMA-smoothed
+        durations, maintaining the original method's interface.
+        """
+        flat_ema_durations = {}
+        self._flatten_ema(self.ema_timings, flat_ema_durations)
+
+        # The total time is the sum of all top-level sections' EMA durations
+        total_ema_time = sum(v['__ema_duration__'] for v in self.ema_timings.values())
+        if total_ema_time == 0:
             return {}
 
         percentages = {}
-        for section, duration in self.current_timings.items():
-            percentages[section] = (duration / self.total_iteration_time) * 100
+        for section, duration in flat_ema_durations.items():
+            percentages[section] = (duration / total_ema_time) * 100
+
         return percentages
+
+    def _flatten_ema(self, ema_level, flat_dict):
+        """Internal helper to flatten the nested EMA dictionary."""
+        for name, data in ema_level.items():
+            flat_dict[name] = data['__ema_duration__']
+            if data['children']:
+                self._flatten_ema(data['children'], flat_dict)
+
+    def get_summary(self):
+        """Generates a clean, hierarchical string of the EMA timing breakdown."""
+        total_time = sum(data['__ema_duration__'] for data in self.ema_timings.values())
+        if total_time == 0: return "No timing data recorded yet."
+        summary_lines = ["Timing Breakdown (EMA):"]
+        self._format_level(summary_lines, self.ema_timings, total_time, indent=0)
+        return "\n".join(summary_lines)
+
+    def _format_level(self, summary_lines, level_data, parent_total, indent):
+        """Recursively formats the summary string."""
+        indent_str = "    " * indent
+        for name, data in sorted(level_data.items(), key=lambda i: i[1]['__ema_duration__'], reverse=True):
+            duration = data['__ema_duration__']
+            percentage = (duration / parent_total) * 100 if parent_total > 0 else 0
+            summary_lines.append(f"{indent_str} L {name:<22} | {percentage:5.1f}% | ({duration * 1000:.2f} ms)")
+            if data['children']:
+                self._format_level(summary_lines, data['children'], duration, indent + 1)
+
+    # --- Other Backward-Compatibility Methods ---
 
     def get_average_percentages(self, last_n=10):
-        """Get average percentage breakdown over the last N iterations."""
-        if not self.timings:
-            return {}
-
-        # Calculate average timings over last N iterations
-        avg_timings = {}
-        for section, times in self.timings.items():
-            recent_times = times[-last_n:] if len(times) >= last_n else times
-            avg_timings[section] = sum(recent_times) / len(recent_times)
-
-        # Calculate total average time
+        if not self.timings: return {}
+        avg_timings = {s: sum(t[-last_n:]) / len(t[-last_n:]) for s, t in self.timings.items()}
         total_avg = sum(avg_timings.values())
-        if total_avg == 0:
-            return {}
-
-        # Convert to percentages
-        percentages = {}
-        for section, avg_time in avg_timings.items():
-            percentages[section] = (avg_time / total_avg) * 100
-
-        return percentages
+        if total_avg == 0: return {}
+        return {s: (t / total_avg) * 100 for s, t in avg_timings.items()}
 
     def get_summary_stats(self, section_name, last_n=10):
-        """Get summary statistics for a specific section."""
-        if section_name not in self.timings:
-            return {}
-
-        times = self.timings[section_name]
-        recent_times = times[-last_n:] if len(times) >= last_n else times
-
-        if not recent_times:
-            return {}
-
+        if section_name not in self.timings: return {}
+        recent_times = self.timings[section_name][-last_n:]
+        if not recent_times: return {}
         return {
             'avg_ms': (sum(recent_times) / len(recent_times)) * 1000,
             'min_ms': min(recent_times) * 1000,
@@ -113,21 +161,20 @@ class TimingProfiler:
 
 class TimingContext:
     """Context manager for timing a specific section."""
-
     def __init__(self, profiler, section_name):
         self.profiler = profiler
         self.section_name = section_name
         self.start_time = None
 
     def __enter__(self):
+        self.profiler._context_stack.append(self.section_name)
         self.start_time = time.perf_counter()
         return self
 
     def __exit__(self, exc_type, exc_val, exc_tb):
-        if self.start_time is not None:
-            duration = time.perf_counter() - self.start_time
-            self.profiler.record_timing(self.section_name, duration)
-
+        duration = time.perf_counter() - self.start_time
+        self.profiler._record_timing(self.section_name, duration)
+        self.profiler._context_stack.pop()
 # -----------------------------------------------------------------------------
 # default config values designed to train a gpt2 (124M) on OpenWebText
 # I/O
@@ -387,24 +434,29 @@ def save_scaling_schedule(file_path, schedule_data):
 def load_scaling_schedule(file_path, init_from):
     """Load scaling schedule and reset 'completed' status if starting from scratch."""
     if not file_path or not os.path.exists(file_path):
+        print("Scaling schedule not found")
         return []
     try:
         with open(file_path, 'r') as f:
             if file_path.endswith('.yaml') or file_path.endswith('.yml'):
                 schedule = yaml.safe_load(f)
+                print("Scaling schedule loaded")
             elif file_path.endswith('.json'):
                 schedule = json.load(f)
+                print("Scaling schedule loaded")
             else:
                 print(f"Warning: Unknown file format for scaling schedule: {file_path}")
+                raise Exception(f"Warning: Unknown file format for scaling schedule: {file_path}")
                 return []
         if not isinstance(schedule, list):
             print(f"Warning: Scaling schedule must be a list, got {type(schedule)}")
+            raise Exception(f"Warning: Scaling schedule must be a list, got {type(schedule)}")
             return []
         for i, op in enumerate(schedule):
             required_keys = ['name', 'value', 'trigger_loss', 'max_wait_iters', 'reevaluate']
             if not all(key in op for key in required_keys):
                 print(f"Warning: Operation {i} missing required keys: {required_keys}")
-                return []
+                raise Exception(f"Warning: Operation {i} missing required keys: {required_keys}")
 
         # Handle completion status based on init_from parameter
         # Note: Missing 'completed' fields are treated as False automatically
@@ -424,7 +476,7 @@ def load_scaling_schedule(file_path, init_from):
         return schedule
     except Exception as e:
         print(f"Error loading scaling schedule from {file_path}: {e}")
-        return []
+        raise e
 
 # Load scaling schedule
 if scaling_schedule_file:
@@ -830,6 +882,10 @@ def get_lr(it):
 
     if master_process and wandb_log:
         wandb.log({"iter": it, "effective_it": effective_it, "warmup_iters": warmup_iters, "lr_decay_iters": lr_decay_iters, "gradient_accumulation_steps":gradient_accumulation_steps, "batch_size":batch_size })
+    else:
+        if it % log_interval == 0:
+            print(f"iter: {it}, effective_it: {effective_it}, warmup_iters: {warmup_iters}, lr_decay_iters: {lr_decay_iters}, gradient_accumulation_steps:{gradient_accumulation_steps}, batch_size:{batch_size}")
+    
     if effective_it < warmup_iters:
         return learning_rate * (effective_it + 1) / (warmup_iters + 1)
     if effective_it > lr_decay_iters:
@@ -875,11 +931,11 @@ def analysis_done_callback(future):
             # Embedding Geometry Analysis
             if 'embeddings' in geo and geo['embeddings']:
                 emb_geo = geo['embeddings']
-                avg_neighbors = emb_geo['local_density']['average_neighborhood_size']
                 mean_sim = emb_geo['global_sparsity']['mean_similarity']
                 std_sim = emb_geo['global_sparsity']['std_similarity']
                 sim_10th = emb_geo['global_sparsity']['similarity_10th_percentile']
                 sim_90th = emb_geo['global_sparsity']['similarity_90th_percentile']
+                avg_neighbors = emb_geo['local_density']['average_neighborhood_size']
                 nbhd_10th = emb_geo['local_density']['neighbor_10th_percentile']
                 nbhd_50th = emb_geo['local_density']['neighbor_50th_percentile']
                 nbhd_90th = emb_geo['local_density']['neighbor_90th_percentile']
@@ -890,8 +946,8 @@ def analysis_done_callback(future):
                 total_embeddings = analysis_info.get('total_embeddings', 'N/A')
                 is_filtered = analysis_info.get('filtered', False)
 
-                geom_msg1 = f"  [Embeddings Geometry] Avg Neighbors: {avg_neighbors:.2f} | Mean Similarity: {mean_sim:.4f} 10th-50th-90th Percentile: {nbhd_10th:.4f} - {nbhd_50th:.4f} - {nbhd_90th:.4f}"
-                geom_msg2 = f"  [Embeddings Geometry] Std Similarity: {std_sim:.4f} | 10th-90th Percentile: {sim_10th:.4f} - {sim_90th:.4f}"
+                geom_msg1 = f"  [Embeddings Geometry] Avg Neighbors: {avg_neighbors:.2f} 10th-50th-90th Percentile: {nbhd_10th:.4f} - {nbhd_50th:.4f} - {nbhd_90th:.4f}"
+                geom_msg2 = f"  [Embeddings Geometry] Mean Similarity: {mean_sim:.4f} Std Similarity: {std_sim:.4f} | 10th-90th Percentile: {sim_10th:.4f} - {sim_90th:.4f}"
                 geom_msg3 = f"  [Embeddings Analysis] Analyzed: {num_analyzed}/{total_embeddings} embeddings | Filtered: {is_filtered}"
                 att_msg = f"  [Attention Entropy] Avg Entropy: {attention_entropy:.4f}"
                 print(geom_msg1)
@@ -957,12 +1013,14 @@ def analysis_done_callback(future):
             if 'embeddings' in drift and drift['embeddings']:
                 emb_drift_avg = drift['embeddings']['avg_cosine_similarity']
                 emb_drift_10th = drift['embeddings']['cosine_sim_10th_percentile']
-                drift_msg1 = f"  [Embeddings Drift] Avg Cosine Sim: {emb_drift_avg:.4f} | 10th Percentile: {emb_drift_10th:.4f}"
+                emb_drift_90th = drift['embeddings']['cosine_sim_90th_percentile']
+                drift_msg1 = f"  [Embeddings Drift] Avg Cosine Sim: {emb_drift_avg:.4f} | 10th Percentile: {emb_drift_10th:.4f} | 90th Percentile: {emb_drift_90th:.4f}"
                 print(drift_msg1)
                 log_messages.append(drift_msg1)
                 if wandb_log: wandb.log({
                     "analysis/embed/drift_avg_sim": emb_drift_avg,
-                    "analysis/embed/drift_10th_sim": emb_drift_10th
+                    "analysis/embed/drift_10th_sim": emb_drift_10th,
+                    "analysis/embed/drift_90th_sim": emb_drift_90th
                 }, step=iter_num)
 
             # FFN Drift (report first layer for brevity)
@@ -970,12 +1028,14 @@ def analysis_done_callback(future):
             if ffn0_drift:
                 ffn_drift_avg = ffn0_drift['avg_cosine_similarity']
                 ffn_drift_10th = ffn0_drift['cosine_sim_10th_percentile']
+                ffn_drift_90th = ffn0_drift['cosine_sim_90th_percentile']
                 drift_msg2 = f"  [FFN L0 Drift] Avg Cosine Sim: {ffn_drift_avg:.4f} | 10th Percentile: {ffn_drift_10th:.4f}"
                 print(drift_msg2)
                 log_messages.append(drift_msg2)
                 if wandb_log: wandb.log({
                     "analysis/ffn/drift_avg_sim_L0": ffn_drift_avg,
-                    "analysis/ffn/drift_10th_sim_L0": ffn_drift_10th
+                    "analysis/ffn/drift_10th_sim_L0": ffn_drift_10th,
+                    "analysis/ffn/drift_90th_sim_L0": ffn_drift_90th
                 }, step=iter_num)
 
         end_msg = "--- END OF ASYNC ANALYSIS RESULTS ---"
@@ -996,7 +1056,23 @@ def analysis_done_callback(future):
             training_logger.log(f"ERROR DURING ASYNC ANALYSIS: {e}")
 
 
+def print_timings(timing_profiler):
+    
+    # Get timing breakdown
+    timing_percentages = timing_profiler.get_current_percentages()
+    evaluation = timing_percentages.get('evaluation', 0)
+    gradient_accumulation =  timing_percentages.get('gradient_accumulation', 0)
+    gradient_clipping =  timing_percentages.get('gradient_clipping', 0)
+    forward_pass_pct = timing_percentages.get('forward_pass', 0)
+    backward_pass_pct = timing_percentages.get('backward_pass', 0)
+    data_loading_pct = timing_percentages.get('data_loading', 0)
+    optimizer_step_pct = timing_percentages.get('optimizer_step', 0)
 
+        # Enhanced logging with timing breakdown
+    print(f"  timing breakdown: evaluation {evaluation:.1f}%")
+    print(f"  timing breakdown: gradient_accumulation {gradient_accumulation:.1f}%")
+    print(f"  timing breakdown:     forward {forward_pass_pct:.1f}%, backward {backward_pass_pct:.1f}%, data {data_loading_pct:.1f}%, optim {optimizer_step_pct:.1f}%")
+    print(f"  timing breakdown: gradient_clipping {gradient_clipping:.1f}%")
 
 
 def execute_operation(op, trigger_reason, current_val_loss, iter_num, target_architecture_config):
@@ -1035,12 +1111,16 @@ def execute_operation(op, trigger_reason, current_val_loss, iter_num, target_arc
 
             # --- Perform the absolute architectural operation ---
             if op_name == 'stack_layers':
+                start_time = time.time()
                 unwrapped_model.stack_layers(op_value)
             elif op_name == 'widen_mlp':
+                start_time = time.time()
                 unwrapped_model.widen_mlp(op_value)
             elif op_name == 'set_attn_lora_rank':
+                start_time = time.time()
                 unwrapped_model.resize_lora_rank(op_value)
             elif op_name == 'set_embedding_lora_rank':
+                start_time = time.time()
                 unwrapped_model.resize_embedding_rank(op_value)
             elif op_name == 'merge_lora_weights':
                 unwrapped_model.merge_lora_weights()
@@ -1071,9 +1151,11 @@ def execute_operation(op, trigger_reason, current_val_loss, iter_num, target_arc
                 if master_process: print(f"Learning rate: {learning_rate:.6f} -> {op_value:.6f}")
                 learning_rate = op_value
             elif op_name == 'set_batch_size':
+                start_time = time.time()
                 if master_process: print(f"Batch size: {batch_size} -> {op_value}")
                 batch_size = op_value
             elif op_name == 'set_grad_accum':
+                start_time = time.time()
                 if master_process: print(f"Grad accum steps: {gradient_accumulation_steps} -> {op_value}")
                 gradient_accumulation_steps = op_value
             elif op_name == 'set_warmup_iters':
@@ -1159,203 +1241,206 @@ timing_profiler = TimingProfiler()
 t0 = time.time()
 
 while True:
+    # Start timing the training iteration
+    timing_profiler.start_iteration()
     lr = get_lr(iter_num)
     for param_group in optimizer.param_groups:
         param_group['lr'] = lr
 
-    if iter_num % eval_interval == 0:
-        losses = estimate_loss()
-        if master_process:
-            # Calculate tokens per second
-            elapsed_time_seconds = time.time() - start_time
-            tokens_per_second = batch_manager.total_tokens_served / elapsed_time_seconds if elapsed_time_seconds > 0 else 0
+    with timing_profiler.time_section("evaluation"):
+        if iter_num % eval_interval == 0:
+            losses = estimate_loss()
+            if master_process:
+                # Calculate tokens per second
+                elapsed_time_seconds = time.time() - start_time
+                tokens_per_second = batch_manager.total_tokens_served / elapsed_time_seconds if elapsed_time_seconds > 0 else 0
 
-            print(f"step {iter_num}: train loss {losses['train']:.4f}, val loss {losses['val']:.4f}, tokens/sec {tokens_per_second:.0f}")
+                print(f"step {iter_num}: train loss {losses['train']:.4f}, val loss {losses['val']:.4f}, lr: {lr:.4f}, tokens/sec {tokens_per_second:.0f}")
+                print_timings(timing_profiler)
 
-            # --- Model Analysis ---
-            analyzer = ModelAnalyzer(raw_model)
-            # --- NEW ROBUST ASYNCHRONOUS ANALYSIS DISPATCH LOGIC ---
-            # Check system memory before dispatching analysis to prevent OOM
-            memory_info = psutil.virtual_memory()
-            if memory_info.percent > 90.0:
-                print(f"WARNING: Skipping async analysis due to high system memory usage ({memory_info.percent:.1f}%)")
-            else:
-                print(f"Dispatching async analysis for iter {iter_num}...")
-                try:
-                    # 1. Create a full snapshot of the model state on CPU.
-                    current_snapshot = analyzer.get_model_state_snapshot()
-
-                    # 2. Get filtered tokens from BatchManager (non-outliers)
-                    filtered_tokens = batch_manager.get_non_outlier_tokens(ignored_outlayers_sum)
-
-                    X, Y = get_val_batch()
-
-                    # 3. Submit the new, generic analysis task to the executor.
-                    future = executor.submit(
-                        run_full_analysis_async,
-                        analyzer,
-                        current_snapshot,
-                        prev_embeddings, # Will be None on the first run.
-                        X,
-                        iter_num,
-                        filtered_tokens
-                    )
-                    future.add_done_callback(analysis_done_callback)
-
-                    # 4. CRITICAL: Update state for the next analysis cycle.
-                    prev_embeddings = current_snapshot
-                    print("Async analysis job dispatched. Training continues.")
-
-                except Exception as dispatch_error:
-                    print(f"ERROR dispatching async analysis for iter {iter_num}: {dispatch_error}")
-
-            # --- END OF NEW LOGIC ---
-
-            training_logger.log_step(iter_num, losses['train'], losses['val'], tokens_per_second)
-
-            # Log detailed timing breakdown to file
-            avg_timing_percentages = timing_profiler.get_average_percentages(last_n=eval_interval)
-            if avg_timing_percentages:
-                timing_breakdown = ", ".join([f"{section} {pct:.1f}%" for section, pct in avg_timing_percentages.items()])
-                training_logger.log(f"  timing breakdown (avg last 10): {timing_breakdown}")
-            if wandb_log:
-                wandb_metrics = {
-                    "iter": iter_num,
-                    "train/loss": losses['train'],
-                    "val/loss": losses['val'],
-                    "lr": lr,
-                    "mfu": running_mfu*100,
-                    "time/elapsed_seconds": elapsed_time_seconds, # Log elapsed time
-                    "throughput/tokens_per_second": tokens_per_second, # Log tokens per second
-                }
-
-                # Add timing breakdown metrics
-                avg_timing_percentages = timing_profiler.get_average_percentages(last_n=10)
-                if avg_timing_percentages:
-                    for section, percentage in avg_timing_percentages.items():
-                        wandb_metrics[f"timing/{section}_pct"] = percentage
-
-                # Add absolute timing metrics (in milliseconds)
-                for section in ['forward_pass', 'backward_pass', 'data_loading', 'optimizer_step']:
-                    stats = timing_profiler.get_summary_stats(section, last_n=10)
-                    if stats:
-                        wandb_metrics[f"timing/{section}_avg_ms"] = stats['avg_ms']
-                        wandb_metrics[f"timing/{section}_max_ms"] = stats['max_ms']
-
-                # Add analysis metrics if they were computed successfully
-                if rank_util != -1.0:
-                    wandb_metrics["analysis/mlp_rank_utilization"] = rank_util
-                if avg_entropy != -1.0:
-                    wandb_metrics["analysis/attention_entropy"] = avg_entropy
-                wandb.log(wandb_metrics)
-            if losses['val'] < best_val_loss or always_save_checkpoint:
-                best_val_loss = losses['val']
-                if iter_num > 0:
-                    # --- MODIFICATION START ---
-                    # Always save a universal, merged checkpoint
-                    print("Creating universal checkpoint by merging LoRA weights...")
-                    universal_state_dict = raw_model.get_merged_state_dict()
-
-                    # Save parameter names to enable optimizer state transfer
-                    param_names = {name: param for name, param in raw_model.named_parameters()}
-
-                    checkpoint = {
-                        'model': universal_state_dict, # Use the merged state dict
-                        'optimizer': optimizer.state_dict(),
-                        'param_names': param_names,  # Save parameter names for optimizer state transfer
-                        'model_args': model_args,
-                        'iter_num': iter_num,
-                        'best_val_loss': best_val_loss,
-                        'config': config,
-                    }
-                    # --- MODIFICATION END ---
-                    print(f"saving checkpoint to {out_dir}")
-                    torch.save(checkpoint, os.path.join(out_dir, 'ckpt.pt'))
-        
-        # FIX: Wrapped orchestration logic in a while loop to handle consecutive non-blocking operations
-        while True:
-            op_to_run = [None]
-            if master_process and scaling_schedule:
-                # Find next uncompleted operation
-                next_op = None
-                for op in scaling_schedule:
-                    if not op.get('completed', False):
-                        next_op = op
-                        break # Found the next operation to consider
-
-                # If next_op is still None, all operations are complete
-                if next_op is None:
-                    if 'all_ops_done' not in globals(): # Log this message only once
-                        print("All scheduled operations have been completed.")
-                        globals()['all_ops_done'] = True
+                # --- Model Analysis ---
+                analyzer = ModelAnalyzer(raw_model)
+                # --- NEW ROBUST ASYNCHRONOUS ANALYSIS DISPATCH LOGIC ---
+                # Check system memory before dispatching analysis to prevent OOM
+                memory_info = psutil.virtual_memory()
+                if memory_info.percent > 90.0:
+                    print(f"WARNING: Skipping async analysis due to high system memory usage ({memory_info.percent:.1f}%)")
                 else:
-                    # We have an operation to consider, now check its trigger conditions
-                    current_val_loss = losses['val']
-                    loss_triggered = current_val_loss < next_op['trigger_loss']
-                    timeout_triggered = (iter_num - iter_of_last_op) >= next_op['max_wait_iters']
+                    print(f"Dispatching async analysis for iter {iter_num}...")
+                    try:
+                        # 1. Create a full snapshot of the model state on CPU.
+                        current_snapshot = analyzer.get_model_state_snapshot()
 
-                    if loss_triggered or timeout_triggered:
-                        trigger_reason = 'Loss threshold' if loss_triggered else 'Timeout'
-                        op_to_run[0] = {'op': next_op, 'reason': trigger_reason, 'loss': current_val_loss}
+                        # 2. Get filtered tokens from BatchManager (non-outliers)
+                        filtered_tokens = batch_manager.get_non_outlier_tokens(ignored_outlayers_sum)
+
+                        X, Y = get_val_batch()
+
+                        # 3. Submit the new, generic analysis task to the executor.
+                        future = executor.submit(
+                            run_full_analysis_async,
+                            analyzer,
+                            current_snapshot,
+                            prev_embeddings, # Will be None on the first run.
+                            X,
+                            iter_num,
+                            filtered_tokens
+                        )
+                        future.add_done_callback(analysis_done_callback)
+
+                        # 4. CRITICAL: Update state for the next analysis cycle.
+                        prev_embeddings = current_snapshot
+                        print("Async analysis job dispatched. Training continues.")
+
+                    except Exception as dispatch_error:
+                        print(f"ERROR dispatching async analysis for iter {iter_num}: {dispatch_error}")
+
+                # --- END OF NEW LOGIC ---
+
+                training_logger.log_step(iter_num, losses['train'], losses['val'], tokens_per_second)
+
+                # Log detailed timing breakdown to file
+                avg_timing_percentages = timing_profiler.get_average_percentages(last_n=eval_interval)
+                if avg_timing_percentages:
+                    timing_breakdown = ", ".join([f"{section} {pct:.1f}%" for section, pct in avg_timing_percentages.items()])
+                    training_logger.log(f"  timing breakdown (avg last 10): {timing_breakdown}")
+                if wandb_log:
+                    wandb_metrics = {
+                        "iter": iter_num,
+                        "train/loss": losses['train'],
+                        "val/loss": losses['val'],
+                        "lr": lr,
+                        "mfu": running_mfu*100,
+                        "time/elapsed_seconds": elapsed_time_seconds, # Log elapsed time
+                        "throughput/tokens_per_second": tokens_per_second, # Log tokens per second
+                    }
+
+                    # Add timing breakdown metrics
+                    avg_timing_percentages = timing_profiler.get_average_percentages(last_n=eval_interval)
+                    if avg_timing_percentages:
+                        for section, percentage in avg_timing_percentages.items():
+                            wandb_metrics[f"timing/{section}_pct"] = percentage
+
+                    # Add absolute timing metrics (in milliseconds)
+                    for section in ['forward_pass', 'backward_pass', 'data_loading', 'optimizer_step']:
+                        stats = timing_profiler.get_summary_stats(section, last_n=eval_interval)
+                        if stats:
+                            wandb_metrics[f"timing/{section}_avg_ms"] = stats['avg_ms']
+                            wandb_metrics[f"timing/{section}_max_ms"] = stats['max_ms']
+
+                    # Add analysis metrics if they were computed successfully
+                    if rank_util != -1.0:
+                        wandb_metrics["analysis/mlp_rank_utilization"] = rank_util
+                    if avg_entropy != -1.0:
+                        wandb_metrics["analysis/attention_entropy"] = avg_entropy
+                    wandb.log(wandb_metrics)
+                if losses['val'] < best_val_loss or always_save_checkpoint:
+                    best_val_loss = losses['val']
+                    if iter_num > 0:
+                        # --- MODIFICATION START ---
+                        # Always save a universal, merged checkpoint
+                        print("Creating universal checkpoint by merging LoRA weights...")
+                        universal_state_dict = raw_model.get_merged_state_dict()
+
+                        # Save parameter names to enable optimizer state transfer
+                        param_names = {name: param for name, param in raw_model.named_parameters()}
+
+                        checkpoint = {
+                            'model': universal_state_dict, # Use the merged state dict
+                            'optimizer': optimizer.state_dict(),
+                            'param_names': param_names,  # Save parameter names for optimizer state transfer
+                            'model_args': model_args,
+                            'iter_num': iter_num,
+                            'best_val_loss': best_val_loss,
+                            'config': config,
+                        }
+                        # --- MODIFICATION END ---
+                        print(f"saving checkpoint to {out_dir}")
+                        torch.save(checkpoint, os.path.join(out_dir, 'ckpt.pt'))
+            
+            # FIX: Wrapped orchestration logic in a while loop to handle consecutive non-blocking operations
+            while True:
+                op_to_run = [None]
+                if master_process and scaling_schedule:
+                    # Find next uncompleted operation
+                    next_op = None
+                    for op in scaling_schedule:
+                        if not op.get('completed', False):
+                            next_op = op
+                            break # Found the next operation to consider
+
+                    # If next_op is still None, all operations are complete
+                    if next_op is None:
+                        if 'all_ops_done' not in globals(): # Log this message only once
+                            print("All scheduled operations have been completed.")
+                            globals()['all_ops_done'] = True
                     else:
-                        print(f"{next_op['name']} {current_val_loss} {next_op['trigger_loss']} {next_op['max_wait_iters']}")
+                        # We have an operation to consider, now check its trigger conditions
+                        current_val_loss = losses['val']
+                        loss_triggered = current_val_loss < next_op['trigger_loss']
+                        timeout_triggered = (iter_num - iter_of_last_op) >= next_op['max_wait_iters']
+
+                        if loss_triggered or timeout_triggered:
+                            trigger_reason = 'Loss threshold' if loss_triggered else 'Timeout'
+                            op_to_run[0] = {'op': next_op, 'reason': trigger_reason, 'loss': current_val_loss}
+                        else:
+                            print(f"{next_op['name']} {current_val_loss} {next_op['trigger_loss']} {next_op['max_wait_iters']}")
+                else:
+                    if master_process:
+                        print(f"No scaling schedule")
+                if ddp:
+                    torch.distributed.broadcast_object_list(op_to_run, src=0)
+
+                if op_to_run[0] is not None:
+                    op_data = op_to_run[0]
+                    next_op, trigger_reason, current_val_loss = op_data['op'], op_data['reason'], op_data['loss']
+                    if master_process:
+                        print(f"\n=== SCALING OPERATION TRIGGERED (DDP SYNC) ===")
+                        print(f"Operation: {next_op['name']}")
+                        print(f"Trigger reason: {trigger_reason}")
+                        print(f"Current val loss: {current_val_loss:.4f}, Trigger loss: {next_op['trigger_loss']:.4f}")
+                        print(f"Iterations since last op: {iter_num - iter_of_last_op}, Max wait: {next_op['max_wait_iters']}")
+
+                    operation_succeeded = execute_operation(next_op, trigger_reason, current_val_loss, iter_num, target_architecture_config)
+                    if operation_succeeded:
+                        # Instead of popping, we mark the operation as complete in our in-memory list
+                        next_op['completed'] = True
+                        iter_of_last_op = iter_num
+
+                        # Save the updated schedule back to the file
+                        if master_process:
+                            save_scaling_schedule(scaling_schedule_file, scaling_schedule)
+                        if next_op['reevaluate']:
+                            if master_process: print("Re-evaluating validation loss after operation...")
+                            losses = estimate_loss() # All processes re-evaluate to stay in sync
+                            if master_process:
+                                new_val_loss = losses['val']
+                                # Calculate tokens per second for this re-evaluation
+                                elapsed_time_seconds = time.time() - start_time
+                                tokens_per_second_reeval = batch_manager.total_tokens_served / elapsed_time_seconds if elapsed_time_seconds > 0 else 0
+                                print(f"New val loss after operation: {new_val_loss:.4f}")
+                                training_logger.log_operation_reevaluation(iter_num, next_op['name'], current_val_loss, new_val_loss)
+                                training_logger.log_step(iter_num, losses['train'], new_val_loss, tokens_per_second_reeval)
+                                if wandb_log:
+                                    elapsed_time_seconds = time.time() - start_time
+                                    wandb.log({
+                                        "iter": iter_num,
+                                        "train/loss": losses['train'],
+                                        "val/loss": new_val_loss,
+                                        "lr": lr,
+                                        "mfu": running_mfu*100,
+                                        "time/elapsed_seconds": elapsed_time_seconds, # Log elapsed time
+                                    })
+                            break # Exit the while loop after a blocking re-evaluation
+                    if master_process: print(f"=== SCALING OPERATION COMPLETE ===\n")
+                else:
+                    break # No operation was triggered, exit the while loop
 
             if ddp:
-                torch.distributed.broadcast_object_list(op_to_run, src=0)
-
-            if op_to_run[0] is not None:
-                op_data = op_to_run[0]
-                next_op, trigger_reason, current_val_loss = op_data['op'], op_data['reason'], op_data['loss']
-                if master_process:
-                    print(f"\n=== SCALING OPERATION TRIGGERED (DDP SYNC) ===")
-                    print(f"Operation: {next_op['name']}")
-                    print(f"Trigger reason: {trigger_reason}")
-                    print(f"Current val loss: {current_val_loss:.4f}, Trigger loss: {next_op['trigger_loss']:.4f}")
-                    print(f"Iterations since last op: {iter_num - iter_of_last_op}, Max wait: {next_op['max_wait_iters']}")
-
-                operation_succeeded = execute_operation(next_op, trigger_reason, current_val_loss, iter_num, target_architecture_config)
-                if operation_succeeded:
-                    # Instead of popping, we mark the operation as complete in our in-memory list
-                    next_op['completed'] = True
-                    iter_of_last_op = iter_num
-
-                    # Save the updated schedule back to the file
-                    if master_process:
-                        save_scaling_schedule(scaling_schedule_file, scaling_schedule)
-                    if next_op['reevaluate']:
-                        if master_process: print("Re-evaluating validation loss after operation...")
-                        losses = estimate_loss() # All processes re-evaluate to stay in sync
-                        if master_process:
-                            new_val_loss = losses['val']
-                            # Calculate tokens per second for this re-evaluation
-                            elapsed_time_seconds = time.time() - start_time
-                            tokens_per_second_reeval = batch_manager.total_tokens_served / elapsed_time_seconds if elapsed_time_seconds > 0 else 0
-                            print(f"New val loss after operation: {new_val_loss:.4f}")
-                            training_logger.log_operation_reevaluation(iter_num, next_op['name'], current_val_loss, new_val_loss)
-                            training_logger.log_step(iter_num, losses['train'], new_val_loss, tokens_per_second_reeval)
-                            if wandb_log:
-                                elapsed_time_seconds = time.time() - start_time
-                                wandb.log({
-                                    "iter": iter_num,
-                                    "train/loss": losses['train'],
-                                    "val/loss": new_val_loss,
-                                    "lr": lr,
-                                    "mfu": running_mfu*100,
-                                    "time/elapsed_seconds": elapsed_time_seconds, # Log elapsed time
-                                })
-                        break # Exit the while loop after a blocking re-evaluation
-                if master_process: print(f"=== SCALING OPERATION COMPLETE ===\n")
-            else:
-                break # No operation was triggered, exit the while loop
-
-        if ddp:
-            torch.distributed.barrier()
+                torch.distributed.barrier()
 
     if iter_num == 0 and eval_only:
         break
-
-    # Start timing the training iteration
-    timing_profiler.start_iteration()
 
     # Time the gradient accumulation loop
     with timing_profiler.time_section("gradient_accumulation"):
@@ -1399,20 +1484,12 @@ while True:
         if local_iter_num >= 5:
             mfu = raw_model.estimate_mfu(batch_size * gradient_accumulation_steps, dt/log_interval)
             running_mfu = mfu if running_mfu == -1.0 else 0.9*running_mfu + 0.1*mfu
+            print(f"iter {iter_num}: loss {lossf:.4f}, lr {lr:.5f}, time {dt/log_interval*1000:.2f}ms, mfu {running_mfu*100:.2f}%")
+    
 
         dt = t1 - t0
         t0 = t1
 
-        # Get timing breakdown
-        timing_percentages = timing_profiler.get_current_percentages()
-        forward_pass_pct = timing_percentages.get('forward_pass', 0)
-        backward_pass_pct = timing_percentages.get('backward_pass', 0)
-        data_loading_pct = timing_percentages.get('data_loading', 0)
-        optimizer_step_pct = timing_percentages.get('optimizer_step', 0)
-
-        # Enhanced logging with timing breakdown
-        print(f"iter {iter_num}: loss {lossf:.4f}, lr {lr:.5f}, time {dt/log_interval*1000:.2f}ms, mfu {running_mfu*100:.2f}%")
-        print(f"  timing breakdown: forward {forward_pass_pct:.1f}%, backward {backward_pass_pct:.1f}%, data {data_loading_pct:.1f}%, optim {optimizer_step_pct:.1f}%")
     iter_num += 1
     local_iter_num += 1
 

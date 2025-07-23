@@ -12,7 +12,7 @@ init_from = 'scratch' #'resume' /'scratch'
 n_layer = 1
 embedding_mode = 'standard'
 
-batch_size = 32
+batch_size = 1
 block_size = 1024
 gradient_accumulation_steps = 1
 
@@ -25,11 +25,13 @@ eval_interval = 200
 eval_iters = 10
 log_interval = 10
 
+n_hidden = 768
+
 # weight decay
 weight_decay = 1e-1
 scaling_schedule_file = 'configs/one_layer_start.json'
 #overrides
 
 use_rotary_embeddings = True
-device='cuda'
+device='cpu'
 
