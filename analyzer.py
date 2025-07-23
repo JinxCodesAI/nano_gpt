@@ -135,16 +135,26 @@ class ModelAnalyzer:
             return -1.0
 
     @torch.no_grad()
-    def run_full_analysis(self, current_snapshot, prev_snapshot=None):
+    def run_full_analysis(self, current_snapshot, prev_snapshot=None, filtered_token_ids=None):
         """
         Runs a full suite of analyses on the provided model snapshots.
         This is the main entry point for the asynchronous worker.
+
+        Args:
+            current_snapshot: Current model state snapshot
+            prev_snapshot: Previous model state snapshot for drift analysis
+            filtered_token_ids: List of token IDs to analyze for embedding geometry (if None, analyze all)
         """
         results = {}
 
         # --- GEOMETRY & RANK ANALYSIS (on current snapshot) ---
         geometry_results = {}
-        # 1. Embedding Galaxy Model Analysis (the most complex)
+        # 1. Embedding Galaxy Model Analysis
+        if 'embeddings' in current_snapshot:
+            geometry_results['embeddings'] = self._analyze_embedding_geometry(
+                current_snapshot['embeddings'],
+                filtered_token_ids=filtered_token_ids
+            )
 
         # 2. FFN and Attention Rank Analysis
         ffn_ranks = {}
@@ -185,15 +195,28 @@ class ModelAnalyzer:
     # --------------------------------------------------------------------------
 
     @torch.no_grad()
-    def _analyze_embedding_geometry(self, embedding_weights, threshold=0.7, chunk_size=512*16):
+    def _analyze_embedding_geometry(self, embedding_weights, threshold=0.7, chunk_size=512*16, filtered_token_ids=None):
         """
         Memory-efficient analysis of embedding geometry using streaming statistics.
         This method is now a private helper.
         Optimized for CPU to leverage PyTorch's internal parallelism for matmul
         and vectorized operations, and calculates neighbor count percentiles.
+
+        Args:
+            embedding_weights: Full embedding weight tensor
+            threshold: Similarity threshold for neighbor counting
+            chunk_size: Processing chunk size for memory efficiency
+            filtered_token_ids: List of token IDs to analyze (if None, analyze all tokens)
         """
         try:
             weights = embedding_weights.clone().float()
+
+            # Filter embeddings if token IDs are provided
+            if filtered_token_ids is not None:
+                filtered_token_ids = torch.tensor(filtered_token_ids, dtype=torch.long)
+                weights = weights[filtered_token_ids]
+                print(f"Analyzing {len(filtered_token_ids)} filtered embeddings out of {embedding_weights.shape[0]} total")
+
             weights_norm = F.normalize(weights, p=2, dim=1)
             vocab_size, _ = weights_norm.shape
 
@@ -326,6 +349,11 @@ class ModelAnalyzer:
                     'std_similarity': std_similarity,
                     'similarity_10th_percentile': sim_10th,
                     'similarity_90th_percentile': sim_90th
+                },
+                'analysis_info': {
+                    'num_embeddings_analyzed': vocab_size,
+                    'total_embeddings': embedding_weights.shape[0],
+                    'filtered': filtered_token_ids is not None
                 }
             }
         except Exception as e:

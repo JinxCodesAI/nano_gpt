@@ -90,6 +90,8 @@ lora_alpha = 1.0 # scaling factor for LoRA layers
 scaling_schedule_file = None # Path to scaling schedule config file (YAML/JSON)
 scaling_schedule = [] # Will be loaded from file or set programmatically
 target_architecture_config = None # Global state for target architecture
+# embedding analysis configuration
+ignored_outlayers_sum = 0.01 # Fraction of tokens to ignore as outliers in embedding analysis
 # -----------------------------------------------------------------------------
 config_keys = [k for k,v in globals().items() if not k.startswith('_') and isinstance(v, (int, float, bool, str))]
 exec(open('configurator.py').read()) # overrides from command line or config file
@@ -525,6 +527,41 @@ class BatchManager:
 
         return best_x, best_y
 
+    def get_non_outlier_tokens(self, ignored_outlayers_sum=0.01):
+        """
+        Extract token IDs that sum up to (1 - ignored_outlayers_sum) of total_tokens_served.
+        Returns a list of token IDs, excluding the most and least frequent outliers.
+        """
+        if self.total_tokens_served == 0:
+            return list(range(self.vocab_size))  # Return all tokens if no tokens served yet
+
+        # Calculate the served distribution
+        served_distribution = self.served_token_counts / self.total_tokens_served
+
+        # Sort tokens by their served frequency
+        sorted_indices = torch.argsort(served_distribution, descending=True)
+        sorted_counts = served_distribution[sorted_indices]
+
+        # Calculate cumulative sum
+        cumulative_sum = torch.cumsum(sorted_counts, dim=0)
+
+        # Find tokens that sum up to (1 - ignored_outlayers_sum) of total
+        target_sum = 1.0 - ignored_outlayers_sum
+
+        # Find the cutoff index where cumulative sum reaches target_sum
+        cutoff_idx = torch.searchsorted(cumulative_sum, target_sum, right=True)
+
+        # Ensure we don't exceed the vocabulary size
+        cutoff_idx = min(cutoff_idx.item(), self.vocab_size - 1)
+
+        # Get the non-outlier token IDs
+        non_outlier_tokens = sorted_indices[:cutoff_idx + 1].tolist()
+
+        print(f"Selected {len(non_outlier_tokens)} non-outlier tokens out of {self.vocab_size} total tokens")
+        print(f"These tokens represent {cumulative_sum[cutoff_idx]:.4f} of total served tokens")
+
+        return non_outlier_tokens
+
     def shutdown(self):
         """Signals the background worker to stop and waits for it to exit."""
         print("Shutting down BatchManager background worker...")
@@ -700,13 +737,14 @@ def get_lr(it):
     coeff = 0.5 * (1.0 + math.cos(math.pi * decay_ratio))
     return (min_lr + coeff * (learning_rate - min_lr))
 
-def run_full_analysis_async(analyzer, current_snapshot, prev_snapshot, val_batch, iter_num):
+def run_full_analysis_async(analyzer, current_snapshot, prev_snapshot, val_batch, iter_num, filtered_token_ids=None):
     """
     The new async task function. It calls the main analysis method of the analyzer.
     """
     print(f"(Async Analysis @ iter {iter_num}) Starting full model analysis job...")
-    results = analyzer.run_full_analysis(current_snapshot, prev_snapshot)
-    enthropy = analyzer.analyze_attention_entropy
+    results = analyzer.run_full_analysis(current_snapshot, prev_snapshot, filtered_token_ids=filtered_token_ids)
+    enthropy = analyzer.analyze_attention_entropy(val_batch)
+    results['attention_entropy'] = enthropy
     results['iter_num'] = iter_num # Tag results with the iteration number
     print(f"(Async Analysis @ iter {iter_num}) Job finished.")
     return results
@@ -720,6 +758,7 @@ def analysis_done_callback(future):
     try:
         results = future.result()
         iter_num = results['iter_num']
+        attention_entropy = results['attention_entropy']
 
         print(f"\n--- ASYNC ANALYSIS RESULTS FOR ITERATION {iter_num} ---")
 
@@ -743,21 +782,37 @@ def analysis_done_callback(future):
                 nbhd_50th = emb_geo['local_density']['neighbor_50th_percentile']
                 nbhd_90th = emb_geo['local_density']['neighbor_90th_percentile']
 
+                # Analysis info
+                analysis_info = emb_geo.get('analysis_info', {})
+                num_analyzed = analysis_info.get('num_embeddings_analyzed', 'N/A')
+                total_embeddings = analysis_info.get('total_embeddings', 'N/A')
+                is_filtered = analysis_info.get('filtered', False)
+
                 geom_msg1 = f"  [Embeddings Geometry] Avg Neighbors: {avg_neighbors:.2f} | Mean Similarity: {mean_sim:.4f} 10th-50th-90th Percentile: {nbhd_10th:.4f} - {nbhd_50th:.4f} - {nbhd_90th:.4f}"
                 geom_msg2 = f"  [Embeddings Geometry] Std Similarity: {std_sim:.4f} | 10th-90th Percentile: {sim_10th:.4f} - {sim_90th:.4f}"
+                geom_msg3 = f"  [Embeddings Analysis] Analyzed: {num_analyzed}/{total_embeddings} embeddings | Filtered: {is_filtered}"
+                att_msg = f"  [Attention Entropy] Avg Entropy: {attention_entropy:.4f}"
                 print(geom_msg1)
                 print(geom_msg2)
+                print(geom_msg3)
                 log_messages.append(geom_msg1)
                 log_messages.append(geom_msg2)
+                log_messages.append(geom_msg3)
 
                 if wandb_log:
-                    wandb.log({
+                    wandb_data = {
                         "analysis/embed/geom_avg_neighbors": avg_neighbors,
                         "analysis/embed/geom_mean_sim": mean_sim,
                         "analysis/embed/geom_std_sim": std_sim,
                         "analysis/embed/geom_sim_10th": sim_10th,
                         "analysis/embed/geom_sim_90th": sim_90th
-                    }, step=iter_num)
+                    }
+                    if isinstance(num_analyzed, (int, float)):
+                        wandb_data["analysis/embed/num_embeddings_analyzed"] = num_analyzed
+                    if isinstance(total_embeddings, (int, float)):
+                        wandb_data["analysis/embed/total_embeddings"] = total_embeddings
+                    wandb_data["analysis/embed/filtered"] = is_filtered
+                    wandb.log(wandb_data, step=iter_num)
 
             # FFN Rank Analysis
             if 'ffn_ranks' in geo:
@@ -1020,14 +1075,18 @@ while True:
                     # 1. Create a full snapshot of the model state on CPU.
                     current_snapshot = analyzer.get_model_state_snapshot()
 
-                    # 2. Submit the new, generic analysis task to the executor.
+                    # 2. Get filtered tokens from BatchManager (non-outliers)
+                    filtered_tokens = batch_manager.get_non_outlier_tokens(ignored_outlayers_sum)
+
+                    # 3. Submit the new, generic analysis task to the executor.
                     future = executor.submit(
                         run_full_analysis_async,
                         analyzer,
                         current_snapshot,
                         prev_embeddings, # Will be None on the first run.
-                        get_val_batch,
-                        iter_num
+                        get_val_batch(),
+                        iter_num,
+                        filtered_tokens
                     )
                     future.add_done_callback(analysis_done_callback)
 
