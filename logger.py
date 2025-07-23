@@ -99,16 +99,20 @@ class TrainingLogger:
         self.log_file.write(f"[{timestamp}] {message}\n")
         self.log_file.flush()
         
-    def log_step(self, iter_num, train_loss, val_loss):
+    def log_step(self, iter_num, train_loss, val_loss, tokens_per_second=None):
         """
-        Log a training step with losses.
+        Log a training step with losses and optionally tokens per second.
 
         Args:
             iter_num (int): Current iteration number
             train_loss (float): Training loss
             val_loss (float): Validation loss
+            tokens_per_second (float, optional): Tokens processed per second
         """
-        message = f"step {iter_num}: train loss {train_loss:.4f}, val loss {val_loss:.4f}"
+        if tokens_per_second is not None:
+            message = f"step {iter_num}: train loss {train_loss:.4f}, val loss {val_loss:.4f}, tokens/sec {tokens_per_second:.0f}"
+        else:
+            message = f"step {iter_num}: train loss {train_loss:.4f}, val loss {val_loss:.4f}"
         self.log(message)
 
     def log_operation_start(self, iter_num, op_name, op_value, trigger_reason, current_val_loss,

@@ -1060,7 +1060,11 @@ while True:
     if iter_num % eval_interval == 0:
         losses = estimate_loss()
         if master_process:
-            print(f"step {iter_num}: train loss {losses['train']:.4f}, val loss {losses['val']:.4f}")
+            # Calculate tokens per second
+            elapsed_time_seconds = time.time() - start_time
+            tokens_per_second = batch_manager.total_tokens_served / elapsed_time_seconds if elapsed_time_seconds > 0 else 0
+
+            print(f"step {iter_num}: train loss {losses['train']:.4f}, val loss {losses['val']:.4f}, tokens/sec {tokens_per_second:.0f}")
 
             # --- Model Analysis ---
             analyzer = ModelAnalyzer(raw_model)
@@ -1099,9 +1103,8 @@ while True:
 
             # --- END OF NEW LOGIC ---
 
-            training_logger.log_step(iter_num, losses['train'], losses['val'])
+            training_logger.log_step(iter_num, losses['train'], losses['val'], tokens_per_second)
             if wandb_log:
-                elapsed_time_seconds = time.time() - start_time
                 wandb_metrics = {
                     "iter": iter_num,
                     "train/loss": losses['train'],
@@ -1109,6 +1112,7 @@ while True:
                     "lr": lr,
                     "mfu": running_mfu*100,
                     "time/elapsed_seconds": elapsed_time_seconds, # Log elapsed time
+                    "throughput/tokens_per_second": tokens_per_second, # Log tokens per second
                 }
                 # Add analysis metrics if they were computed successfully
                 if rank_util != -1.0:
@@ -1195,9 +1199,12 @@ while True:
                         losses = estimate_loss() # All processes re-evaluate to stay in sync
                         if master_process:
                             new_val_loss = losses['val']
+                            # Calculate tokens per second for this re-evaluation
+                            elapsed_time_seconds = time.time() - start_time
+                            tokens_per_second_reeval = batch_manager.total_tokens_served / elapsed_time_seconds if elapsed_time_seconds > 0 else 0
                             print(f"New val loss after operation: {new_val_loss:.4f}")
                             training_logger.log_operation_reevaluation(iter_num, next_op['name'], current_val_loss, new_val_loss)
-                            training_logger.log_step(iter_num, losses['train'], new_val_loss)
+                            training_logger.log_step(iter_num, losses['train'], new_val_loss, tokens_per_second_reeval)
                             if wandb_log:
                                 elapsed_time_seconds = time.time() - start_time
                                 wandb.log({
