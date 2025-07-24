@@ -175,17 +175,7 @@ class TrainingLogger:
                   f"change={loss_change:+.4f}")
         self.log(message)
 
-    def log_metrics(self, iter_num, metrics):
-        """
-        Log training metrics.
 
-        Args:
-            iter_num (int): Current iteration number
-            metrics (dict): Dictionary of metrics to log
-        """
-        metrics_str = " | ".join([f"{k}={v}" for k, v in metrics.items()])
-        message = f"METRICS: iter={iter_num} | {metrics_str}"
-        self.log(message)
 
     def log_analysis_results(self, iter_num, results):
         """

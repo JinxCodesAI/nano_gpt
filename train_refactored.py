@@ -14,6 +14,14 @@ from contextlib import nullcontext
 from torch.nn.parallel import DistributedDataParallel as DDP
 from torch.distributed import init_process_group, destroy_process_group
 
+# Conditional wandb import
+try:
+    import wandb
+    WANDB_AVAILABLE = True
+except ImportError:
+    WANDB_AVAILABLE = False
+    wandb = None
+
 # Import model and core components
 from model import GPTConfig, GPT
 from logger import TrainingLogger
@@ -83,23 +91,53 @@ def main():
     if master_process:
         os.makedirs(config.out_dir, exist_ok=True)
         os.makedirs(config.log_dir, exist_ok=True)
-        
+
+        # File logging setup
         training_logger = TrainingLogger(
             log_dir=config.log_dir,
             enabled=config.file_logging
         )
         training_logger.setup(config.to_dict())
-        
+
         print("Configuration:")
         for key, value in config.to_dict().items():
             print(f"  {key}: {value}")
-        
+
         system_info = get_system_info()
         print(f"\nSystem Info:")
         for key, value in system_info.items():
             print(f"  {key}: {value}")
     else:
         training_logger = None
+
+    # Initialize Wandb logging (separate from file logging)
+    final_wandb_run_name = None
+    if config.wandb_log and master_process:
+        if not WANDB_AVAILABLE:
+            print("Warning: wandb_log=True but wandb is not installed. Wandb logging disabled.")
+            print("Install wandb with: pip install wandb")
+        else:
+            # Try to restore wandb run name from checkpoint first
+            if config.init_from == 'resume':
+                ckpt_path = os.path.join(config.out_dir, 'ckpt.pt')
+                if os.path.exists(ckpt_path):
+                    try:
+                        checkpoint_temp = torch.load(ckpt_path, map_location='cpu')
+                        if 'final_wandb_run_name' in checkpoint_temp:
+                            final_wandb_run_name = checkpoint_temp['final_wandb_run_name']
+                            print(f"Restored W&B run name: {final_wandb_run_name}")
+                        del checkpoint_temp  # Free memory
+                    except Exception as e:
+                        print(f"Could not restore wandb run name: {e}")
+
+            # Create new run name if not restored
+            if final_wandb_run_name is None:
+                from datetime import datetime
+                timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+                final_wandb_run_name = f"{config.wandb_run_name}_{timestamp}"
+                print(f"Created new W&B run name: {final_wandb_run_name}")
+
+            wandb.init(project=config.wandb_project, name=final_wandb_run_name, config=config.to_dict())
     
     # Load scaling schedule
     if config.scaling_schedule_file:
@@ -300,11 +338,22 @@ def main():
         if iter_num % config.eval_interval == 0 and master_process:
             with timing_profiler.time_section("evaluation"):
                 val_loss = estimate_loss(model, get_val_batch_fn, config.eval_iters, device_type, config.dtype)
-                print(f"step {iter_num}: train loss {val_loss:.4f}")
-                
+                print(f"step {iter_num}: val loss {val_loss:.4f}")
+
+                # File logging
                 if training_logger:
-                    training_logger.log_metrics(iter_num, {'val_loss': val_loss, 'lr': lr, 'mfu': running_mfu})
-                
+                    training_logger.log_step(iter_num, val_loss, val_loss)
+
+                # Wandb logging
+                if config.wandb_log and WANDB_AVAILABLE:
+                    wandb_metrics = {
+                        "iter": iter_num,
+                        "val/loss": val_loss,
+                        "lr": lr,
+                        "mfu": running_mfu * 100 if running_mfu > 0 else 0
+                    }
+                    wandb.log(wandb_metrics)
+
                 # Save checkpoint if this is the best model
                 if val_loss < best_val_loss or config.always_save_checkpoint:
                     best_val_loss = val_loss
@@ -315,7 +364,8 @@ def main():
                             'model_args': (model.module if ddp else model).config.__dict__,
                             'iter_num': iter_num,
                             'best_val_loss': best_val_loss,
-                            'config': config.to_dict()
+                            'config': config.to_dict(),
+                            'final_wandb_run_name': final_wandb_run_name,  # Save wandb run name for continuity
                         }
                         print(f"saving checkpoint to {config.out_dir}")
                         torch.save(checkpoint, os.path.join(config.out_dir, 'ckpt.pt'))
@@ -348,12 +398,23 @@ def main():
                     if 'set_lr' in hyperparameter_updates:
                         config.learning_rate = hyperparameter_updates['set_lr']
                         lr_scheduler.update_params(learning_rate=config.learning_rate)
+                        print(f"Updated learning rate to: {config.learning_rate}")
                     if 'set_batch_size' in hyperparameter_updates:
                         config.batch_size = hyperparameter_updates['set_batch_size']
                         # Update batch manager
                         batch_manager.batch_size = config.batch_size
+                        print(f"Updated batch size to: {config.batch_size}")
                     if 'reset_lr_schedule' in hyperparameter_updates:
                         lr_scheduler.reset_schedule(iter_num)
+                        print(f"Reset learning rate schedule at iteration: {iter_num}")
+
+                    # Log hyperparameter updates to wandb
+                    if config.wandb_log and WANDB_AVAILABLE:
+                        wandb_updates = {}
+                        for key, value in hyperparameter_updates.items():
+                            wandb_updates[f"hyperparams/{key}"] = value
+                        wandb_updates["iter"] = iter_num
+                        wandb.log(wandb_updates)
         
         # Forward and backward pass
         with timing_profiler.time_section("forward_backward"):
@@ -391,18 +452,22 @@ def main():
             if local_iter_num >= 5:  # Let MFU calculation stabilize
                 mfu = (model.module if ddp else model).estimate_mfu(config.batch_size * config.gradient_accumulation_steps, dt)
                 running_mfu = mfu if running_mfu == -1.0 else 0.9*running_mfu + 0.1*mfu
-            
-            print(f"iter {iter_num}: loss {lossf:.4f}, time {dt*1000:.2f}ms, mfu {running_mfu*100:.2f}%")
-            
+
+            print(f"iter {iter_num}: loss {lossf:.4f}, lr {lr:.5f}, time {dt*1000:.2f}ms, mfu {running_mfu*100:.2f}%")
+
+            # File logging
             if training_logger:
-                metrics = {
-                    'train_loss': lossf,
-                    'lr': lr,
-                    'dt': dt,
-                    'mfu': running_mfu,
-                    'iter_num': iter_num
-                }
-                training_logger.log_metrics(iter_num, metrics)
+                training_logger.log(f"iter {iter_num}: loss {lossf:.4f}, lr {lr:.5f}, time {dt*1000:.2f}ms, mfu {running_mfu*100:.2f}%")
+
+            # Wandb logging (separate from file logging)
+            if config.wandb_log and WANDB_AVAILABLE:
+                wandb.log({
+                    "iter": iter_num,
+                    "train/loss": lossf,
+                    "lr": lr,
+                    "time/dt_ms": dt * 1000,
+                    "mfu": running_mfu * 100 if running_mfu > 0 else 0
+                })
         
         iter_num += 1
         local_iter_num += 1

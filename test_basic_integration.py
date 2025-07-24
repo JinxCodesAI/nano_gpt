@@ -105,9 +105,9 @@ def test_logger_functionality():
         logger.log("Test message")
         print("✓ Basic logging works")
         
-        # Test metrics logging
-        logger.log_metrics(100, {'loss': 0.5, 'lr': 1e-4})
-        print("✓ Metrics logging works")
+        # Test step logging
+        logger.log_step(100, 0.5, 0.4, 1000)
+        print("✓ Step logging works")
         
         # Test operation logging
         logger.log_operation_start(100, 'test_op', 'test_value', 'test_trigger', 0.5, 0.6, 1000)
@@ -133,7 +133,7 @@ def test_logger_functionality():
                 content = f.read()
                 assert len(content) > 0
                 assert 'Test message' in content
-                assert 'METRICS:' in content
+                assert 'step 100:' in content
                 assert 'OPERATION_START:' in content
             print("✓ Log file created with expected content")
             
@@ -141,7 +141,8 @@ def test_logger_functionality():
             os.remove(logger.log_file_path)
         
         if os.path.exists('test_logs'):
-            os.rmdir('test_logs')
+            import shutil
+            shutil.rmtree('test_logs')
         
         print("✓ Logger cleanup completed")
         
