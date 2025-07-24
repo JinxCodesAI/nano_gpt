@@ -174,6 +174,29 @@ class TrainingLogger:
                   f"old_val_loss={old_val_loss:.4f} | new_val_loss={new_val_loss:.4f} | "
                   f"change={loss_change:+.4f}")
         self.log(message)
+
+    def log_metrics(self, iter_num, metrics):
+        """
+        Log training metrics.
+
+        Args:
+            iter_num (int): Current iteration number
+            metrics (dict): Dictionary of metrics to log
+        """
+        metrics_str = " | ".join([f"{k}={v}" for k, v in metrics.items()])
+        message = f"METRICS: iter={iter_num} | {metrics_str}"
+        self.log(message)
+
+    def log_analysis_results(self, iter_num, results):
+        """
+        Log model analysis results.
+
+        Args:
+            iter_num (int): Current iteration number
+            results (dict): Analysis results dictionary
+        """
+        message = f"ANALYSIS: iter={iter_num} | results={results}"
+        self.log(message)
         
     def close(self):
         """Close the log file and write footer."""

@@ -158,6 +158,14 @@ class TrainingConfig:
             'dropout', 'use_rotary_embeddings', 'rotary_base', 'rotary_max_position_embeddings',
             'embedding_mode', 'embedding_rank', 'attn_lora_rank', 'lora_alpha'
         ]
+
+    def get_training_overrideable_params(self) -> List[str]:
+        """Get list of training parameters that can be overridden during resume."""
+        return [
+            'learning_rate', 'max_iters', 'weight_decay', 'beta1', 'beta2', 'grad_clip',
+            'decay_lr', 'warmup_iters', 'lr_decay_iters', 'min_lr', 'batch_size',
+            'gradient_accumulation_steps', 'eval_interval', 'eval_iters'
+        ]
     
     def validate(self):
         """Validate configuration settings."""

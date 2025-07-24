@@ -21,10 +21,15 @@ from analyzer import ModelAnalyzer
 
 # Import training modules
 from training.config import TrainingConfig, load_scaling_schedule
-from training.utils import TimingProfiler, BatchManager, setup_signal_handlers, get_system_info
-from training.evaluation import get_val_batch, estimate_loss, run_full_analysis_async, analysis_done_callback
+from training.utils import TimingProfiler, BatchManager, setup_signal_handlers, get_system_info, estimate_loss
+from training.evaluation import get_val_batch, run_full_analysis_async, analysis_done_callback
 from training.scheduler import TrainingScheduler, LearningRateScheduler, EarlyStoppingMonitor
 from training.operations import log_detailed_params, log_model_architecture, calculate_and_log_target_architecture
+from training.resume import (
+    find_checkpoint_path, load_checkpoint_with_fallback, apply_model_parameter_overrides,
+    apply_smart_state_dict_loading, transfer_optimizer_state, transfer_optimizer_state_by_shape,
+    load_training_state, restore_scaling_schedule_state, apply_training_parameter_overrides
+)
 
 # Initialize global termination flag
 should_terminate = False
@@ -81,11 +86,9 @@ def main():
         
         training_logger = TrainingLogger(
             log_dir=config.log_dir,
-            wandb_log=config.wandb_log,
-            wandb_project=config.wandb_project,
-            wandb_run_name=config.wandb_run_name,
-            config=config.to_dict()
+            enabled=config.file_logging
         )
+        training_logger.setup(config.to_dict())
         
         print("Configuration:")
         for key, value in config.to_dict().items():
@@ -156,26 +159,50 @@ def main():
         
     elif config.init_from == 'resume':
         print(f"Resuming training from {config.out_dir}")
-        ckpt_path = os.path.join(config.out_dir, 'ckpt.pt')
-        checkpoint = torch.load(ckpt_path, map_location=device)
-        
-        # Handle configuration overrides
+
+        # Find the best available checkpoint (including emergency checkpoints)
+        ckpt_path = find_checkpoint_path(config.out_dir)
+
+        # Load checkpoint with fallback to emergency checkpoints
+        checkpoint = load_checkpoint_with_fallback(ckpt_path, device, config.out_dir)
+
+        # Apply model parameter overrides from current config
         checkpoint_model_args = checkpoint['model_args']
-        overrideable_params = config.get_overrideable_params()
-        
-        for param in overrideable_params:
-            if hasattr(config, param):
-                current_value = getattr(config, param)
-                checkpoint_value = checkpoint_model_args.get(param)
-                if current_value != checkpoint_value:
-                    print(f"Overriding {param}: {checkpoint_value} -> {current_value}")
-                    checkpoint_model_args[param] = current_value
-        
+        checkpoint_model_args, config_changes = apply_model_parameter_overrides(
+            checkpoint_model_args, config
+        )
+
+        if config_changes:
+            print(f"Applied {len(config_changes)} hyperparameter overrides:")
+            for change in config_changes:
+                print(f"  - {change}")
+
+            # Log the overrides for tracking
+            if master_process and training_logger:
+                training_logger.log(f"Resume with hyperparameter overrides: {'; '.join(config_changes)}")
+        else:
+            print("No hyperparameter overrides detected.")
+
+        # Create the model with the potentially new configuration
         gptconf = GPTConfig(**checkpoint_model_args)
         model = GPT(gptconf)
-        model.load_state_dict(checkpoint['model'])
-        iter_num = checkpoint['iter_num']
-        best_val_loss = checkpoint['best_val_loss']
+
+        # Apply smart state dict loading with LoRA compatibility
+        apply_smart_state_dict_loading(model, checkpoint['model'])
+
+        # Load training state
+        iter_num, best_val_loss, execution_state = load_training_state(checkpoint)
+
+        # Restore scaling schedule state from checkpoint if available
+        if config.scaling_schedule_file:
+            restored_schedule = restore_scaling_schedule_state(checkpoint, config.scaling_schedule_file)
+            if restored_schedule:
+                config.scaling_schedule = restored_schedule
+
+        # Apply training parameter overrides
+        training_param_changes = apply_training_parameter_overrides(checkpoint, config)
+        if training_param_changes and master_process and training_logger:
+            training_logger.log(f"Resume with training parameter overrides: {'; '.join(training_param_changes)}")
         
     elif config.init_from.startswith('gpt2'):
         print(f"Initializing from OpenAI GPT-2 weights: {config.init_from}")
@@ -203,8 +230,33 @@ def main():
     )
     
     # Setup optimizer
-    optimizer = model.configure_optimizers(config.weight_decay, config.learning_rate, 
+    optimizer = model.configure_optimizers(config.weight_decay, config.learning_rate,
                                          (config.beta1, config.beta2), device_type)
+
+    # Load optimizer state if resuming
+    if config.init_from == 'resume':
+        print("Attempting to load optimizer state...")
+        try:
+            # Try direct loading first
+            optimizer.load_state_dict(checkpoint['optimizer'])
+            print("Successfully loaded optimizer state directly from checkpoint")
+        except (ValueError, RuntimeError) as e:
+            print(f"Direct optimizer loading failed: {e}")
+            print("This is expected when switching between LoRA and non-LoRA models.")
+
+            # Attempt to transfer optimizer state using parameter names
+            if 'param_names' in checkpoint:
+                print("Attempting to transfer optimizer state using saved parameter names...")
+                transfer_optimizer_state(optimizer, checkpoint['optimizer'], checkpoint['param_names'], model)
+            else:
+                print("No parameter names saved in checkpoint - this is an older checkpoint format.")
+                transferred_count = transfer_optimizer_state_by_shape(optimizer, checkpoint['optimizer'], model)
+                if transferred_count == 0:
+                    print("Could not transfer optimizer state. Optimizer will start fresh.")
+                    print("To enable full state transfer, re-save checkpoints with the updated format.")
+
+        # Free up memory
+        checkpoint = None
     
     # Initialize model analyzer
     analyzer = None
