@@ -48,9 +48,10 @@ Successfully integrated the resume improvements from `feature/improve_resume` wi
 
 ### ✅ Testing Verified
 - Configuration system works correctly
-- Logger functionality complete
+- Logger functionality complete (file logging + wandb logging separation)
 - All Python files compile without errors
 - Basic imports and functionality tested
+- Logging systems properly separated as in original
 
 ## What Still Needs Work
 
@@ -107,9 +108,10 @@ The refactored version has a simpler `BatchManager`. Need to decide:
 - `INTEGRATION_SUMMARY.md` - This summary
 
 ### Modified Files
-- `train_refactored.py` - Integrated resume improvements
+- `train_refactored.py` - Integrated resume improvements + proper logging separation
 - `training/config.py` - Added training parameter overrides
-- `logger.py` - Added missing methods
+- `logger.py` - Restored to original file-only logging interface
+- `test_basic_integration.py` - Updated tests to match corrected logging
 
 ### Unchanged Files
 - `train.py` - Original monolithic version (preserved)
