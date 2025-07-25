@@ -552,7 +552,8 @@ def main():
                     beta1=config.beta1,
                     beta2=config.beta2,
                     device_type=device_type,
-                    target_architecture_config=config.target_architecture_config
+                    target_architecture_config=config.target_architecture_config,
+                    current_batch_size=config.batch_size
                 )
                 
                 # Apply hyperparameter updates

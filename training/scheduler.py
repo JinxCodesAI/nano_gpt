@@ -29,7 +29,8 @@ class TrainingScheduler:
                                    ddp_local_rank: int, master_process: bool, data_dir: str,
                                    weight_decay: float, learning_rate: float, beta1: float, 
                                    beta2: float, device_type: str, 
-                                   target_architecture_config: Optional[Dict[str, Any]] = None) -> Tuple[Any, Any, Dict[str, Any]]:
+                                   target_architecture_config: Optional[Dict[str, Any]] = None,
+                                   current_batch_size: int = None) -> Tuple[Any, Any, Dict[str, Any]]:
         """
         Check if any operations should be executed and execute them.
         
@@ -56,11 +57,23 @@ class TrainingScheduler:
                             target_architecture_config, model, optimizer,
                             compile_enabled, ddp_enabled, ddp_local_rank,
                             master_process, data_dir, weight_decay, learning_rate,
-                            beta1, beta2, device_type, self.training_logger
+                            beta1, beta2, device_type, self.training_logger, current_batch_size
                         )
                     else:
                         # Handle hyperparameter operations
-                        hyperparameter_updates[op['name']] = op['value']
+                        if op['name'] == 'adjust_batch_size':
+                            # Execute adjust_batch_size to calculate optimal size
+                            model, optimizer = execute_operation(
+                                op, trigger_reason, current_val_loss, iter_num,
+                                target_architecture_config, model, optimizer,
+                                compile_enabled, ddp_enabled, ddp_local_rank,
+                                master_process, data_dir, weight_decay, learning_rate,
+                                beta1, beta2, device_type, self.training_logger, current_batch_size
+                            )
+                            # The calculated batch size is now in op['value']
+                            hyperparameter_updates['set_batch_size'] = op['value']
+                        else:
+                            hyperparameter_updates[op['name']] = op['value']
                     
                     # Mark operation as completed
                     self.completed_operations.add(i)
