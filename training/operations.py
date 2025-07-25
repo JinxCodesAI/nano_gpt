@@ -311,6 +311,7 @@ def execute_operation(op: Dict[str, Any], trigger_reason: str, current_val_loss:
         raise
 
 
+
 def _execute_architectural_operation(op_name: str, op_value: Any, model, optimizer,
                                    compile_enabled: bool, ddp_enabled: bool, ddp_local_rank: int,
                                    master_process: bool, data_dir: str, weight_decay: float,
@@ -369,6 +370,11 @@ def _execute_architectural_operation(op_name: str, op_value: Any, model, optimiz
         layer_name, rank = op_value
         unwrapped_model.set_layer_lora_rank(layer_name, rank)
     
+    # Clear CUDA cache after architectural changes
+    if device_type == 'cuda':
+        if master_process: print("Clearing CUDA cache...")
+        torch.cuda.empty_cache()
+
     # Re-create optimizer and wrappers
     log_detailed_params(unwrapped_model, master_process)
     if master_process:

@@ -1366,6 +1366,11 @@ def execute_operation(op, trigger_reason, current_val_loss, iter_num, target_arc
                 layer_name, rank = op_value
                 unwrapped_model.set_layer_lora_rank(layer_name, rank)
 
+            # Clear CUDA cache after architectural changes to free up memory
+            if device_type == 'cuda':
+                if master_process: print("Clearing CUDA cache...")
+                torch.cuda.empty_cache()
+
             # --- Re-create optimizer and wrappers (this logic remains the same) ---
             log_detailed_params(unwrapped_model)
             if master_process: print("Re-configuring optimizer...")
@@ -1384,7 +1389,7 @@ def execute_operation(op, trigger_reason, current_val_loss, iter_num, target_arc
 
             raw_model = model.module if ddp else model
             log_model_architecture(raw_model, iter_num)
-            if master_process: training_logger.log_operation_success(iter_num, op_name, {'new_config': raw_model.config.__dict__})
+            if master_process: training_logger.log_operation_success(iter_num, op_name, {'new_config': raw_model.config.__dict__})}
 
 
         # --- Handle non-architectural (hyperparameter) operations ---
@@ -1451,16 +1456,20 @@ def execute_operation(op, trigger_reason, current_val_loss, iter_num, target_arc
                     
                     batch_size = optimal_batch_size
                     
+                    if device_type == 'cuda':
+                        if master_process: print("Clearing CUDA cache after batch size adjustment...")
+                        torch.cuda.empty_cache()
+
                     if master_process: 
                         training_logger.log_operation_success(iter_num, op_name, 
                                                             {'calculated_batch_size': optimal_batch_size,
-                                                             'original_batch_size': batch_size_to_use})
+                                                             'original_batch_size': batch_size_to_use})}
                 except NameError:
                     # Fallback if calculate_optimal_batch_size is not available
                     if master_process:
                         print("Warning: calculate_optimal_batch_size not available, keeping current batch size")
                         training_logger.log_operation_success(iter_num, op_name, 
-                                                            {'message': 'Operation skipped - function not available'})
+                                                            {'message': 'Operation skipped - function not available'})}
             
             elif op_name == 'set_batch_size_relative':
                 batch_size_to_use = batch_size
@@ -1480,11 +1489,15 @@ def execute_operation(op, trigger_reason, current_val_loss, iter_num, target_arc
                     
                     batch_size = new_batch_size
                     
+                    if device_type == 'cuda':
+                        if master_process: print("Clearing CUDA cache after batch size adjustment...")
+                        torch.cuda.empty_cache()
+
                     if master_process:
                         training_logger.log_operation_success(iter_num, op_name, 
                                                             {'new_batch_size': new_batch_size,
                                                              'original_batch_size': batch_size_to_use,
-                                                             'scale_factor': scale_factor})
+                                                             'scale_factor': scale_factor})}
                 except NameError:
                     # Fallback if calculate_relative_batch_size is not available
                     new_batch_size_float = batch_size_to_use * scale_factor
@@ -1497,17 +1510,21 @@ def execute_operation(op, trigger_reason, current_val_loss, iter_num, target_arc
                     
                     batch_size = new_batch_size
                     
+                    if device_type == 'cuda':
+                        if master_process: print("Clearing CUDA cache after batch size adjustment...")
+                        torch.cuda.empty_cache()
+
                     if master_process:
                         training_logger.log_operation_success(iter_num, op_name, 
                                                             {'new_batch_size': new_batch_size,
                                                              'original_batch_size': batch_size_to_use,
-                                                             'scale_factor': scale_factor})
+                                                             'scale_factor': scale_factor})}
             else:
                 raise ValueError(f"Unknown operation '{op_name}'")
             
             # Log success for operations that don't have their own logging
             if op_name not in ['adjust_batch_size', 'set_batch_size_relative'] and master_process:
-                training_logger.log_operation_success(iter_num, op_name, {'new_value': op_value})
+                training_logger.log_operation_success(iter_num, op_name, {'new_value': op_value})}
 
         return True
 
