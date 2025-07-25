@@ -74,16 +74,16 @@ def generate_scaling_schedule(
             f"Reduce batch size to 50% before adding layer {layer_num}"
         ))
         
-        # After batch size reduction: optimize VRAM usage
-        schedule.append(create_operation(
-            "adjust_batch_size", {"max_batch_size": 512, "target_vram_percent": 85.0}, 100, 0,
-            f"Optimize batch size for VRAM after reduction before layer {layer_num}"
-        ))
-        
         # Add the new layer
         schedule.append(create_operation(
             "stack_layers", stack_config, 100, 0,
             f"Add layer {layer_num} after {current_iter} iterations total"
+        ))
+        
+        # After adding new layer: optimize VRAM usage
+        schedule.append(create_operation(
+            "adjust_batch_size", {"max_batch_size": 512, "target_vram_percent": 85.0}, 100, 0,
+            f"Optimize batch size for VRAM after adding layer {layer_num}"
         ))
         
         # Freeze all previous layers (both attn and mlp) + embeddings
