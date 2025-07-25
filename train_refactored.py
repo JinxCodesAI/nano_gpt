@@ -339,6 +339,22 @@ def main():
     running_mfu = -1.0
     eval_start_time = time.time()
     
+    # MFU stats logging setup
+    if master_process and config.file_logging:
+        mfu_log_path = os.path.join(config.log_dir, 'mfu_stats.txt')
+        with open(mfu_log_path, 'w') as f:
+            f.write("iter,loss,lr,time_ms,mfu_percent,vram_used_gb,vram_total_gb,vram_percent\n")
+    
+    # VRAM monitoring
+    def get_vram_usage():
+        if torch.cuda.is_available():
+            allocated = torch.cuda.memory_allocated() / 1024**3  # GB
+            cached = torch.cuda.memory_reserved() / 1024**3     # GB
+            total = torch.cuda.get_device_properties(0).total_memory / 1024**3  # GB
+            used_percent = (allocated / total) * 100
+            return allocated, total, used_percent
+        return 0, 0, 0
+    
     while iter_num < config.max_iters and not should_terminate:
         
         # Determine current learning rate
@@ -590,23 +606,33 @@ def main():
         
         # Timing and logging
         t1 = time.time()
-        dt = t1 - t0
-        t0 = t1
         
         if iter_num % config.log_interval == 0 and master_process:
+            # Calculate accumulated time over log_interval iterations
+            dt = t1 - t0
             lossf = loss.item() * config.gradient_accumulation_steps
+            # Get VRAM usage
+            vram_used, vram_total, vram_percent = get_vram_usage()
+            
             if local_iter_num >= 5:  # Let MFU calculation stabilize
-                mfu = (model.module if ddp else model).estimate_mfu(config.batch_size * config.gradient_accumulation_steps, dt)
+                # Fix MFU calculation: dt represents accumulated time over log_interval iterations
+                # So dt/log_interval gives average time per iteration, which is what we need
+                mfu = (model.module if ddp else model).estimate_mfu(config.batch_size * config.gradient_accumulation_steps, dt/config.log_interval)
                 running_mfu = mfu if running_mfu == -1.0 else 0.9*running_mfu + 0.1*mfu
 
             # Add the extra iteration info like original
             effective_it = iter_num
             print(f"iter: {iter_num}, effective_it: {effective_it}, warmup_iters: {config.warmup_iters}, lr_decay_iters: {config.lr_decay_iters}, gradient_accumulation_steps:{config.gradient_accumulation_steps}, batch_size:{config.batch_size}")
-            print(f"iter {iter_num}: loss {lossf:.4f}, lr {lr:.5f}, time {dt*1000:.2f}ms, mfu {running_mfu*100:.2f}%")
+            print(f"iter {iter_num}: loss {lossf:.4f}, lr {lr:.5f}, time {dt/config.log_interval*1000:.2f}ms, mfu {running_mfu*100:.2f}%, VRAM {vram_used:.1f}/{vram_total:.1f}GB ({vram_percent:.1f}%)")
 
             # File logging
             if training_logger:
-                training_logger.log(f"iter {iter_num}: loss {lossf:.4f}, lr {lr:.5f}, time {dt*1000:.2f}ms, mfu {running_mfu*100:.2f}%")
+                training_logger.log(f"iter {iter_num}: loss {lossf:.4f}, lr {lr:.5f}, time {dt/config.log_interval*1000:.2f}ms, mfu {running_mfu*100:.2f}%, VRAM {vram_used:.1f}/{vram_total:.1f}GB ({vram_percent:.1f}%)")
+            
+            # MFU stats logging to dedicated file
+            if config.file_logging:
+                with open(mfu_log_path, 'a') as f:
+                    f.write(f"{iter_num},{lossf:.6f},{lr:.8f},{dt/config.log_interval*1000:.2f},{running_mfu*100:.2f},{vram_used:.3f},{vram_total:.3f},{vram_percent:.2f}\n")
 
             # Wandb logging (separate from file logging)
             if config.wandb_log and WANDB_AVAILABLE:
@@ -614,9 +640,15 @@ def main():
                     "iter": iter_num,
                     "train/loss": lossf,
                     "lr": lr,
-                    "time/dt_ms": dt * 1000,
-                    "mfu": running_mfu * 100 if running_mfu > 0 else 0
+                    "time/dt_ms": dt / config.log_interval * 1000,
+                    "mfu": running_mfu * 100 if running_mfu > 0 else 0,
+                    "vram/used_gb": vram_used,
+                    "vram/total_gb": vram_total,
+                    "vram/percent": vram_percent
                 })
+            
+            # Reset timer after logging
+            t0 = t1
         
         iter_num += 1
         local_iter_num += 1
