@@ -256,7 +256,7 @@ config = {k: globals()[k] for k in config_keys} # will be useful for logging
 
 
 
-if(dataset == 'fineweb10B'):
+if dataset == 'fineweb10B':
     num_train_shards = 103
     train_shard_filenames = [f"fineweb_train_{i:06d}.bin" for i in range(1, num_train_shards + 1)]
 else:
@@ -514,7 +514,7 @@ lr_schedule_offset = 0 # Offset for learning rate schedule (for reset_lr_schedul
 # -----------------------------------------------------------------------------
 
 # logging setup
-training_logger = TrainingLogger(log_dir=log_dir, enabled=file_logging)
+training_logger = TrainingLogger(log_dir=log_dir, file_enabled=file_logging)
 
 # various inits, derived attributes, I/O setup
 ddp = int(os.environ.get('RANK', -1)) != -1 # is this a ddp run?
@@ -1459,8 +1459,7 @@ if wandb_log and master_process:
 # Initialize the BatchManager for the training set
 batch_manager = BatchManager(
     data_dir=data_dir,
-    shard_filenames=train_shard_filenames,
-    vocab_size=meta_vocab_size if meta_vocab_size is not None else 50304,
+    train_shard_filenames=train_shard_filenames,
     batch_size=batch_size,
     block_size=block_size,
     device=device,
@@ -1469,8 +1468,6 @@ batch_manager = BatchManager(
 )
 
 X, Y = batch_manager.get_next_batch()
-if remapping_active:
-    X, Y = remapping_vector[X], remapping_vector[Y]
 local_iter_num = 0
 raw_model = model.module if ddp else model
 
@@ -1529,15 +1526,12 @@ while True:
                     "mfu": running_mfu*100,
                     "time/elapsed_seconds": elapsed_time_seconds, # Log elapsed time
                 }
-                # Add analysis metrics if they were computed successfully
-                if rank_util != -1.0:
-                    wandb_metrics["analysis/mlp_rank_utilization"] = rank_util
-                if avg_entropy != -1.0:
-                    wandb_metrics["analysis/attention_entropy"] = avg_entropy
+
                 # Add core accuracy if available
                 if 'val_core_acc' in losses:
                     wandb_metrics["val/core_accuracy"] = losses['val_core_acc']
-                wandb.log(wandb_metrics)
+                if wandb_log:
+                    wandb.log(wandb_metrics)
             if losses['val'] < best_val_loss or always_save_checkpoint:
                 best_val_loss = losses['val']
                 if iter_num > 0:

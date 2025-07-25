@@ -91,11 +91,8 @@ class TrainingConfig:
         self.shrunken_vocab_size = None
         self.vocab_remapping_file = None
         self.RARE_TOKEN_ID = None
-        
-        # Apply dataset-specific defaults
-        self._apply_dataset_defaults()
     
-    def _apply_dataset_defaults(self):
+    def apply_dataset_defaults(self):
         """Apply dataset-specific configuration defaults."""
         if self.dataset == 'fineweb10B':
             self.num_train_shards = 103
@@ -110,7 +107,7 @@ class TrainingConfig:
                 setattr(self, key, value)
         
         # Reapply dataset-specific defaults if dataset changed
-        self._apply_dataset_defaults()
+        self.apply_dataset_defaults()
     
     def update_from_file(self, config_path: str):
         """Update configuration from a YAML or JSON file."""

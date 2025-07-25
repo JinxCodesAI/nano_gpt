@@ -9,6 +9,7 @@ eval_iters = 5
 eval_only = False
 always_save_checkpoint = False
 init_from = 'scratch'
+device = 'cpu'
 
 # Use shakespeare_char dataset (small and complete)
 dataset = 'shakespeare_char'
@@ -25,7 +26,7 @@ bias = False
 
 # Short training
 learning_rate = 1e-3
-max_iters = 100
+max_iters = 200
 weight_decay = 1e-2
 beta1 = 0.9
 beta2 = 0.95
@@ -38,7 +39,6 @@ lr_decay_iters = 80
 min_lr = 1e-4
 
 # System
-device = 'cpu'  # Use CPU to avoid CUDA issues during debugging
 dtype = 'float32'  # Use float32 for compatibility
 compile = False
 
@@ -50,8 +50,8 @@ lora_alpha = 1.0
 
 # Shrunken vocabulary test - use a small subset
 # Shakespeare char dataset has vocab_size = 65, let's shrink to 32
-shrunken_vocab_size = 32
-vocab_remapping_file = 'data/shakespeare_remapping.pt'
+#shrunken_vocab_size = 32
+#vocab_remapping_file = 'data/shakespeare_remapping.pt'
 RARE_TOKEN_ID = 31  # Last token in shrunken vocab
 
 # No scaling schedule for this basic test

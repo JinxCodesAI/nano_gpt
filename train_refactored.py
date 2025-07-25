@@ -95,7 +95,7 @@ def main():
         # File logging setup
         training_logger = TrainingLogger(
             log_dir=config.log_dir,
-            enabled=config.file_logging
+            file_enabled=config.file_logging
         )
         training_logger.setup(config.to_dict())
 
@@ -299,7 +299,7 @@ def main():
     # Initialize model analyzer
     analyzer = None
     if master_process:
-        analyzer = ModelAnalyzer()
+        analyzer = ModelAnalyzer(model)
     
     # Compile model if requested
     unoptimized_model = model

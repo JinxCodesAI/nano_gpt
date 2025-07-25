@@ -89,7 +89,7 @@ def test_logger_functionality():
         from logger import TrainingLogger
         
         # Create logger
-        logger = TrainingLogger(log_dir='test_logs', enabled=True)
+        logger = TrainingLogger(log_dir='test_logs', file_enabled=True)
         print("✓ TrainingLogger created successfully")
         
         # Test setup

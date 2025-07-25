@@ -86,7 +86,7 @@ def test_logger():
         from logger import TrainingLogger
         
         # Create logger
-        logger = TrainingLogger(log_dir='test_logs', enabled=True)
+        logger = TrainingLogger(log_dir='test_logs', file_enabled=True)
         print("✓ TrainingLogger created successfully")
         
         # Test setup
@@ -95,7 +95,7 @@ def test_logger():
         
         # Test logging methods
         logger.log("Test message")
-        logger.log_metrics(100, {'loss': 0.5, 'lr': 1e-4})
+        logger.log_metrics( {'iter':100, 'loss': 0.5, 'lr': 1e-4})
         logger.log_operation_start(100, 'test_op', 'test_value', 'test_trigger', 0.5, 0.6, 1000)
         print("✓ All logging methods work")
         
