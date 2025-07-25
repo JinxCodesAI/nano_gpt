@@ -1837,12 +1837,17 @@ while True:
         if local_iter_num >= 5:
             mfu = raw_model.estimate_mfu(batch_size * gradient_accumulation_steps, dt/log_interval)
             running_mfu = mfu if running_mfu == -1.0 else 0.9*running_mfu + 0.1*mfu
-            print(f"iter {iter_num}: loss {lossf:.4f}, lr {lr:.5f}, time {dt/log_interval*1000:.2f}ms, mfu {running_mfu*100:.2f}%, VRAM {vram_used:.1f}/{vram_total:.1f}GB ({vram_percent:.1f}%)")
+        
+        # Print and log (with proper fallback values)
+        avg_time_ms = dt/log_interval*1000
+        mfu_percent = running_mfu*100 if running_mfu > 0 else 0
+        
+        print(f"iter {iter_num}: loss {lossf:.4f}, lr {lr:.5f}, time {avg_time_ms:.2f}ms, mfu {mfu_percent:.2f}%, VRAM {vram_used:.1f}/{vram_total:.1f}GB ({vram_percent:.1f}%)")
         
         # MFU stats logging to dedicated file
         if file_logging:
             with open(mfu_log_path, 'a') as f:
-                f.write(f"{iter_num},{lossf:.6f},{lr:.8f},{dt/log_interval*1000:.2f},{running_mfu*100:.2f},{vram_used:.3f},{vram_total:.3f},{vram_percent:.2f}\n")
+                f.write(f"{iter_num},{lossf:.6f},{lr:.8f},{avg_time_ms:.2f},{mfu_percent:.2f},{vram_used:.3f},{vram_total:.3f},{vram_percent:.2f}\n")
         
         # Log train/loss and iter to wandb at log_interval
         if wandb_log:
@@ -1850,8 +1855,8 @@ while True:
                 "iter": iter_num,
                 "train/loss": lossf,
                 "lr": lr,
-                "time/dt_ms": dt / log_interval * 1000,
-                "mfu": running_mfu * 100 if running_mfu > 0 else 0,
+                "time/dt_ms": avg_time_ms,
+                "mfu": mfu_percent,
                 "vram/used_gb": vram_used,
                 "vram/total_gb": vram_total,
                 "vram/percent": vram_percent
