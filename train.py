@@ -1663,76 +1663,70 @@ while True:
     for param_group in optimizer.param_groups:
         param_group['lr'] = lr
 
-    with timing_profiler.time_section("evaluation"):
-        if iter_num % eval_interval == 0:
+    if iter_num % eval_interval == 0:
+        with timing_profiler.time_section("evaluation"):
             losses = estimate_loss()
-            if master_process:
-                # Calculate tokens per second
-                elapsed_time_seconds = time.time() - start_time
-                tokens_per_second = batch_manager.total_tokens_served / elapsed_time_seconds if elapsed_time_seconds > 0 else 0
-                wandb_metrics = {
-                    "iter": iter_num,
-                    "train/loss": losses['train'],
-                    "val/loss": losses['val'],
-                    "lr": lr,
-                    "mfu": running_mfu*100,
-                    "time/elapsed_seconds": elapsed_time_seconds, # Log elapsed time
-                }
 
-                # Add core accuracy if available
-                if 'val_core_acc' in losses:
-                    wandb_metrics["val/core_accuracy"] = losses['val_core_acc']
-                if wandb_log:
-                    wandb.log(wandb_metrics)
+        if master_process:
+            # The rest of the evaluation-related logic that should not be timed
+            elapsed_time_seconds = time.time() - start_time
+            tokens_per_second = batch_manager.total_tokens_served / elapsed_time_seconds if elapsed_time_seconds > 0 else 0
+            wandb_metrics = {
+                "iter": iter_num,
+                "train/loss": losses['train'],
+                "val/loss": losses['val'],
+                "lr": lr,
+                "mfu": running_mfu*100,
+                "time/elapsed_seconds": elapsed_time_seconds,
+            }
+
+            if 'val_core_acc' in losses:
+                wandb_metrics["val/core_accuracy"] = losses['val_core_acc']
+            if wandb_log:
+                wandb.log(wandb_metrics)
+
+            print(f"step {iter_num}: train loss {losses['train']:.4f}, val loss {losses['val']:.4f}, lr: {lr:.4f}, tokens/sec {tokens_per_second:.0f}")
+            print_timings(timing_profiler, training_logger)
+
             if losses['val'] < best_val_loss or always_save_checkpoint:
                 best_val_loss = losses['val']
                 if iter_num > 0:
-                    # --- MODIFICATION START ---
-                    # Always save a universal, merged checkpoint
+                    # ... (checkpoint saving logic remains the same)
                     print("Creating universal checkpoint by merging LoRA weights...")
                     universal_state_dict = raw_model.get_merged_state_dict()
+                    # ... (rest of checkpoint saving)
 
-                print(f"step {iter_num}: train loss {losses['train']:.4f}, val loss {losses['val']:.4f}, lr: {lr:.4f}, tokens/sec {tokens_per_second:.0f}")
-                print_timings(timing_profiler, training_logger)
-
-                # --- Model Analysis ---
-                analyzer = ModelAnalyzer(raw_model)
-                # --- NEW ROBUST ASYNCHRONOUS ANALYSIS DISPATCH LOGIC ---
-                # Check system memory before dispatching analysis to prevent OOM
-                memory_info = psutil.virtual_memory()
-                if memory_info.percent > 90.0:
-                    print(f"WARNING: Skipping async analysis due to high system memory usage ({memory_info.percent:.1f}%)")
-                else:
-                    print(f"Dispatching async analysis for iter {iter_num}...")
-                    try:
-                        # 1. Create a full snapshot of the model state on CPU.
-                        current_snapshot = analyzer.get_model_state_snapshot()
-
-                        # 2. Get filtered tokens from BatchManager (non-outliers)
-                        filtered_tokens = batch_manager.get_non_outlier_tokens(ignored_outlayers_sum)
-
-                        X, Y = get_val_batch()
-
-                        # 3. Submit the new, generic analysis task to the executor.
-                        """
-                        future = executor.submit(
-                            run_full_analysis_async,
-                            analyzer,
-                            current_snapshot,
-                            prev_embeddings, # Will be None on the first run.
-                            X,
-                            iter_num,
-                            filtered_tokens
-                        )
-                        """
-                        future.add_done_callback(analysis_done_callback)
+            # --- Model Analysis ---
+            analyzer = ModelAnalyzer(raw_model)
+            memory_info = psutil.virtual_memory()
+            if memory_info.percent > 90.0:
+                print(f"WARNING: Skipping async analysis due to high system memory usage ({memory_info.percent:.1f}%)")
+            else:
+                print(f"Dispatching async analysis for iter {iter_num}...")
+                try:
+                    current_snapshot = analyzer.get_model_state_snapshot()
+                    filtered_tokens = batch_manager.get_non_outlier_tokens(ignored_outlayers_sum)
+                    X_val, Y_val = get_val_batch()
+                    """
+                    # 3. Submit the new, generic analysis task to the executor.
+                    future = executor.submit(
+                        run_full_analysis_async,
+                        analyzer,
+                        current_snapshot,
+                        prev_embeddings, # Will be None on the first run.
+                        (X_val, Y_val),
+                        iter_num,
+                        filtered_tokens
+                    )
+                    """
+                    future.add_done_callback(analysis_done_callback)
 
                         # 4. CRITICAL: Update state for the next analysis cycle.
-                        prev_embeddings = current_snapshot
-                        print("Async analysis job dispatched. Training continues.")
+                    prev_embeddings = current_snapshot
+                    print("Async analysis job dispatched. Training continues.")
 
-                    except Exception as dispatch_error:
-                        print(f"ERROR dispatching async analysis for iter {iter_num}: {dispatch_error}")
+                except Exception as dispatch_error:
+                    print(f"ERROR dispatching async analysis for iter {iter_num}: {dispatch_error}")
 
                 # --- END OF NEW LOGIC ---
 
