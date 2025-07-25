@@ -349,10 +349,13 @@ def main():
     def get_vram_usage():
         if torch.cuda.is_available():
             allocated = torch.cuda.memory_allocated() / 1024**3  # GB
-            cached = torch.cuda.memory_reserved() / 1024**3     # GB
+            reserved = torch.cuda.memory_reserved() / 1024**3     # GB
             total = torch.cuda.get_device_properties(0).total_memory / 1024**3  # GB
-            used_percent = (allocated / total) * 100
-            return allocated, total, used_percent
+            
+            # Use reserved memory as it's more accurate for actual GPU usage
+            used_percent = (reserved / total) * 100
+            
+            return reserved, total, used_percent  # Return reserved instead of allocated
         return 0, 0, 0
     
     while iter_num < config.max_iters and not should_terminate:
