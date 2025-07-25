@@ -15,7 +15,7 @@ device = 'cuda'
 dataset = 'shakespeare_char'
 
 # Very small model for quick testing
-batch_size = 1536
+batch_size = 1024
 block_size = 256
 gradient_accumulation_steps = 1
 n_layer = 1

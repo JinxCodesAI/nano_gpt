@@ -1389,7 +1389,7 @@ def execute_operation(op, trigger_reason, current_val_loss, iter_num, target_arc
 
             raw_model = model.module if ddp else model
             log_model_architecture(raw_model, iter_num)
-            if master_process: training_logger.log_operation_success(iter_num, op_name, {'new_config': raw_model.config.__dict__})}
+            if master_process: training_logger.log_operation_success(iter_num, op_name, {'new_config': raw_model.config.__dict__})
 
 
         # --- Handle non-architectural (hyperparameter) operations ---
@@ -1463,13 +1463,13 @@ def execute_operation(op, trigger_reason, current_val_loss, iter_num, target_arc
                     if master_process: 
                         training_logger.log_operation_success(iter_num, op_name, 
                                                             {'calculated_batch_size': optimal_batch_size,
-                                                             'original_batch_size': batch_size_to_use})}
+                                                             'original_batch_size': batch_size_to_use})
                 except NameError:
                     # Fallback if calculate_optimal_batch_size is not available
                     if master_process:
                         print("Warning: calculate_optimal_batch_size not available, keeping current batch size")
                         training_logger.log_operation_success(iter_num, op_name, 
-                                                            {'message': 'Operation skipped - function not available'})}
+                                                            {'message': 'Operation skipped - function not available'})
             
             elif op_name == 'set_batch_size_relative':
                 batch_size_to_use = batch_size
@@ -1497,7 +1497,7 @@ def execute_operation(op, trigger_reason, current_val_loss, iter_num, target_arc
                         training_logger.log_operation_success(iter_num, op_name, 
                                                             {'new_batch_size': new_batch_size,
                                                              'original_batch_size': batch_size_to_use,
-                                                             'scale_factor': scale_factor})}
+                                                             'scale_factor': scale_factor})
                 except NameError:
                     # Fallback if calculate_relative_batch_size is not available
                     new_batch_size_float = batch_size_to_use * scale_factor
@@ -1518,13 +1518,13 @@ def execute_operation(op, trigger_reason, current_val_loss, iter_num, target_arc
                         training_logger.log_operation_success(iter_num, op_name, 
                                                             {'new_batch_size': new_batch_size,
                                                              'original_batch_size': batch_size_to_use,
-                                                             'scale_factor': scale_factor})}
+                                                             'scale_factor': scale_factor})
             else:
                 raise ValueError(f"Unknown operation '{op_name}'")
             
             # Log success for operations that don't have their own logging
             if op_name not in ['adjust_batch_size', 'set_batch_size_relative'] and master_process:
-                training_logger.log_operation_success(iter_num, op_name, {'new_value': op_value})}
+                training_logger.log_operation_success(iter_num, op_name, {'new_value': op_value})
 
         return True
 
@@ -1714,6 +1714,7 @@ while True:
                         X, Y = get_val_batch()
 
                         # 3. Submit the new, generic analysis task to the executor.
+                        """
                         future = executor.submit(
                             run_full_analysis_async,
                             analyzer,
@@ -1723,6 +1724,7 @@ while True:
                             iter_num,
                             filtered_tokens
                         )
+                        """
                         future.add_done_callback(analysis_done_callback)
 
                         # 4. CRITICAL: Update state for the next analysis cycle.
