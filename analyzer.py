@@ -119,9 +119,11 @@ class ModelAnalyzer:
             all_entropies = []
             # attention_scores is a list of tensors, one for each layer
             for layer_att in attention_scores:
+                # Move tensor to CPU before calculations to free up VRAM
+                layer_att_cpu = layer_att.to('cpu')
                 # layer_att shape: (B, nh, T, T)
                 # Add a small epsilon for numerical stability to avoid log(0)
-                att_probs = layer_att + 1e-9
+                att_probs = layer_att_cpu + 1e-9
 
                 # Entropy = -sum(p * log(p))
                 log_p = torch.log(att_probs)
@@ -129,6 +131,13 @@ class ModelAnalyzer:
 
                 # Average entropy for this layer and append
                 all_entropies.append(entropy.mean().item())
+
+            # Explicitly delete the large GPU tensor and clear cache
+            del attention_scores
+            del layer_att
+            del layer_att_cpu
+            gc.collect()
+            torch.cuda.empty_cache()
 
             return sum(all_entropies) / len(all_entropies) if all_entropies else 0.0
         except Exception as e:

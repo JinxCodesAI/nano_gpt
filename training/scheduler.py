@@ -33,19 +33,28 @@ class TrainingScheduler:
                                    current_batch_size: int = None) -> Tuple[Any, Any, Dict[str, Any]]:
         """
         Check if any operations should be executed and execute them.
-        
-        Returns:
-            Tuple of (updated_model, updated_optimizer, hyperparameter_updates)
+        Handles consecutive non-blocking operations within a single call.
         """
         hyperparameter_updates = {}
         
-        for i, op in enumerate(self.operations):
-            if i in self.completed_operations:
-                continue
+        while True:  # Loop to handle consecutive operations
+            operation_executed_in_loop = False
+            next_op_to_run = None
+
+            # Find the next uncompleted operation
+            for i, op in enumerate(self.operations):
+                if i not in self.completed_operations:
+                    next_op_to_run = (i, op)
+                    break
             
-            # Check if operation should be triggered
+            if next_op_to_run is None:
+                break # All operations are completed
+
+            op_index, op = next_op_to_run
+            
+            # Check if the operation should be triggered
             should_execute, trigger_reason = self._should_execute_operation(
-                i, op, current_val_loss, iter_num
+                op_index, op, current_val_loss, iter_num
             )
             
             if should_execute:
@@ -62,7 +71,6 @@ class TrainingScheduler:
                     else:
                         # Handle hyperparameter operations
                         if op['name'] in ['adjust_batch_size', 'set_batch_size_relative']:
-                            # Execute operations that need current batch size calculation
                             model, optimizer = execute_operation(
                                 op, trigger_reason, current_val_loss, iter_num,
                                 target_architecture_config, model, optimizer,
@@ -70,21 +78,35 @@ class TrainingScheduler:
                                 master_process, data_dir, weight_decay, learning_rate,
                                 beta1, beta2, device_type, self.training_logger, current_batch_size
                             )
-                            # The calculated batch size is now in op['value']
                             hyperparameter_updates['set_batch_size'] = op['value']
                         else:
                             hyperparameter_updates[op['name']] = op['value']
                     
-                    # Mark operation as completed
-                    self.completed_operations.add(i)
+                    # Mark operation as completed and reset wait counter
+                    self.completed_operations.add(op_index)
+                    self.operation_wait_counters[op_index] = 0 # Reset counter after execution
+                    operation_executed_in_loop = True
                     
                     if master_process:
-                        print(f"✓ Operation {i+1}/{len(self.operations)} completed: {op['name']}")
-                
+                        print(f"✓ Operation {op_index+1}/{len(self.operations)} completed: {op['name']}")
+                    
+                    # If the operation requires re-evaluation, break the loop
+                    if op.get('reevaluate', False):
+                        if master_process:
+                            print("Re-evaluation required, breaking operation loop for this iteration.")
+                        break
+
                 except Exception as e:
                     if master_process:
-                        print(f"✗ Operation {i+1} failed: {op['name']} - {str(e)}")
-                    # Don't mark as completed, allow retry
+                        print(f"✗ Operation {op_index+1} failed: {op['name']} - {str(e)}")
+                    break # Stop processing further operations on failure
+            else:
+                # If the next operation is not ready, break the loop
+                break
+
+            # If no operation was executed in this loop, exit
+            if not operation_executed_in_loop:
+                break
         
         return model, optimizer, hyperparameter_updates
     
