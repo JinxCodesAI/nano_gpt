@@ -15,10 +15,10 @@ device = 'cpu'
 dataset = 'shakespeare_char'
 
 # Very small model for quick testing
-batch_size = 2
-block_size = 64
+batch_size = 64
+block_size = 256
 gradient_accumulation_steps = 1
-n_layer = 1
+n_layer = 6
 n_head = 6
 n_embd = 384
 dropout = 0.2
@@ -55,7 +55,7 @@ lora_alpha = 1.0
 RARE_TOKEN_ID = 31  # Last token in shrunken vocab
 
 # Scaling schedule for testing layer growth
-scaling_schedule_file = 'configs/test_basic_shrunken_schedule.json'
+#scaling_schedule_file = 'configs/test_basic_shrunken_schedule.json'
 
 # Output
 out_dir = 'out-test-basic-shrunken'

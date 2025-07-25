@@ -15,9 +15,15 @@ def transfer_optimizer_state(new_optimizer, old_state_dict, old_param_dict, mode
     # Get the new parameter dictionary
     new_param_dict = {name: p for name, p in model.named_parameters()}
     
-    # Initialize new optimizer state
-    new_state = {}
+    # Clear optimizer state completely to avoid KeyError issues
+    new_optimizer.state.clear()
     
+    # Update param_groups to contain current model parameters
+    new_params = [p for p in model.parameters() if p.requires_grad]
+    for group in new_optimizer.param_groups:
+        group['params'] = new_params
+    
+    # Transfer matching state
     transferred_count = 0
     total_old_params = len(old_param_dict)
     
@@ -32,13 +38,19 @@ def transfer_optimizer_state(new_optimizer, old_state_dict, old_param_dict, mode
                 if old_param_id in old_state_dict['state']:
                     # Transfer the state to the new parameter ID
                     new_param_id = id(new_param)
-                    new_state[new_param_id] = old_state_dict['state'][old_param_id].copy()
+                    # Deep copy the state to avoid reference issues
+                    old_state = old_state_dict['state'][old_param_id]
+                    new_state = {}
+                    for key, value in old_state.items():
+                        if torch.is_tensor(value):
+                            new_state[key] = value.clone().detach()
+                        else:
+                            new_state[key] = value
+                    new_optimizer.state[new_param_id] = new_state
                     transferred_count += 1
     
-    # Update the new optimizer's state
-    new_optimizer.state = new_state
-    
     print(f"Successfully transferred optimizer state for {transferred_count}/{total_old_params} parameters")
+    print(f"New optimizer now tracks {len(new_params)} parameters")
 
 
 def transfer_optimizer_state_by_shape(new_optimizer, old_state_dict, model):
@@ -244,9 +256,14 @@ def _execute_architectural_operation(op_name: str, op_value: Any, model, optimiz
                                    master_process: bool, data_dir: str, weight_decay: float,
                                    learning_rate: float, beta1: float, beta2: float,
                                    device_type: str, training_logger, iter_num: int):
+
     """Execute an architectural operation that requires model reconstruction."""
     if master_process:
         print(f"Performing architectural operation: {op_name}")
+    
+    # Reset torch compilation if enabled to avoid state issues
+    if compile_enabled:
+        torch._dynamo.reset()
     
     # Get unwrapped model
     if compile_enabled:
@@ -297,12 +314,21 @@ def _execute_architectural_operation(op_name: str, op_value: Any, model, optimiz
     if master_process:
         print("Re-configuring optimizer...")
     
+    # Create fresh optimizer
     optimizer = unwrapped_model.configure_optimizers(weight_decay, learning_rate, 
                                                    (beta1, beta2), device_type)
     
+    # Try to transfer optimizer state, but don't fail if it doesn't work
     if master_process:
         print("Transferring optimizer state...")
-    transfer_optimizer_state(optimizer, old_optimizer_state, old_param_dict, unwrapped_model)
+    try:
+        transfer_optimizer_state(optimizer, old_optimizer_state, old_param_dict, unwrapped_model)
+    except Exception as e:
+        if master_process:
+            print(f"Warning: Failed to transfer optimizer state: {e}")
+            print("Starting with fresh optimizer state...")
+        # Clear any partial state to ensure clean start
+        optimizer.state.clear()
     
     # Rebuild model wrappers
     model = unwrapped_model

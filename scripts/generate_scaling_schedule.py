@@ -16,7 +16,7 @@ import argparse
 from typing import List, Dict, Any
 
 
-def create_operation(name: str, value: Any, max_wait_iters: int, desc: str) -> Dict[str, Any]:
+def create_operation(name: str, value: Any, trigger_loss: int, max_wait_iters: int, desc: str) -> Dict[str, Any]:
     """Create a standardized operation entry."""
     # merge_lora_weights should always have reevaluate: true
     reevaluate = True if name == "merge_lora_weights" else False
@@ -24,7 +24,7 @@ def create_operation(name: str, value: Any, max_wait_iters: int, desc: str) -> D
     return {
         "name": name,
         "value": value,
-        "trigger_loss": 0,  # Always use time-based triggers
+        "trigger_loss": trigger_loss,  # Always use time-based triggers
         "max_wait_iters": max_wait_iters,
         "desc": desc,
         "reevaluate": reevaluate,
@@ -45,7 +45,7 @@ def generate_scaling_schedule(
     
     # Step 1: Train first layer unfreezed for iters_per_layer iterations
     schedule.append(create_operation(
-        "merge_lora_weights", None, iters_per_layer,
+        "merge_lora_weights", None, 0, iters_per_layer,
         f"Train first layer unfreezed for {iters_per_layer} iterations"
     ))
     
@@ -70,24 +70,24 @@ def generate_scaling_schedule(
         
         # Add the new layer
         schedule.append(create_operation(
-            "stack_layers", stack_config, 1,
+            "stack_layers", stack_config, 100, 0,
             f"Add layer {layer_num} after {current_iter} iterations total"
         ))
         
         # Freeze all previous layers (both attn and mlp) + embeddings
         for prev_layer in range(layer_num - 1):  # 0 to layer_num-2
             schedule.append(create_operation(
-                "freeze_layer", f"attn.{prev_layer}", 1,
+                "freeze_layer", f"attn.{prev_layer}", 100, 0,
                 f"Freeze layer {prev_layer} attention when adding layer {layer_num}"
             ))
             schedule.append(create_operation(
-                "freeze_layer", f"mlp.{prev_layer}", 1,
+                "freeze_layer", f"mlp.{prev_layer}", 100, 0,
                 f"Freeze layer {prev_layer} MLP when adding layer {layer_num}"
             ))
         
         # Freeze embeddings
         schedule.append(create_operation(
-            "freeze_layer", "wte", 1,
+            "freeze_layer", "wte", 100, 0,
             f"Freeze embeddings when adding layer {layer_num}"
         ))
         
@@ -99,19 +99,19 @@ def generate_scaling_schedule(
         for prev_layer in range(layer_num - 1):  # 0 to layer_num-2
             wait_time = freeze_iters if first_unfreeze else 1
             schedule.append(create_operation(
-                "unfreeze_layer", f"attn.{prev_layer}", wait_time,
+                "unfreeze_layer", f"attn.{prev_layer}", 0, wait_time,
                 f"Unfreeze layer {prev_layer} attention after {freeze_iters} iterations"
             ))
             first_unfreeze = False  # Only first operation waits
             
             schedule.append(create_operation(
-                "unfreeze_layer", f"mlp.{prev_layer}", 1,
+                "unfreeze_layer", f"mlp.{prev_layer}", 100, 0,
                 f"Unfreeze layer {prev_layer} MLP after {freeze_iters} iterations"
             ))
         
         # Unfreeze embeddings
         schedule.append(create_operation(
-            "unfreeze_layer", "wte", 1,
+            "unfreeze_layer", "wte", 100, 0,
             f"Unfreeze embeddings after {freeze_iters} iterations"
         ))
         
@@ -120,7 +120,7 @@ def generate_scaling_schedule(
         if most_recent_prev >= 0:
             rank_quarter = n_embd // 4  # 1/4 of embedding dim
             schedule.append(create_operation(
-                "set_layer_lora_rank", [f"attn.{most_recent_prev}", rank_quarter], 1,
+                "set_layer_lora_rank", [f"attn.{most_recent_prev}", rank_quarter], 100, 0,
                 f"Set layer {most_recent_prev} attention to LoRA rank 1/4 of {n_embd}"
             ))
             
@@ -129,7 +129,7 @@ def generate_scaling_schedule(
                 prev_prev = most_recent_prev - 1
                 rank_sixteenth = n_embd // 16  # 1/16 of embedding dim
                 schedule.append(create_operation(
-                    "set_layer_lora_rank", [f"attn.{prev_prev}", rank_sixteenth], 1,
+                    "set_layer_lora_rank", [f"attn.{prev_prev}", rank_sixteenth], 100, 0,
                     f"Set layer {prev_prev} attention to LoRA rank 1/16 of {n_embd}"
                 ))
         
@@ -137,14 +137,14 @@ def generate_scaling_schedule(
         remaining_iters = iters_per_layer - freeze_iters - 2  # -2 for the operations above
         if layer_num < target_layers:  # Don't merge after final layer
             schedule.append(create_operation(
-                "merge_lora_weights", None, remaining_iters,
+                "merge_lora_weights", None, 0, remaining_iters,
                 f"Merge LoRA weights before next growth (at iter {current_iter + iters_per_layer})"
             ))
     
     # Add extra training iterations after final layer
     if extra_iters > 0:
         schedule.append(create_operation(
-            "merge_lora_weights", None, extra_iters,
+            "merge_lora_weights", None, 0, extra_iters,
             f"Extra training after final layer for {extra_iters} iterations"
         ))
     
