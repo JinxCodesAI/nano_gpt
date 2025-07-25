@@ -9,13 +9,13 @@ eval_iters = 5
 eval_only = False
 always_save_checkpoint = False
 init_from = 'scratch'
-device = 'cpu'
+device = 'cuda'
 
 # Use shakespeare_char dataset (small and complete)
 dataset = 'shakespeare_char'
 
 # Very small model for quick testing
-batch_size = 64
+batch_size = 256
 block_size = 256
 gradient_accumulation_steps = 1
 n_layer = 6
