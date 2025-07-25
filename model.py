@@ -50,6 +50,75 @@ class LoRAEmbedding(nn.Module):
         nn.init.normal_(self.lora_A.weight, std=0.02)
         nn.init.zeros_(self.lora_B.weight)
 
+class LoRAOnlyEmbedding(nn.Module):
+    """LoRA-only embedding layer with no main weight"""
+    
+    def __init__(self, vocab_size, n_embd, rank, alpha):
+        super().__init__()
+        if rank <= 0:
+            raise ValueError("LoRAOnlyEmbedding requires rank > 0")
+        self.lora_A = nn.Embedding(vocab_size, rank)
+        self.lora_B = nn.Linear(rank, n_embd, bias=False)
+        self.rank = rank
+        self.alpha = alpha
+        self.vocab_size = vocab_size
+        self.n_embd = n_embd
+        
+        nn.init.normal_(self.lora_A.weight, std=0.02)
+        nn.init.zeros_(self.lora_B.weight)
+
+    def forward(self, idx):
+        return (self.alpha / self.rank) * self.lora_B(self.lora_A(idx))
+
+    def merge_and_reset(self):
+        pass
+
+    def get_full_weight(self):
+        """Reconstruct the full weight matrix from LoRA components"""
+        with torch.no_grad():
+            return (self.alpha / self.rank) * (self.lora_A.weight @ self.lora_B.weight.T)
+
+    def resize_rank(self, new_rank, alpha):
+        """Resize the LoRA rank by reconstructing and decomposing the full matrix"""
+        if new_rank <= 0:
+            raise ValueError("LoRA-only embedding cannot be resized to rank 0 or negative")
+            
+        with torch.no_grad():
+            # Get the current full weight matrix
+            full_weight = self.get_full_weight()
+            
+            # Perform SVD decomposition
+            U, S, Vt = torch.linalg.svd(full_weight, full_matrices=False)
+            
+            # Truncate to new rank
+            rank_to_use = min(new_rank, len(S))
+            U_truncated = U[:, :rank_to_use]
+            S_truncated = S[:rank_to_use]
+            Vt_truncated = Vt[:rank_to_use, :]
+            
+            # Create new LoRA components
+            device = self.lora_A.weight.device
+            new_lora_A = nn.Embedding(self.vocab_size, new_rank).to(device)
+            new_lora_B = nn.Linear(new_rank, self.n_embd, bias=False).to(device)
+            
+            # Initialize new components
+            if rank_to_use < new_rank:
+                # Pad with zeros if new rank is larger than available singular values
+                new_lora_A.weight.data[:, :rank_to_use] = U_truncated * torch.sqrt(S_truncated).unsqueeze(0)
+                new_lora_B.weight.data[:, :rank_to_use] = (torch.sqrt(S_truncated).unsqueeze(1) * Vt_truncated).T
+                # Initialize remaining with small random values
+                nn.init.normal_(new_lora_A.weight.data[:, rank_to_use:], std=0.02)
+                nn.init.zeros_(new_lora_B.weight.data[:, rank_to_use:])
+            else:
+                new_lora_A.weight.data = U_truncated * torch.sqrt(S_truncated).unsqueeze(0)
+                new_lora_B.weight.data = (torch.sqrt(S_truncated).unsqueeze(1) * Vt_truncated).T
+            
+            # Update components
+            self.lora_A = new_lora_A
+            self.lora_B = new_lora_B
+            self.rank = new_rank
+            self.alpha = alpha
+
 class LoRALinear(nn.Module):
     """LoRA adapter for linear layers"""
     
@@ -296,7 +365,7 @@ class GPTConfig:
     rotary_max_position_embeddings: int = 2048
     
     # LoRA parameters
-    embedding_mode: str = 'standard' # 'standard' or 'lora'
+    embedding_mode: str = 'standard' # 'standard', 'lora', or 'lora_only'
     embedding_rank: int = 0 # rank for embedding LoRA, 0 disables
     attn_lora_rank: int = 0 # rank for attention LoRA, 0 disables
     lora_alpha: float = 1.0 # scaling factor for LoRA layers
@@ -315,6 +384,10 @@ class GPT(nn.Module):
             wte_module = LoRAEmbedding(config.vocab_size, config.n_embd,
                                        rank=config.embedding_rank,
                                        alpha=config.lora_alpha)
+        elif config.embedding_mode == 'lora_only' and config.embedding_rank > 0:
+            wte_module = LoRAOnlyEmbedding(config.vocab_size, config.n_embd,
+                                           rank=config.embedding_rank,
+                                           alpha=config.lora_alpha)
         else:
             wte_module = nn.Embedding(config.vocab_size, config.n_embd)
 
@@ -339,6 +412,9 @@ class GPT(nn.Module):
             # CRITICAL FIX: After tying, explicitly freeze the lm_head as well,
             # since it now shares the same (supposedly frozen) weight tensor.
             self.lm_head.requires_grad_(False)
+        elif isinstance(self.transformer.wte, LoRAOnlyEmbedding):
+            # LoRA-only embeddings don't have weight tying since there's no main_weight
+            pass
         else:
             # Standard weight tying for regular embeddings
             self.transformer.wte.weight = self.lm_head.weight
@@ -800,6 +876,12 @@ class GPT(nn.Module):
                 merged_weight = module.main_weight.weight.data + lora_update * (module.alpha / module.rank)
                 final_sd[key] = merged_weight
 
+            elif isinstance(module, LoRAOnlyEmbedding):
+                key = f"{name}.weight"
+                # For LoRA-only embeddings, the full weight is just the LoRA components
+                merged_weight = module.get_full_weight()
+                final_sd[key] = merged_weight
+
         return final_sd
 
     def resize_vocabulary(self, new_vocab_size, source_token_id, noise_std=0.01):
@@ -1077,7 +1159,16 @@ class GPT(nn.Module):
                 print(f"LoRA only supported for 'attn' component, not '{component}'")
         else:
             if layer_name == "wte":
-                device = self.transformer.wte.weight.device
+                device = self.transformer.wte.weight.device if hasattr(self.transformer.wte, 'weight') else next(self.transformer.wte.parameters()).device
+                
+                # Handle LoRA-only embeddings
+                if isinstance(self.transformer.wte, LoRAOnlyEmbedding):
+                    if rank <= 0:
+                        raise ValueError("LoRA-only embeddings cannot be converted to rank 0. Use a different embedding_mode.")
+                    # Resize the existing LoRA-only embedding
+                    self.transformer.wte.resize_rank(rank, self.config.lora_alpha)
+                    print(f"Resized LoRA-only token embeddings to rank {rank}")
+                    return
                 
                 # Merge existing LoRA weights if it's already a LoRA layer
                 if isinstance(self.transformer.wte, LoRAEmbedding):
