@@ -18,15 +18,15 @@ dataset = 'shakespeare_char'
 batch_size = 2
 block_size = 64
 gradient_accumulation_steps = 1
-n_layer = 2
-n_head = 2
-n_embd = 32
-dropout = 0.0
+n_layer = 1
+n_head = 6
+n_embd = 384
+dropout = 0.2
 bias = False
 
-# Short training
+# Extended training for scaling schedule
 learning_rate = 1e-3
-max_iters = 200
+max_iters = 3500  # 6 layers * 500 iters + 500 extra = 3500
 weight_decay = 1e-2
 beta1 = 0.9
 beta2 = 0.95
@@ -34,8 +34,8 @@ grad_clip = 1.0
 
 # LR settings
 decay_lr = True
-warmup_iters = 10
-lr_decay_iters = 80
+warmup_iters = 100
+lr_decay_iters = 3000
 min_lr = 1e-4
 
 # System
@@ -54,8 +54,8 @@ lora_alpha = 1.0
 #vocab_remapping_file = 'data/shakespeare_remapping.pt'
 RARE_TOKEN_ID = 31  # Last token in shrunken vocab
 
-# No scaling schedule for this basic test
-scaling_schedule = []
+# Scaling schedule for testing layer growth
+scaling_schedule_file = 'configs/test_basic_shrunken_schedule.json'
 
 # Output
 out_dir = 'out-test-basic-shrunken'

@@ -1,0 +1,864 @@
+[
+  {
+    "name": "merge_lora_weights",
+    "value": null,
+    "trigger_loss": 0,
+    "max_wait_iters": 500,
+    "desc": "Train first layer unfreezed for 500 iterations",
+    "reevaluate": true,
+    "completed": false
+  },
+  {
+    "name": "stack_layers",
+    "value": [
+      0,
+      0
+    ],
+    "trigger_loss": 0,
+    "max_wait_iters": 1,
+    "desc": "Add layer 2 after 500 iterations total",
+    "reevaluate": false,
+    "completed": false
+  },
+  {
+    "name": "freeze_layer",
+    "value": "attn.0",
+    "trigger_loss": 0,
+    "max_wait_iters": 1,
+    "desc": "Freeze layer 0 attention when adding layer 2",
+    "reevaluate": false,
+    "completed": false
+  },
+  {
+    "name": "freeze_layer",
+    "value": "mlp.0",
+    "trigger_loss": 0,
+    "max_wait_iters": 1,
+    "desc": "Freeze layer 0 MLP when adding layer 2",
+    "reevaluate": false,
+    "completed": false
+  },
+  {
+    "name": "freeze_layer",
+    "value": "wte",
+    "trigger_loss": 0,
+    "max_wait_iters": 1,
+    "desc": "Freeze embeddings when adding layer 2",
+    "reevaluate": false,
+    "completed": false
+  },
+  {
+    "name": "unfreeze_layer",
+    "value": "attn.0",
+    "trigger_loss": 0,
+    "max_wait_iters": 200,
+    "desc": "Unfreeze layer 0 attention after 200 iterations",
+    "reevaluate": false,
+    "completed": false
+  },
+  {
+    "name": "unfreeze_layer",
+    "value": "mlp.0",
+    "trigger_loss": 0,
+    "max_wait_iters": 1,
+    "desc": "Unfreeze layer 0 MLP after 200 iterations",
+    "reevaluate": false,
+    "completed": false
+  },
+  {
+    "name": "unfreeze_layer",
+    "value": "wte",
+    "trigger_loss": 0,
+    "max_wait_iters": 1,
+    "desc": "Unfreeze embeddings after 200 iterations",
+    "reevaluate": false,
+    "completed": false
+  },
+  {
+    "name": "set_layer_lora_rank",
+    "value": [
+      "attn.0",
+      96
+    ],
+    "trigger_loss": 0,
+    "max_wait_iters": 1,
+    "desc": "Set layer 0 attention to LoRA rank 1/4 of 384",
+    "reevaluate": false,
+    "completed": false
+  },
+  {
+    "name": "merge_lora_weights",
+    "value": null,
+    "trigger_loss": 0,
+    "max_wait_iters": 298,
+    "desc": "Merge LoRA weights before next growth (at iter 1000)",
+    "reevaluate": true,
+    "completed": false
+  },
+  {
+    "name": "stack_layers",
+    "value": [
+      0,
+      1,
+      1
+    ],
+    "trigger_loss": 0,
+    "max_wait_iters": 1,
+    "desc": "Add layer 3 after 1000 iterations total",
+    "reevaluate": false,
+    "completed": false
+  },
+  {
+    "name": "freeze_layer",
+    "value": "attn.0",
+    "trigger_loss": 0,
+    "max_wait_iters": 1,
+    "desc": "Freeze layer 0 attention when adding layer 3",
+    "reevaluate": false,
+    "completed": false
+  },
+  {
+    "name": "freeze_layer",
+    "value": "mlp.0",
+    "trigger_loss": 0,
+    "max_wait_iters": 1,
+    "desc": "Freeze layer 0 MLP when adding layer 3",
+    "reevaluate": false,
+    "completed": false
+  },
+  {
+    "name": "freeze_layer",
+    "value": "attn.1",
+    "trigger_loss": 0,
+    "max_wait_iters": 1,
+    "desc": "Freeze layer 1 attention when adding layer 3",
+    "reevaluate": false,
+    "completed": false
+  },
+  {
+    "name": "freeze_layer",
+    "value": "mlp.1",
+    "trigger_loss": 0,
+    "max_wait_iters": 1,
+    "desc": "Freeze layer 1 MLP when adding layer 3",
+    "reevaluate": false,
+    "completed": false
+  },
+  {
+    "name": "freeze_layer",
+    "value": "wte",
+    "trigger_loss": 0,
+    "max_wait_iters": 1,
+    "desc": "Freeze embeddings when adding layer 3",
+    "reevaluate": false,
+    "completed": false
+  },
+  {
+    "name": "unfreeze_layer",
+    "value": "attn.0",
+    "trigger_loss": 0,
+    "max_wait_iters": 200,
+    "desc": "Unfreeze layer 0 attention after 200 iterations",
+    "reevaluate": false,
+    "completed": false
+  },
+  {
+    "name": "unfreeze_layer",
+    "value": "mlp.0",
+    "trigger_loss": 0,
+    "max_wait_iters": 1,
+    "desc": "Unfreeze layer 0 MLP after 200 iterations",
+    "reevaluate": false,
+    "completed": false
+  },
+  {
+    "name": "unfreeze_layer",
+    "value": "attn.1",
+    "trigger_loss": 0,
+    "max_wait_iters": 1,
+    "desc": "Unfreeze layer 1 attention after 200 iterations",
+    "reevaluate": false,
+    "completed": false
+  },
+  {
+    "name": "unfreeze_layer",
+    "value": "mlp.1",
+    "trigger_loss": 0,
+    "max_wait_iters": 1,
+    "desc": "Unfreeze layer 1 MLP after 200 iterations",
+    "reevaluate": false,
+    "completed": false
+  },
+  {
+    "name": "unfreeze_layer",
+    "value": "wte",
+    "trigger_loss": 0,
+    "max_wait_iters": 1,
+    "desc": "Unfreeze embeddings after 200 iterations",
+    "reevaluate": false,
+    "completed": false
+  },
+  {
+    "name": "set_layer_lora_rank",
+    "value": [
+      "attn.1",
+      96
+    ],
+    "trigger_loss": 0,
+    "max_wait_iters": 1,
+    "desc": "Set layer 1 attention to LoRA rank 1/4 of 384",
+    "reevaluate": false,
+    "completed": false
+  },
+  {
+    "name": "set_layer_lora_rank",
+    "value": [
+      "attn.0",
+      24
+    ],
+    "trigger_loss": 0,
+    "max_wait_iters": 1,
+    "desc": "Set layer 0 attention to LoRA rank 1/16 of 384",
+    "reevaluate": false,
+    "completed": false
+  },
+  {
+    "name": "merge_lora_weights",
+    "value": null,
+    "trigger_loss": 0,
+    "max_wait_iters": 298,
+    "desc": "Merge LoRA weights before next growth (at iter 1500)",
+    "reevaluate": true,
+    "completed": false
+  },
+  {
+    "name": "stack_layers",
+    "value": [
+      0,
+      1,
+      2,
+      2
+    ],
+    "trigger_loss": 0,
+    "max_wait_iters": 1,
+    "desc": "Add layer 4 after 1500 iterations total",
+    "reevaluate": false,
+    "completed": false
+  },
+  {
+    "name": "freeze_layer",
+    "value": "attn.0",
+    "trigger_loss": 0,
+    "max_wait_iters": 1,
+    "desc": "Freeze layer 0 attention when adding layer 4",
+    "reevaluate": false,
+    "completed": false
+  },
+  {
+    "name": "freeze_layer",
+    "value": "mlp.0",
+    "trigger_loss": 0,
+    "max_wait_iters": 1,
+    "desc": "Freeze layer 0 MLP when adding layer 4",
+    "reevaluate": false,
+    "completed": false
+  },
+  {
+    "name": "freeze_layer",
+    "value": "attn.1",
+    "trigger_loss": 0,
+    "max_wait_iters": 1,
+    "desc": "Freeze layer 1 attention when adding layer 4",
+    "reevaluate": false,
+    "completed": false
+  },
+  {
+    "name": "freeze_layer",
+    "value": "mlp.1",
+    "trigger_loss": 0,
+    "max_wait_iters": 1,
+    "desc": "Freeze layer 1 MLP when adding layer 4",
+    "reevaluate": false,
+    "completed": false
+  },
+  {
+    "name": "freeze_layer",
+    "value": "attn.2",
+    "trigger_loss": 0,
+    "max_wait_iters": 1,
+    "desc": "Freeze layer 2 attention when adding layer 4",
+    "reevaluate": false,
+    "completed": false
+  },
+  {
+    "name": "freeze_layer",
+    "value": "mlp.2",
+    "trigger_loss": 0,
+    "max_wait_iters": 1,
+    "desc": "Freeze layer 2 MLP when adding layer 4",
+    "reevaluate": false,
+    "completed": false
+  },
+  {
+    "name": "freeze_layer",
+    "value": "wte",
+    "trigger_loss": 0,
+    "max_wait_iters": 1,
+    "desc": "Freeze embeddings when adding layer 4",
+    "reevaluate": false,
+    "completed": false
+  },
+  {
+    "name": "unfreeze_layer",
+    "value": "attn.0",
+    "trigger_loss": 0,
+    "max_wait_iters": 200,
+    "desc": "Unfreeze layer 0 attention after 200 iterations",
+    "reevaluate": false,
+    "completed": false
+  },
+  {
+    "name": "unfreeze_layer",
+    "value": "mlp.0",
+    "trigger_loss": 0,
+    "max_wait_iters": 1,
+    "desc": "Unfreeze layer 0 MLP after 200 iterations",
+    "reevaluate": false,
+    "completed": false
+  },
+  {
+    "name": "unfreeze_layer",
+    "value": "attn.1",
+    "trigger_loss": 0,
+    "max_wait_iters": 1,
+    "desc": "Unfreeze layer 1 attention after 200 iterations",
+    "reevaluate": false,
+    "completed": false
+  },
+  {
+    "name": "unfreeze_layer",
+    "value": "mlp.1",
+    "trigger_loss": 0,
+    "max_wait_iters": 1,
+    "desc": "Unfreeze layer 1 MLP after 200 iterations",
+    "reevaluate": false,
+    "completed": false
+  },
+  {
+    "name": "unfreeze_layer",
+    "value": "attn.2",
+    "trigger_loss": 0,
+    "max_wait_iters": 1,
+    "desc": "Unfreeze layer 2 attention after 200 iterations",
+    "reevaluate": false,
+    "completed": false
+  },
+  {
+    "name": "unfreeze_layer",
+    "value": "mlp.2",
+    "trigger_loss": 0,
+    "max_wait_iters": 1,
+    "desc": "Unfreeze layer 2 MLP after 200 iterations",
+    "reevaluate": false,
+    "completed": false
+  },
+  {
+    "name": "unfreeze_layer",
+    "value": "wte",
+    "trigger_loss": 0,
+    "max_wait_iters": 1,
+    "desc": "Unfreeze embeddings after 200 iterations",
+    "reevaluate": false,
+    "completed": false
+  },
+  {
+    "name": "set_layer_lora_rank",
+    "value": [
+      "attn.2",
+      96
+    ],
+    "trigger_loss": 0,
+    "max_wait_iters": 1,
+    "desc": "Set layer 2 attention to LoRA rank 1/4 of 384",
+    "reevaluate": false,
+    "completed": false
+  },
+  {
+    "name": "set_layer_lora_rank",
+    "value": [
+      "attn.1",
+      24
+    ],
+    "trigger_loss": 0,
+    "max_wait_iters": 1,
+    "desc": "Set layer 1 attention to LoRA rank 1/16 of 384",
+    "reevaluate": false,
+    "completed": false
+  },
+  {
+    "name": "merge_lora_weights",
+    "value": null,
+    "trigger_loss": 0,
+    "max_wait_iters": 298,
+    "desc": "Merge LoRA weights before next growth (at iter 2000)",
+    "reevaluate": true,
+    "completed": false
+  },
+  {
+    "name": "stack_layers",
+    "value": [
+      0,
+      1,
+      2,
+      3,
+      3
+    ],
+    "trigger_loss": 0,
+    "max_wait_iters": 1,
+    "desc": "Add layer 5 after 2000 iterations total",
+    "reevaluate": false,
+    "completed": false
+  },
+  {
+    "name": "freeze_layer",
+    "value": "attn.0",
+    "trigger_loss": 0,
+    "max_wait_iters": 1,
+    "desc": "Freeze layer 0 attention when adding layer 5",
+    "reevaluate": false,
+    "completed": false
+  },
+  {
+    "name": "freeze_layer",
+    "value": "mlp.0",
+    "trigger_loss": 0,
+    "max_wait_iters": 1,
+    "desc": "Freeze layer 0 MLP when adding layer 5",
+    "reevaluate": false,
+    "completed": false
+  },
+  {
+    "name": "freeze_layer",
+    "value": "attn.1",
+    "trigger_loss": 0,
+    "max_wait_iters": 1,
+    "desc": "Freeze layer 1 attention when adding layer 5",
+    "reevaluate": false,
+    "completed": false
+  },
+  {
+    "name": "freeze_layer",
+    "value": "mlp.1",
+    "trigger_loss": 0,
+    "max_wait_iters": 1,
+    "desc": "Freeze layer 1 MLP when adding layer 5",
+    "reevaluate": false,
+    "completed": false
+  },
+  {
+    "name": "freeze_layer",
+    "value": "attn.2",
+    "trigger_loss": 0,
+    "max_wait_iters": 1,
+    "desc": "Freeze layer 2 attention when adding layer 5",
+    "reevaluate": false,
+    "completed": false
+  },
+  {
+    "name": "freeze_layer",
+    "value": "mlp.2",
+    "trigger_loss": 0,
+    "max_wait_iters": 1,
+    "desc": "Freeze layer 2 MLP when adding layer 5",
+    "reevaluate": false,
+    "completed": false
+  },
+  {
+    "name": "freeze_layer",
+    "value": "attn.3",
+    "trigger_loss": 0,
+    "max_wait_iters": 1,
+    "desc": "Freeze layer 3 attention when adding layer 5",
+    "reevaluate": false,
+    "completed": false
+  },
+  {
+    "name": "freeze_layer",
+    "value": "mlp.3",
+    "trigger_loss": 0,
+    "max_wait_iters": 1,
+    "desc": "Freeze layer 3 MLP when adding layer 5",
+    "reevaluate": false,
+    "completed": false
+  },
+  {
+    "name": "freeze_layer",
+    "value": "wte",
+    "trigger_loss": 0,
+    "max_wait_iters": 1,
+    "desc": "Freeze embeddings when adding layer 5",
+    "reevaluate": false,
+    "completed": false
+  },
+  {
+    "name": "unfreeze_layer",
+    "value": "attn.0",
+    "trigger_loss": 0,
+    "max_wait_iters": 200,
+    "desc": "Unfreeze layer 0 attention after 200 iterations",
+    "reevaluate": false,
+    "completed": false
+  },
+  {
+    "name": "unfreeze_layer",
+    "value": "mlp.0",
+    "trigger_loss": 0,
+    "max_wait_iters": 1,
+    "desc": "Unfreeze layer 0 MLP after 200 iterations",
+    "reevaluate": false,
+    "completed": false
+  },
+  {
+    "name": "unfreeze_layer",
+    "value": "attn.1",
+    "trigger_loss": 0,
+    "max_wait_iters": 1,
+    "desc": "Unfreeze layer 1 attention after 200 iterations",
+    "reevaluate": false,
+    "completed": false
+  },
+  {
+    "name": "unfreeze_layer",
+    "value": "mlp.1",
+    "trigger_loss": 0,
+    "max_wait_iters": 1,
+    "desc": "Unfreeze layer 1 MLP after 200 iterations",
+    "reevaluate": false,
+    "completed": false
+  },
+  {
+    "name": "unfreeze_layer",
+    "value": "attn.2",
+    "trigger_loss": 0,
+    "max_wait_iters": 1,
+    "desc": "Unfreeze layer 2 attention after 200 iterations",
+    "reevaluate": false,
+    "completed": false
+  },
+  {
+    "name": "unfreeze_layer",
+    "value": "mlp.2",
+    "trigger_loss": 0,
+    "max_wait_iters": 1,
+    "desc": "Unfreeze layer 2 MLP after 200 iterations",
+    "reevaluate": false,
+    "completed": false
+  },
+  {
+    "name": "unfreeze_layer",
+    "value": "attn.3",
+    "trigger_loss": 0,
+    "max_wait_iters": 1,
+    "desc": "Unfreeze layer 3 attention after 200 iterations",
+    "reevaluate": false,
+    "completed": false
+  },
+  {
+    "name": "unfreeze_layer",
+    "value": "mlp.3",
+    "trigger_loss": 0,
+    "max_wait_iters": 1,
+    "desc": "Unfreeze layer 3 MLP after 200 iterations",
+    "reevaluate": false,
+    "completed": false
+  },
+  {
+    "name": "unfreeze_layer",
+    "value": "wte",
+    "trigger_loss": 0,
+    "max_wait_iters": 1,
+    "desc": "Unfreeze embeddings after 200 iterations",
+    "reevaluate": false,
+    "completed": false
+  },
+  {
+    "name": "set_layer_lora_rank",
+    "value": [
+      "attn.3",
+      96
+    ],
+    "trigger_loss": 0,
+    "max_wait_iters": 1,
+    "desc": "Set layer 3 attention to LoRA rank 1/4 of 384",
+    "reevaluate": false,
+    "completed": false
+  },
+  {
+    "name": "set_layer_lora_rank",
+    "value": [
+      "attn.2",
+      24
+    ],
+    "trigger_loss": 0,
+    "max_wait_iters": 1,
+    "desc": "Set layer 2 attention to LoRA rank 1/16 of 384",
+    "reevaluate": false,
+    "completed": false
+  },
+  {
+    "name": "merge_lora_weights",
+    "value": null,
+    "trigger_loss": 0,
+    "max_wait_iters": 298,
+    "desc": "Merge LoRA weights before next growth (at iter 2500)",
+    "reevaluate": true,
+    "completed": false
+  },
+  {
+    "name": "stack_layers",
+    "value": [
+      0,
+      1,
+      2,
+      3,
+      4,
+      4
+    ],
+    "trigger_loss": 0,
+    "max_wait_iters": 1,
+    "desc": "Add layer 6 after 2500 iterations total",
+    "reevaluate": false,
+    "completed": false
+  },
+  {
+    "name": "freeze_layer",
+    "value": "attn.0",
+    "trigger_loss": 0,
+    "max_wait_iters": 1,
+    "desc": "Freeze layer 0 attention when adding layer 6",
+    "reevaluate": false,
+    "completed": false
+  },
+  {
+    "name": "freeze_layer",
+    "value": "mlp.0",
+    "trigger_loss": 0,
+    "max_wait_iters": 1,
+    "desc": "Freeze layer 0 MLP when adding layer 6",
+    "reevaluate": false,
+    "completed": false
+  },
+  {
+    "name": "freeze_layer",
+    "value": "attn.1",
+    "trigger_loss": 0,
+    "max_wait_iters": 1,
+    "desc": "Freeze layer 1 attention when adding layer 6",
+    "reevaluate": false,
+    "completed": false
+  },
+  {
+    "name": "freeze_layer",
+    "value": "mlp.1",
+    "trigger_loss": 0,
+    "max_wait_iters": 1,
+    "desc": "Freeze layer 1 MLP when adding layer 6",
+    "reevaluate": false,
+    "completed": false
+  },
+  {
+    "name": "freeze_layer",
+    "value": "attn.2",
+    "trigger_loss": 0,
+    "max_wait_iters": 1,
+    "desc": "Freeze layer 2 attention when adding layer 6",
+    "reevaluate": false,
+    "completed": false
+  },
+  {
+    "name": "freeze_layer",
+    "value": "mlp.2",
+    "trigger_loss": 0,
+    "max_wait_iters": 1,
+    "desc": "Freeze layer 2 MLP when adding layer 6",
+    "reevaluate": false,
+    "completed": false
+  },
+  {
+    "name": "freeze_layer",
+    "value": "attn.3",
+    "trigger_loss": 0,
+    "max_wait_iters": 1,
+    "desc": "Freeze layer 3 attention when adding layer 6",
+    "reevaluate": false,
+    "completed": false
+  },
+  {
+    "name": "freeze_layer",
+    "value": "mlp.3",
+    "trigger_loss": 0,
+    "max_wait_iters": 1,
+    "desc": "Freeze layer 3 MLP when adding layer 6",
+    "reevaluate": false,
+    "completed": false
+  },
+  {
+    "name": "freeze_layer",
+    "value": "attn.4",
+    "trigger_loss": 0,
+    "max_wait_iters": 1,
+    "desc": "Freeze layer 4 attention when adding layer 6",
+    "reevaluate": false,
+    "completed": false
+  },
+  {
+    "name": "freeze_layer",
+    "value": "mlp.4",
+    "trigger_loss": 0,
+    "max_wait_iters": 1,
+    "desc": "Freeze layer 4 MLP when adding layer 6",
+    "reevaluate": false,
+    "completed": false
+  },
+  {
+    "name": "freeze_layer",
+    "value": "wte",
+    "trigger_loss": 0,
+    "max_wait_iters": 1,
+    "desc": "Freeze embeddings when adding layer 6",
+    "reevaluate": false,
+    "completed": false
+  },
+  {
+    "name": "unfreeze_layer",
+    "value": "attn.0",
+    "trigger_loss": 0,
+    "max_wait_iters": 200,
+    "desc": "Unfreeze layer 0 attention after 200 iterations",
+    "reevaluate": false,
+    "completed": false
+  },
+  {
+    "name": "unfreeze_layer",
+    "value": "mlp.0",
+    "trigger_loss": 0,
+    "max_wait_iters": 1,
+    "desc": "Unfreeze layer 0 MLP after 200 iterations",
+    "reevaluate": false,
+    "completed": false
+  },
+  {
+    "name": "unfreeze_layer",
+    "value": "attn.1",
+    "trigger_loss": 0,
+    "max_wait_iters": 1,
+    "desc": "Unfreeze layer 1 attention after 200 iterations",
+    "reevaluate": false,
+    "completed": false
+  },
+  {
+    "name": "unfreeze_layer",
+    "value": "mlp.1",
+    "trigger_loss": 0,
+    "max_wait_iters": 1,
+    "desc": "Unfreeze layer 1 MLP after 200 iterations",
+    "reevaluate": false,
+    "completed": false
+  },
+  {
+    "name": "unfreeze_layer",
+    "value": "attn.2",
+    "trigger_loss": 0,
+    "max_wait_iters": 1,
+    "desc": "Unfreeze layer 2 attention after 200 iterations",
+    "reevaluate": false,
+    "completed": false
+  },
+  {
+    "name": "unfreeze_layer",
+    "value": "mlp.2",
+    "trigger_loss": 0,
+    "max_wait_iters": 1,
+    "desc": "Unfreeze layer 2 MLP after 200 iterations",
+    "reevaluate": false,
+    "completed": false
+  },
+  {
+    "name": "unfreeze_layer",
+    "value": "attn.3",
+    "trigger_loss": 0,
+    "max_wait_iters": 1,
+    "desc": "Unfreeze layer 3 attention after 200 iterations",
+    "reevaluate": false,
+    "completed": false
+  },
+  {
+    "name": "unfreeze_layer",
+    "value": "mlp.3",
+    "trigger_loss": 0,
+    "max_wait_iters": 1,
+    "desc": "Unfreeze layer 3 MLP after 200 iterations",
+    "reevaluate": false,
+    "completed": false
+  },
+  {
+    "name": "unfreeze_layer",
+    "value": "attn.4",
+    "trigger_loss": 0,
+    "max_wait_iters": 1,
+    "desc": "Unfreeze layer 4 attention after 200 iterations",
+    "reevaluate": false,
+    "completed": false
+  },
+  {
+    "name": "unfreeze_layer",
+    "value": "mlp.4",
+    "trigger_loss": 0,
+    "max_wait_iters": 1,
+    "desc": "Unfreeze layer 4 MLP after 200 iterations",
+    "reevaluate": false,
+    "completed": false
+  },
+  {
+    "name": "unfreeze_layer",
+    "value": "wte",
+    "trigger_loss": 0,
+    "max_wait_iters": 1,
+    "desc": "Unfreeze embeddings after 200 iterations",
+    "reevaluate": false,
+    "completed": false
+  },
+  {
+    "name": "set_layer_lora_rank",
+    "value": [
+      "attn.4",
+      96
+    ],
+    "trigger_loss": 0,
+    "max_wait_iters": 1,
+    "desc": "Set layer 4 attention to LoRA rank 1/4 of 384",
+    "reevaluate": false,
+    "completed": false
+  },
+  {
+    "name": "set_layer_lora_rank",
+    "value": [
+      "attn.3",
+      24
+    ],
+    "trigger_loss": 0,
+    "max_wait_iters": 1,
+    "desc": "Set layer 3 attention to LoRA rank 1/16 of 384",
+    "reevaluate": false,
+    "completed": false
+  },
+  {
+    "name": "merge_lora_weights",
+    "value": null,
+    "trigger_loss": 0,
+    "max_wait_iters": 500,
+    "desc": "Extra training after final layer for 500 iterations",
+    "reevaluate": true,
+    "completed": false
+  }
+]
