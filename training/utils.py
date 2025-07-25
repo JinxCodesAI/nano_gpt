@@ -522,77 +522,79 @@ def calculate_optimal_batch_size(model, current_batch_size: int, max_batch_size:
                                target_vram_percent: float = 82.0, device_type: str = 'cuda',
                                master_process: bool = True) -> int:
     """
-    Calculate optimal batch size based on current VRAM usage.
-    
-    Args:
-        model: The model to test
-        current_batch_size: Current batch size
-        max_batch_size: Maximum batch size to consider
-        target_vram_percent: Target VRAM utilization percentage
-        device_type: Device type ('cuda' or 'cpu')
-        master_process: Whether this is the master process
-    
-    Returns:
-        Optimal batch size (multiple of 8, preferably power of 2)
+    Calculate optimal batch size based on VRAM usage, using a dry run to be more accurate.
     """
     if device_type != 'cuda' or not torch.cuda.is_available():
         return current_batch_size
-    
-    # Get current VRAM state
-    current_vram_used, total_vram, current_percent = get_vram_usage()
-    
+
     if master_process:
-        print(f"Current VRAM usage: {current_vram_used:.1f}/{total_vram:.1f}GB ({current_percent:.1f}%)")
-        print(f"Target VRAM usage: {target_vram_percent:.1f}%")
-    
-    # If current usage is already optimal, keep current batch size
-    if abs(current_percent - target_vram_percent) < 5.0:
+        print("Calculating optimal batch size with a dry run...")
+
+    try:
+        # 1. Get base memory usage (model weights, etc.)
+        torch.cuda.empty_cache()
+        base_mem_gb, total_vram, _ = get_vram_usage()
+
+        # 2. Estimate memory for gradients and optimizer state (AdamW with fp32 states)
+        num_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
+        # Grads (1x), Adam exp_avg (1x), Adam exp_avg_sq (1x) = 3x model params
+        # Assuming optimizer states are float32 (4 bytes)
+        grad_optim_mem_gb = (num_params * 4 * 3) / (1024**3)
+
+        # 3. Estimate memory available for activations
+        target_vram_gb = total_vram * (target_vram_percent / 100.0)
+        available_mem_for_activations = target_vram_gb - base_mem_gb - grad_optim_mem_gb
+        
+        if available_mem_for_activations <= 0:
+            if master_process:
+                print("Warning: Not enough memory for model, gradients, and optimizer state even before activations.")
+            return 8 # Return a very small batch size
+
+        # 4. Dry run a forward pass to find activation memory per sample
+        probe_batch_size = 8 # Use a small, safe batch size
+        dummy_input = torch.randint(0, model.config.vocab_size, (probe_batch_size, model.config.block_size), device=next(model.parameters()).device)
+        
+        torch.cuda.synchronize()
+        torch.cuda.reset_peak_memory_stats()
+        
+        # Forward pass
+        _ = model(dummy_input)
+        
+        torch.cuda.synchronize()
+        peak_mem_gb = torch.cuda.max_memory_reserved() / (1024**3)
+        
+        activation_mem_for_probe_batch = peak_mem_gb - base_mem_gb
+        activation_mem_per_sample = activation_mem_for_probe_batch / probe_batch_size
+        
+        # Cleanup
+        del dummy_input
+        torch.cuda.empty_cache()
+
+        if activation_mem_per_sample <= 1e-6: # Check for near-zero value
+            if master_process:
+                print("Warning: Activation memory per sample is negligible. Using previous batch size.")
+            return current_batch_size
+
+        # 5. Estimate optimal batch size
+        estimated_batch_size = int(available_mem_for_activations / activation_mem_per_sample)
+        
         if master_process:
-            print(f"Current VRAM usage is optimal, keeping batch size: {current_batch_size}")
+            print(f"Base memory (model): {base_mem_gb:.2f}GB")
+            print(f"Est. Grad/Optim memory: {grad_optim_mem_gb:.2f}GB")
+            print(f"Available for activations: {available_mem_for_activations:.2f}GB")
+            print(f"Activation memory per sample: {activation_mem_per_sample * 1024:.2f}MB")
+            print(f"Raw estimated optimal batch size: {estimated_batch_size}")
+
+        # 6. Round to a reasonable number (multiple of 8) and clamp
+        new_batch_size = max(8, int(estimated_batch_size // 8) * 8)
+        new_batch_size = min(new_batch_size, max_batch_size)
+
+        if master_process:
+            print(f"Selected new batch size: {new_batch_size}")
+        
+        return new_batch_size
+
+    except Exception as e:
+        if master_process:
+            print(f"Error during optimal batch size calculation: {e}. Falling back to current batch size.")
         return current_batch_size
-    
-    # Estimate memory per sample (rough approximation)
-    memory_per_sample = current_vram_used / current_batch_size if current_batch_size > 0 else 0.1
-    target_vram_used = total_vram * (target_vram_percent / 100.0)
-    estimated_optimal_batch = int(target_vram_used / memory_per_sample) if memory_per_sample > 0 else current_batch_size
-    
-    # Generate candidate batch sizes (multiples of 8, preferably powers of 2)
-    candidates = []
-    
-    # Powers of 2
-    power = 3  # Start from 8
-    while 2**power <= max_batch_size:
-        candidates.append(2**power)
-        power += 1
-    
-    # Multiples of 8 that aren't powers of 2
-    for mult in range(3, max_batch_size // 8 + 1):
-        candidate = mult * 8
-        if candidate <= max_batch_size and candidate not in candidates:
-            candidates.append(candidate)
-    
-    candidates.sort()
-    
-    # Find the best candidate closest to our estimate
-    best_batch_size = current_batch_size
-    best_diff = float('inf')
-    
-    for candidate in candidates:
-        # Prefer candidates close to our estimate
-        diff = abs(candidate - estimated_optimal_batch)
-        if diff < best_diff:
-            best_diff = diff
-            best_batch_size = candidate
-    
-    # Safety bounds - don't change too drastically
-    min_batch_size = max(8, current_batch_size // 4)
-    max_safe_batch_size = min(max_batch_size, current_batch_size * 4)
-    best_batch_size = max(min_batch_size, min(best_batch_size, max_safe_batch_size))
-    
-    if master_process:
-        estimated_vram_with_new_batch = memory_per_sample * best_batch_size
-        estimated_percent = (estimated_vram_with_new_batch / total_vram) * 100
-        print(f"Estimated optimal batch size: {estimated_optimal_batch}")
-        print(f"Selected batch size: {best_batch_size} (estimated VRAM: {estimated_percent:.1f}%)")
-    
-    return best_batch_size
