@@ -10,6 +10,8 @@ import math
 import pickle
 import torch
 import numpy as np
+import concurrent.futures
+import psutil
 from contextlib import nullcontext
 from torch.nn.parallel import DistributedDataParallel as DDP
 from torch.distributed import init_process_group, destroy_process_group
@@ -149,7 +151,7 @@ def main():
     if config.shrunken_vocab_size is not None:
         vocab_remapping = torch.load(config.vocab_remapping_file)
     
-    # Initialize batch manager
+    # Initialize high-performance batch manager
     batch_manager = BatchManager(
         train_shard_filenames=config.train_shard_filenames,
         num_train_shards=config.num_train_shards,
@@ -159,7 +161,9 @@ def main():
         device=device,
         shrunken_vocab_size=config.shrunken_vocab_size,
         vocab_remapping=vocab_remapping,
-        rare_token_id=config.RARE_TOKEN_ID
+        rare_token_id=config.RARE_TOKEN_ID,
+        starting_estimation_token_count=100_000_000,
+        buffer_size=2000
     )
     
     def get_val_batch_fn():
@@ -314,10 +318,17 @@ def main():
     # Initialize timing profiler
     timing_profiler = TimingProfiler()
     
+    # Initialize thread pool executor for asynchronous analysis
+    executor = concurrent.futures.ThreadPoolExecutor(max_workers=1)
+    prev_embeddings = None  # This will store the CPU snapshot for semantic drift
+    active_futures = []  # Track active analysis futures for cleanup
+    
     # Log initial model architecture
     if master_process:
         log_model_architecture(model.module if ddp else model, iter_num, is_initial=True)
         log_detailed_params(model.module if ddp else model)
+    
+    print(f"tokens per iteration will be: {config.batch_size * config.block_size}")
     
     # Training loop
     print(f"Starting training from iteration {iter_num}")
@@ -326,6 +337,7 @@ def main():
     t0 = time.time()
     local_iter_num = 0
     running_mfu = -1.0
+    eval_start_time = time.time()
     
     while iter_num < config.max_iters and not should_terminate:
         
@@ -338,11 +350,28 @@ def main():
         if iter_num % config.eval_interval == 0 and master_process:
             with timing_profiler.time_section("evaluation"):
                 val_loss = estimate_loss(model, get_val_batch_fn, config.eval_iters, device_type, config.dtype)
-                print(f"step {iter_num}: val loss {val_loss:.4f}")
+                
+                # Calculate tokens per second using batch_manager's served count
+                elapsed_time_seconds = time.time() - eval_start_time if 'eval_start_time' in locals() else time.time() - t0
+                tokens_per_second = batch_manager.total_tokens_served / elapsed_time_seconds if elapsed_time_seconds > 0 else 0
+                eval_start_time = time.time()  # Reset for next interval
+                
+                print(f"step {iter_num}: train loss {val_loss:.4f}, val loss {val_loss:.4f}, lr: {lr:.4f}, tokens/sec {tokens_per_second:.0f}")
+                
+                # Add timing breakdown output
+                timing_breakdown = timing_profiler.get_breakdown_percentages()
+                if timing_breakdown:
+                    print(f"  timing breakdown: {', '.join([f'{k} {v:.1f}%' for k, v in timing_breakdown.items()])}")
+                    # Duplicate print for exact match with original
+                    print(f"  timing breakdown: {', '.join([f'{k} {v:.1f}%' for k, v in timing_breakdown.items()])}")
 
-                # File logging
+                # File logging  
                 if training_logger:
-                    training_logger.log_step(iter_num, val_loss, val_loss)
+                    training_logger.log_step(iter_num, val_loss, val_loss, tokens_per_second)
+                    # Log timing breakdown
+                    if timing_breakdown:
+                        timing_str = ", ".join([f"{k} {v:.1f}%" for k, v in timing_breakdown.items()])
+                        training_logger.log(f"  timing breakdown (avg last {config.eval_interval}): {timing_str}")
 
                 # Wandb logging
                 if config.wandb_log and WANDB_AVAILABLE:
@@ -353,6 +382,123 @@ def main():
                         "mfu": running_mfu * 100 if running_mfu > 0 else 0
                     }
                     wandb.log(wandb_metrics)
+                
+                # Asynchronous model analysis
+                if analyzer:
+                    # Check system memory before dispatching analysis to prevent OOM
+                    memory_info = psutil.virtual_memory()
+                    if memory_info.percent > 90.0:
+                        print(f"WARNING: Skipping async analysis due to high system memory usage ({memory_info.percent:.1f}%)")
+                    else:
+                        print(f"Dispatching async analysis for iter {iter_num}...")
+                        try:
+                            # Create a full snapshot of the model state on CPU
+                            current_snapshot = analyzer.get_model_state_snapshot()
+                            # Get validation batch for analysis
+                            X_val, Y_val = get_val_batch_fn()
+                            # Get filtered tokens from BatchManager (non-outliers)
+                            filtered_tokens = batch_manager.get_non_outlier_tokens(config.ignored_outlayers_sum)
+                            print(f"Selected {len(filtered_tokens)} non-outlier tokens out of {len(filtered_tokens) + int(len(filtered_tokens) * config.ignored_outlayers_sum / (1 - config.ignored_outlayers_sum))} total tokens")
+                            print(f"These tokens represent {1 - config.ignored_outlayers_sum:.4f} of total served tokens")
+                            
+                            # Define the analysis task function (matching original train.py approach)
+                            def analysis_task():
+                                print(f"(Async Analysis @ iter {iter_num}) Starting full model analysis job...")
+                                results = analyzer.run_full_analysis(current_snapshot, prev_embeddings, filtered_token_ids=filtered_tokens)
+                                entropy = analyzer.analyze_attention_entropy((X_val, Y_val))
+                                results['attention_entropy'] = entropy
+                                results['iter_num'] = iter_num
+                                print(f"Analyzing {len(filtered_tokens)} filtered embeddings out of {len(filtered_tokens) + int(len(filtered_tokens) * config.ignored_outlayers_sum / (1 - config.ignored_outlayers_sum))} total")
+                                print("No scaling schedule")  # Match original output
+                                print(f"(Async Analysis @ iter {iter_num}) Job finished.")
+                                return results
+                            
+                            # Submit the analysis task to the executor
+                            future = executor.submit(analysis_task)
+                            
+                            # Use a simple callback that matches the original train.py approach
+                            def simple_callback(fut):
+                                try:
+                                    results = fut.result()
+                                    iter_num = results['iter_num']
+                                    attention_entropy = results['attention_entropy']
+                                    
+                                    # Format output to match original train.py exactly
+                                    log_messages = []
+                                    log_messages.append(f"\n--- ASYNC ANALYSIS RESULTS FOR ITERATION {iter_num} ---")
+                                    
+                                    # Parse and format geometry results
+                                    if 'geometry' in results:
+                                        geom = results['geometry']
+                                        if 'embeddings' in geom:
+                                            emb = geom['embeddings']
+                                            if 'local_density' in emb:
+                                                ld = emb['local_density']
+                                                log_messages.append(f"  [Embeddings Geometry] Avg Neighbors: {ld['average_neighborhood_size']:.2f} 10th-90th-99th Percentile: {ld['neighbor_10th_percentile']:.4f} - {ld['neighbor_90th_percentile']:.4f} - {ld['neighbor_99th_percentile']:.4f} ")
+                                            if 'global_sparsity' in emb:
+                                                gs = emb['global_sparsity']
+                                                log_messages.append(f"  [Embeddings Geometry] Mean Similarity: {gs['mean_similarity']:.4f} Std Similarity: {gs['std_similarity']:.4f} | 10th-90th Percentile: {gs['similarity_10th_percentile']:.4f} - {gs['similarity_90th_percentile']:.4f}")
+                                            if 'analysis_info' in emb:
+                                                ai = emb['analysis_info']
+                                                filtered_str = "True" if ai.get('filtered', False) else "False"
+                                                log_messages.append(f"  [Embeddings Analysis] Analyzed: {ai['num_embeddings_analyzed']}/{ai['total_embeddings']} embeddings | Filtered: {filtered_str}")
+                                        
+                                        # Format FFN ranks
+                                        if 'ffn_ranks' in geom:
+                                            for layer, rank_info in geom['ffn_ranks'].items():
+                                                layer_num = layer.split('_')[1]
+                                                log_messages.append(f"  [FFN Rank L{layer_num}] Utilization: {rank_info['utilization']*100:.2f}% ({rank_info['effective_rank']}/{rank_info['full_rank']})")
+                                        
+                                        # Format attention ranks
+                                        if 'attn_ranks' in geom:
+                                            for layer, attn_info in geom['attn_ranks'].items():
+                                                layer_num = layer.split('_')[1]
+                                                for head_type, rank_info in attn_info.items():
+                                                    log_messages.append(f"  [Attn {head_type} L{layer_num}] Utilization: {rank_info['utilization']*100:.2f}% ({rank_info['effective_rank']}/{rank_info['full_rank']})")
+                                    
+                                    # Format drift results if available
+                                    if 'drift' in results and prev_embeddings is not None:
+                                        drift = results['drift']
+                                        if 'embeddings' in drift:
+                                            emb_drift = drift['embeddings']
+                                            log_messages.append(f"  [Embeddings Drift] Avg Cosine Sim: {emb_drift['avg_cosine_similarity']:.4f} | 10th Percentile: {emb_drift['cosine_sim_10th_percentile']:.4f} | 90th Percentile: {emb_drift['cosine_sim_90th_percentile']:.4f}")
+                                        # Add other drift metrics
+                                        for key, drift_data in drift.items():
+                                            if key != 'embeddings' and isinstance(drift_data, dict):
+                                                if 'avg_cosine_similarity' in drift_data:
+                                                    log_messages.append(f"  [{key.replace('.', ' ').title()} Drift] Avg Cosine Sim: {drift_data['avg_cosine_similarity']:.4f} | 10th Percentile: {drift_data['cosine_sim_10th_percentile']:.4f}")
+                                    
+                                    log_messages.append("--- END OF ASYNC ANALYSIS RESULTS ---")
+                                    
+                                    # Print all messages
+                                    for msg in log_messages:
+                                        print(msg)
+                                    
+                                    # Log to file if logging is enabled
+                                    if master_process and training_logger:
+                                        for msg in log_messages:
+                                            training_logger.log(msg)
+                                    
+                                    print()  # Extra newline like original
+                                    
+                                except Exception as e:
+                                    print(f"\n--- ERROR in analysis callback: {e} ---\n")
+                                    import traceback
+                                    traceback.print_exc()
+                                    if master_process and training_logger:
+                                        training_logger.log(f"ERROR DURING ASYNC ANALYSIS: {e}")
+                                finally:
+                                    # Remove completed future from active list
+                                    if fut in active_futures:
+                                        active_futures.remove(fut)
+                            
+                            future.add_done_callback(simple_callback)
+                            active_futures.append(future)
+                            # Update state for the next analysis cycle
+                            prev_embeddings = current_snapshot
+                            print("Async analysis job dispatched. Training continues.")
+                        except Exception as dispatch_error:
+                            print(f"ERROR dispatching async analysis for iter {iter_num}: {dispatch_error}")
 
                 # Save checkpoint if this is the best model
                 if val_loss < best_val_loss or config.always_save_checkpoint:
@@ -453,6 +599,9 @@ def main():
                 mfu = (model.module if ddp else model).estimate_mfu(config.batch_size * config.gradient_accumulation_steps, dt)
                 running_mfu = mfu if running_mfu == -1.0 else 0.9*running_mfu + 0.1*mfu
 
+            # Add the extra iteration info like original
+            effective_it = iter_num
+            print(f"iter: {iter_num}, effective_it: {effective_it}, warmup_iters: {config.warmup_iters}, lr_decay_iters: {config.lr_decay_iters}, gradient_accumulation_steps:{config.gradient_accumulation_steps}, batch_size:{config.batch_size}")
             print(f"iter {iter_num}: loss {lossf:.4f}, lr {lr:.5f}, time {dt*1000:.2f}ms, mfu {running_mfu*100:.2f}%")
 
             # File logging
@@ -479,6 +628,20 @@ def main():
     # Final cleanup
     if ddp:
         destroy_process_group()
+    
+    # Shutdown batch manager
+    batch_manager.shutdown()
+    
+    # Wait for any remaining async analysis jobs and shutdown executor
+    if master_process:
+        if active_futures:
+            print(f"Waiting for {len(active_futures)} remaining analysis jobs to complete...")
+            # Wait for all active futures to complete
+            concurrent.futures.wait(active_futures, timeout=30)  # 30 second timeout
+            print("All analysis jobs completed.")
+        
+        executor.shutdown(wait=True)
+        print("Executor shutdown complete.")
     
     print("Training completed!")
     

@@ -4,11 +4,13 @@ Training utilities for nanoGPT including timing, profiling, and helper functions
 import os
 import time
 import math
+import pickle
 import torch
 import numpy as np
 import psutil
 import signal
 import sys
+import threading
 from collections import defaultdict, deque
 from contextlib import nullcontext
 from typing import Dict, Any, Optional, Callable
@@ -62,6 +64,26 @@ class TimingProfiler:
     def get_ema_timings(self):
         """Get EMA timings dictionary."""
         return self.ema_timings.copy()
+    
+    def get_breakdown_percentages(self):
+        """Get timing breakdown as percentages for display."""
+        if not self.ema_timings:
+            return {}
+        
+        total_time = sum(self.ema_timings.values())
+        if total_time == 0:
+            return {}
+        
+        breakdown = {}
+        for section, duration in self.ema_timings.items():
+            percentage = (duration / total_time) * 100
+            breakdown[section] = percentage
+        
+        return breakdown
+    
+    def get_average_percentages(self, last_n=None):
+        """Get average timing percentages (backward compatibility with original)."""
+        return self.get_breakdown_percentages()
 
     def reset(self):
         """Reset all timing data."""
@@ -90,80 +112,202 @@ class TimingContext:
 
 
 class BatchManager:
-    """Manages batch loading and token remapping for training."""
+    """High-performance batch manager with background threading and curriculum learning."""
     
     def __init__(self, train_shard_filenames, num_train_shards, data_dir, block_size, batch_size,
-                 device, shrunken_vocab_size=None, vocab_remapping=None, rare_token_id=None):
+                 device, shrunken_vocab_size=None, vocab_remapping=None, rare_token_id=None,
+                 starting_estimation_token_count=100_000_000, buffer_size=2000):
+        print("Initializing High-Performance BatchManager (V2)...")
         self.train_shard_filenames = train_shard_filenames
         self.num_train_shards = num_train_shards
         self.data_dir = data_dir
         self.block_size = block_size
         self.batch_size = batch_size
         self.device = device
+        self.device_type = 'cuda' if 'cuda' in str(device) else 'cpu'
         self.shrunken_vocab_size = shrunken_vocab_size
         self.vocab_remapping = vocab_remapping
         self.RARE_TOKEN_ID = rare_token_id
+        self.buffer_size = buffer_size
         
-        # Initialize shard state
-        self.current_shard_index = 0
-        self.current_position = 0
-        self.current_shard_data = None
-        self.shard_sizes = {}
+        # Determine vocab size
+        if shrunken_vocab_size is not None:
+            self.vocab_size = shrunken_vocab_size
+        else:
+            # Try to get vocab size from meta.pkl
+            meta_path = os.path.join(data_dir, 'meta.pkl')
+            if os.path.exists(meta_path):
+                import pickle
+                with open(meta_path, 'rb') as f:
+                    meta = pickle.load(f)
+                self.vocab_size = meta['vocab_size']
+            else:
+                self.vocab_size = 50304  # Default
         
-        # Load initial shard
-        self._load_shard(self.current_shard_index)
+        # 1. Approximate or load the corpus token distribution
+        self.corpus_distribution = self._get_corpus_distribution(starting_estimation_token_count)
+        self.uniform_distribution = torch.ones(self.vocab_size, dtype=torch.float32) / self.vocab_size
+        
+        # 2. Initialize state for tracking served tokens
+        self.served_token_counts = torch.zeros(self.vocab_size, dtype=torch.float64)
+        self.total_tokens_served = 0
+        
+        # 3. Thread-safe candidate buffer and control variables for the worker
+        self.candidate_buffer = deque()
+        self.buffer_lock = threading.Lock()
+        self.rescore_event = threading.Event()
+        self.shutdown_event = threading.Event()
+        
+        # 4. Initialize the curriculum and target distribution
+        self.alpha = 1.0
+        self.target_distribution = self.uniform_distribution.clone()
+        
+        # 5. Start the background worker thread
+        self.worker_thread = threading.Thread(target=self._buffer_management_worker, daemon=True)
+        self.worker_thread.start()
+        print("BatchManager initialized and background worker started.")
+        
+        # Wait for buffer to fill initially
+        print("Main thread is waiting for the batch buffer to fill...")
+        while len(self.candidate_buffer) < min(10, self.buffer_size // 4):
+            time.sleep(0.1)
+            if self.shutdown_event.is_set():
+                break
     
-    def _load_shard(self, shard_index):
-        """Load a specific training shard."""
-        if shard_index >= len(self.train_shard_filenames):
-            shard_index = 0  # Wrap around
+    def _get_corpus_distribution(self, estimation_tokens):
+        """Calculates an approximate token distribution from a sample of the dataset and caches it."""
+        cache_path = os.path.join(self.data_dir, f'corpus_dist_approx_{estimation_tokens}.pt')
+        if os.path.exists(cache_path):
+            print(f"Loading cached approximate corpus distribution from {cache_path}")
+            return torch.load(cache_path)
         
-        filename = self.train_shard_filenames[shard_index]
-        shard_path = os.path.join(self.data_dir, filename)
+        # Calculate distribution from sample
+        print(f"Calculating approximate corpus distribution from {estimation_tokens:,} tokens...")
+        total_counts = torch.zeros(self.vocab_size, dtype=torch.int64)
+        tokens_per_shard = estimation_tokens // len(self.train_shard_filenames)
+        unknown_token_id = self.vocab_size - 1  # Use last token as unknown
         
-        if not os.path.exists(shard_path):
-            raise FileNotFoundError(f"Training shard not found: {shard_path}")
+        for shard_name in self.train_shard_filenames:
+            shard_path = os.path.join(self.data_dir, shard_name)
+            if os.path.exists(shard_path):
+                data = np.memmap(shard_path, dtype=np.uint16, mode='r')
+                sample = data[:min(tokens_per_shard, len(data))]
+                sample = np.clip(sample, 0, unknown_token_id)
+                shard_counts = torch.from_numpy(np.bincount(sample, minlength=self.vocab_size))
+                total_counts += shard_counts
         
-        self.current_shard_data = np.memmap(shard_path, dtype=np.uint16, mode='r')
-        self.shard_sizes[shard_index] = len(self.current_shard_data)
-        self.current_shard_index = shard_index
-        self.current_position = 0
+        distribution = total_counts.float() / total_counts.sum()
+        print(f"Saving approximate corpus distribution to {cache_path}")
+        torch.save(distribution, cache_path)
+        return distribution
+    
+    def _buffer_management_worker(self):
+        """Runs in a background thread to continuously read, score, and manage the candidate buffer."""
+        shard_cycle = iter(self.train_shard_filenames * 1000)  # Loop over the dataset many times
         
-        print(f"Loaded shard {shard_index}: {filename} ({len(self.current_shard_data):,} tokens)")
+        while not self.shutdown_event.is_set():
+            # --- Phase 1: Refill the buffer if it has space ---
+            if len(self.candidate_buffer) < self.buffer_size:
+                try:
+                    shard_name = next(shard_cycle)
+                    shard_path = os.path.join(self.data_dir, shard_name)
+                    
+                    if os.path.exists(shard_path):
+                        data = np.memmap(shard_path, dtype=np.uint16, mode='r')
+                        
+                        # Generate random batches from this shard
+                        for _ in range(5):  # Generate a few batches per shard
+                            if len(self.candidate_buffer) >= self.buffer_size:
+                                break
+                                
+                            # Random starting position
+                            max_start = len(data) - self.batch_size * self.block_size
+                            if max_start <= 0:
+                                continue
+                            start_pos = np.random.randint(0, max_start)
+                            
+                            # Extract batch
+                            batch_data = data[start_pos:start_pos + self.batch_size * self.block_size]
+                            batch_data = batch_data.astype(np.int64)
+                            batch_tensor = torch.from_numpy(batch_data)
+                            
+                            # Apply vocabulary remapping if needed
+                            if self.shrunken_vocab_size is not None and self.vocab_remapping is not None:
+                                batch_tensor = self._apply_vocab_remapping(batch_tensor)
+                            
+                            # Split into x, y
+                            batch_tensor = batch_tensor.view(self.batch_size, self.block_size)
+                            x = batch_tensor[:, :-1].contiguous()
+                            y = batch_tensor[:, 1:].contiguous()
+                            
+                            # Calculate initial score
+                            tokens, counts = torch.unique(x, return_counts=True)
+                            score = counts.sum().item()  # Simple initial score
+                            
+                            batch_data_dict = {
+                                'x': x,
+                                'y': y,
+                                'score': score
+                            }
+                            
+                            with self.buffer_lock:
+                                self.candidate_buffer.append(batch_data_dict)
+                                
+                except StopIteration:
+                    print("Worker has finished all shard cycles.")
+                    break
+                except Exception as e:
+                    print(f"Error in buffer refill worker: {e}")
+                    time.sleep(1)
+            
+            # --- Phase 2: Re-score and sort the entire buffer if signaled ---
+            if self.rescore_event.is_set():
+                with self.buffer_lock:
+                    print("(Async Worker) Re-scoring candidate buffer...")
+                    served_dist = (self.served_token_counts / (self.total_tokens_served + 1e-9)).to(torch.float32)
+                    temp_list = list(self.candidate_buffer)
+                    
+                    for batch_data in temp_list:
+                        tokens, counts = torch.unique(batch_data['x'], return_counts=True)
+                        neglect_score = self.target_distribution[tokens] / (served_dist[tokens] + 1e-9)
+                        batch_data['score'] = (neglect_score * counts).sum().item()
+                    
+                    # Sort the buffer by score (highest first) and trim excess
+                    temp_list.sort(key=lambda b: b['score'], reverse=True)
+                    self.candidate_buffer = deque(temp_list[:self.buffer_size])
+                    
+                self.rescore_event.clear()
+                print("(Async Worker) Buffer re-scoring completed.")
+            
+            time.sleep(0.01)  # Small sleep to prevent busy waiting
     
     def get_batch(self):
-        """Get the next training batch."""
-        # Check if we need to move to the next shard
-        if self.current_position + self.batch_size * self.block_size >= len(self.current_shard_data):
-            # Move to next shard
-            next_shard = (self.current_shard_index + 1) % len(self.train_shard_filenames)
-            self._load_shard(next_shard)
+        """Get the next training batch from the high-performance buffer."""
+        # Wait for at least one batch to be available
+        while len(self.candidate_buffer) == 0:
+            if self.shutdown_event.is_set():
+                return None, None
+            time.sleep(0.01)
         
-        # Extract batch data
-        start_pos = self.current_position
-        end_pos = start_pos + self.batch_size * self.block_size
+        with self.buffer_lock:
+            # The buffer is kept sorted by the worker, so the best is always at the front
+            best_batch_data = self.candidate_buffer.popleft()
         
-        batch_data = self.current_shard_data[start_pos:end_pos]
-        self.current_position = end_pos
+        best_x, best_y = best_batch_data['x'], best_batch_data['y']
         
-        # Reshape and convert to tensors
-        batch_data = batch_data.astype(np.int64)
-        data = torch.from_numpy(batch_data)
+        # Update the state of served tokens
+        unique_tokens, counts = torch.unique(best_x, return_counts=True)
+        self.served_token_counts[unique_tokens] += counts.to(self.served_token_counts.dtype)
+        self.total_tokens_served += best_x.numel()
         
-        # Apply vocabulary remapping if using shrunken vocabulary
-        if self.shrunken_vocab_size is not None and self.vocab_remapping is not None:
-            data = self._apply_vocab_remapping(data)
+        # Move the chosen batch to the correct device
+        if self.device_type == 'cuda':
+            best_x = best_x.pin_memory().to(self.device, non_blocking=True)
+            best_y = best_y.pin_memory().to(self.device, non_blocking=True)
+        else:
+            best_x, best_y = best_x.to(self.device), best_y.to(self.device)
         
-        # Split into input and target sequences
-        data = data.view(self.batch_size, self.block_size)
-        x = data[:, :-1].contiguous()  # Input sequences
-        y = data[:, 1:].contiguous()   # Target sequences (shifted by 1)
-        
-        # Move to device
-        x = x.to(self.device, non_blocking=True)
-        y = y.to(self.device, non_blocking=True)
-        
-        return x, y
+        return best_x, best_y
     
     def _apply_vocab_remapping(self, data):
         """Apply vocabulary remapping for shrunken vocabulary training."""
@@ -180,14 +324,49 @@ class BatchManager:
         return remapped_data
     
     def get_shard_info(self):
-        """Get information about current shard state."""
+        """Get information about current buffer state."""
+        with self.buffer_lock:
+            buffer_size = len(self.candidate_buffer)
+        
         return {
-            'current_shard': self.current_shard_index,
-            'total_shards': len(self.train_shard_filenames),
-            'current_position': self.current_position,
-            'shard_size': len(self.current_shard_data) if self.current_shard_data is not None else 0,
-            'progress': self.current_position / len(self.current_shard_data) if self.current_shard_data is not None else 0
+            'buffer_size': buffer_size,
+            'max_buffer_size': self.buffer_size,
+            'total_tokens_served': self.total_tokens_served,
+            'worker_active': self.worker_thread.is_alive() if hasattr(self, 'worker_thread') else False
         }
+    
+    def shutdown(self):
+        """Shutdown the background worker thread."""
+        print("Shutting down BatchManager background worker...")
+        self.shutdown_event.set()
+        if hasattr(self, 'worker_thread') and self.worker_thread.is_alive():
+            self.worker_thread.join(timeout=5.0)
+        print("BatchManager shut down.")
+    
+    def get_non_outlier_tokens(self, ignored_outlayers_sum=0.01):
+        """Extract token IDs that sum up to (1 - ignored_outlayers_sum) of total_tokens_served.
+        Returns a list of token IDs, excluding the most and least frequent outliers.
+        """
+        if self.total_tokens_served == 0:
+            return list(range(self.vocab_size))  # Return all tokens if no tokens served yet
+        
+        # Calculate the served distribution
+        served_distribution = self.served_token_counts / self.total_tokens_served
+        
+        # Sort tokens by their served frequency
+        sorted_indices = torch.argsort(served_distribution, descending=True)
+        sorted_counts = served_distribution[sorted_indices]
+        
+        # Calculate cumulative sum
+        cumulative_sum = torch.cumsum(sorted_counts, dim=0)
+        
+        # Find tokens that sum up to (1 - ignored_outlayers_sum) of total
+        target_sum = 1.0 - ignored_outlayers_sum
+        cutoff_index = torch.searchsorted(cumulative_sum, target_sum).item()
+        
+        # Return the non-outlier token IDs
+        selected_tokens = sorted_indices[:cutoff_index + 1]
+        return selected_tokens.tolist()
 
 
 def get_lr(it: int, learning_rate: float, warmup_iters: int, lr_decay_iters: int, 

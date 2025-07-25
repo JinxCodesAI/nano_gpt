@@ -184,6 +184,7 @@ out_dir = 'out'
 eval_interval = 2000
 log_interval = 1
 eval_iters = 200
+vocab_size = None # taken from meta_vocab_size
 eval_only = False # if True, script exits right after the first eval
 always_save_checkpoint = True # if True, always save a checkpoint after each eval
 init_from = 'scratch' # 'scratch' or 'resume' or 'gpt2*'
@@ -802,6 +803,11 @@ if os.path.exists(meta_path):
         meta = pickle.load(f)
     meta_vocab_size = meta['vocab_size']
     print(f"found vocab_size = {meta_vocab_size} (inside {meta_path})")
+else:
+    if vocab_size:
+        meta_vocab_size = vocab_size
+    else:
+        raise ValueError("meta_vocab_size / vocab_size not set")
 
 # model init
 model_args = dict(n_layer=n_layer, n_head=n_head, n_embd=n_embd, block_size=block_size,
@@ -1459,11 +1465,12 @@ if wandb_log and master_process:
 # Initialize the BatchManager for the training set
 batch_manager = BatchManager(
     data_dir=data_dir,
-    train_shard_filenames=train_shard_filenames,
+    shard_filenames=train_shard_filenames,
     batch_size=batch_size,
     block_size=block_size,
     device=device,
     device_type=device_type,
+    vocab_size=meta_vocab_size,
     starting_estimation_token_count=100_000_000  # ~100M tokens for approximation
 )
 
