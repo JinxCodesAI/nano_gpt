@@ -61,8 +61,8 @@ class TrainingScheduler:
                         )
                     else:
                         # Handle hyperparameter operations
-                        if op['name'] == 'adjust_batch_size':
-                            # Execute adjust_batch_size to calculate optimal size
+                        if op['name'] in ['adjust_batch_size', 'set_batch_size_relative']:
+                            # Execute operations that need current batch size calculation
                             model, optimizer = execute_operation(
                                 op, trigger_reason, current_val_loss, iter_num,
                                 target_architecture_config, model, optimizer,

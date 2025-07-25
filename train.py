@@ -1827,6 +1827,8 @@ while True:
 
     t1 = time.time()
     if iter_num % log_interval == 0 and master_process:
+        # Calculate accumulated time over log_interval iterations
+        dt = t1 - t0
 
         lossf = loss.item() * gradient_accumulation_steps
         # Get VRAM usage
@@ -1854,9 +1856,8 @@ while True:
                 "vram/total_gb": vram_total,
                 "vram/percent": vram_percent
             })
-    
-
-        dt = t1 - t0
+        
+        # Reset timer after logging
         t0 = t1
 
     iter_num += 1

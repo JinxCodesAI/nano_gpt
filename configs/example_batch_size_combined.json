@@ -1,0 +1,32 @@
+[
+  {
+    "name": "adjust_batch_size",
+    "value": {
+      "max_batch_size": 512,
+      "target_vram_percent": 85.0
+    },
+    "trigger_loss": 3.0,
+    "max_wait_iters": 50,
+    "desc": "Start with VRAM-optimized batch size",
+    "reevaluate": false,
+    "completed": false
+  },
+  {
+    "name": "set_batch_size_relative",
+    "value": 0.75,
+    "trigger_loss": 2.2,
+    "max_wait_iters": 100,
+    "desc": "Scale down to 75% for better gradient quality",
+    "reevaluate": false,
+    "completed": false
+  },
+  {
+    "name": "set_batch_size_relative", 
+    "value": 0.5,
+    "trigger_loss": 1.5,
+    "max_wait_iters": 150,
+    "desc": "Final scale down to 50% for fine-tuning",
+    "reevaluate": false,
+    "completed": false
+  }
+]

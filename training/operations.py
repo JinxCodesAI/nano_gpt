@@ -189,6 +189,35 @@ def calculate_and_log_target_architecture(initial_config, schedule: List[Dict[st
     return target_config
 
 
+def calculate_relative_batch_size(current_batch_size: int, scale_factor: float, 
+                                master_process: bool = True) -> int:
+    """
+    Calculate new batch size by scaling current batch size by a factor.
+    
+    Args:
+        current_batch_size: Current batch size
+        scale_factor: Factor to scale by (0 < scale_factor <= 1)
+        master_process: Whether this is the master process
+    
+    Returns:
+        New batch size rounded down to nearest multiple of 8
+    """
+    if scale_factor <= 0 or scale_factor > 1:
+        raise ValueError(f"scale_factor must be in range (0, 1], got {scale_factor}")
+    
+    # Calculate new batch size
+    new_batch_size_float = current_batch_size * scale_factor
+    
+    # Round down to nearest multiple of 8, minimum of 8
+    new_batch_size = max(8, int(new_batch_size_float // 8) * 8)
+    
+    if master_process:
+        print(f"Scaling batch size: {current_batch_size} × {scale_factor:.3f} = {new_batch_size_float:.1f}")
+        print(f"Rounded down to nearest multiple of 8: {new_batch_size}")
+    
+    return new_batch_size
+
+
 def calculate_optimal_batch_size(model, current_batch_size: int, max_batch_size: int = 1024, 
                                target_vram_percent: float = 82.0, device_type: str = 'cuda',
                                master_process: bool = True) -> int:
@@ -358,6 +387,28 @@ def execute_operation(op: Dict[str, Any], trigger_reason: str, current_val_loss:
                     training_logger.log_operation_success(iter_num, op_name, 
                                                         {'calculated_batch_size': optimal_batch_size,
                                                          'original_batch_size': batch_size_to_use})
+            
+            # Special handling for set_batch_size_relative
+            elif op_name == 'set_batch_size_relative':
+                batch_size_to_use = current_batch_size or 32
+                scale_factor = op_value
+                
+                if not isinstance(scale_factor, (int, float)):
+                    raise ValueError(f"set_batch_size_relative requires a numeric scale factor, got {type(scale_factor)}")
+                
+                new_batch_size = calculate_relative_batch_size(
+                    batch_size_to_use, scale_factor, master_process
+                )
+                
+                # Return the calculated batch size as the operation value
+                op['value'] = new_batch_size
+                
+                if master_process:
+                    print(f"Calculated relative batch size: {new_batch_size}")
+                    training_logger.log_operation_success(iter_num, op_name, 
+                                                        {'new_batch_size': new_batch_size,
+                                                         'original_batch_size': batch_size_to_use,
+                                                         'scale_factor': scale_factor})
             else:
                 # These operations modify global training state and are handled by caller
                 # Just log the operation
