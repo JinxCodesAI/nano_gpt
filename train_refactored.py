@@ -31,7 +31,7 @@ from analyzer import ModelAnalyzer
 
 # Import training modules
 from training.config import TrainingConfig, load_scaling_schedule
-from training.utils import TimingProfiler, BatchManager, setup_signal_handlers, get_system_info, estimate_loss
+from training.utils import TimingProfiler, BatchManager, setup_signal_handlers, get_system_info, estimate_loss, get_vram_usage
 from training.evaluation import get_val_batch, run_full_analysis_async, analysis_done_callback
 from training.scheduler import TrainingScheduler, LearningRateScheduler, EarlyStoppingMonitor
 from training.operations import log_detailed_params, log_model_architecture, calculate_and_log_target_architecture
@@ -345,18 +345,7 @@ def main():
         with open(mfu_log_path, 'w') as f:
             f.write("iter,loss,lr,time_ms,mfu_percent,vram_used_gb,vram_total_gb,vram_percent\n")
     
-    # VRAM monitoring
-    def get_vram_usage():
-        if torch.cuda.is_available():
-            allocated = torch.cuda.memory_allocated() / 1024**3  # GB
-            reserved = torch.cuda.memory_reserved() / 1024**3     # GB
-            total = torch.cuda.get_device_properties(0).total_memory / 1024**3  # GB
-            
-            # Use reserved memory as it's more accurate for actual GPU usage
-            used_percent = (reserved / total) * 100
-            
-            return reserved, total, used_percent  # Return reserved instead of allocated
-        return 0, 0, 0
+    # VRAM monitoring function already imported from training.utils
     
     while iter_num < config.max_iters and not should_terminate:
         

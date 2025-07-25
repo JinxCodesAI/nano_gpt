@@ -1419,9 +1419,95 @@ def execute_operation(op, trigger_reason, current_val_loss, iter_num, target_arc
             elif op_name == 'disable_vocab_remapping':
                 if master_process: print("Disabling vocabulary remapping.")
                 remapping_active = False
+            elif op_name == 'adjust_batch_size':
+                # Get unwrapped model for VRAM calculation
+                if compile:
+                    unwrapped_model = unoptimized_model if hasattr(unoptimized_model, '_orig_mod') else unoptimized_model
+                    if ddp:
+                        unwrapped_model = unwrapped_model.module if hasattr(unwrapped_model, 'module') else unwrapped_model
+                else:
+                    unwrapped_model = model.module if ddp and hasattr(model, 'module') else model
+                
+                # Extract parameters from op_value
+                if isinstance(op_value, dict):
+                    batch_size_to_use = op_value.get('current_batch_size', batch_size)
+                    max_batch_size = op_value.get('max_batch_size', 1024)
+                    target_vram_percent = op_value.get('target_vram_percent', 82.0)
+                else:
+                    # Legacy support - use current batch_size or op_value
+                    batch_size_to_use = batch_size or op_value or 32
+                    max_batch_size = 1024
+                    target_vram_percent = 82.0
+                
+                try:
+                    optimal_batch_size = calculate_optimal_batch_size(
+                        unwrapped_model, batch_size_to_use, max_batch_size, 
+                        target_vram_percent, device_type, master_process
+                    )
+                    
+                    if master_process:
+                        print(f"Calculated optimal batch size: {optimal_batch_size}")
+                        print(f"Batch size: {batch_size} -> {optimal_batch_size}")
+                    
+                    batch_size = optimal_batch_size
+                    
+                    if master_process: 
+                        training_logger.log_operation_success(iter_num, op_name, 
+                                                            {'calculated_batch_size': optimal_batch_size,
+                                                             'original_batch_size': batch_size_to_use})
+                except NameError:
+                    # Fallback if calculate_optimal_batch_size is not available
+                    if master_process:
+                        print("Warning: calculate_optimal_batch_size not available, keeping current batch size")
+                        training_logger.log_operation_success(iter_num, op_name, 
+                                                            {'message': 'Operation skipped - function not available'})
+            
+            elif op_name == 'set_batch_size_relative':
+                batch_size_to_use = batch_size
+                scale_factor = op_value
+                
+                if not isinstance(scale_factor, (int, float)):
+                    raise ValueError(f"set_batch_size_relative requires a numeric scale factor, got {type(scale_factor)}")
+                
+                try:
+                    new_batch_size = calculate_relative_batch_size(
+                        batch_size_to_use, scale_factor, master_process
+                    )
+                    
+                    if master_process:
+                        print(f"Calculated relative batch size: {new_batch_size}")
+                        print(f"Batch size: {batch_size} -> {new_batch_size}")
+                    
+                    batch_size = new_batch_size
+                    
+                    if master_process:
+                        training_logger.log_operation_success(iter_num, op_name, 
+                                                            {'new_batch_size': new_batch_size,
+                                                             'original_batch_size': batch_size_to_use,
+                                                             'scale_factor': scale_factor})
+                except NameError:
+                    # Fallback if calculate_relative_batch_size is not available
+                    new_batch_size_float = batch_size_to_use * scale_factor
+                    new_batch_size = max(8, int(new_batch_size_float // 8) * 8)
+                    
+                    if master_process:
+                        print(f"Fallback scaling batch size: {batch_size_to_use} × {scale_factor:.3f} = {new_batch_size_float:.1f}")
+                        print(f"Rounded down to nearest multiple of 8: {new_batch_size}")
+                        print(f"Batch size: {batch_size} -> {new_batch_size}")
+                    
+                    batch_size = new_batch_size
+                    
+                    if master_process:
+                        training_logger.log_operation_success(iter_num, op_name, 
+                                                            {'new_batch_size': new_batch_size,
+                                                             'original_batch_size': batch_size_to_use,
+                                                             'scale_factor': scale_factor})
             else:
                 raise ValueError(f"Unknown operation '{op_name}'")
-            if master_process: training_logger.log_operation_success(iter_num, op_name, {'new_value': op_value})
+            
+            # Log success for operations that don't have their own logging
+            if op_name not in ['adjust_batch_size', 'set_batch_size_relative'] and master_process:
+                training_logger.log_operation_success(iter_num, op_name, {'new_value': op_value})
 
         return True
 
@@ -1518,17 +1604,22 @@ if master_process and file_logging:
         f.write("iter,loss,lr,time_ms,mfu_percent,vram_used_gb,vram_total_gb,vram_percent\n")
 
 # VRAM monitoring
-def get_vram_usage():
-    if torch.cuda.is_available():
-        allocated = torch.cuda.memory_allocated() / 1024**3  # GB
-        reserved = torch.cuda.memory_reserved() / 1024**3     # GB  
-        total = torch.cuda.get_device_properties(0).total_memory / 1024**3  # GB
-        
-        # Use reserved memory as it's more accurate for actual GPU usage
-        used_percent = (reserved / total) * 100
-        
-        return reserved, total, used_percent  # Return reserved instead of allocated
-    return 0, 0, 0
+# Import shared VRAM utilities
+try:
+    from training.utils import get_vram_usage, calculate_relative_batch_size, calculate_optimal_batch_size
+except ImportError:
+    # Fallback implementation if training.utils is not available
+    def get_vram_usage():
+        if torch.cuda.is_available():
+            allocated = torch.cuda.memory_allocated() / 1024**3  # GB
+            reserved = torch.cuda.memory_reserved() / 1024**3     # GB  
+            total = torch.cuda.get_device_properties(0).total_memory / 1024**3  # GB
+            
+            # Use reserved memory as it's more accurate for actual GPU usage
+            used_percent = (reserved / total) * 100
+            
+            return reserved, total, used_percent  # Return reserved instead of allocated
+        return 0, 0, 0
 
 def get_detailed_vram_usage():
     """Get detailed VRAM breakdown for debugging"""

@@ -68,6 +68,18 @@ def generate_scaling_schedule(
                 prev_config.append(prev_config[-1])
             stack_config = prev_config
         
+        # Before adding new layer: reduce batch size to 50%
+        schedule.append(create_operation(
+            "set_batch_size_relative", 0.5, 100, 0,
+            f"Reduce batch size to 50% before adding layer {layer_num}"
+        ))
+        
+        # After batch size reduction: optimize VRAM usage
+        schedule.append(create_operation(
+            "adjust_batch_size", {"max_batch_size": 512, "target_vram_percent": 85.0}, 100, 0,
+            f"Optimize batch size for VRAM after reduction before layer {layer_num}"
+        ))
+        
         # Add the new layer
         schedule.append(create_operation(
             "stack_layers", stack_config, 100, 0,
@@ -124,6 +136,12 @@ def generate_scaling_schedule(
                 f"Set layer {most_recent_prev} attention to LoRA rank 1/4 of {n_embd}"
             ))
             
+            # After setting LoRA rank: optimize batch size for VRAM
+            schedule.append(create_operation(
+                "adjust_batch_size", {"max_batch_size": 512, "target_vram_percent": 85.0}, 100, 0,
+                f"Optimize batch size after setting layer {most_recent_prev} LoRA rank"
+            ))
+            
             # Set layer before that to 1/16 if it exists
             if most_recent_prev > 0:
                 prev_prev = most_recent_prev - 1
@@ -131,6 +149,12 @@ def generate_scaling_schedule(
                 schedule.append(create_operation(
                     "set_layer_lora_rank", [f"attn.{prev_prev}", rank_sixteenth], 100, 0,
                     f"Set layer {prev_prev} attention to LoRA rank 1/16 of {n_embd}"
+                ))
+                
+                # After setting LoRA rank: optimize batch size for VRAM
+                schedule.append(create_operation(
+                    "adjust_batch_size", {"max_batch_size": 512, "target_vram_percent": 85.0}, 100, 0,
+                    f"Optimize batch size after setting layer {prev_prev} LoRA rank"
                 ))
         
         # Wait remaining iterations to complete iters_per_layer total, then merge LoRA

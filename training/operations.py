@@ -6,6 +6,7 @@ import time
 import pickle
 import torch
 from typing import Dict, Any, List, Tuple, Optional
+from .utils import get_vram_usage, calculate_relative_batch_size, calculate_optimal_batch_size
 
 
 def transfer_optimizer_state(new_optimizer, old_state_dict, old_param_dict, model):
@@ -189,124 +190,6 @@ def calculate_and_log_target_architecture(initial_config, schedule: List[Dict[st
     return target_config
 
 
-def calculate_relative_batch_size(current_batch_size: int, scale_factor: float, 
-                                master_process: bool = True) -> int:
-    """
-    Calculate new batch size by scaling current batch size by a factor.
-    
-    Args:
-        current_batch_size: Current batch size
-        scale_factor: Factor to scale by (0 < scale_factor <= 1)
-        master_process: Whether this is the master process
-    
-    Returns:
-        New batch size rounded down to nearest multiple of 8
-    """
-    if scale_factor <= 0 or scale_factor > 1:
-        raise ValueError(f"scale_factor must be in range (0, 1], got {scale_factor}")
-    
-    # Calculate new batch size
-    new_batch_size_float = current_batch_size * scale_factor
-    
-    # Round down to nearest multiple of 8, minimum of 8
-    new_batch_size = max(8, int(new_batch_size_float // 8) * 8)
-    
-    if master_process:
-        print(f"Scaling batch size: {current_batch_size} × {scale_factor:.3f} = {new_batch_size_float:.1f}")
-        print(f"Rounded down to nearest multiple of 8: {new_batch_size}")
-    
-    return new_batch_size
-
-
-def calculate_optimal_batch_size(model, current_batch_size: int, max_batch_size: int = 1024, 
-                               target_vram_percent: float = 82.0, device_type: str = 'cuda',
-                               master_process: bool = True) -> int:
-    """
-    Calculate optimal batch size based on current VRAM usage.
-    
-    Args:
-        model: The model to test
-        current_batch_size: Current batch size
-        max_batch_size: Maximum batch size to consider
-        target_vram_percent: Target VRAM utilization percentage
-        device_type: Device type ('cuda' or 'cpu')
-        master_process: Whether this is the master process
-    
-    Returns:
-        Optimal batch size (multiple of 8, preferably power of 2)
-    """
-    if device_type != 'cuda' or not torch.cuda.is_available():
-        return current_batch_size
-    
-    def get_vram_usage():
-        if torch.cuda.is_available():
-            allocated = torch.cuda.memory_allocated() / 1024**3  # GB
-            reserved = torch.cuda.memory_reserved() / 1024**3     # GB
-            total = torch.cuda.get_device_properties(0).total_memory / 1024**3  # GB
-            
-            # Use reserved memory as it's more accurate for actual GPU usage
-            used_percent = (reserved / total) * 100
-            return reserved, total, used_percent
-        return 0, 0, 0
-    
-    # Get current VRAM state
-    current_vram_used, total_vram, current_percent = get_vram_usage()
-    
-    if master_process:
-        print(f"Current VRAM usage: {current_vram_used:.1f}/{total_vram:.1f}GB ({current_percent:.1f}%)")
-        print(f"Target VRAM usage: {target_vram_percent:.1f}%")
-    
-    # If current usage is already optimal, keep current batch size
-    if abs(current_percent - target_vram_percent) < 5.0:
-        if master_process:
-            print(f"Current VRAM usage is optimal, keeping batch size: {current_batch_size}")
-        return current_batch_size
-    
-    # Estimate memory per sample (rough approximation)
-    memory_per_sample = current_vram_used / current_batch_size if current_batch_size > 0 else 0.1
-    target_vram_used = total_vram * (target_vram_percent / 100.0)
-    estimated_optimal_batch = int(target_vram_used / memory_per_sample) if memory_per_sample > 0 else current_batch_size
-    
-    # Generate candidate batch sizes (multiples of 8, preferably powers of 2)
-    candidates = []
-    
-    # Powers of 2
-    power = 3  # Start from 8
-    while 2**power <= max_batch_size:
-        candidates.append(2**power)
-        power += 1
-    
-    # Multiples of 8 that aren't powers of 2
-    for mult in range(3, max_batch_size // 8 + 1):
-        candidate = mult * 8
-        if candidate <= max_batch_size and candidate not in candidates:
-            candidates.append(candidate)
-    
-    candidates.sort()
-    
-    # Find the best candidate closest to our estimate
-    best_batch_size = current_batch_size
-    best_diff = float('inf')
-    
-    for candidate in candidates:
-        # Prefer candidates close to our estimate
-        diff = abs(candidate - estimated_optimal_batch)
-        if diff < best_diff:
-            best_diff = diff
-            best_batch_size = candidate
-    
-    # Safety bounds - don't change too drastically
-    min_batch_size = max(8, current_batch_size // 4)
-    max_safe_batch_size = min(max_batch_size, current_batch_size * 4)
-    best_batch_size = max(min_batch_size, min(best_batch_size, max_safe_batch_size))
-    
-    if master_process:
-        estimated_vram_with_new_batch = memory_per_sample * best_batch_size
-        estimated_percent = (estimated_vram_with_new_batch / total_vram) * 100
-        print(f"Estimated optimal batch size: {estimated_optimal_batch}")
-        print(f"Selected batch size: {best_batch_size} (estimated VRAM: {estimated_percent:.1f}%)")
-    
-    return best_batch_size
 
 
 def execute_operation(op: Dict[str, Any], trigger_reason: str, current_val_loss: float, 
