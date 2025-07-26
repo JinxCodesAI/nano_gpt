@@ -329,7 +329,8 @@ def main():
         log_model_architecture(model.module if ddp else model, iter_num, is_initial=True)
         log_detailed_params(model.module if ddp else model)
     
-    print(f"tokens per iteration will be: {config.batch_size * config.block_size}")
+        tokens_per_iter = config.gradient_accumulation_steps * ddp_world_size * config.batch_size * config.block_size
+    print(f"tokens per iteration will be: {tokens_per_iter:,}")
     
     # Training loop
     print(f"Starting training from iteration {iter_num}")
