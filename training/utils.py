@@ -281,7 +281,7 @@ class BatchManager:
             
             time.sleep(0.01)  # Small sleep to prevent busy waiting
     
-    def get_batch(self):
+    def get_next_batch(self):
         """Get the next training batch from the high-performance buffer."""
         # Wait for at least one batch to be available
         while len(self.candidate_buffer) == 0:

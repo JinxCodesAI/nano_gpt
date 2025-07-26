@@ -335,7 +335,7 @@ def main():
     # Training loop
     print(f"Starting training from iteration {iter_num}")
     
-    X, Y = batch_manager.get_batch()  # Fetch the first batch
+    X, Y = batch_manager.get_next_batch()  # Fetch the first batch
     t0 = time.time()
     local_iter_num = 0
     running_mfu = -1.0
