@@ -606,3 +606,116 @@ def calculate_optimal_batch_size(model, current_batch_size: int,
         if master_process:
             print(f"Error during optimal batch size calculation: {e}. Falling back to current batch size.")
         return current_batch_size
+
+
+def format_analysis_results(results, iter_num, config=None, wandb=None, WANDB_AVAILABLE=False):
+    """
+    Format and display analysis results consistently across training scripts.
+    
+    Args:
+        results: Analysis results dictionary
+        iter_num: Current iteration number
+        config: Training configuration (optional, for wandb logging)
+        wandb: wandb module (optional, for logging)
+        WANDB_AVAILABLE: Whether wandb is available
+    
+    Returns:
+        List of log messages for file logging
+    """
+    attention_entropy = results.get('attention_entropy', 0.0)
+    
+    # Format output to match original train.py exactly
+    print(f"\n--- ASYNC ANALYSIS RESULTS FOR ITERATION {iter_num} ---")
+    
+    # Prepare log messages for file logging
+    log_messages = []
+    log_messages.append(f"--- ASYNC ANALYSIS RESULTS FOR ITERATION {iter_num} ---")
+    
+    # --- Report Geometry & Rank Results ---
+    if 'geometry' in results:
+        geo = results['geometry']
+        
+        # Embedding Geometry Analysis
+        if 'embeddings' in geo and geo['embeddings']:
+            emb_geo = geo['embeddings']
+            mean_sim = emb_geo['global_sparsity']['mean_similarity']
+            std_sim = emb_geo['global_sparsity']['std_similarity']
+            sim_10th = emb_geo['global_sparsity']['similarity_10th_percentile']
+            sim_90th = emb_geo['global_sparsity']['similarity_90th_percentile']
+            avg_neighbors = emb_geo['local_density']['average_neighborhood_size']
+            nbhd_10th = emb_geo['local_density']['neighbor_10th_percentile']
+            nbhd_90th = emb_geo['local_density']['neighbor_90th_percentile']
+            nbhd_99th = emb_geo['local_density']['neighbor_99th_percentile']
+            
+            # Analysis info
+            analysis_info = emb_geo.get('analysis_info', {})
+            num_analyzed = analysis_info.get('num_embeddings_analyzed', 'N/A')
+            total_embeddings = analysis_info.get('total_embeddings', 'N/A')
+            is_filtered = analysis_info.get('filtered', False)
+            
+            geom_msg1 = f"  [Embeddings Geometry] Avg Neighbors: {avg_neighbors:.2f} 10th-90th-99th Percentile: {nbhd_10th:.4f} - {nbhd_90th:.4f} - {nbhd_99th:.4f} "
+            geom_msg2 = f"  [Embeddings Geometry] Mean Similarity: {mean_sim:.4f} Std Similarity: {std_sim:.4f} | 10th-90th Percentile: {sim_10th:.4f} - {sim_90th:.4f}"
+            geom_msg3 = f"  [Embeddings Analysis] Analyzed: {num_analyzed}/{total_embeddings} embeddings | Filtered: {is_filtered}"
+            print(geom_msg1)
+            print(geom_msg2)
+            print(geom_msg3)
+            log_messages.append(geom_msg1)
+            log_messages.append(geom_msg2)
+            log_messages.append(geom_msg3)
+            
+            # Wandb logging
+            if config and hasattr(config, 'wandb_log') and config.wandb_log and wandb and WANDB_AVAILABLE:
+                wandb_data = {
+                    "analysis/embed/geom_avg_neighbors": avg_neighbors,
+                    "analysis/embed/geom_mean_sim": mean_sim,
+                    "analysis/embed/geom_std_sim": std_sim,
+                    "analysis/embed/geom_sim_10th": sim_10th,
+                    "analysis/embed/geom_sim_90th": sim_90th
+                }
+                if isinstance(num_analyzed, (int, float)):
+                    wandb_data["analysis/embed/num_embeddings_analyzed"] = num_analyzed
+                if isinstance(total_embeddings, (int, float)):
+                    wandb_data["analysis/embed/total_embeddings"] = total_embeddings
+                wandb_data["analysis/embed/filtered"] = is_filtered
+                wandb.log(wandb_data, step=iter_num)
+        
+        # FFN Rank Analysis
+        if 'ffn_ranks' in geo:
+            num_layers = len(geo['ffn_ranks'])
+            layers_to_log = {0, num_layers // 2, num_layers - 1}
+            for i in layers_to_log:
+                rank_info = geo['ffn_ranks'].get(f'layer_{i}')
+                if rank_info:
+                    util = rank_info['utilization']
+                    eff_rank = rank_info['effective_rank']
+                    full_rank = rank_info['full_rank']
+                    ffn_msg = f"  [FFN Rank L{i}] Utilization: {util:.2%} ({eff_rank}/{full_rank})"
+                    print(ffn_msg)
+                    log_messages.append(ffn_msg)
+                    if config and hasattr(config, 'wandb_log') and config.wandb_log and wandb and WANDB_AVAILABLE: 
+                        wandb.log({f"analysis/ffn/rank_util_L{i}": util}, step=iter_num)
+        
+        # Attention Rank Analysis
+        if 'attn_ranks' in geo:
+            num_layers = len(geo['attn_ranks'])
+            layers_to_log = {0, num_layers // 2, num_layers - 1}
+            for i in layers_to_log:
+                attn_info = geo['attn_ranks'].get(f'layer_{i}')
+                if attn_info:
+                    for component in ['Q', 'K', 'V']:
+                        comp_info = attn_info.get(component)
+                        if comp_info:
+                            util = comp_info['utilization']
+                            eff_rank = comp_info['effective_rank']
+                            full_rank = comp_info['full_rank']
+                            attn_msg = f"  [Attn {component} L{i}] Utilization: {util:.2%} ({eff_rank}/{full_rank})"
+                            print(attn_msg)
+                            log_messages.append(attn_msg)
+                            if config and hasattr(config, 'wandb_log') and config.wandb_log and wandb and WANDB_AVAILABLE:
+                                wandb.log({f"analysis/attn/{component}_util_L{i}": util}, step=iter_num)
+    
+    end_msg = "--- END OF ASYNC ANALYSIS RESULTS ---"
+    print(end_msg + "\n")
+    log_messages.append(end_msg)
+    
+    return log_messages

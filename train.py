@@ -879,7 +879,10 @@ elif init_from == 'resume':
             checkpoint_value = checkpoint_model_args[param]
             current_value = model_args.get(param)
             
-            if current_value != checkpoint_value:
+            # Special handling for vocab_size - if current value is None, use checkpoint value
+            if param == 'vocab_size' and current_value is None:
+                model_args[param] = checkpoint_value
+            elif current_value != checkpoint_value and current_value is not None:
                 config_changes.append(f"{param}: {checkpoint_value} -> {current_value}")
                 print(f"Overriding {param}: {checkpoint_value} -> {current_value}")
                 model_args[param] = current_value  # Use current config value
@@ -1111,7 +1114,7 @@ def run_full_analysis_async(analyzer, current_snapshot, prev_snapshot, val_batch
     """
     print(f"(Async Analysis @ iter {iter_num}) Starting full model analysis job...")
     results = analyzer.run_full_analysis(current_snapshot, prev_snapshot, filtered_token_ids=filtered_token_ids)
-    enthropy = analyzer.analyze_attention_entropy(val_batch)
+    enthropy = analyzer.analyze_attention_entropy(val_batch[0])
     results['attention_entropy'] = enthropy
     results['iter_num'] = iter_num # Tag results with the iteration number
     print(f"(Async Analysis @ iter {iter_num}) Job finished.")
@@ -1126,131 +1129,21 @@ def analysis_done_callback(future):
     try:
         results = future.result()
         iter_num = results['iter_num']
-        attention_entropy = results['attention_entropy']
-
-        print(f"\n--- ASYNC ANALYSIS RESULTS FOR ITERATION {iter_num} ---")
-
-        # Prepare log messages for file logging
-        log_messages = []
-        log_messages.append(f"--- ASYNC ANALYSIS RESULTS FOR ITERATION {iter_num} ---")
-
-        # --- Report Geometry & Rank Results ---
-        if 'geometry' in results:
-            geo = results['geometry']
-
-            # Embedding Geometry Analysis
-            if 'embeddings' in geo and geo['embeddings']:
-                emb_geo = geo['embeddings']
-                mean_sim = emb_geo['global_sparsity']['mean_similarity']
-                std_sim = emb_geo['global_sparsity']['std_similarity']
-                sim_10th = emb_geo['global_sparsity']['similarity_10th_percentile']
-                sim_90th = emb_geo['global_sparsity']['similarity_90th_percentile']
-                avg_neighbors = emb_geo['local_density']['average_neighborhood_size']
-                nbhd_10th = emb_geo['local_density']['neighbor_10th_percentile']
-                nbhd_90th = emb_geo['local_density']['neighbor_90th_percentile']
-                nbhd_99th = emb_geo['local_density']['neighbor_99th_percentile']
-
-                # Analysis info
-                analysis_info = emb_geo.get('analysis_info', {})
-                num_analyzed = analysis_info.get('num_embeddings_analyzed', 'N/A')
-                total_embeddings = analysis_info.get('total_embeddings', 'N/A')
-                is_filtered = analysis_info.get('filtered', False)
-
-                geom_msg1 = f"  [Embeddings Geometry] Avg Neighbors: {avg_neighbors:.2f} 10th-90th-99th Percentile: {nbhd_10th:.4f} - {nbhd_90th:.4f} - {nbhd_99th:.4f} "
-                geom_msg2 = f"  [Embeddings Geometry] Mean Similarity: {mean_sim:.4f} Std Similarity: {std_sim:.4f} | 10th-90th Percentile: {sim_10th:.4f} - {sim_90th:.4f}"
-                geom_msg3 = f"  [Embeddings Analysis] Analyzed: {num_analyzed}/{total_embeddings} embeddings | Filtered: {is_filtered}"
-                att_msg = f"  [Attention Entropy] Avg Entropy: {attention_entropy:.4f}"
-                print(geom_msg1)
-                print(geom_msg2)
-                print(geom_msg3)
-                log_messages.append(geom_msg1)
-                log_messages.append(geom_msg2)
-                log_messages.append(geom_msg3)
-
-                if wandb_log:
-                    wandb_data = {
-                        "analysis/embed/geom_avg_neighbors": avg_neighbors,
-                        "analysis/embed/geom_mean_sim": mean_sim,
-                        "analysis/embed/geom_std_sim": std_sim,
-                        "analysis/embed/geom_sim_10th": sim_10th,
-                        "analysis/embed/geom_sim_90th": sim_90th
-                    }
-                    if isinstance(num_analyzed, (int, float)):
-                        wandb_data["analysis/embed/num_embeddings_analyzed"] = num_analyzed
-                    if isinstance(total_embeddings, (int, float)):
-                        wandb_data["analysis/embed/total_embeddings"] = total_embeddings
-                    wandb_data["analysis/embed/filtered"] = is_filtered
-                    wandb.log(wandb_data, step=iter_num)
-
-            # FFN Rank Analysis
-            if 'ffn_ranks' in geo:
-                num_layers = len(geo['ffn_ranks'])
-                layers_to_log = {0, num_layers // 2, num_layers - 1}
-                for i in layers_to_log:
-                    rank_info = geo['ffn_ranks'].get(f'layer_{i}')
-                    if rank_info:
-                        util = rank_info['utilization']
-                        eff_rank = rank_info['effective_rank']
-                        full_rank = rank_info['full_rank']
-                        ffn_msg = f"  [FFN Rank L{i}] Utilization: {util:.2%} ({eff_rank}/{full_rank})"
-                        print(ffn_msg)
-                        log_messages.append(ffn_msg)
-                        if wandb_log: wandb.log({f"analysis/ffn/rank_util_L{i}": util}, step=iter_num)
-
-            # Attention Rank Analysis
-            if 'attn_ranks' in geo:
-                num_layers = len(geo['attn_ranks'])
-                layers_to_log = {0, num_layers // 2, num_layers - 1}
-                for i in layers_to_log:
-                    attn_info = geo['attn_ranks'].get(f'layer_{i}')
-                    if attn_info:
-                        for component in ['Q', 'K', 'V']:
-                            comp_info = attn_info.get(component)
-                            if comp_info:
-                                util = comp_info['utilization']
-                                eff_rank = comp_info['effective_rank']
-                                full_rank = comp_info['full_rank']
-                                attn_msg = f"  [Attn {component} L{i}] Utilization: {util:.2%} ({eff_rank}/{full_rank})"
-                                print(attn_msg)
-                                log_messages.append(attn_msg)
-                                if wandb_log: wandb.log({f"analysis/attn/{component.lower()}_rank_util_L{i}": util}, step=iter_num)
-
-        # --- Report Drift Results ---
-        if 'drift' in results:
-            drift = results['drift']
-
-            # Embedding Drift
-            if 'embeddings' in drift and drift['embeddings']:
-                emb_drift_avg = drift['embeddings']['avg_cosine_similarity']
-                emb_drift_10th = drift['embeddings']['cosine_sim_10th_percentile']
-                emb_drift_90th = drift['embeddings']['cosine_sim_90th_percentile']
-                drift_msg1 = f"  [Embeddings Drift] Avg Cosine Sim: {emb_drift_avg:.4f} | 10th Percentile: {emb_drift_10th:.4f} | 90th Percentile: {emb_drift_90th:.4f}"
-                print(drift_msg1)
-                log_messages.append(drift_msg1)
-                if wandb_log: wandb.log({
-                    "analysis/embed/drift_avg_sim": emb_drift_avg,
-                    "analysis/embed/drift_10th_sim": emb_drift_10th,
-                    "analysis/embed/drift_90th_sim": emb_drift_90th
-                }, step=iter_num)
-
-            # FFN Drift (report first layer for brevity)
-            ffn0_drift = drift.get('ffn.0.c_fc.weight')
-            if ffn0_drift:
-                ffn_drift_avg = ffn0_drift['avg_cosine_similarity']
-                ffn_drift_10th = ffn0_drift['cosine_sim_10th_percentile']
-                ffn_drift_90th = ffn0_drift['cosine_sim_90th_percentile']
-                drift_msg2 = f"  [FFN L0 Drift] Avg Cosine Sim: {ffn_drift_avg:.4f} | 10th Percentile: {ffn_drift_10th:.4f}"
-                print(drift_msg2)
-                log_messages.append(drift_msg2)
-                if wandb_log: wandb.log({
-                    "analysis/ffn/drift_avg_sim_L0": ffn_drift_avg,
-                    "analysis/ffn/drift_10th_sim_L0": ffn_drift_10th,
-                    "analysis/ffn/drift_90th_sim_L0": ffn_drift_90th
-                }, step=iter_num)
-
-        end_msg = "--- END OF ASYNC ANALYSIS RESULTS ---"
-        print(end_msg + "\n")
-        log_messages.append(end_msg)
+        
+        # Create a config-like object for wandb logging  
+        class ConfigLike:
+            def __init__(self, wandb_log_val):
+                self.wandb_log = wandb_log_val
+        
+        config_like = ConfigLike(wandb_log)
+        
+        # Use the utility function for consistent formatting
+        log_messages = format_analysis_results(
+            results, iter_num, 
+            config=config_like, 
+            wandb=wandb if wandb_log else None, 
+            WANDB_AVAILABLE=wandb_log
+        )
 
         # Log to file if logging is enabled and we're the master process
         if master_process and training_logger.is_enabled:
@@ -1615,7 +1508,7 @@ if master_process and file_logging:
 
 # VRAM monitoring
 # Import shared VRAM utilities
-from training.utils import get_vram_usage, get_detailed_vram_usage, calculate_relative_batch_size, calculate_optimal_batch_size
+from training.utils import get_vram_usage, get_detailed_vram_usage, calculate_relative_batch_size, calculate_optimal_batch_size, format_analysis_results
 
 while True:
     # Start timing the training iteration
@@ -1668,7 +1561,7 @@ while True:
                     current_snapshot = analyzer.get_model_state_snapshot()
                     filtered_tokens = batch_manager.get_non_outlier_tokens(ignored_outlayers_sum)
                     X_val, Y_val = get_val_batch()
-                    """
+                    
                     # 3. Submit the new, generic analysis task to the executor.
                     future = executor.submit(
                         run_full_analysis_async,
@@ -1679,7 +1572,7 @@ while True:
                         iter_num,
                         filtered_tokens
                     )
-                    """
+
                     future.add_done_callback(analysis_done_callback)
 
                         # 4. CRITICAL: Update state for the next analysis cycle.

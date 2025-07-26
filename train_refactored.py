@@ -31,7 +31,7 @@ from analyzer import ModelAnalyzer
 
 # Import training modules
 from training.config import TrainingConfig, load_scaling_schedule
-from training.utils import TimingProfiler, BatchManager, setup_signal_handlers, get_system_info, estimate_loss, get_vram_usage
+from training.utils import TimingProfiler, BatchManager, setup_signal_handlers, get_system_info, estimate_loss, get_vram_usage, format_analysis_results
 from training.evaluation import get_val_batch, run_full_analysis_async, analysis_done_callback
 from training.scheduler import TrainingScheduler, LearningRateScheduler, EarlyStoppingMonitor
 from training.operations import log_detailed_params, log_model_architecture, calculate_and_log_target_architecture
@@ -420,7 +420,7 @@ def main():
                             def analysis_task():
                                 print(f"(Async Analysis @ iter {iter_num}) Starting full model analysis job...")
                                 results = analyzer.run_full_analysis(current_snapshot, prev_embeddings, filtered_token_ids=filtered_tokens)
-                                entropy = analyzer.analyze_attention_entropy((X_val, Y_val))
+                                entropy = analyzer.analyze_attention_entropy(X_val)
                                 results['attention_entropy'] = entropy
                                 results['iter_num'] = iter_num
                                 print(f"Analyzing {len(filtered_tokens)} filtered embeddings out of {len(filtered_tokens) + int(len(filtered_tokens) * config.ignored_outlayers_sum / (1 - config.ignored_outlayers_sum))} total")
@@ -437,29 +437,18 @@ def main():
                                     results = fut.result()
                                     iter_num = results['iter_num']
                                     
-                                    # Format output to match original train.py exactly
-                                    log_messages = []
-                                    log_messages.append(f"\n--- ASYNC ANALYSIS RESULTS FOR ITERATION {iter_num} ---")
-                                    
-                                    # Parse and format geometry results
-                                    if 'geometry' in results:
-                                        geom = results['geometry']
-                                        if 'embeddings' in geom and 'global_sparsity' in geom['embeddings']:
-                                            gs = geom['embeddings']['global_sparsity']
-                                            log_messages.append(f"  [Embeddings Geometry] Mean Similarity: {gs['mean_similarity']:.4f} Std Similarity: {gs['std_similarity']:.4f} | 10th-90th Percentile: {gs['similarity_10th_percentile']:.4f} - {gs['similarity_90th_percentile']:.4f}")
-                                    
-                                    log_messages.append("--- END OF ASYNC ANALYSIS RESULTS ---")
-                                    
-                                    # Print all messages
-                                    for msg in log_messages:
-                                        print(msg)
+                                    # Use the utility function for consistent formatting
+                                    log_messages = format_analysis_results(
+                                        results, iter_num, 
+                                        config=config, 
+                                        wandb=wandb if config.wandb_log else None, 
+                                        WANDB_AVAILABLE=WANDB_AVAILABLE
+                                    )
                                     
                                     # Log to file if logging is enabled
                                     if master_process and training_logger:
                                         for msg in log_messages:
                                             training_logger.log(msg)
-                                    
-                                    print()  # Extra newline like original
                                     
                                 except Exception as e:
                                     print(f"\n--- ERROR in analysis callback: {e} ---\n")

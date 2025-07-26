@@ -2,6 +2,9 @@
 # Base config for fast, small-scale testing of the Training Orchestrator.
 # This is NOT for achieving a good loss, but for verifying functionality.
 
+device = 'cpu'
+init_from = 'resume'
+out_dir = 'test-base'
 wandb_log = False # Disable wandb for quick tests
 wandb_project = 'owt-test'
 wandb_run_name='orchestrator-test'
