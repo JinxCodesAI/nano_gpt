@@ -107,8 +107,6 @@ class TrainingScheduler:
             # If no operation was executed in this loop, exit
             if not operation_executed_in_loop:
                 break
-        
-        return model, optimizer, hyperparameter_updates
     
     def _should_execute_operation(self, op_index: int, op: Dict[str, Any], 
                                 current_val_loss: float, iter_num: int) -> Tuple[bool, str]:

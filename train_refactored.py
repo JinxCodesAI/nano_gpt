@@ -436,7 +436,6 @@ def main():
                                 try:
                                     results = fut.result()
                                     iter_num = results['iter_num']
-                                    attention_entropy = results['attention_entropy']
                                     
                                     # Format output to match original train.py exactly
                                     log_messages = []
@@ -445,43 +444,9 @@ def main():
                                     # Parse and format geometry results
                                     if 'geometry' in results:
                                         geom = results['geometry']
-                                        if 'embeddings' in geom:
-                                            emb = geom['embeddings']
-                                            if 'local_density' in emb:
-                                                ld = emb['local_density']
-                                                log_messages.append(f"  [Embeddings Geometry] Avg Neighbors: {ld['average_neighborhood_size']:.2f} 10th-90th-99th Percentile: {ld['neighbor_10th_percentile']:.4f} - {ld['neighbor_90th_percentile']:.4f} - {ld['neighbor_99th_percentile']:.4f} ")
-                                            if 'global_sparsity' in emb:
-                                                gs = emb['global_sparsity']
-                                                log_messages.append(f"  [Embeddings Geometry] Mean Similarity: {gs['mean_similarity']:.4f} Std Similarity: {gs['std_similarity']:.4f} | 10th-90th Percentile: {gs['similarity_10th_percentile']:.4f} - {gs['similarity_90th_percentile']:.4f}")
-                                            if 'analysis_info' in emb:
-                                                ai = emb['analysis_info']
-                                                filtered_str = "True" if ai.get('filtered', False) else "False"
-                                                log_messages.append(f"  [Embeddings Analysis] Analyzed: {ai['num_embeddings_analyzed']}/{ai['total_embeddings']} embeddings | Filtered: {filtered_str}")
-                                        
-                                        # Format FFN ranks
-                                        if 'ffn_ranks' in geom:
-                                            for layer, rank_info in geom['ffn_ranks'].items():
-                                                layer_num = layer.split('_')[1]
-                                                log_messages.append(f"  [FFN Rank L{layer_num}] Utilization: {rank_info['utilization']*100:.2f}% ({rank_info['effective_rank']}/{rank_info['full_rank']})")
-                                        
-                                        # Format attention ranks
-                                        if 'attn_ranks' in geom:
-                                            for layer, attn_info in geom['attn_ranks'].items():
-                                                layer_num = layer.split('_')[1]
-                                                for head_type, rank_info in attn_info.items():
-                                                    log_messages.append(f"  [Attn {head_type} L{layer_num}] Utilization: {rank_info['utilization']*100:.2f}% ({rank_info['effective_rank']}/{rank_info['full_rank']})")
-                                    
-                                    # Format drift results if available
-                                    if 'drift' in results and prev_embeddings is not None:
-                                        drift = results['drift']
-                                        if 'embeddings' in drift:
-                                            emb_drift = drift['embeddings']
-                                            log_messages.append(f"  [Embeddings Drift] Avg Cosine Sim: {emb_drift['avg_cosine_similarity']:.4f} | 10th Percentile: {emb_drift['cosine_sim_10th_percentile']:.4f} | 90th Percentile: {emb_drift['cosine_sim_90th_percentile']:.4f}")
-                                        # Add other drift metrics
-                                        for key, drift_data in drift.items():
-                                            if key != 'embeddings' and isinstance(drift_data, dict):
-                                                if 'avg_cosine_similarity' in drift_data:
-                                                    log_messages.append(f"  [{key.replace('.', ' ').title()} Drift] Avg Cosine Sim: {drift_data['avg_cosine_similarity']:.4f} | 10th Percentile: {drift_data['cosine_sim_10th_percentile']:.4f}")
+                                        if 'embeddings' in geom and 'global_sparsity' in geom['embeddings']:
+                                            gs = geom['embeddings']['global_sparsity']
+                                            log_messages.append(f"  [Embeddings Geometry] Mean Similarity: {gs['mean_similarity']:.4f} Std Similarity: {gs['std_similarity']:.4f} | 10th-90th Percentile: {gs['similarity_10th_percentile']:.4f} - {gs['similarity_90th_percentile']:.4f}")
                                     
                                     log_messages.append("--- END OF ASYNC ANALYSIS RESULTS ---")
                                     
