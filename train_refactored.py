@@ -361,7 +361,7 @@ def main():
             with timing_profiler.time_section("evaluation"):
                 losses = estimate_loss(
                     model,
-                    {'train': batch_manager.get_batch, 'val': get_val_batch_fn},
+                    {'train': batch_manager.get_next_batch, 'val': get_val_batch_fn},
                     config.eval_iters, device_type, config.dtype
                 )
                 
@@ -554,7 +554,7 @@ def main():
                     loss = loss / config.gradient_accumulation_steps
                 
                 # Get next batch asynchronously
-                X, Y = batch_manager.get_batch()
+                X, Y = batch_manager.get_next_batch()
                 
                 # Backward pass
                 loss.backward()
