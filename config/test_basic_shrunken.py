@@ -15,7 +15,7 @@ device = 'cuda'
 dataset = 'shakespeare_char'
 
 # Very small model for quick testing
-batch_size = 1024
+batch_size = 1536
 block_size = 256
 gradient_accumulation_steps = 1
 n_layer = 1
@@ -39,7 +39,7 @@ lr_decay_iters = 3000
 min_lr = 1e-4
 
 # System
-dtype = 'float32'  # Use float32 for compatibility
+dtype = 'bfloat16'  # Use float32 for compatibility
 compile = False
 
 # LoRA disabled

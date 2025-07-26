@@ -75,7 +75,7 @@
     "max_wait_iters": 200,
     "desc": "Unfreeze layer 0 attention after 200 iterations",
     "reevaluate": false,
-    "completed": false
+    "completed": true
   },
   {
     "name": "unfreeze_layer",
@@ -84,7 +84,7 @@
     "max_wait_iters": 0,
     "desc": "Unfreeze layer 0 MLP after 200 iterations",
     "reevaluate": false,
-    "completed": false
+    "completed": true
   },
   {
     "name": "unfreeze_layer",
@@ -93,7 +93,7 @@
     "max_wait_iters": 0,
     "desc": "Unfreeze embeddings after 200 iterations",
     "reevaluate": false,
-    "completed": false
+    "completed": true
   },
   {
     "name": "set_layer_lora_rank",
@@ -105,7 +105,7 @@
     "max_wait_iters": 0,
     "desc": "Set layer 0 attention to LoRA rank 1/4 of 384",
     "reevaluate": false,
-    "completed": false
+    "completed": true
   },
   {
     "name": "adjust_batch_size",
@@ -117,7 +117,7 @@
     "max_wait_iters": 0,
     "desc": "Optimize batch size after setting layer 0 LoRA rank",
     "reevaluate": false,
-    "completed": false
+    "completed": true
   },
   {
     "name": "merge_lora_weights",
@@ -126,7 +126,7 @@
     "max_wait_iters": 298,
     "desc": "Merge LoRA weights before next growth (at iter 1000)",
     "reevaluate": true,
-    "completed": false
+    "completed": true
   },
   {
     "name": "set_batch_size_relative",
@@ -135,7 +135,7 @@
     "max_wait_iters": 0,
     "desc": "Reduce batch size to 50% before adding layer 3",
     "reevaluate": false,
-    "completed": false
+    "completed": true
   },
   {
     "name": "stack_layers",
@@ -148,7 +148,7 @@
     "max_wait_iters": 0,
     "desc": "Add layer 3 after 1000 iterations total",
     "reevaluate": false,
-    "completed": false
+    "completed": true
   },
   {
     "name": "adjust_batch_size",
@@ -160,7 +160,7 @@
     "max_wait_iters": 0,
     "desc": "Optimize batch size for VRAM after adding layer 3",
     "reevaluate": false,
-    "completed": false
+    "completed": true
   },
   {
     "name": "freeze_layer",
@@ -169,7 +169,7 @@
     "max_wait_iters": 0,
     "desc": "Freeze layer 0 attention when adding layer 3",
     "reevaluate": false,
-    "completed": false
+    "completed": true
   },
   {
     "name": "freeze_layer",
@@ -178,7 +178,7 @@
     "max_wait_iters": 0,
     "desc": "Freeze layer 0 MLP when adding layer 3",
     "reevaluate": false,
-    "completed": false
+    "completed": true
   },
   {
     "name": "freeze_layer",
@@ -187,7 +187,7 @@
     "max_wait_iters": 0,
     "desc": "Freeze layer 1 attention when adding layer 3",
     "reevaluate": false,
-    "completed": false
+    "completed": true
   },
   {
     "name": "freeze_layer",
@@ -196,7 +196,7 @@
     "max_wait_iters": 0,
     "desc": "Freeze layer 1 MLP when adding layer 3",
     "reevaluate": false,
-    "completed": false
+    "completed": true
   },
   {
     "name": "freeze_layer",
@@ -205,7 +205,7 @@
     "max_wait_iters": 0,
     "desc": "Freeze embeddings when adding layer 3",
     "reevaluate": false,
-    "completed": false
+    "completed": true
   },
   {
     "name": "unfreeze_layer",
@@ -214,7 +214,7 @@
     "max_wait_iters": 200,
     "desc": "Unfreeze layer 0 attention after 200 iterations",
     "reevaluate": false,
-    "completed": false
+    "completed": true
   },
   {
     "name": "unfreeze_layer",
@@ -223,7 +223,7 @@
     "max_wait_iters": 0,
     "desc": "Unfreeze layer 0 MLP after 200 iterations",
     "reevaluate": false,
-    "completed": false
+    "completed": true
   },
   {
     "name": "unfreeze_layer",
@@ -232,7 +232,7 @@
     "max_wait_iters": 1,
     "desc": "Unfreeze layer 1 attention after 200 iterations",
     "reevaluate": false,
-    "completed": false
+    "completed": true
   },
   {
     "name": "unfreeze_layer",
@@ -241,7 +241,7 @@
     "max_wait_iters": 0,
     "desc": "Unfreeze layer 1 MLP after 200 iterations",
     "reevaluate": false,
-    "completed": false
+    "completed": true
   },
   {
     "name": "unfreeze_layer",
@@ -250,7 +250,7 @@
     "max_wait_iters": 0,
     "desc": "Unfreeze embeddings after 200 iterations",
     "reevaluate": false,
-    "completed": false
+    "completed": true
   },
   {
     "name": "set_layer_lora_rank",
@@ -262,7 +262,7 @@
     "max_wait_iters": 0,
     "desc": "Set layer 1 attention to LoRA rank 1/4 of 384",
     "reevaluate": false,
-    "completed": false
+    "completed": true
   },
   {
     "name": "adjust_batch_size",
@@ -274,7 +274,7 @@
     "max_wait_iters": 0,
     "desc": "Optimize batch size after setting layer 1 LoRA rank",
     "reevaluate": false,
-    "completed": false
+    "completed": true
   },
   {
     "name": "set_layer_lora_rank",
@@ -286,7 +286,7 @@
     "max_wait_iters": 0,
     "desc": "Set layer 0 attention to LoRA rank 1/16 of 384",
     "reevaluate": false,
-    "completed": false
+    "completed": true
   },
   {
     "name": "adjust_batch_size",
@@ -298,7 +298,7 @@
     "max_wait_iters": 0,
     "desc": "Optimize batch size after setting layer 0 LoRA rank",
     "reevaluate": false,
-    "completed": false
+    "completed": true
   },
   {
     "name": "merge_lora_weights",
