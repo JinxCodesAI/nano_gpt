@@ -1929,7 +1929,9 @@ while True:
         
         detailed_vram = get_detailed_vram_usage()
         if detailed_vram and vram_debug:
-            print(f"  [VRAM Debug] Allocated: {detailed_vram['allocated_gb']:.3f}GB ({detailed_vram['allocated_percent']:.1f}%), Reserved: {detailed_vram['reserved_gb']:.3f}GB ({detailed_vram['reserved_percent']:.1f}%)")
+            msg = f"  [VRAM Debug] Allocated: {detailed_vram['allocated_gb']:.3f}GB ({detailed_vram['allocated_percent']:.1f}%), Reserved: {detailed_vram['reserved_gb']:.3f}GB ({detailed_vram['reserved_percent']:.1f}%)")
+            print(msg)
+            training_logger.log(msg)
         
         # MFU stats logging to dedicated file
         if file_logging:
