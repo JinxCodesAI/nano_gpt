@@ -6,7 +6,7 @@
     "max_wait_iters": 500,
     "desc": "Train first layer unfreezed for 500 iterations",
     "reevaluate": true,
-    "completed": true
+    "completed": false
   },
   {
     "name": "set_batch_size_relative",
@@ -15,7 +15,7 @@
     "max_wait_iters": 0,
     "desc": "Reduce batch size to 50% before adding layer 2",
     "reevaluate": false,
-    "completed": true
+    "completed": false
   },
   {
     "name": "stack_layers",
@@ -27,7 +27,7 @@
     "max_wait_iters": 0,
     "desc": "Add layer 2 after 500 iterations total",
     "reevaluate": false,
-    "completed": true
+    "completed": false
   },
   {
     "name": "adjust_batch_size",
@@ -39,7 +39,7 @@
     "max_wait_iters": 0,
     "desc": "Optimize batch size for VRAM after adding layer 2",
     "reevaluate": false,
-    "completed": true
+    "completed": false
   },
   {
     "name": "freeze_layer",
@@ -48,7 +48,7 @@
     "max_wait_iters": 0,
     "desc": "Freeze layer 0 attention when adding layer 2",
     "reevaluate": false,
-    "completed": true
+    "completed": false
   },
   {
     "name": "freeze_layer",
@@ -57,7 +57,7 @@
     "max_wait_iters": 0,
     "desc": "Freeze layer 0 MLP when adding layer 2",
     "reevaluate": false,
-    "completed": true
+    "completed": false
   },
   {
     "name": "freeze_layer",
@@ -66,7 +66,7 @@
     "max_wait_iters": 0,
     "desc": "Freeze embeddings when adding layer 2",
     "reevaluate": false,
-    "completed": true
+    "completed": false
   },
   {
     "name": "unfreeze_layer",

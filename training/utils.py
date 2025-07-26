@@ -548,7 +548,10 @@ def calculate_optimal_batch_size(model, current_batch_size: int,
 
         # 2. Estimate memory for gradients and optimizer state (AdamW with fp32 states)
         num_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
-        grad_optim_mem_gb = (num_params * 4 * 3) / (1024**3) # Grads (1x) + Adam States (2x)
+        print(f"Num params: {num_params}")
+        # Grads (1x), Adam exp_avg (1x), Adam exp_avg_sq (1x) = 3x model params
+        # Assuming optimizer states are float32 (4 bytes)
+        grad_optim_mem_gb = (num_params * 4 * 3) / (1024**3)
 
         # 3. Estimate memory available for activations
         target_vram_gb = total_vram * (target_vram_percent / 100.0)

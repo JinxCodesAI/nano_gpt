@@ -39,7 +39,7 @@ lr_decay_iters = 3000
 min_lr = 1e-4
 
 # System
-dtype = 'float32'  # Use float32 for compatibility
+dtype = 'bfloat16'  # Use float32 for compatibility
 compile = False
 
 # LoRA disabled

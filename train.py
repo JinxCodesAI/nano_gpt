@@ -1389,7 +1389,7 @@ def execute_operation(op, trigger_reason, current_val_loss, iter_num, target_arc
 
             raw_model = model.module if ddp else model
             log_model_architecture(raw_model, iter_num)
-            if master_process: training_logger.log_operation_success(iter_num, op_name, {'new_config': raw_model.config.__dict__})}
+            if master_process: training_logger.log_operation_success(iter_num, op_name, {'new_config': raw_model.config.__dict__})
 
 
         # --- Handle non-architectural (hyperparameter) operations ---
@@ -1458,11 +1458,11 @@ def execute_operation(op, trigger_reason, current_val_loss, iter_num, target_arc
                     if master_process: print("Clearing CUDA cache after batch size adjustment...")
                     torch.cuda.empty_cache()
 
-                if master_process: 
-                    training_logger.log_operation_success(iter_num, op_name, 
-                                                        {'calculated_batch_size': optimal_batch_size,
-                                                         'original_batch_size': batch_size_to_use})}
-                
+                    if master_process: 
+                        training_logger.log_operation_success(iter_num, op_name, 
+                                                            {'calculated_batch_size': optimal_batch_size,
+                                                             'original_batch_size': batch_size_to_use})
+
             elif op_name == 'set_batch_size_relative':
                 batch_size_to_use = batch_size
                 scale_factor = op_value
@@ -1489,7 +1489,7 @@ def execute_operation(op, trigger_reason, current_val_loss, iter_num, target_arc
                         training_logger.log_operation_success(iter_num, op_name, 
                                                             {'new_batch_size': new_batch_size,
                                                              'original_batch_size': batch_size_to_use,
-                                                             'scale_factor': scale_factor})}
+                                                             'scale_factor': scale_factor})
                 except NameError:
                     # Fallback if calculate_relative_batch_size is not available
                     new_batch_size_float = batch_size_to_use * scale_factor
@@ -1510,13 +1510,13 @@ def execute_operation(op, trigger_reason, current_val_loss, iter_num, target_arc
                         training_logger.log_operation_success(iter_num, op_name, 
                                                             {'new_batch_size': new_batch_size,
                                                              'original_batch_size': batch_size_to_use,
-                                                             'scale_factor': scale_factor})}
+                                                             'scale_factor': scale_factor})
             else:
                 raise ValueError(f"Unknown operation '{op_name}'")
             
             # Log success for operations that don't have their own logging
             if op_name not in ['adjust_batch_size', 'set_batch_size_relative'] and master_process:
-                training_logger.log_operation_success(iter_num, op_name, {'new_value': op_value})}
+                training_logger.log_operation_success(iter_num, op_name, {'new_value': op_value})
 
         return True
 
@@ -1614,10 +1614,7 @@ if master_process and file_logging:
 
 # VRAM monitoring
 # Import shared VRAM utilities
-try:
-    from training.utils import get_vram_usage get_detailed_vram_usage, calculate_relative_batch_size, calculate_optimal_batch_size
-except ImportError:
-    # Fallback implementation if training.utils is not available
+from training.utils import get_vram_usage, get_detailed_vram_usage, calculate_relative_batch_size, calculate_optimal_batch_size
 
 while True:
     # Start timing the training iteration
@@ -1670,19 +1667,24 @@ while True:
                     current_snapshot = analyzer.get_model_state_snapshot()
                     filtered_tokens = batch_manager.get_non_outlier_tokens(ignored_outlayers_sum)
                     X_val, Y_val = get_val_batch()
-
+                    """
+                    # 3. Submit the new, generic analysis task to the executor.
                     future = executor.submit(
                         run_full_analysis_async,
                         analyzer,
                         current_snapshot,
-                        prev_embeddings,
+                        prev_embeddings, # Will be None on the first run.
                         (X_val, Y_val),
                         iter_num,
                         filtered_tokens
                     )
+                    """
                     future.add_done_callback(analysis_done_callback)
+
+                        # 4. CRITICAL: Update state for the next analysis cycle.
                     prev_embeddings = current_snapshot
                     print("Async analysis job dispatched. Training continues.")
+
                 except Exception as dispatch_error:
                     print(f"ERROR dispatching async analysis for iter {iter_num}: {dispatch_error}")
 
@@ -1929,7 +1931,7 @@ while True:
         
         detailed_vram = get_detailed_vram_usage()
         if detailed_vram and vram_debug:
-            msg = f"  [VRAM Debug] Allocated: {detailed_vram['allocated_gb']:.3f}GB ({detailed_vram['allocated_percent']:.1f}%), Reserved: {detailed_vram['reserved_gb']:.3f}GB ({detailed_vram['reserved_percent']:.1f}%)")
+            msg = f"  [VRAM Debug] Allocated: {detailed_vram['allocated_gb']:.3f}GB ({detailed_vram['allocated_percent']:.1f}%), Reserved: {detailed_vram['reserved_gb']:.3f}GB ({detailed_vram['reserved_percent']:.1f}%)"
             print(msg)
             training_logger.log(msg)
         
