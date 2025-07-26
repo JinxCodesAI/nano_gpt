@@ -31,7 +31,7 @@ from analyzer import ModelAnalyzer
 
 # Import training modules
 from training.config import TrainingConfig, load_scaling_schedule
-from training.utils import TimingProfiler, BatchManager, setup_signal_handlers, get_system_info, estimate_loss, get_vram_usage
+from training.utils import TimingProfiler, BatchManager, setup_signal_handlers, get_system_info, estimate_loss, get_vram_usage, format_analysis_results
 from training.evaluation import get_val_batch, run_full_analysis_async, analysis_done_callback
 from training.scheduler import TrainingScheduler, LearningRateScheduler, EarlyStoppingMonitor
 from training.operations import log_detailed_params, log_model_architecture, calculate_and_log_target_architecture
@@ -257,11 +257,16 @@ def main():
     
     # Initialize schedulers and monitors
     training_scheduler = None
+    print(f"DEBUG: config.scaling_schedule = {config.scaling_schedule}")
+    print(f"DEBUG: type = {type(config.scaling_schedule)}, len = {len(config.scaling_schedule) if config.scaling_schedule else 'None'}")
     if config.scaling_schedule:
+        print("DEBUG: Initializing TrainingScheduler")
         training_scheduler = TrainingScheduler(config.scaling_schedule, training_logger)
         if master_process:
             target_config = calculate_and_log_target_architecture(model.config, config.scaling_schedule)
             config.target_architecture_config = target_config
+    else:
+        print("DEBUG: No scaling schedule - training_scheduler remains None")
     
     lr_scheduler = LearningRateScheduler(
         learning_rate=config.learning_rate,
@@ -314,6 +319,7 @@ def main():
     # Wrap model in DDP
     if ddp:
         model = DDP(model, device_ids=[ddp_local_rank])
+        config.gradient_accumulation_steps //= ddp_world_size
     
     # Initialize timing profiler
     timing_profiler = TimingProfiler()
@@ -328,12 +334,13 @@ def main():
         log_model_architecture(model.module if ddp else model, iter_num, is_initial=True)
         log_detailed_params(model.module if ddp else model)
     
-    print(f"tokens per iteration will be: {config.batch_size * config.block_size}")
+        tokens_per_iter = config.gradient_accumulation_steps * ddp_world_size * config.batch_size * config.block_size
+    print(f"tokens per iteration will be: {tokens_per_iter:,}")
     
     # Training loop
     print(f"Starting training from iteration {iter_num}")
     
-    X, Y = batch_manager.get_batch()  # Fetch the first batch
+    X, Y = batch_manager.get_next_batch()  # Fetch the first batch
     t0 = time.time()
     local_iter_num = 0
     running_mfu = -1.0
@@ -357,14 +364,18 @@ def main():
         # Evaluate model periodically
         if iter_num % config.eval_interval == 0 and master_process:
             with timing_profiler.time_section("evaluation"):
-                val_loss = estimate_loss(model, get_val_batch_fn, config.eval_iters, device_type, config.dtype)
+                losses = estimate_loss(
+                    model,
+                    {'train': batch_manager.get_next_batch, 'val': get_val_batch_fn},
+                    config.eval_iters, device_type, config.dtype
+                )
                 
                 # Calculate tokens per second using batch_manager's served count
                 elapsed_time_seconds = time.time() - eval_start_time if 'eval_start_time' in locals() else time.time() - t0
                 tokens_per_second = batch_manager.total_tokens_served / elapsed_time_seconds if elapsed_time_seconds > 0 else 0
                 eval_start_time = time.time()  # Reset for next interval
                 
-                print(f"step {iter_num}: train loss {val_loss:.4f}, val loss {val_loss:.4f}, lr: {lr:.4f}, tokens/sec {tokens_per_second:.0f}")
+                print(f"step {iter_num}: train loss {losses['train']:.4f}, val loss {losses['val']:.4f}, lr: {lr:.4f}, tokens/sec {tokens_per_second:.0f}")
                 
                 # Add timing breakdown output
                 timing_breakdown = timing_profiler.get_breakdown_percentages()
@@ -375,7 +386,7 @@ def main():
 
                 # File logging  
                 if training_logger:
-                    training_logger.log_step(iter_num, val_loss, val_loss, tokens_per_second)
+                    training_logger.log_step(iter_num, losses['train'], losses['val'], tokens_per_second)
                     # Log timing breakdown
                     if timing_breakdown:
                         timing_str = ", ".join([f"{k} {v:.1f}%" for k, v in timing_breakdown.items()])
@@ -385,7 +396,8 @@ def main():
                 if config.wandb_log and WANDB_AVAILABLE:
                     wandb_metrics = {
                         "iter": iter_num,
-                        "val/loss": val_loss,
+                        "train/loss": losses['train'],
+                        "val/loss": losses['val'],
                         "lr": lr,
                         "mfu": running_mfu * 100 if running_mfu > 0 else 0
                     }
@@ -413,7 +425,7 @@ def main():
                             def analysis_task():
                                 print(f"(Async Analysis @ iter {iter_num}) Starting full model analysis job...")
                                 results = analyzer.run_full_analysis(current_snapshot, prev_embeddings, filtered_token_ids=filtered_tokens)
-                                entropy = analyzer.analyze_attention_entropy((X_val, Y_val))
+                                entropy = analyzer.analyze_attention_entropy(X_val)
                                 results['attention_entropy'] = entropy
                                 results['iter_num'] = iter_num
                                 print(f"Analyzing {len(filtered_tokens)} filtered embeddings out of {len(filtered_tokens) + int(len(filtered_tokens) * config.ignored_outlayers_sum / (1 - config.ignored_outlayers_sum))} total")
@@ -429,65 +441,19 @@ def main():
                                 try:
                                     results = fut.result()
                                     iter_num = results['iter_num']
-                                    attention_entropy = results['attention_entropy']
                                     
-                                    # Format output to match original train.py exactly
-                                    log_messages = []
-                                    log_messages.append(f"\n--- ASYNC ANALYSIS RESULTS FOR ITERATION {iter_num} ---")
-                                    
-                                    # Parse and format geometry results
-                                    if 'geometry' in results:
-                                        geom = results['geometry']
-                                        if 'embeddings' in geom:
-                                            emb = geom['embeddings']
-                                            if 'local_density' in emb:
-                                                ld = emb['local_density']
-                                                log_messages.append(f"  [Embeddings Geometry] Avg Neighbors: {ld['average_neighborhood_size']:.2f} 10th-90th-99th Percentile: {ld['neighbor_10th_percentile']:.4f} - {ld['neighbor_90th_percentile']:.4f} - {ld['neighbor_99th_percentile']:.4f} ")
-                                            if 'global_sparsity' in emb:
-                                                gs = emb['global_sparsity']
-                                                log_messages.append(f"  [Embeddings Geometry] Mean Similarity: {gs['mean_similarity']:.4f} Std Similarity: {gs['std_similarity']:.4f} | 10th-90th Percentile: {gs['similarity_10th_percentile']:.4f} - {gs['similarity_90th_percentile']:.4f}")
-                                            if 'analysis_info' in emb:
-                                                ai = emb['analysis_info']
-                                                filtered_str = "True" if ai.get('filtered', False) else "False"
-                                                log_messages.append(f"  [Embeddings Analysis] Analyzed: {ai['num_embeddings_analyzed']}/{ai['total_embeddings']} embeddings | Filtered: {filtered_str}")
-                                        
-                                        # Format FFN ranks
-                                        if 'ffn_ranks' in geom:
-                                            for layer, rank_info in geom['ffn_ranks'].items():
-                                                layer_num = layer.split('_')[1]
-                                                log_messages.append(f"  [FFN Rank L{layer_num}] Utilization: {rank_info['utilization']*100:.2f}% ({rank_info['effective_rank']}/{rank_info['full_rank']})")
-                                        
-                                        # Format attention ranks
-                                        if 'attn_ranks' in geom:
-                                            for layer, attn_info in geom['attn_ranks'].items():
-                                                layer_num = layer.split('_')[1]
-                                                for head_type, rank_info in attn_info.items():
-                                                    log_messages.append(f"  [Attn {head_type} L{layer_num}] Utilization: {rank_info['utilization']*100:.2f}% ({rank_info['effective_rank']}/{rank_info['full_rank']})")
-                                    
-                                    # Format drift results if available
-                                    if 'drift' in results and prev_embeddings is not None:
-                                        drift = results['drift']
-                                        if 'embeddings' in drift:
-                                            emb_drift = drift['embeddings']
-                                            log_messages.append(f"  [Embeddings Drift] Avg Cosine Sim: {emb_drift['avg_cosine_similarity']:.4f} | 10th Percentile: {emb_drift['cosine_sim_10th_percentile']:.4f} | 90th Percentile: {emb_drift['cosine_sim_90th_percentile']:.4f}")
-                                        # Add other drift metrics
-                                        for key, drift_data in drift.items():
-                                            if key != 'embeddings' and isinstance(drift_data, dict):
-                                                if 'avg_cosine_similarity' in drift_data:
-                                                    log_messages.append(f"  [{key.replace('.', ' ').title()} Drift] Avg Cosine Sim: {drift_data['avg_cosine_similarity']:.4f} | 10th Percentile: {drift_data['cosine_sim_10th_percentile']:.4f}")
-                                    
-                                    log_messages.append("--- END OF ASYNC ANALYSIS RESULTS ---")
-                                    
-                                    # Print all messages
-                                    for msg in log_messages:
-                                        print(msg)
+                                    # Use the utility function for consistent formatting
+                                    log_messages = format_analysis_results(
+                                        results, iter_num, 
+                                        config=config, 
+                                        wandb=wandb if config.wandb_log else None, 
+                                        WANDB_AVAILABLE=WANDB_AVAILABLE
+                                    )
                                     
                                     # Log to file if logging is enabled
                                     if master_process and training_logger:
                                         for msg in log_messages:
                                             training_logger.log(msg)
-                                    
-                                    print()  # Extra newline like original
                                     
                                 except Exception as e:
                                     print(f"\n--- ERROR in analysis callback: {e} ---\n")
@@ -509,8 +475,8 @@ def main():
                             print(f"ERROR dispatching async analysis for iter {iter_num}: {dispatch_error}")
 
                 # Save checkpoint if this is the best model
-                if val_loss < best_val_loss or config.always_save_checkpoint:
-                    best_val_loss = val_loss
+                if losses['val'] < best_val_loss or config.always_save_checkpoint:
+                    best_val_loss = losses['val']
                     if iter_num > 0:
                         checkpoint = {
                             'model': (model.module if ddp else model).state_dict(),
@@ -527,7 +493,8 @@ def main():
         # Execute scheduled operations
         if training_scheduler and master_process:
             with timing_profiler.time_section("operations"):
-                val_loss = estimate_loss(model, get_val_batch_fn, config.eval_iters, device_type, config.dtype)
+                val_losses = estimate_loss(model, {'val': get_val_batch_fn}, config.eval_iters, device_type, config.dtype)
+                val_loss = val_losses['val']
                 
                 model, optimizer, hyperparameter_updates = training_scheduler.check_and_execute_operations(
                     iter_num=iter_num,
@@ -582,7 +549,7 @@ def main():
                     loss = loss / config.gradient_accumulation_steps
                 
                 # Get next batch asynchronously
-                X, Y = batch_manager.get_batch()
+                X, Y = batch_manager.get_next_batch()
                 
                 # Backward pass
                 loss.backward()

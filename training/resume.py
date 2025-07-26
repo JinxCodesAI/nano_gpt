@@ -104,11 +104,16 @@ def apply_model_parameter_overrides(
             checkpoint_value = checkpoint_model_args[param]
             current_value = getattr(config, param, None)
             
-            if current_value != checkpoint_value:
+            # Special handling for vocab_size - if current value is None, use checkpoint value
+            if param == 'vocab_size' and current_value is None:
+                checkpoint_model_args[param] = checkpoint_value
+            elif current_value != checkpoint_value and current_value is not None:
                 config_changes.append(f"{param}: {checkpoint_value} -> {current_value}")
                 print(f"Overriding {param}: {checkpoint_value} -> {current_value}")
                 checkpoint_model_args[param] = current_value  # Use current config value
-            # If no override specified, keep checkpoint value (already in checkpoint_model_args)
+            else:
+                # If no override specified, keep checkpoint value (already in checkpoint_model_args)
+                pass
     
     # Force update of base architecture from checkpoint for parameters not overridden
     base_arch_params = ['n_layer', 'n_head', 'n_embd', 'block_size', 'bias', 'vocab_size', 'n_hidden']

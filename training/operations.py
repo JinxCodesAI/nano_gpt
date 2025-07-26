@@ -257,8 +257,7 @@ def execute_operation(op: Dict[str, Any], trigger_reason: str, current_val_loss:
                 else:
                     # Legacy support - use current_batch_size from training loop or op_value
                     batch_size_to_use = current_batch_size or op_value or 32
-                    max_batch_size = 1024
-                    target_vram_percent = 82.0
+                    target_vram_percent = 50
                 
                 optimal_batch_size = calculate_optimal_batch_size(
                     unwrapped_model, batch_size_to_use, max_batch_size, 

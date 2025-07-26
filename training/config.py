@@ -200,6 +200,9 @@ class TrainingConfig:
 
 def load_scaling_schedule(file_path: str, init_from: str) -> List[Dict[str, Any]]:
     """Load scaling schedule from file."""
+    print(f"DEBUG: Attempting to load scaling schedule from: {file_path}")
+    print(f"DEBUG: File exists: {os.path.exists(file_path)}")
+    
     if not os.path.exists(file_path):
         print(f"Scaling schedule file not found: {file_path}")
         return []
@@ -207,18 +210,25 @@ def load_scaling_schedule(file_path: str, init_from: str) -> List[Dict[str, Any]
     try:
         with open(file_path, 'r') as f:
             if file_path.endswith('.yaml') or file_path.endswith('.yml'):
+                print("DEBUG: Loading as YAML")
                 data = yaml.safe_load(f)
             elif file_path.endswith('.json'):
+                print("DEBUG: Loading as JSON")
                 data = json.load(f)
             else:
                 print(f"Unsupported scaling schedule file format: {file_path}")
                 return []
         
+        print(f"DEBUG: Loaded data type: {type(data)}")
+        print(f"DEBUG: Data content (first 200 chars): {str(data)[:200]}")
+        
         # Extract operations from the data structure
         if isinstance(data, dict) and 'operations' in data:
             operations = data['operations']
+            print("DEBUG: Found operations in dict structure")
         elif isinstance(data, list):
             operations = data
+            print("DEBUG: Data is already a list of operations")
         else:
             print("Invalid scaling schedule format: expected list of operations or dict with 'operations' key")
             return []

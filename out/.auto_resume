@@ -1,0 +1,2 @@
+init_from=resume
+final_wandb_run_name=None

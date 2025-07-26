@@ -281,7 +281,7 @@ class BatchManager:
             
             time.sleep(0.01)  # Small sleep to prevent busy waiting
     
-    def get_batch(self):
+    def get_next_batch(self):
         """Get the next training batch from the high-performance buffer."""
         # Wait for at least one batch to be available
         while len(self.candidate_buffer) == 0:
@@ -393,26 +393,30 @@ def get_lr(it: int, learning_rate: float, warmup_iters: int, lr_decay_iters: int
     return min_lr + coeff * (learning_rate - min_lr)
 
 
-def estimate_loss(model, get_val_batch_fn: Callable, eval_iters: int, 
-                 device_type: str, dtype: str) -> float:
-    """Estimate validation loss by averaging over multiple batches."""
+def estimate_loss(model, get_batch_fns: Dict[str, Callable], eval_iters: int, 
+                 device_type: str, dtype: str) -> Dict[str, float]:
+    """Estimate loss for train and val splits by averaging over multiple batches."""
+    out = {}
     model.eval()
-    losses = torch.zeros(eval_iters)
-    
-    # Determine context and autocast settings
-    ctx = nullcontext() if device_type == 'cpu' else torch.amp.autocast(
-        device_type=device_type, dtype=torch.bfloat16 if dtype == 'bfloat16' else torch.float16
-    )
-    
-    with torch.no_grad():
-        for k in range(eval_iters):
-            X, Y = get_val_batch_fn()
-            with ctx:
-                logits, loss = model(X, Y)
-            losses[k] = loss.item()
+    for split, get_batch_fn in get_batch_fns.items():
+        losses = torch.zeros(eval_iters)
+        
+        # Determine context and autocast settings
+        ctx = nullcontext() if device_type == 'cpu' else torch.amp.autocast(
+            device_type=device_type, dtype=torch.bfloat16 if dtype == 'bfloat16' else torch.float16
+        )
+        
+        with torch.no_grad():
+            for k in range(eval_iters):
+                X, Y = get_batch_fn()
+                with ctx:
+                    logits, loss = model(X, Y)
+                losses[k] = loss.item()
+        
+        out[split] = losses.mean().item()
     
     model.train()
-    return losses.mean().item()
+    return out
 
 
 def print_timings(timing_profiler: TimingProfiler, training_logger, master_process: bool = True):
@@ -470,21 +474,32 @@ def format_time(seconds: float) -> str:
         return f"{hours:.1f}h"
 
 
-def get_vram_usage():
-    """
-    Get current VRAM usage statistics.
-    
-    Returns:
-        Tuple of (reserved_gb, total_gb, used_percent)
-    """
+def get_detailed_vram_usage():
+    """Get detailed VRAM breakdown for debugging"""
     if torch.cuda.is_available():
         allocated = torch.cuda.memory_allocated() / 1024**3  # GB
-        reserved = torch.cuda.memory_reserved() / 1024**3     # GB
+        reserved = torch.cuda.memory_reserved() / 1024**3     # GB  
         total = torch.cuda.get_device_properties(0).total_memory / 1024**3  # GB
+        free = total - reserved
         
-        # Use reserved memory as it's more accurate for actual GPU usage
-        used_percent = (reserved / total) * 100
-        
+        return {
+            'allocated_gb': allocated,
+            'reserved_gb': reserved, 
+            'free_gb': free,
+            'total_gb': total,
+            'allocated_percent': (allocated / total) * 100,
+            'reserved_percent': (reserved / total) * 100
+        }
+    return None
+
+def get_vram_usage():
+    usage = get_detailed_vram_usage();
+    if usage == None:
+        return 0,0,0
+    else:
+        reserved = usage['reserved_gb']
+        total = usage['total_gb']
+        used_percent = usage['allocated_percent']
         return reserved, total, used_percent  # Return reserved instead of allocated
     return 0, 0, 0
 
@@ -518,8 +533,8 @@ def calculate_relative_batch_size(current_batch_size: int, scale_factor: float,
     return new_batch_size
 
 
-def calculate_optimal_batch_size(model, current_batch_size: int, max_batch_size: int = 1024, 
-                               target_vram_percent: float = 82.0, device_type: str = 'cuda',
+def calculate_optimal_batch_size(model, current_batch_size: int, 
+                               target_vram_percent: float = 50.0, device_type: str = 'cuda',
                                master_process: bool = True) -> int:
     """
     Calculate optimal batch size based on an analytical model of memory usage.
@@ -537,7 +552,10 @@ def calculate_optimal_batch_size(model, current_batch_size: int, max_batch_size:
 
         # 2. Estimate memory for gradients and optimizer state (AdamW with fp32 states)
         num_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
-        grad_optim_mem_gb = (num_params * 4 * 3) / (1024**3) # Grads (1x) + Adam States (2x)
+        print(f"Num params: {num_params}")
+        # Grads (1x), Adam exp_avg (1x), Adam exp_avg_sq (1x) = 3x model params
+        # Assuming optimizer states are float32 (4 bytes)
+        grad_optim_mem_gb = (num_params * 4 * 3) / (1024**3)
 
         # 3. Estimate memory available for activations
         target_vram_gb = total_vram * (target_vram_percent / 100.0)
@@ -578,7 +596,6 @@ def calculate_optimal_batch_size(model, current_batch_size: int, max_batch_size:
 
         # 6. Round to a reasonable number (multiple of 8) and clamp
         new_batch_size = max(8, int(estimated_batch_size // 8) * 8)
-        new_batch_size = min(new_batch_size, max_batch_size)
 
         if master_process:
             print(f"Selected new batch size: {new_batch_size}")
@@ -589,3 +606,116 @@ def calculate_optimal_batch_size(model, current_batch_size: int, max_batch_size:
         if master_process:
             print(f"Error during optimal batch size calculation: {e}. Falling back to current batch size.")
         return current_batch_size
+
+
+def format_analysis_results(results, iter_num, config=None, wandb=None, WANDB_AVAILABLE=False):
+    """
+    Format and display analysis results consistently across training scripts.
+    
+    Args:
+        results: Analysis results dictionary
+        iter_num: Current iteration number
+        config: Training configuration (optional, for wandb logging)
+        wandb: wandb module (optional, for logging)
+        WANDB_AVAILABLE: Whether wandb is available
+    
+    Returns:
+        List of log messages for file logging
+    """
+    attention_entropy = results.get('attention_entropy', 0.0)
+    
+    # Format output to match original train.py exactly
+    print(f"\n--- ASYNC ANALYSIS RESULTS FOR ITERATION {iter_num} ---")
+    
+    # Prepare log messages for file logging
+    log_messages = []
+    log_messages.append(f"--- ASYNC ANALYSIS RESULTS FOR ITERATION {iter_num} ---")
+    
+    # --- Report Geometry & Rank Results ---
+    if 'geometry' in results:
+        geo = results['geometry']
+        
+        # Embedding Geometry Analysis
+        if 'embeddings' in geo and geo['embeddings']:
+            emb_geo = geo['embeddings']
+            mean_sim = emb_geo['global_sparsity']['mean_similarity']
+            std_sim = emb_geo['global_sparsity']['std_similarity']
+            sim_10th = emb_geo['global_sparsity']['similarity_10th_percentile']
+            sim_90th = emb_geo['global_sparsity']['similarity_90th_percentile']
+            avg_neighbors = emb_geo['local_density']['average_neighborhood_size']
+            nbhd_10th = emb_geo['local_density']['neighbor_10th_percentile']
+            nbhd_90th = emb_geo['local_density']['neighbor_90th_percentile']
+            nbhd_99th = emb_geo['local_density']['neighbor_99th_percentile']
+            
+            # Analysis info
+            analysis_info = emb_geo.get('analysis_info', {})
+            num_analyzed = analysis_info.get('num_embeddings_analyzed', 'N/A')
+            total_embeddings = analysis_info.get('total_embeddings', 'N/A')
+            is_filtered = analysis_info.get('filtered', False)
+            
+            geom_msg1 = f"  [Embeddings Geometry] Avg Neighbors: {avg_neighbors:.2f} 10th-90th-99th Percentile: {nbhd_10th:.4f} - {nbhd_90th:.4f} - {nbhd_99th:.4f} "
+            geom_msg2 = f"  [Embeddings Geometry] Mean Similarity: {mean_sim:.4f} Std Similarity: {std_sim:.4f} | 10th-90th Percentile: {sim_10th:.4f} - {sim_90th:.4f}"
+            geom_msg3 = f"  [Embeddings Analysis] Analyzed: {num_analyzed}/{total_embeddings} embeddings | Filtered: {is_filtered}"
+            print(geom_msg1)
+            print(geom_msg2)
+            print(geom_msg3)
+            log_messages.append(geom_msg1)
+            log_messages.append(geom_msg2)
+            log_messages.append(geom_msg3)
+            
+            # Wandb logging
+            if config and hasattr(config, 'wandb_log') and config.wandb_log and wandb and WANDB_AVAILABLE:
+                wandb_data = {
+                    "analysis/embed/geom_avg_neighbors": avg_neighbors,
+                    "analysis/embed/geom_mean_sim": mean_sim,
+                    "analysis/embed/geom_std_sim": std_sim,
+                    "analysis/embed/geom_sim_10th": sim_10th,
+                    "analysis/embed/geom_sim_90th": sim_90th
+                }
+                if isinstance(num_analyzed, (int, float)):
+                    wandb_data["analysis/embed/num_embeddings_analyzed"] = num_analyzed
+                if isinstance(total_embeddings, (int, float)):
+                    wandb_data["analysis/embed/total_embeddings"] = total_embeddings
+                wandb_data["analysis/embed/filtered"] = is_filtered
+                wandb.log(wandb_data, step=iter_num)
+        
+        # FFN Rank Analysis
+        if 'ffn_ranks' in geo:
+            num_layers = len(geo['ffn_ranks'])
+            layers_to_log = {0, num_layers // 2, num_layers - 1}
+            for i in layers_to_log:
+                rank_info = geo['ffn_ranks'].get(f'layer_{i}')
+                if rank_info:
+                    util = rank_info['utilization']
+                    eff_rank = rank_info['effective_rank']
+                    full_rank = rank_info['full_rank']
+                    ffn_msg = f"  [FFN Rank L{i}] Utilization: {util:.2%} ({eff_rank}/{full_rank})"
+                    print(ffn_msg)
+                    log_messages.append(ffn_msg)
+                    if config and hasattr(config, 'wandb_log') and config.wandb_log and wandb and WANDB_AVAILABLE: 
+                        wandb.log({f"analysis/ffn/rank_util_L{i}": util}, step=iter_num)
+        
+        # Attention Rank Analysis
+        if 'attn_ranks' in geo:
+            num_layers = len(geo['attn_ranks'])
+            layers_to_log = {0, num_layers // 2, num_layers - 1}
+            for i in layers_to_log:
+                attn_info = geo['attn_ranks'].get(f'layer_{i}')
+                if attn_info:
+                    for component in ['Q', 'K', 'V']:
+                        comp_info = attn_info.get(component)
+                        if comp_info:
+                            util = comp_info['utilization']
+                            eff_rank = comp_info['effective_rank']
+                            full_rank = comp_info['full_rank']
+                            attn_msg = f"  [Attn {component} L{i}] Utilization: {util:.2%} ({eff_rank}/{full_rank})"
+                            print(attn_msg)
+                            log_messages.append(attn_msg)
+                            if config and hasattr(config, 'wandb_log') and config.wandb_log and wandb and WANDB_AVAILABLE:
+                                wandb.log({f"analysis/attn/{component}_util_L{i}": util}, step=iter_num)
+    
+    end_msg = "--- END OF ASYNC ANALYSIS RESULTS ---"
+    print(end_msg + "\n")
+    log_messages.append(end_msg)
+    
+    return log_messages
