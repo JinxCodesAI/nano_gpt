@@ -522,16 +522,16 @@ def calculate_optimal_batch_size(model, current_batch_size: int, max_batch_size:
                                target_vram_percent: float = 82.0, device_type: str = 'cuda',
                                master_process: bool = True) -> int:
     """
-    Calculate optimal batch size based on VRAM usage, using a dry run to be more accurate.
+    Calculate optimal batch size based on an analytical model of memory usage.
     """
     if device_type != 'cuda' or not torch.cuda.is_available():
         return current_batch_size
 
     if master_process:
-        print("Calculating optimal batch size with a dry run...")
+        print("Calculating optimal batch size with an analytical model...")
 
     try:
-        # 1. Get base memory usage (model weights, etc.)
+        # 1. Get base memory usage (model weights)
         torch.cuda.empty_cache()
         base_mem_gb, total_vram, _ = get_vram_usage()
 
@@ -548,42 +548,35 @@ def calculate_optimal_batch_size(model, current_batch_size: int, max_batch_size:
         
         if available_mem_for_activations <= 0:
             if master_process:
-                print("Warning: Not enough memory for model, gradients, and optimizer state even before activations.")
-            return 8 # Return a very small batch size
+                print("Warning: Not enough memory for model, gradients, and optimizer state.")
+            return 8
 
-        # 4. Dry run a forward pass to find activation memory per sample
-        probe_batch_size = 8 # Use a small, safe batch size
-        dummy_input = torch.randint(0, model.config.vocab_size, (probe_batch_size, model.config.block_size), device=next(model.parameters()).device)
-        
-        torch.cuda.synchronize()
-        torch.cuda.reset_peak_memory_stats()
-        
-        # Forward pass
-        _ = model(dummy_input)
-        
-        torch.cuda.synchronize()
-        peak_mem_gb = torch.cuda.max_memory_reserved() / (1024**3)
-        
-        activation_mem_for_probe_batch = peak_mem_gb - base_mem_gb
-        activation_mem_per_sample = activation_mem_for_probe_batch / probe_batch_size
-        
-        # Cleanup
-        del dummy_input
-        torch.cuda.empty_cache()
+        # 4. Analytically estimate activation memory per sample
+        cfg = model.config
+        L, C, T, H = cfg.n_layer, cfg.n_embd, cfg.block_size, cfg.n_head
+        C_hidden = cfg.n_hidden if cfg.n_hidden is not None else 4 * C
+        ptdtype_bytes = 4 if model.lm_head.weight.dtype == torch.float32 else 2
 
-        if activation_mem_per_sample <= 1e-6: # Check for near-zero value
+        # Simplified formula for activation memory per sample (in bytes)
+        # This is a well-known approximation for transformer models.
+        # It accounts for major tensors saved for the backward pass.
+        # Ref: https://arxiv.org/abs/2205.05198 (Appendix D)
+        activation_mem_per_sample_bytes = T * C * L * (10 + (24 * C) / (T * H)) * ptdtype_bytes
+        activation_mem_per_sample_gb = activation_mem_per_sample_bytes / (1024**3)
+
+        if activation_mem_per_sample_gb <= 1e-6:
             if master_process:
-                print("Warning: Activation memory per sample is negligible. Using previous batch size.")
+                print("Warning: Analytical activation memory per sample is negligible. Using previous batch size.")
             return current_batch_size
 
         # 5. Estimate optimal batch size
-        estimated_batch_size = int(available_mem_for_activations / activation_mem_per_sample)
+        estimated_batch_size = int(available_mem_for_activations / activation_mem_per_sample_gb)
         
         if master_process:
             print(f"Base memory (model): {base_mem_gb:.2f}GB")
             print(f"Est. Grad/Optim memory: {grad_optim_mem_gb:.2f}GB")
             print(f"Available for activations: {available_mem_for_activations:.2f}GB")
-            print(f"Activation memory per sample: {activation_mem_per_sample * 1024:.2f}MB")
+            print(f"Analytical activation memory per sample: {activation_mem_per_sample_gb * 1024:.2f}MB")
             print(f"Raw estimated optimal batch size: {estimated_batch_size}")
 
         # 6. Round to a reasonable number (multiple of 8) and clamp
