@@ -314,6 +314,7 @@ def main():
     # Wrap model in DDP
     if ddp:
         model = DDP(model, device_ids=[ddp_local_rank])
+        config.gradient_accumulation_steps //= ddp_world_size
     
     # Initialize timing profiler
     timing_profiler = TimingProfiler()
