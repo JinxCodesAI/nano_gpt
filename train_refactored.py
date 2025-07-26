@@ -357,14 +357,18 @@ def main():
         # Evaluate model periodically
         if iter_num % config.eval_interval == 0 and master_process:
             with timing_profiler.time_section("evaluation"):
-                val_loss = estimate_loss(model, get_val_batch_fn, config.eval_iters, device_type, config.dtype)
+                losses = estimate_loss(
+                    model,
+                    {'train': batch_manager.get_batch, 'val': get_val_batch_fn},
+                    config.eval_iters, device_type, config.dtype
+                )
                 
                 # Calculate tokens per second using batch_manager's served count
                 elapsed_time_seconds = time.time() - eval_start_time if 'eval_start_time' in locals() else time.time() - t0
                 tokens_per_second = batch_manager.total_tokens_served / elapsed_time_seconds if elapsed_time_seconds > 0 else 0
                 eval_start_time = time.time()  # Reset for next interval
                 
-                print(f"step {iter_num}: train loss {val_loss:.4f}, val loss {val_loss:.4f}, lr: {lr:.4f}, tokens/sec {tokens_per_second:.0f}")
+                print(f"step {iter_num}: train loss {losses['train']:.4f}, val loss {losses['val']:.4f}, lr: {lr:.4f}, tokens/sec {tokens_per_second:.0f}")
                 
                 # Add timing breakdown output
                 timing_breakdown = timing_profiler.get_breakdown_percentages()
@@ -375,7 +379,7 @@ def main():
 
                 # File logging  
                 if training_logger:
-                    training_logger.log_step(iter_num, val_loss, val_loss, tokens_per_second)
+                    training_logger.log_step(iter_num, losses['train'], losses['val'], tokens_per_second)
                     # Log timing breakdown
                     if timing_breakdown:
                         timing_str = ", ".join([f"{k} {v:.1f}%" for k, v in timing_breakdown.items()])
@@ -385,7 +389,8 @@ def main():
                 if config.wandb_log and WANDB_AVAILABLE:
                     wandb_metrics = {
                         "iter": iter_num,
-                        "val/loss": val_loss,
+                        "train/loss": losses['train'],
+                        "val/loss": losses['val'],
                         "lr": lr,
                         "mfu": running_mfu * 100 if running_mfu > 0 else 0
                     }
@@ -509,8 +514,8 @@ def main():
                             print(f"ERROR dispatching async analysis for iter {iter_num}: {dispatch_error}")
 
                 # Save checkpoint if this is the best model
-                if val_loss < best_val_loss or config.always_save_checkpoint:
-                    best_val_loss = val_loss
+                if losses['val'] < best_val_loss or config.always_save_checkpoint:
+                    best_val_loss = losses['val']
                     if iter_num > 0:
                         checkpoint = {
                             'model': (model.module if ddp else model).state_dict(),

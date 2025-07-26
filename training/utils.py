@@ -393,26 +393,30 @@ def get_lr(it: int, learning_rate: float, warmup_iters: int, lr_decay_iters: int
     return min_lr + coeff * (learning_rate - min_lr)
 
 
-def estimate_loss(model, get_val_batch_fn: Callable, eval_iters: int, 
-                 device_type: str, dtype: str) -> float:
-    """Estimate validation loss by averaging over multiple batches."""
+def estimate_loss(model, get_batch_fns: Dict[str, Callable], eval_iters: int, 
+                 device_type: str, dtype: str) -> Dict[str, float]:
+    """Estimate loss for train and val splits by averaging over multiple batches."""
+    out = {}
     model.eval()
-    losses = torch.zeros(eval_iters)
-    
-    # Determine context and autocast settings
-    ctx = nullcontext() if device_type == 'cpu' else torch.amp.autocast(
-        device_type=device_type, dtype=torch.bfloat16 if dtype == 'bfloat16' else torch.float16
-    )
-    
-    with torch.no_grad():
-        for k in range(eval_iters):
-            X, Y = get_val_batch_fn()
-            with ctx:
-                logits, loss = model(X, Y)
-            losses[k] = loss.item()
+    for split, get_batch_fn in get_batch_fns.items():
+        losses = torch.zeros(eval_iters)
+        
+        # Determine context and autocast settings
+        ctx = nullcontext() if device_type == 'cpu' else torch.amp.autocast(
+            device_type=device_type, dtype=torch.bfloat16 if dtype == 'bfloat16' else torch.float16
+        )
+        
+        with torch.no_grad():
+            for k in range(eval_iters):
+                X, Y = get_batch_fn()
+                with ctx:
+                    logits, loss = model(X, Y)
+                losses[k] = loss.item()
+        
+        out[split] = losses.mean().item()
     
     model.train()
-    return losses.mean().item()
+    return out
 
 
 def print_timings(timing_profiler: TimingProfiler, training_logger, master_process: bool = True):
@@ -493,9 +497,9 @@ def get_vram_usage():
     if usage == None:
         return 0,0,0
     else:
-        reserved = usage.reserved_gb
-        total = usage.total_gb
-        used_percent = usage.allocated_percent
+        reserved = usage['reserved_gb']
+        total = usage['total_gb']
+        used_percent = usage['allocated_percent']
         return reserved, total, used_percent  # Return reserved instead of allocated
     return 0, 0, 0
 
