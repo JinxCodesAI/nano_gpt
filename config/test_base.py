@@ -3,14 +3,14 @@
 # This is NOT for achieving a good loss, but for verifying functionality.
 
 device = 'cpu'
-init_from = 'resume'
+init_from = 'scratch'
 out_dir = 'test-base'
 wandb_log = False # Disable wandb for quick tests
 wandb_project = 'owt-test'
 wandb_run_name='orchestrator-test'
 
 # Make the model very small for fast initialization and training
-n_layer = 4
+n_layer = 1
 n_head = 4
 n_embd = 128
 n_hidden = 256 # Explicitly set for clarity
@@ -29,5 +29,6 @@ log_interval = 5
 
 # For debugging, it's often better to disable compile to get clearer stack traces
 compile = False
+scaling_schedule_file = 'configs/test_base_example.json'
 
     

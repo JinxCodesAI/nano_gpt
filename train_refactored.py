@@ -257,11 +257,16 @@ def main():
     
     # Initialize schedulers and monitors
     training_scheduler = None
+    print(f"DEBUG: config.scaling_schedule = {config.scaling_schedule}")
+    print(f"DEBUG: type = {type(config.scaling_schedule)}, len = {len(config.scaling_schedule) if config.scaling_schedule else 'None'}")
     if config.scaling_schedule:
+        print("DEBUG: Initializing TrainingScheduler")
         training_scheduler = TrainingScheduler(config.scaling_schedule, training_logger)
         if master_process:
             target_config = calculate_and_log_target_architecture(model.config, config.scaling_schedule)
             config.target_architecture_config = target_config
+    else:
+        print("DEBUG: No scaling schedule - training_scheduler remains None")
     
     lr_scheduler = LearningRateScheduler(
         learning_rate=config.learning_rate,
@@ -488,7 +493,8 @@ def main():
         # Execute scheduled operations
         if training_scheduler and master_process:
             with timing_profiler.time_section("operations"):
-                val_loss = estimate_loss(model, get_val_batch_fn, config.eval_iters, device_type, config.dtype)
+                val_losses = estimate_loss(model, {'val': get_val_batch_fn}, config.eval_iters, device_type, config.dtype)
+                val_loss = val_losses['val']
                 
                 model, optimizer, hyperparameter_updates = training_scheduler.check_and_execute_operations(
                     iter_num=iter_num,
