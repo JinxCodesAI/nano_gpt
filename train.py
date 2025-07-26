@@ -1441,36 +1441,28 @@ def execute_operation(op, trigger_reason, current_val_loss, iter_num, target_arc
                 else:
                     # Legacy support - use current batch_size or op_value
                     batch_size_to_use = batch_size or op_value or 32
-                    max_batch_size = 1024
-                    target_vram_percent = 82.0
+                    target_vram_percent = 50
                 
-                try:
-                    optimal_batch_size = calculate_optimal_batch_size(
-                        unwrapped_model, batch_size_to_use, max_batch_size, 
-                        target_vram_percent, device_type, master_process
-                    )
+                optimal_batch_size = calculate_optimal_batch_size(
+                    unwrapped_model, batch_size_to_use, 
+                    target_vram_percent, device_type, master_process
+                )
                     
-                    if master_process:
-                        print(f"Calculated optimal batch size: {optimal_batch_size}")
-                        print(f"Batch size: {batch_size} -> {optimal_batch_size}")
+                if master_process:
+                    print(f"Calculated optimal batch size: {optimal_batch_size}")
+                    print(f"Batch size: {batch_size} -> {optimal_batch_size}")
                     
-                    batch_size = optimal_batch_size
+                batch_size = optimal_batch_size
                     
-                    if device_type == 'cuda':
-                        if master_process: print("Clearing CUDA cache after batch size adjustment...")
-                        torch.cuda.empty_cache()
+                if device_type == 'cuda':
+                    if master_process: print("Clearing CUDA cache after batch size adjustment...")
+                    torch.cuda.empty_cache()
 
-                    if master_process: 
-                        training_logger.log_operation_success(iter_num, op_name, 
-                                                            {'calculated_batch_size': optimal_batch_size,
-                                                             'original_batch_size': batch_size_to_use})}
-                except NameError:
-                    # Fallback if calculate_optimal_batch_size is not available
-                    if master_process:
-                        print("Warning: calculate_optimal_batch_size not available, keeping current batch size")
-                        training_logger.log_operation_success(iter_num, op_name, 
-                                                            {'message': 'Operation skipped - function not available'})}
-            
+                if master_process: 
+                    training_logger.log_operation_success(iter_num, op_name, 
+                                                        {'calculated_batch_size': optimal_batch_size,
+                                                         'original_batch_size': batch_size_to_use})}
+                
             elif op_name == 'set_batch_size_relative':
                 batch_size_to_use = batch_size
                 scale_factor = op_value
@@ -1623,38 +1615,9 @@ if master_process and file_logging:
 # VRAM monitoring
 # Import shared VRAM utilities
 try:
-    from training.utils import get_vram_usage, calculate_relative_batch_size, calculate_optimal_batch_size
+    from training.utils import get_vram_usage get_detailed_vram_usage, calculate_relative_batch_size, calculate_optimal_batch_size
 except ImportError:
     # Fallback implementation if training.utils is not available
-    def get_vram_usage():
-        if torch.cuda.is_available():
-            allocated = torch.cuda.memory_allocated() / 1024**3  # GB
-            reserved = torch.cuda.memory_reserved() / 1024**3     # GB  
-            total = torch.cuda.get_device_properties(0).total_memory / 1024**3  # GB
-            
-            # Use reserved memory as it's more accurate for actual GPU usage
-            used_percent = (reserved / total) * 100
-            
-            return reserved, total, used_percent  # Return reserved instead of allocated
-        return 0, 0, 0
-
-def get_detailed_vram_usage():
-    """Get detailed VRAM breakdown for debugging"""
-    if torch.cuda.is_available():
-        allocated = torch.cuda.memory_allocated() / 1024**3  # GB
-        reserved = torch.cuda.memory_reserved() / 1024**3     # GB  
-        total = torch.cuda.get_device_properties(0).total_memory / 1024**3  # GB
-        free = total - reserved
-        
-        return {
-            'allocated_gb': allocated,
-            'reserved_gb': reserved, 
-            'free_gb': free,
-            'total_gb': total,
-            'allocated_percent': (allocated / total) * 100,
-            'reserved_percent': (reserved / total) * 100
-        }
-    return None
 
 while True:
     # Start timing the training iteration
@@ -1964,11 +1927,9 @@ while True:
         
         print(f"iter {iter_num}: loss {lossf:.4f}, lr {lr:.5f}, time {avg_time_ms:.2f}ms, mfu {mfu_percent:.2f}%, VRAM {vram_used:.1f}/{vram_total:.1f}GB ({vram_percent:.1f}%)")
         
-        # Debug VRAM for first few iterations
-        if iter_num <= 50 and iter_num % log_interval == 0:
-            detailed_vram = get_detailed_vram_usage()
-            if detailed_vram:
-                print(f"  [VRAM Debug] Allocated: {detailed_vram['allocated_gb']:.3f}GB ({detailed_vram['allocated_percent']:.1f}%), Reserved: {detailed_vram['reserved_gb']:.3f}GB ({detailed_vram['reserved_percent']:.1f}%)")
+        detailed_vram = get_detailed_vram_usage()
+        if detailed_vram and vram_debug:
+            print(f"  [VRAM Debug] Allocated: {detailed_vram['allocated_gb']:.3f}GB ({detailed_vram['allocated_percent']:.1f}%), Reserved: {detailed_vram['reserved_gb']:.3f}GB ({detailed_vram['reserved_percent']:.1f}%)")
         
         # MFU stats logging to dedicated file
         if file_logging:

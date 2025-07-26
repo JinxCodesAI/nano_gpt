@@ -470,21 +470,32 @@ def format_time(seconds: float) -> str:
         return f"{hours:.1f}h"
 
 
-def get_vram_usage():
-    """
-    Get current VRAM usage statistics.
-    
-    Returns:
-        Tuple of (reserved_gb, total_gb, used_percent)
-    """
+def get_detailed_vram_usage():
+    """Get detailed VRAM breakdown for debugging"""
     if torch.cuda.is_available():
         allocated = torch.cuda.memory_allocated() / 1024**3  # GB
-        reserved = torch.cuda.memory_reserved() / 1024**3     # GB
+        reserved = torch.cuda.memory_reserved() / 1024**3     # GB  
         total = torch.cuda.get_device_properties(0).total_memory / 1024**3  # GB
+        free = total - reserved
         
-        # Use reserved memory as it's more accurate for actual GPU usage
-        used_percent = (reserved / total) * 100
-        
+        return {
+            'allocated_gb': allocated,
+            'reserved_gb': reserved, 
+            'free_gb': free,
+            'total_gb': total,
+            'allocated_percent': (allocated / total) * 100,
+            'reserved_percent': (reserved / total) * 100
+        }
+    return None
+
+def get_vram_usage():
+    usage = get_detailed_vram_usage();
+    if usage == None:
+        return 0,0,0
+    else:
+        reserved = usage.reserved_gb
+        total = usage.total_gb
+        used_percent = usage.allocated_percent
         return reserved, total, used_percent  # Return reserved instead of allocated
     return 0, 0, 0
 
@@ -518,8 +529,8 @@ def calculate_relative_batch_size(current_batch_size: int, scale_factor: float,
     return new_batch_size
 
 
-def calculate_optimal_batch_size(model, current_batch_size: int, max_batch_size: int = 1024, 
-                               target_vram_percent: float = 82.0, device_type: str = 'cuda',
+def calculate_optimal_batch_size(model, current_batch_size: int, 
+                               target_vram_percent: float = 50.0, device_type: str = 'cuda',
                                master_process: bool = True) -> int:
     """
     Calculate optimal batch size based on an analytical model of memory usage.
@@ -578,7 +589,6 @@ def calculate_optimal_batch_size(model, current_batch_size: int, max_batch_size:
 
         # 6. Round to a reasonable number (multiple of 8) and clamp
         new_batch_size = max(8, int(estimated_batch_size // 8) * 8)
-        new_batch_size = min(new_batch_size, max_batch_size)
 
         if master_process:
             print(f"Selected new batch size: {new_batch_size}")
