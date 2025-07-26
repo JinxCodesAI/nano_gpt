@@ -15,7 +15,7 @@ class TrainingLogger:
     and handles configuration dumping and progress logging.
     """
     
-    def __init__(self, log_dir='logs', enabled=True):
+    def __init__(self, log_dir='logs', wandb=None, file_enabled=True):
         """
         Initialize the training logger.
         
@@ -24,7 +24,9 @@ class TrainingLogger:
             enabled (bool): Whether logging is enabled
         """
         self.log_dir = log_dir
-        self.enabled = enabled
+        self.enabled = file_enabled
+        self.wandb_enabled = not (wandb == None)
+        self.wandb = wandb
         self.log_file = None
         self.log_path = None
         
@@ -61,9 +63,9 @@ class TrainingLogger:
         if self.log_file is None:
             return
             
-        self.log_file.write("=" * 80 + "\n")
-        self.log_file.write(f"Training run started at {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n")
-        self.log_file.write("=" * 80 + "\n")
+        self.log("=" * 80 + "\n")
+        self.log(f"Training run started at {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n")
+        self.log("=" * 80 + "\n")
         self.log_file.flush()
         
     def _log_config(self, config):
@@ -76,27 +78,36 @@ class TrainingLogger:
         if self.log_file is None:
             return
             
-        self.log_file.write("Configuration:\n")
-        self.log_file.write("-" * 40 + "\n")
+        self.log("Configuration:\n", False)
+        self.log("-" * 40 + "\n", False)
         
         for key, value in sorted(config.items()):
-            self.log_file.write(f"{key}: {value}\n")
+            self.log(f"{key}: {value}\n", False)
             
-        self.log_file.write("-" * 40 + "\n")
+        self.log("-" * 40 + "\n", False)
         self.log_file.flush()
+
+    def log_metrics(self, obj):
+        if self.wandb_enabled:
+            self.wandb.log(obj)
         
-    def log(self, message):
+    def log(self, message, add_timestamp = True):
         """
         Log a message with timestamp.
         
         Args:
             message (str): Message to log
         """
+        print(message);
         if self.log_file is None:
             return
             
         timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-        self.log_file.write(f"[{timestamp}] {message}\n")
+        if add_timestamp:
+            self.log_file.write(f"[{timestamp}] {message}\n")
+        else:
+            self.log_file.write(f"      {message}\n")
+
         self.log_file.flush()
         
     def log_step(self, iter_num, train_loss, val_loss, tokens_per_second=None):
@@ -174,6 +185,19 @@ class TrainingLogger:
                   f"old_val_loss={old_val_loss:.4f} | new_val_loss={new_val_loss:.4f} | "
                   f"change={loss_change:+.4f}")
         self.log(message)
+
+
+
+    def log_analysis_results(self, iter_num, results):
+        """
+        Log model analysis results.
+
+        Args:
+            iter_num (int): Current iteration number
+            results (dict): Analysis results dictionary
+        """
+        message = f"ANALYSIS: iter={iter_num} | results={results}"
+        self.log(message)
         
     def close(self):
         """Close the log file and write footer."""
@@ -181,9 +205,9 @@ class TrainingLogger:
             return
             
         # Write footer
-        self.log_file.write("=" * 80 + "\n")
-        self.log_file.write(f"Training run ended at {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n")
-        self.log_file.write("=" * 80 + "\n")
+        self.log("=" * 80 + "\n")
+        self.log(f"Training run ended at {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n")
+        self.log("=" * 80 + "\n")
         
         # Close file
         self.log_file.close()

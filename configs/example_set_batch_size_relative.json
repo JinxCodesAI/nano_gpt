@@ -1,0 +1,29 @@
+[
+  {
+    "name": "set_batch_size_relative",
+    "value": 0.75,
+    "trigger_loss": 2.5,
+    "max_wait_iters": 50,
+    "desc": "Reduce batch size to 75% when loss drops below 2.5",
+    "reevaluate": false,
+    "completed": false
+  },
+  {
+    "name": "set_batch_size_relative", 
+    "value": 0.5,
+    "trigger_loss": 1.8,
+    "max_wait_iters": 100,
+    "desc": "Further reduce batch size to 50% for fine-tuning",
+    "reevaluate": false,
+    "completed": false
+  },
+  {
+    "name": "set_batch_size_relative",
+    "value": 0.25,
+    "trigger_loss": 1.2,
+    "max_wait_iters": 150,
+    "desc": "Final reduction to 25% for very fine-grained training",
+    "reevaluate": false,
+    "completed": false
+  }
+]

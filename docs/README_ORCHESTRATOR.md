@@ -137,13 +137,8 @@ python test_manual.py
 - `logger.py`: Enhanced logging with operation tracking
 - `configs/`: Configuration files directory
 
-### Testing
-- `test_ddp_safety.py`: DDP safety validation tests
-- `test_manual.py`: Manual simulation tests
-
 ### Documentation
 - `README_ORCHESTRATOR.md`: This documentation
-- `docs/Training_Orchestration_code_review.md`: Critical DDP issues and fixes
 
 ## Status
 

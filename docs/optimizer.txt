@@ -1,0 +1,155 @@
+Optimizer Configuration: A Crash Course
+You are correct that PyTorch optimizers are highly configurable. The key concept to understand is Parameter Groups.
+Instead of treating the model as a single block of parameters, you can give the optimizer a list of dictionaries, where each dictionary defines a "group" of parameters and its specific hyperparameters.
+The Anatomy of a Parameter Group
+When you initialize an optimizer like AdamW, you pass it an iterable of parameter groups. Each group is a dictionary that can have several keys:
+'params' (required): An iterable of the torch.Tensor parameters that belong to this group.
+'lr' (optional): The learning rate specific to this group. If not set, it defaults to the optimizer's main learning rate.
+'weight_decay' (optional): The weight decay value for this group. This is commonly used to disable weight decay for biases and LayerNorm parameters.
+'betas', 'eps' (optional): Other optimizer-specific hyperparameters can also be set on a per-group basis.
+How It's Used: A Classic Example
+A very common use case is to create two parameter groups: one for weights that should be decayed, and one for biases and norms that should not. Your configure_optimizers function already does a version of this, but here's the general pattern:
+# In your model's configure_optimizers method...
+
+decay_params = []
+nodecay_params = []
+for name, p in self.named_parameters():
+    if not p.requires_grad:
+        continue
+    # Check if the parameter is a weight tensor (2D) vs a bias/norm (1D)
+    if p.dim() > 1:
+        decay_params.append(p)
+    else:
+        nodecay_params.append(p)
+
+optim_groups = [
+    {'params': decay_params, 'weight_decay': 0.1},      # Group 1: Apply weight decay
+    {'params': nodecay_params, 'weight_decay': 0.0}       # Group 2: No weight decay
+]
+
+optimizer = torch.optim.AdamW(optim_groups, lr=learning_rate, betas=betas)
+return optimizer
+
+
+Dynamic Control During Training
+The real power comes from the ability to modify these groups during training. The optimizer object exposes its groups via optimizer.param_groups. This is a list of dictionaries that you can iterate through and change.
+For example, to implement the "gentle thaw" we discussed, you could find the embedding group and lower its 'lr' value before unfreezing the parameters.
+The Solution: "Gradient Surgery" for Vocabulary Expansion
+Your goal is to train the newly added vocabulary embeddings aggressively without destabilizing the already-trained "core" embeddings or the rest of the model.
+While creating different optimizer groups is powerful, it has a limitation: you cannot place parts of a single parameter tensor (like your wte.weight) into different groups. The optimizer works on whole nn.Parameter objects.
+The most elegant and powerful solution is a technique I call "Gradient Surgery." Instead of configuring the optimizer, you can manually and precisely scale the gradients of different parts of the embedding layer after loss.backward() but before optimizer.step().
+This gives you per-embedding learning rate control.
+The Strategy
+Keep the Optimizer Simple: Configure your optimizer with just one group for the entire embedding layer.
+Perform Gradient Surgery: After calculating the loss and running backward(), the model.transformer.wte.weight.grad tensor will be populated. We will surgically reduce the gradients for the "core" vocabulary before the optimizer uses them.
+Control with the Scheduler: We'll create a new schedule operation, set_embedding_grad_scale, to control this process.
+Implementation Steps
+Here is a complete plan to integrate this into your training script.
+1. Add a New Global Variable in train.py
+This variable will control the scaling factor. We'll add it near your other configuration variables.
+# In train.py, near the top
+# ...
+# scaling schedule configuration
+scaling_schedule_file = None
+scaling_schedule = []
+embedding_grad_scale = 1.0 # Add this line. 1.0 means no scaling.
+# ...
+
+
+2. Implement the "Gradient Surgery" in the Training Loop
+Modify your main training loop in train.py. The new logic goes right after the backward() call.
+# In train.py, inside the `while True:` loop
+
+# ... (inside the `for micro_step in ...` loop)
+
+    # Time the backward pass
+    with timing_profiler.time_section("backward_pass"):
+        scaler.scale(loss).backward()
+
+    # --- NEW: GRADIENT SURGERY BLOCK ---
+    # If a special scaling factor is set, apply it to the embedding gradients
+    if embedding_grad_scale < 1.0 and 'wte' in dict(model.named_modules()):
+        # This assumes your shrunken_vocab_size is available
+        core_vocab_size = shrunken_vocab_size if shrunken_vocab_size is not None else 0
+        if core_vocab_size > 0:
+            # Get the unwrapped model to access the parameter directly
+            unwrapped_model = model.module if ddp else model
+            wte_grad = unwrapped_model.transformer.wte.weight.grad
+            if wte_grad is not None:
+                # Create a scaling tensor on the same device as the gradient
+                # 1.0 for new tokens, embedding_grad_scale for core tokens
+                scales = torch.full_like(wte_grad, 1.0)
+                scales[:core_vocab_size] *= embedding_grad_scale
+                # Apply the scaling
+                wte_grad.mul_(scales)
+
+# --- END OF NEW BLOCK ---
+
+# Time gradient clipping (this comes after our surgery)
+with timing_profiler.time_section("gradient_clipping"):
+# ... (rest of the loop)
+
+
+3. Create a New Orchestrator Operation
+Now, create the schedule command to control this new feature.
+# In train.py -> execute_operation function
+
+# ...
+    # --- Handle non-architectural (hyperparameter) operations ---
+    else:
+        if op_name == 'set_lr':
+            # ...
+        elif op_name == 'set_embedding_grad_scale': # Add this new operation
+            global embedding_grad_scale
+            if master_process: print(f"Setting embedding grad scale: {embedding_grad_scale} -> {op_value}")
+            embedding_grad_scale = op_value
+        elif op_name == 'set_batch_size':
+            # ...
+
+
+How to Use It in Your Schedule
+Now you can precisely control the fine-tuning of your new embeddings. After you resize_vocabulary, your schedule could look like this:
+  {
+    "name": "resize_vocabulary",
+    "value": [ 50256, 0.01 ], // RARE_TOKEN_ID, noise_std
+    "trigger_loss": 3.5,
+    "max_wait_iters": 1000,
+    "desc": "grow to full vocabulary",
+    "reevaluate": true
+  },
+  {
+    "name": "disable_vocab_remapping",
+    "value": null,
+    "trigger_loss": 100.0,
+    "max_wait_iters": 1,
+    "desc": "stop remapping",
+    "reevaluate": false
+  },
+  {
+    "name": "set_embedding_grad_scale",
+    "value": 0.05, // Effectively sets core embedding LR to 5% of main LR
+    "trigger_loss": 100.0,
+    "max_wait_iters": 1,
+    "desc": "protect core embeddings",
+    "reevaluate": false
+  },
+  {
+    "name": "reset_lr_schedule",
+    "value": null,
+    "trigger_loss": 100.0,
+    "max_wait_iters": 1,
+    "desc": "train new embeddings aggressively",
+    "reevaluate": false
+  }
+  // ... train for a few thousand iterations to differentiate new embeddings ...
+  {
+    "name": "set_embedding_grad_scale",
+    "value": 1.0, // Set back to 1.0 to train all embeddings jointly
+    "trigger_loss": 3.3,
+    "max_wait_iters": 5000,
+    "desc": "unify embedding learning rates",
+    "reevaluate": false
+  }
+
+
+This "Gradient Surgery" approach is extremely powerful. It gives you the fine-grained control you need to intelligently train your expanded vocabulary without the complexity of reconfiguring the optimizer multiple times, and it perfectly solves the problem of stabilizing the model after vocabulary expansion.

@@ -1,0 +1,26 @@
+[
+  {
+    "name": "adjust_batch_size",
+    "value": {
+      "max_batch_size": 512,
+      "target_vram_percent": 80.0
+    },
+    "trigger_loss": 2.0,
+    "max_wait_iters": 100,
+    "desc": "Automatically adjust batch size based on VRAM usage",
+    "reevaluate": false,
+    "completed": false
+  },
+  {
+    "name": "adjust_batch_size", 
+    "value": {
+      "max_batch_size": 1024,
+      "target_vram_percent": 85.0
+    },
+    "trigger_loss": 1.5,
+    "max_wait_iters": 200,
+    "desc": "Further optimize batch size at lower loss",
+    "reevaluate": false,
+    "completed": false
+  }
+]

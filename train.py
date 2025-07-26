@@ -12,6 +12,8 @@ import numpy as np
 import torch
 import psutil
 import threading
+import signal
+import sys
 from collections import deque, defaultdict
 import torch._dynamo
 try:
@@ -182,6 +184,7 @@ out_dir = 'out'
 eval_interval = 2000
 log_interval = 1
 eval_iters = 200
+vocab_size = None # taken from meta_vocab_size
 eval_only = False # if True, script exits right after the first eval
 always_save_checkpoint = True # if True, always save a checkpoint after each eval
 init_from = 'scratch' # 'scratch' or 'resume' or 'gpt2*'
@@ -254,7 +257,7 @@ config = {k: globals()[k] for k in config_keys} # will be useful for logging
 
 
 
-if(dataset == 'fineweb10B'):
+if dataset == 'fineweb10B':
     num_train_shards = 103
     train_shard_filenames = [f"fineweb_train_{i:06d}.bin" for i in range(1, num_train_shards + 1)]
 else:
@@ -483,9 +486,28 @@ def load_scaling_schedule(file_path, init_from):
         print(f"Error loading scaling schedule from {file_path}: {e}")
         raise e
 
-# Load scaling schedule
+# Check for auto-resume configuration
+auto_resume_marker = os.path.join(out_dir, '.auto_resume') 
+if init_from == 'scratch' and os.path.exists(auto_resume_marker):
+    print("Found auto-resume marker. Switching to 'resume' mode...")
+    init_from = 'resume'
+    # Read the marker file for additional settings
+    try:
+        with open(auto_resume_marker, 'r') as f:
+            for line in f:
+                if line.startswith('init_from='):
+                    pass  # Already handled
+                elif line.startswith('final_wandb_run_name='):
+                    # This will be handled in wandb initialization
+                    pass
+    except Exception as e:
+        print(f"Warning: Could not read auto-resume marker: {e}")
+
+# Load scaling schedule (this will be overridden by checkpoint state if resuming)
 if scaling_schedule_file:
     scaling_schedule = load_scaling_schedule(scaling_schedule_file, init_from)
+else:
+    scaling_schedule = []
 
 # Training Orchestrator State
 iter_of_last_op = 0 # Iteration number when last operation was executed
@@ -493,7 +515,7 @@ lr_schedule_offset = 0 # Offset for learning rate schedule (for reset_lr_schedul
 # -----------------------------------------------------------------------------
 
 # logging setup
-training_logger = TrainingLogger(log_dir=log_dir, enabled=file_logging)
+training_logger = TrainingLogger(log_dir=log_dir, file_enabled=file_logging)
 
 # various inits, derived attributes, I/O setup
 ddp = int(os.environ.get('RANK', -1)) != -1 # is this a ddp run?
@@ -781,6 +803,11 @@ if os.path.exists(meta_path):
         meta = pickle.load(f)
     meta_vocab_size = meta['vocab_size']
     print(f"found vocab_size = {meta_vocab_size} (inside {meta_path})")
+else:
+    if vocab_size:
+        meta_vocab_size = vocab_size
+    else:
+        raise ValueError("meta_vocab_size / vocab_size not set")
 
 # model init
 model_args = dict(n_layer=n_layer, n_head=n_head, n_embd=n_embd, block_size=block_size,
@@ -809,12 +836,69 @@ if init_from == 'scratch':
 elif init_from == 'resume':
     print(f"Resuming training from {out_dir}")
     ckpt_path = os.path.join(out_dir, 'ckpt.pt')
-    checkpoint = torch.load(ckpt_path, map_location=device)
+    
+    # Check for emergency checkpoints if main checkpoint is corrupted or missing
+    if not os.path.exists(ckpt_path):
+        # Look for emergency checkpoints
+        emergency_files = [f for f in os.listdir(out_dir) if f.startswith('emergency_ckpt_iter_') and f.endswith('.pt')]
+        if emergency_files:
+            # Use the most recent emergency checkpoint
+            emergency_files.sort(key=lambda x: int(x.split('_')[3].split('.')[0]), reverse=True)
+            ckpt_path = os.path.join(out_dir, emergency_files[0])
+            print(f"Main checkpoint not found. Using emergency checkpoint: {ckpt_path}")
+        else:
+            raise FileNotFoundError(f"No checkpoint found in {out_dir}")
+    
+    try:
+        checkpoint = torch.load(ckpt_path, map_location=device)
+        if checkpoint.get('emergency_save', False):
+            print("Loaded from emergency checkpoint - continuing training from emergency save point")
+    except Exception as e:
+        print(f"Error loading checkpoint {ckpt_path}: {e}")
+        # Try emergency checkpoints as fallback
+        emergency_files = [f for f in os.listdir(out_dir) if f.startswith('emergency_ckpt_iter_') and f.endswith('.pt')]
+        if emergency_files:
+            emergency_files.sort(key=lambda x: int(x.split('_')[3].split('.')[0]), reverse=True)
+            ckpt_path = os.path.join(out_dir, emergency_files[0])
+            print(f"Trying emergency checkpoint: {ckpt_path}")
+            checkpoint = torch.load(ckpt_path, map_location=device)
+            print("Successfully loaded from emergency checkpoint")
+        else:
+            raise e
     checkpoint_model_args = checkpoint['model_args']
-
-    # Force an update of the model args from the checkpoint for base architecture
-    for k in ['n_layer', 'n_head', 'n_embd', 'block_size', 'bias', 'vocab_size', 'n_hidden']:
-        model_args[k] = checkpoint_model_args[k]
+    
+    # Compare current config with checkpoint and handle overrides
+    overrideable_params = ['n_hidden', 'n_layer', 'n_head', 'n_embd', 'block_size', 'bias', 'vocab_size',
+                          'dropout', 'use_rotary_embeddings', 'rotary_base', 'rotary_max_position_embeddings',
+                          'embedding_mode', 'embedding_rank', 'attn_lora_rank', 'lora_alpha']
+    
+    config_changes = []
+    for param in overrideable_params:
+        if param in checkpoint_model_args:
+            checkpoint_value = checkpoint_model_args[param]
+            current_value = model_args.get(param)
+            
+            if current_value != checkpoint_value:
+                config_changes.append(f"{param}: {checkpoint_value} -> {current_value}")
+                print(f"Overriding {param}: {checkpoint_value} -> {current_value}")
+                model_args[param] = current_value  # Use current config value
+            else:
+                # Keep checkpoint value if no override specified
+                model_args[param] = checkpoint_value
+    
+    if config_changes:
+        print(f"Applied {len(config_changes)} hyperparameter overrides:")
+        for change in config_changes:
+            print(f"  - {change}")
+        
+        # Log the overrides for tracking
+        if master_process:
+            training_logger.log(f"Resume with hyperparameter overrides: {'; '.join(config_changes)}")
+    else:
+        print("No hyperparameter overrides detected.")
+        # Force an update of the model args from the checkpoint for base architecture
+        for k in ['n_layer', 'n_head', 'n_embd', 'block_size', 'bias', 'vocab_size', 'n_hidden']:
+            model_args[k] = checkpoint_model_args[k]
 
     # Create the model with the potentially new LoRA configuration from the config file
     gptconf = GPTConfig(**model_args)
@@ -853,6 +937,59 @@ elif init_from == 'resume':
     # Load the rest of the training state
     iter_num = checkpoint['iter_num']
     best_val_loss = checkpoint['best_val_loss']
+    
+    # Load execution state variables
+    if 'iter_of_last_op' in checkpoint:
+        iter_of_last_op = checkpoint['iter_of_last_op']
+        print(f"Restored iter_of_last_op: {iter_of_last_op}")
+    if 'lr_schedule_offset' in checkpoint:
+        lr_schedule_offset = checkpoint['lr_schedule_offset']
+        print(f"Restored lr_schedule_offset: {lr_schedule_offset}")
+    
+    # Restore scaling schedule state from checkpoint if available
+    if 'scaling_schedule' in checkpoint and checkpoint['scaling_schedule']:
+        saved_schedule = checkpoint['scaling_schedule']
+        saved_schedule_file = checkpoint.get('scaling_schedule_file')
+        
+        # If we have a current scaling schedule file and it matches the saved one,
+        # use the saved state to preserve completion status
+        if scaling_schedule_file and saved_schedule_file == scaling_schedule_file:
+            print(f"Restoring scaling schedule state from checkpoint (preserving completion status)")
+            scaling_schedule = saved_schedule
+            # Also update the file to match the checkpoint state
+            save_scaling_schedule(scaling_schedule_file, scaling_schedule)
+        elif saved_schedule:
+            print(f"Warning: Checkpoint has scaling schedule but current config doesn't match.")
+            print(f"  Checkpoint file: {saved_schedule_file}")
+            print(f"  Current file: {scaling_schedule_file}")
+            print(f"  Using file-based schedule (some completion status may be lost).")
+    
+    # Override certain training parameters from current config if different
+    training_overrides = ['learning_rate', 'max_iters', 'weight_decay', 'beta1', 'beta2', 'grad_clip',
+                         'decay_lr', 'warmup_iters', 'lr_decay_iters', 'min_lr', 'batch_size', 
+                         'gradient_accumulation_steps', 'eval_interval', 'eval_iters']
+    
+    if 'config' in checkpoint:
+        saved_config = checkpoint['config']
+        training_param_changes = []
+        
+        for param in training_overrides:
+            if param in saved_config:
+                saved_value = saved_config[param]
+                current_value = globals().get(param)
+                
+                if current_value != saved_value:
+                    training_param_changes.append(f"{param}: {saved_value} -> {current_value}")
+                    print(f"Training override {param}: {saved_value} -> {current_value}")
+                    # Keep current value (already in globals())
+        
+        if training_param_changes:
+            print(f"Applied {len(training_param_changes)} training parameter overrides:")
+            for change in training_param_changes:
+                print(f"  - {change}")
+            
+            if master_process:
+                training_logger.log(f"Resume with training parameter overrides: {'; '.join(training_param_changes)}")
 elif init_from.startswith('gpt2'):
     print(f"Initializing from OpenAI GPT-2 weights: {init_from}")
     override_args = dict(dropout=dropout)
@@ -1177,7 +1314,8 @@ def execute_operation(op, trigger_reason, current_val_loss, iter_num, target_arc
         # Check if this is an architectural operation
         architectural_ops = ['stack_layers', 'widen_mlp', 'set_attn_lora_rank',
                              'set_embedding_lora_rank', 'merge_lora_weights',
-                             'resize_vocabulary', 'set_embedding_finetune_mode', 'set_embedding_freeze_mode']
+                             'resize_vocabulary', 'set_embedding_finetune_mode', 'set_embedding_freeze_mode',
+                             'freeze_layer', 'unfreeze_layer', 'set_layer_lora_rank']
 
         if op_name in architectural_ops:
             if master_process:
@@ -1217,6 +1355,21 @@ def execute_operation(op, trigger_reason, current_val_loss, iter_num, target_arc
             elif op_name == 'set_embedding_freeze_mode':
                 # op_value is expected to be True or False
                 unwrapped_model.set_embedding_freeze_mode(op_value)
+            elif op_name == 'freeze_layer':
+                # op_value is expected to be a layer name string like "attn.2" or "wte"
+                unwrapped_model.freeze_layer(op_value)
+            elif op_name == 'unfreeze_layer':
+                # op_value is expected to be a layer name string like "attn.2" or "wte"
+                unwrapped_model.unfreeze_layer(op_value)
+            elif op_name == 'set_layer_lora_rank':
+                # op_value is expected to be [layer_name, rank] like ["attn.2", 16]
+                layer_name, rank = op_value
+                unwrapped_model.set_layer_lora_rank(layer_name, rank)
+
+            # Clear CUDA cache after architectural changes to free up memory
+            if device_type == 'cuda':
+                if master_process: print("Clearing CUDA cache...")
+                torch.cuda.empty_cache()
 
             # --- Re-create optimizer and wrappers (this logic remains the same) ---
             log_detailed_params(unwrapped_model)
@@ -1236,7 +1389,7 @@ def execute_operation(op, trigger_reason, current_val_loss, iter_num, target_arc
 
             raw_model = model.module if ddp else model
             log_model_architecture(raw_model, iter_num)
-            if master_process: training_logger.log_operation_success(iter_num, op_name, {'new_config': raw_model.config.__dict__})
+            if master_process: training_logger.log_operation_success(iter_num, op_name, {'new_config': raw_model.config.__dict__})}
 
 
         # --- Handle non-architectural (hyperparameter) operations ---
@@ -1271,9 +1424,107 @@ def execute_operation(op, trigger_reason, current_val_loss, iter_num, target_arc
             elif op_name == 'disable_vocab_remapping':
                 if master_process: print("Disabling vocabulary remapping.")
                 remapping_active = False
+            elif op_name == 'adjust_batch_size':
+                # Get unwrapped model for VRAM calculation
+                if compile:
+                    unwrapped_model = unoptimized_model if hasattr(unoptimized_model, '_orig_mod') else unoptimized_model
+                    if ddp:
+                        unwrapped_model = unwrapped_model.module if hasattr(unwrapped_model, 'module') else unwrapped_model
+                else:
+                    unwrapped_model = model.module if ddp and hasattr(model, 'module') else model
+                
+                # Extract parameters from op_value
+                if isinstance(op_value, dict):
+                    batch_size_to_use = op_value.get('current_batch_size', batch_size)
+                    max_batch_size = op_value.get('max_batch_size', 1024)
+                    target_vram_percent = op_value.get('target_vram_percent', 82.0)
+                else:
+                    # Legacy support - use current batch_size or op_value
+                    batch_size_to_use = batch_size or op_value or 32
+                    max_batch_size = 1024
+                    target_vram_percent = 82.0
+                
+                try:
+                    optimal_batch_size = calculate_optimal_batch_size(
+                        unwrapped_model, batch_size_to_use, max_batch_size, 
+                        target_vram_percent, device_type, master_process
+                    )
+                    
+                    if master_process:
+                        print(f"Calculated optimal batch size: {optimal_batch_size}")
+                        print(f"Batch size: {batch_size} -> {optimal_batch_size}")
+                    
+                    batch_size = optimal_batch_size
+                    
+                    if device_type == 'cuda':
+                        if master_process: print("Clearing CUDA cache after batch size adjustment...")
+                        torch.cuda.empty_cache()
+
+                    if master_process: 
+                        training_logger.log_operation_success(iter_num, op_name, 
+                                                            {'calculated_batch_size': optimal_batch_size,
+                                                             'original_batch_size': batch_size_to_use})}
+                except NameError:
+                    # Fallback if calculate_optimal_batch_size is not available
+                    if master_process:
+                        print("Warning: calculate_optimal_batch_size not available, keeping current batch size")
+                        training_logger.log_operation_success(iter_num, op_name, 
+                                                            {'message': 'Operation skipped - function not available'})}
+            
+            elif op_name == 'set_batch_size_relative':
+                batch_size_to_use = batch_size
+                scale_factor = op_value
+                
+                if not isinstance(scale_factor, (int, float)):
+                    raise ValueError(f"set_batch_size_relative requires a numeric scale factor, got {type(scale_factor)}")
+                
+                try:
+                    new_batch_size = calculate_relative_batch_size(
+                        batch_size_to_use, scale_factor, master_process
+                    )
+                    
+                    if master_process:
+                        print(f"Calculated relative batch size: {new_batch_size}")
+                        print(f"Batch size: {batch_size} -> {new_batch_size}")
+                    
+                    batch_size = new_batch_size
+                    
+                    if device_type == 'cuda':
+                        if master_process: print("Clearing CUDA cache after batch size adjustment...")
+                        torch.cuda.empty_cache()
+
+                    if master_process:
+                        training_logger.log_operation_success(iter_num, op_name, 
+                                                            {'new_batch_size': new_batch_size,
+                                                             'original_batch_size': batch_size_to_use,
+                                                             'scale_factor': scale_factor})}
+                except NameError:
+                    # Fallback if calculate_relative_batch_size is not available
+                    new_batch_size_float = batch_size_to_use * scale_factor
+                    new_batch_size = max(8, int(new_batch_size_float // 8) * 8)
+                    
+                    if master_process:
+                        print(f"Fallback scaling batch size: {batch_size_to_use} × {scale_factor:.3f} = {new_batch_size_float:.1f}")
+                        print(f"Rounded down to nearest multiple of 8: {new_batch_size}")
+                        print(f"Batch size: {batch_size} -> {new_batch_size}")
+                    
+                    batch_size = new_batch_size
+                    
+                    if device_type == 'cuda':
+                        if master_process: print("Clearing CUDA cache after batch size adjustment...")
+                        torch.cuda.empty_cache()
+
+                    if master_process:
+                        training_logger.log_operation_success(iter_num, op_name, 
+                                                            {'new_batch_size': new_batch_size,
+                                                             'original_batch_size': batch_size_to_use,
+                                                             'scale_factor': scale_factor})}
             else:
                 raise ValueError(f"Unknown operation '{op_name}'")
-            if master_process: training_logger.log_operation_success(iter_num, op_name, {'new_value': op_value})
+            
+            # Log success for operations that don't have their own logging
+            if op_name not in ['adjust_batch_size', 'set_batch_size_relative'] and master_process:
+                training_logger.log_operation_success(iter_num, op_name, {'new_value': op_value})}
 
         return True
 
@@ -1291,30 +1542,42 @@ def execute_operation(op, trigger_reason, current_val_loss, iter_num, target_arc
 
 
 
+# Initialize or restore wandb run name
+final_wandb_run_name = None
 if wandb_log and master_process:
     import wandb
-    # Create a compact timestamp
-    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    final_wandb_run_name = f"{wandb_run_name}_{timestamp}"
-
-    print(f"Initializing W&B run with name: {final_wandb_run_name}")
+    
+    # Try to restore from checkpoint first
+    if init_from == 'resume':
+        ckpt_path = os.path.join(out_dir, 'ckpt.pt')
+        if os.path.exists(ckpt_path):
+            checkpoint_temp = torch.load(ckpt_path, map_location='cpu')
+            if 'final_wandb_run_name' in checkpoint_temp:
+                final_wandb_run_name = checkpoint_temp['final_wandb_run_name']
+                print(f"Restored W&B run name: {final_wandb_run_name}")
+            del checkpoint_temp  # Free memory
+    
+    # Create new run name if not restored
+    if final_wandb_run_name is None:
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        final_wandb_run_name = f"{wandb_run_name}_{timestamp}"
+        print(f"Created new W&B run name: {final_wandb_run_name}")
+    
     wandb.init(project=wandb_project, name=final_wandb_run_name, config=config)
 
 # Initialize the BatchManager for the training set
 batch_manager = BatchManager(
     data_dir=data_dir,
     shard_filenames=train_shard_filenames,
-    vocab_size=meta_vocab_size if meta_vocab_size is not None else 50304,
     batch_size=batch_size,
     block_size=block_size,
     device=device,
     device_type=device_type,
+    vocab_size=meta_vocab_size,
     starting_estimation_token_count=100_000_000  # ~100M tokens for approximation
 )
 
 X, Y = batch_manager.get_next_batch()
-if remapping_active:
-    X, Y = remapping_vector[X], remapping_vector[Y]
 local_iter_num = 0
 raw_model = model.module if ddp else model
 
@@ -1337,7 +1600,61 @@ prev_embeddings = None  # This will store the CPU snapshot for semantic drift
 # Initialize timing profiler for granular performance measurements
 timing_profiler = TimingProfiler()
 
+# Add graceful shutdown handling
+shutdown_requested = False
+
+def signal_handler(signum, frame):
+    global shutdown_requested
+    print(f"\nReceived signal {signum}. Requesting graceful shutdown...")
+    shutdown_requested = True
+
+# Register signal handlers for graceful shutdown
+signal.signal(signal.SIGINT, signal_handler)   # Ctrl+C
+signal.signal(signal.SIGTERM, signal_handler)  # Termination signal
+
 t0 = time.time()
+
+# MFU stats logging setup
+if master_process and file_logging:
+    mfu_log_path = os.path.join(out_dir, 'mfu_stats.txt')
+    with open(mfu_log_path, 'w') as f:
+        f.write("iter,loss,lr,time_ms,mfu_percent,vram_used_gb,vram_total_gb,vram_percent\n")
+
+# VRAM monitoring
+# Import shared VRAM utilities
+try:
+    from training.utils import get_vram_usage, calculate_relative_batch_size, calculate_optimal_batch_size
+except ImportError:
+    # Fallback implementation if training.utils is not available
+    def get_vram_usage():
+        if torch.cuda.is_available():
+            allocated = torch.cuda.memory_allocated() / 1024**3  # GB
+            reserved = torch.cuda.memory_reserved() / 1024**3     # GB  
+            total = torch.cuda.get_device_properties(0).total_memory / 1024**3  # GB
+            
+            # Use reserved memory as it's more accurate for actual GPU usage
+            used_percent = (reserved / total) * 100
+            
+            return reserved, total, used_percent  # Return reserved instead of allocated
+        return 0, 0, 0
+
+def get_detailed_vram_usage():
+    """Get detailed VRAM breakdown for debugging"""
+    if torch.cuda.is_available():
+        allocated = torch.cuda.memory_allocated() / 1024**3  # GB
+        reserved = torch.cuda.memory_reserved() / 1024**3     # GB  
+        total = torch.cuda.get_device_properties(0).total_memory / 1024**3  # GB
+        free = total - reserved
+        
+        return {
+            'allocated_gb': allocated,
+            'reserved_gb': reserved, 
+            'free_gb': free,
+            'total_gb': total,
+            'allocated_percent': (allocated / total) * 100,
+            'reserved_percent': (reserved / total) * 100
+        }
+    return None
 
 while True:
     # Start timing the training iteration
@@ -1346,77 +1663,65 @@ while True:
     for param_group in optimizer.param_groups:
         param_group['lr'] = lr
 
-    with timing_profiler.time_section("evaluation"):
-        if iter_num % eval_interval == 0:
+    if iter_num % eval_interval == 0:
+        with timing_profiler.time_section("evaluation"):
             losses = estimate_loss()
-            if master_process:
-                # Calculate tokens per second
-                elapsed_time_seconds = time.time() - start_time
-                tokens_per_second = batch_manager.total_tokens_served / elapsed_time_seconds if elapsed_time_seconds > 0 else 0
-                wandb_metrics = {
-                    "iter": iter_num,
-                    "train/loss": losses['train'],
-                    "val/loss": losses['val'],
-                    "lr": lr,
-                    "mfu": running_mfu*100,
-                    "time/elapsed_seconds": elapsed_time_seconds, # Log elapsed time
-                }
-                # Add analysis metrics if they were computed successfully
-                if rank_util != -1.0:
-                    wandb_metrics["analysis/mlp_rank_utilization"] = rank_util
-                if avg_entropy != -1.0:
-                    wandb_metrics["analysis/attention_entropy"] = avg_entropy
-                # Add core accuracy if available
-                if 'val_core_acc' in losses:
-                    wandb_metrics["val/core_accuracy"] = losses['val_core_acc']
+
+        if master_process:
+            # The rest of the evaluation-related logic that should not be timed
+            elapsed_time_seconds = time.time() - start_time
+            tokens_per_second = batch_manager.total_tokens_served / elapsed_time_seconds if elapsed_time_seconds > 0 else 0
+            wandb_metrics = {
+                "iter": iter_num,
+                "train/loss": losses['train'],
+                "val/loss": losses['val'],
+                "lr": lr,
+                "mfu": running_mfu*100,
+                "time/elapsed_seconds": elapsed_time_seconds,
+            }
+
+            if 'val_core_acc' in losses:
+                wandb_metrics["val/core_accuracy"] = losses['val_core_acc']
+            if wandb_log:
                 wandb.log(wandb_metrics)
+
+            print(f"step {iter_num}: train loss {losses['train']:.4f}, val loss {losses['val']:.4f}, lr: {lr:.4f}, tokens/sec {tokens_per_second:.0f}")
+            print_timings(timing_profiler, training_logger)
+
             if losses['val'] < best_val_loss or always_save_checkpoint:
                 best_val_loss = losses['val']
                 if iter_num > 0:
-                    # --- MODIFICATION START ---
-                    # Always save a universal, merged checkpoint
+                    # ... (checkpoint saving logic remains the same)
                     print("Creating universal checkpoint by merging LoRA weights...")
                     universal_state_dict = raw_model.get_merged_state_dict()
+                    # ... (rest of checkpoint saving)
 
-                print(f"step {iter_num}: train loss {losses['train']:.4f}, val loss {losses['val']:.4f}, lr: {lr:.4f}, tokens/sec {tokens_per_second:.0f}")
-                print_timings(timing_profiler, training_logger)
+            # --- Model Analysis ---
+            analyzer = ModelAnalyzer(raw_model)
+            memory_info = psutil.virtual_memory()
+            if memory_info.percent > 90.0:
+                print(f"WARNING: Skipping async analysis due to high system memory usage ({memory_info.percent:.1f}%)")
+            else:
+                print(f"Dispatching async analysis for iter {iter_num}...")
+                try:
+                    current_snapshot = analyzer.get_model_state_snapshot()
+                    filtered_tokens = batch_manager.get_non_outlier_tokens(ignored_outlayers_sum)
+                    X_val, Y_val = get_val_batch()
 
-                # --- Model Analysis ---
-                analyzer = ModelAnalyzer(raw_model)
-                # --- NEW ROBUST ASYNCHRONOUS ANALYSIS DISPATCH LOGIC ---
-                # Check system memory before dispatching analysis to prevent OOM
-                memory_info = psutil.virtual_memory()
-                if memory_info.percent > 90.0:
-                    print(f"WARNING: Skipping async analysis due to high system memory usage ({memory_info.percent:.1f}%)")
-                else:
-                    print(f"Dispatching async analysis for iter {iter_num}...")
-                    try:
-                        # 1. Create a full snapshot of the model state on CPU.
-                        current_snapshot = analyzer.get_model_state_snapshot()
-
-                        # 2. Get filtered tokens from BatchManager (non-outliers)
-                        filtered_tokens = batch_manager.get_non_outlier_tokens(ignored_outlayers_sum)
-
-                        X, Y = get_val_batch()
-
-                        # 3. Submit the new, generic analysis task to the executor.
-                        future = executor.submit(
-                            run_full_analysis_async,
-                            analyzer,
-                            current_snapshot,
-                            prev_embeddings, # Will be None on the first run.
-                            X,
-                            iter_num,
-                            filtered_tokens
-                        )
-                        future.add_done_callback(analysis_done_callback)
-
-                        # 4. CRITICAL: Update state for the next analysis cycle.
-                        prev_embeddings = current_snapshot
-                        print("Async analysis job dispatched. Training continues.")
-
-                    except Exception as dispatch_error:
-                        print(f"ERROR dispatching async analysis for iter {iter_num}: {dispatch_error}")
+                    future = executor.submit(
+                        run_full_analysis_async,
+                        analyzer,
+                        current_snapshot,
+                        prev_embeddings,
+                        (X_val, Y_val),
+                        iter_num,
+                        filtered_tokens
+                    )
+                    future.add_done_callback(analysis_done_callback)
+                    prev_embeddings = current_snapshot
+                    print("Async analysis job dispatched. Training continues.")
+                except Exception as dispatch_error:
+                    print(f"ERROR dispatching async analysis for iter {iter_num}: {dispatch_error}")
 
                 # --- END OF NEW LOGIC ---
 
@@ -1476,10 +1781,46 @@ while True:
                             'iter_num': iter_num,
                             'best_val_loss': best_val_loss,
                             'config': config,
+                            'final_wandb_run_name': final_wandb_run_name,  # Save wandb run name for continuity
+                            'iter_of_last_op': iter_of_last_op,  # Save operation state
+                            'lr_schedule_offset': lr_schedule_offset,  # Save LR schedule state
+                            'scaling_schedule': scaling_schedule,  # Save current scaling schedule state
+                            'scaling_schedule_file': scaling_schedule_file,  # Save schedule file path
                         }
                         # --- MODIFICATION END ---
                         print(f"saving checkpoint to {out_dir}")
-                        torch.save(checkpoint, os.path.join(out_dir, 'ckpt.pt'))
+                        
+                        # Save to temporary file first, then atomically move to avoid corruption
+                        temp_ckpt_path = os.path.join(out_dir, 'ckpt_temp.pt')
+                        final_ckpt_path = os.path.join(out_dir, 'ckpt.pt')
+                        
+                        try:
+                            torch.save(checkpoint, temp_ckpt_path)
+                            # Atomic move (prevents corruption from abrupt shutdown during save)
+                            os.rename(temp_ckpt_path, final_ckpt_path)
+                            print(f"Checkpoint saved successfully to {final_ckpt_path}")
+                        except Exception as e:
+                            print(f"Error saving checkpoint: {e}")
+                            # Clean up temp file if it exists
+                            if os.path.exists(temp_ckpt_path):
+                                os.remove(temp_ckpt_path)
+                            raise e
+                        
+                        # Auto-switch from 'scratch' to 'resume' after first save
+                        if init_from == 'scratch' and iter_num > 0:
+                            # Update the global config to resume mode for next run
+                            import json
+                            config_update = {'init_from': 'resume'}
+                            config_file = os.path.join(out_dir, 'auto_resume_config.json')
+                            with open(config_file, 'w') as f:
+                                json.dump(config_update, f, indent=2)
+                            print(f"Auto-created resume config at {config_file}. Use --config {config_file} for next run.")
+                            
+                            # Also create a marker file to indicate this run should auto-resume
+                            marker_file = os.path.join(out_dir, '.auto_resume')
+                            with open(marker_file, 'w') as f:
+                                f.write(f"init_from=resume\nfinal_wandb_run_name={final_wandb_run_name}\n")
+                            print(f"Created auto-resume marker at {marker_file}")
             
             # FIX: Wrapped orchestration logic in a while loop to handle consecutive non-blocking operations
             while True:
@@ -1606,19 +1947,83 @@ while True:
 
     t1 = time.time()
     if iter_num % log_interval == 0 and master_process:
+        # Calculate accumulated time over log_interval iterations
+        dt = t1 - t0
 
         lossf = loss.item() * gradient_accumulation_steps
+        # Get VRAM usage
+        vram_used, vram_total, vram_percent = get_vram_usage()
+        
         if local_iter_num >= 5:
             mfu = raw_model.estimate_mfu(batch_size * gradient_accumulation_steps, dt/log_interval)
             running_mfu = mfu if running_mfu == -1.0 else 0.9*running_mfu + 0.1*mfu
-            print(f"iter {iter_num}: loss {lossf:.4f}, lr {lr:.5f}, time {dt/log_interval*1000:.2f}ms, mfu {running_mfu*100:.2f}%")
-    
-
-        dt = t1 - t0
+        
+        # Print and log (with proper fallback values)
+        avg_time_ms = dt/log_interval*1000
+        mfu_percent = running_mfu*100 if running_mfu > 0 else 0
+        
+        print(f"iter {iter_num}: loss {lossf:.4f}, lr {lr:.5f}, time {avg_time_ms:.2f}ms, mfu {mfu_percent:.2f}%, VRAM {vram_used:.1f}/{vram_total:.1f}GB ({vram_percent:.1f}%)")
+        
+        # Debug VRAM for first few iterations
+        if iter_num <= 50 and iter_num % log_interval == 0:
+            detailed_vram = get_detailed_vram_usage()
+            if detailed_vram:
+                print(f"  [VRAM Debug] Allocated: {detailed_vram['allocated_gb']:.3f}GB ({detailed_vram['allocated_percent']:.1f}%), Reserved: {detailed_vram['reserved_gb']:.3f}GB ({detailed_vram['reserved_percent']:.1f}%)")
+        
+        # MFU stats logging to dedicated file
+        if file_logging:
+            with open(mfu_log_path, 'a') as f:
+                f.write(f"{iter_num},{lossf:.6f},{lr:.8f},{avg_time_ms:.2f},{mfu_percent:.2f},{vram_used:.3f},{vram_total:.3f},{vram_percent:.2f}\n")
+        
+        # Log train/loss and iter to wandb at log_interval
+        if wandb_log:
+            wandb.log({
+                "iter": iter_num,
+                "train/loss": lossf,
+                "lr": lr,
+                "time/dt_ms": avg_time_ms,
+                "mfu": mfu_percent,
+                "vram/used_gb": vram_used,
+                "vram/total_gb": vram_total,
+                "vram/percent": vram_percent
+            })
+        
+        # Reset timer after logging
         t0 = t1
 
     iter_num += 1
     local_iter_num += 1
+
+    # Check for graceful shutdown request
+    if shutdown_requested:
+        print("\nGraceful shutdown requested. Saving final checkpoint...")
+        if master_process and iter_num > 0:
+            # Create emergency checkpoint
+            print("Creating emergency checkpoint by merging LoRA weights...")
+            universal_state_dict = raw_model.get_merged_state_dict()
+            param_names = {name: param for name, param in raw_model.named_parameters()}
+            
+            emergency_checkpoint = {
+                'model': universal_state_dict,
+                'optimizer': optimizer.state_dict(),
+                'param_names': param_names,
+                'model_args': model_args,
+                'iter_num': iter_num,
+                'best_val_loss': best_val_loss,
+                'config': config,
+                'final_wandb_run_name': final_wandb_run_name,
+                'iter_of_last_op': iter_of_last_op,
+                'lr_schedule_offset': lr_schedule_offset,
+                'scaling_schedule': scaling_schedule,
+                'scaling_schedule_file': scaling_schedule_file,
+                'emergency_save': True,  # Mark as emergency save
+            }
+            
+            emergency_path = os.path.join(out_dir, f'emergency_ckpt_iter_{iter_num}.pt')
+            torch.save(emergency_checkpoint, emergency_path)
+            print(f"Emergency checkpoint saved to {emergency_path}")
+        print("Graceful shutdown complete. Exiting...")
+        break
 
     if iter_num > max_iters:
         break
