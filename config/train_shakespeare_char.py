@@ -2,8 +2,8 @@
 # good for debugging and playing on macbooks and such
 
 out_dir = 'out-shakespeare-char'
-eval_interval = 250 # keep frequent because we'll overfit
-eval_iters = 200
+eval_interval = 100 # keep frequent because we'll overfit
+eval_iters = 50
 log_interval = 10 # don't print too too often
 
 # we expect to overfit on this small dataset, so only save when val improves
@@ -15,8 +15,16 @@ wandb_run_name = 'mini-gpt'
 
 dataset = 'shakespeare_char'
 gradient_accumulation_steps = 1
-batch_size = 64
+batch_size = 256
 block_size = 256 # context of up to 256 previous characters
+
+# enhanced data augmentation settings
+# uncomment to experiment with enhanced data to reduce overfitting
+# enhanced_data_probability = 0.1 # 10% enhanced data
+# min_prefix_length = 64 # shorter prefixes for character-level
+# max_prefix_length = 192 # shorter prefixes for character-level  
+# enhanced_generation_temperature = 0.9 # slightly more creative
+# enhanced_buffer_size = 500 # smaller buffer for this small dataset
 
 # baby GPT model :)
 n_layer = 6

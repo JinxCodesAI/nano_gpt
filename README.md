@@ -3,11 +3,82 @@
 
 ![nanoGPT](assets/nanogpt.jpg)
 
+**⚠️ EXPERIMENTAL BRANCH: Enhanced Data Augmentation**
+
+This branch contains an experimental enhanced data augmentation feature to prevent overfitting by mixing real training data with model-generated samples. See the [Enhanced Data Augmentation](#enhanced-data-augmentation) section below for details.
+
 The simplest, fastest repository for training/finetuning medium-sized GPTs. It is a rewrite of [minGPT](https://github.com/karpathy/minGPT) that prioritizes teeth over education. Still under active development, but currently the file `train.py` reproduces GPT-2 (124M) on OpenWebText, running on a single 8XA100 40GB node in about 4 days of training. The code itself is plain and readable: `train.py` is a ~300-line boilerplate training loop and `model.py` a ~300-line GPT model definition, which can optionally load the GPT-2 weights from OpenAI. That's it.
 
 ![repro124m](assets/gpt2_124M_loss.png)
 
 Because the code is so simple, it is very easy to hack to your needs, train new models from scratch, or finetune pretrained checkpoints (e.g. biggest one currently available as a starting point would be the GPT-2 1.3B model from OpenAI).
+
+## Enhanced Data Augmentation
+
+This experimental branch introduces an enhanced data augmentation feature designed to prevent overfitting by mixing real training data with model-generated continuations. This approach helps the model see variations of the training data rather than exact repeats.
+
+### How It Works
+
+- **Mixed Training Batches**: Each training batch probabilistically mixes "natural" (original) and "enhanced" (model-generated) samples
+- **Background Generation**: A separate thread continuously generates enhanced samples using a dedicated inference model
+- **Zero-Latency Training**: Pre-generated samples are stored in a rotating buffer for immediate use
+- **Automatic Updates**: The inference model is automatically updated when training checkpoints improve
+
+### Quick Start with Enhanced Data
+
+Try the enhanced data augmentation on Shakespeare with 10% enhanced samples:
+
+```bash
+# Prepare data (same as usual)
+python data/shakespeare_char/prepare.py
+
+# Train with enhanced data augmentation
+python train.py config/train_shakespeare_char.py --enhanced_data_probability=0.1
+```
+
+### Configuration Parameters
+
+The following new parameters control enhanced data augmentation:
+
+- `enhanced_data_probability` (float, 0.0-1.0): Probability of enhanced vs natural data per batch element (default: 0.0 = disabled)
+- `min_prefix_length` (int): Minimum prefix length for enhanced data generation (default: 50)
+- `max_prefix_length` (int): Maximum prefix length for enhanced data generation (default: 950)
+- `enhanced_generation_temperature` (float): Temperature for model generation (default: 0.8)
+- `enhanced_generation_top_k` (int): Top-k sampling for model generation (default: 200)
+- `enhanced_buffer_size` (int): Maximum number of pre-generated enhanced samples in rotating buffer (default: 1000)
+- `enhanced_generation_batch_size` (int): Batch size for parallel enhanced sample generation (default: 32)
+
+### Usage Examples
+
+```bash
+# Basic usage (10% enhanced data)
+python train.py config/train_shakespeare_char.py --enhanced_data_probability=0.1
+
+# More aggressive mixing (20% enhanced data)
+python train.py config/train_shakespeare_char.py --enhanced_data_probability=0.2
+
+# Custom generation settings
+python train.py config/train_shakespeare_char.py \
+    --enhanced_data_probability=0.15 \
+    --enhanced_generation_temperature=0.9 \
+    --min_prefix_length=100 \
+    --max_prefix_length=200
+
+# Disabled (default behavior)
+python train.py config/train_shakespeare_char.py  # enhanced_data_probability=0.0
+```
+
+### Performance Notes
+
+- **No Training Speed Impact**: Enhanced samples are generated in the background
+- **Memory Usage**: Buffer size controls memory usage vs sample diversity trade-off
+- **Backward Compatible**: Feature is disabled by default (enhanced_data_probability=0.0)
+- **Thread Safe**: All components designed for concurrent access
+
+### Documentation
+
+- Complete implementation details: `docs/development_plan.md`
+- Test suite: `test_enhanced_data_simple.py`
 
 ## install
 
