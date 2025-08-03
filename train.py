@@ -54,8 +54,8 @@ min_prefix_length = 50 # minimum prefix length for enhanced data generation
 max_prefix_length = 950 # maximum prefix length for enhanced data generation
 enhanced_generation_temperature = 0.8 # temperature for enhanced data generation
 enhanced_generation_top_k = 200 # top_k for enhanced data generation
-enhanced_buffer_size = 1000 # maximum number of pre-generated enhanced samples in rotating buffer
-enhanced_generation_batch_size = 32 # batch size for parallel enhanced sample generation
+enhanced_buffer_size = 512 # maximum number of pre-generated enhanced samples in rotating buffer
+enhanced_generation_batch_size = 256 # batch size for parallel enhanced sample generation
 # model
 n_layer = 12
 n_head = 12
@@ -335,33 +335,38 @@ def generate_enhanced_samples_batch(inference_model, data, batch_size, min_prefi
     try:
         with torch.no_grad():
             with ctx:
+                # Generate batch of prefixes with same length for efficient batching
+                # Use average prefix length to balance variety and efficiency  
+                avg_prefix_length = (min_prefix_length + max_prefix_length) // 2
+                
+                # Create batch of prefix tensors
+                prefix_tensors = []
                 for i in range(batch_size):
-                    # Random prefix length
-                    prefix_length = random.randint(min_prefix_length, max_prefix_length)
-                    
-                    # Random starting position for prefix
-                    start_idx = random.randint(0, len(data) - prefix_length - 1)
-                    
-                    # Extract prefix
-                    prefix_data = data[start_idx:start_idx + prefix_length]
-                    prefix_tensor = torch.from_numpy(prefix_data.astype(np.int64)).unsqueeze(0).to(device)
-                    
-                    # Generate continuation
-                    generated = inference_model.generate(
-                        prefix_tensor, 
-                        block_size, 
-                        temperature=temperature, 
-                        top_k=top_k
-                    )
-                    
-                    # Extract random fragment of block_size
-                    generated_seq = generated[0].cpu()
-                    fragment = sample_random_fragments([generated_seq], block_size)
-                    
-                    if fragment:
-                        x = fragment[0]
-                        y = torch.cat([x[1:], torch.tensor([x[-1]])])  # Shift by 1 for target
-                        samples.append((x.to(device), y.to(device)))
+                    # Use avg_prefix_length for batching efficiency, add some randomness in start position
+                    start_idx = random.randint(0, len(data) - avg_prefix_length - 1)
+                    prefix_data = data[start_idx:start_idx + avg_prefix_length]
+                    prefix_tensor = torch.from_numpy(prefix_data.astype(np.int64))
+                    prefix_tensors.append(prefix_tensor)
+                
+                # Stack into batch tensor
+                prefix_batch = torch.stack(prefix_tensors).to(device)  # [batch_size, avg_prefix_length]
+                
+                # Single batched generation call - much more efficient!
+                generated_batch = inference_model.generate(
+                    prefix_batch, 
+                    block_size, 
+                    temperature=temperature, 
+                    top_k=top_k
+                )
+                
+                # Process generated sequences
+                generated_sequences = [generated_batch[i].cpu() for i in range(batch_size)]
+                fragments = sample_random_fragments(generated_sequences, block_size)
+                
+                for fragment in fragments:
+                    x = fragment
+                    y = torch.cat([x[1:], torch.tensor([x[-1]])])  # Shift by 1 for target
+                    samples.append((x.to(device), y.to(device)))
     
     except Exception as e:
         print(f"Error generating enhanced samples: {e}")

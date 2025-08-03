@@ -24,7 +24,9 @@ enhanced_data_probability = 0.5 # 50% enhanced data
 min_prefix_length = 20 # shorter prefixes for character-level
 max_prefix_length = 230 # shorter prefixes for character-level  
 enhanced_generation_temperature = 0.3 # slightly more creative
-enhanced_buffer_size = 2000 # smaller buffer for this small dataset
+enhanced_buffer_size = 512 # smaller buffer for this small dataset
+enhanced_generation_batch_size =256
+
 
 # baby GPT model :)
 n_layer = 6
