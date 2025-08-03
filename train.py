@@ -284,9 +284,11 @@ class EnhancedSampleGenerator:
                             self.buffer.add_samples(samples)
                             # Update global generation count
                             enhanced_stats['enhanced_samples_generated'] += len(samples)
-                            print(f"Generated {len(samples)} enhanced samples, buffer size now: {self.buffer.size()}")
+                            current_size = self.buffer.size()
+                            progress = (current_size / self.buffer.max_size) * 100
+                            print(f"🔥 Generated {len(samples)} enhanced samples → Buffer: {current_size}/{self.buffer.max_size} ({progress:.1f}%)")
                         else:
-                            print("Warning: No enhanced samples generated")
+                            print("⚠️  Warning: No enhanced samples generated")
                     except Exception as gen_error:
                         print(f"Enhanced sample generation failed: {gen_error}")
                         import traceback
@@ -577,6 +579,8 @@ if enhanced_data_probability > 0.0:
     
     print(f"Enhanced data augmentation initialized with probability {enhanced_data_probability}")
     print("⏳ Background generation will start after model compilation...")
+else:
+    print(f"📵 Enhanced data augmentation DISABLED (enhanced_data_probability = {enhanced_data_probability})")
 
 # initialize a GradScaler. If enabled=False scaler is a no-op
 scaler = torch.cuda.amp.GradScaler(enabled=(dtype == 'float16'))
@@ -637,20 +641,33 @@ if enhanced_data_probability > 0.0 and enhanced_sample_generator is not None:
     print("🚀 Starting background enhanced sample generation...")
     enhanced_sample_generator.start()
     
-    # Wait for initial buffer filling
-    print("Waiting for initial enhanced sample generation...")
+    # Wait for full buffer filling before starting training
+    print(f"📦 Waiting for full enhanced buffer ({enhanced_buffer_size} samples)...")
     import time
-    for i in range(30):  # Wait up to 30 seconds
-        time.sleep(1)
+    start_time = time.time()
+    last_buffer_size = 0
+    
+    while True:
+        time.sleep(2)  # Check every 2 seconds
         buffer_size = enhanced_sample_buffer.size()
         generated = enhanced_stats['enhanced_samples_generated']
-        print(f"Buffer filling: {buffer_size} samples ready, {generated} generated")
-        if buffer_size >= enhanced_generation_batch_size:  # At least one batch ready
+        elapsed = time.time() - start_time
+        
+        # Show progress when buffer size changes
+        if buffer_size != last_buffer_size:
+            progress = (buffer_size / enhanced_buffer_size) * 100
+            print(f"📈 Buffer progress: {buffer_size}/{enhanced_buffer_size} samples ({progress:.1f}%) - Generated: {generated} - Elapsed: {elapsed:.0f}s")
+            last_buffer_size = buffer_size
+        
+        # Check if buffer is full
+        if buffer_size >= enhanced_buffer_size:
+            print(f"✅ Enhanced buffer FULL: {buffer_size} samples ready! Generated: {generated} - Total time: {elapsed:.0f}s")
             break
-    
-    final_buffer_size = enhanced_sample_buffer.size()
-    final_generated = enhanced_stats['enhanced_samples_generated']
-    print(f"✅ Enhanced data ready: {final_buffer_size} samples in buffer, {final_generated} total generated")
+            
+        # Safety timeout after 10 minutes
+        if elapsed > 600:
+            print(f"⚠️  Timeout waiting for buffer. Proceeding with {buffer_size}/{enhanced_buffer_size} samples after {elapsed:.0f}s")
+            break
 
 # training loop
 X, Y = get_batch('train') # fetch the very first batch
@@ -705,14 +722,9 @@ while True:
                     print("Updating inference model with new checkpoint...")
                     new_inference_model = GPT(GPTConfig(**model_args))
                     
-                    # Handle torch.compile model state dict with _orig_mod prefix
-                    # Use unoptimized model if available, otherwise use raw_model
-                    source_model = unoptimized_model if compile and 'unoptimized_model' in locals() else raw_model
-                    state_dict = source_model.state_dict()
-                    unwanted_prefix = '_orig_mod.'
-                    for k,v in list(state_dict.items()):
-                        if k.startswith(unwanted_prefix):
-                            state_dict[k[len(unwanted_prefix):]] = state_dict.pop(k)
+                    # Use the exact same state_dict that was just saved to checkpoint
+                    # This ensures consistency with what's in ckpt.pt
+                    state_dict = checkpoint['model']
                     
                     new_inference_model.load_state_dict(state_dict)
                     new_inference_model.eval()
