@@ -328,13 +328,12 @@ def generate_enhanced_samples_batch(inference_model, data, batch_size, min_prefi
         print(f"ERROR: data length {len(data)} <= max_prefix_length {max_prefix_length}")
         return []
     
-    print(f"Starting generation: batch_size={batch_size}, data_len={len(data)}, prefix_range={min_prefix_length}-{max_prefix_length}")
     samples = []
     
     try:
         with torch.no_grad():
             with ctx:
-                for _ in range(batch_size):
+                for i in range(batch_size):
                     # Random prefix length
                     prefix_length = random.randint(min_prefix_length, max_prefix_length)
                     
@@ -418,8 +417,8 @@ def get_batch(split):
         natural_y = []
         if n_natural > 0:
             ix_natural = torch.randint(len(data) - block_size, (n_natural,))
-            natural_x = [torch.from_numpy((data[i:i+block_size]).astype(np.int64)) for i in ix_natural]
-            natural_y = [torch.from_numpy((data[i+1:i+1+block_size]).astype(np.int64)) for i in ix_natural]
+            natural_x = [torch.from_numpy((data[i:i+block_size]).astype(np.int64)).to(device) for i in ix_natural]
+            natural_y = [torch.from_numpy((data[i+1:i+1+block_size]).astype(np.int64)).to(device) for i in ix_natural]
         
         # Get enhanced samples from buffer (reuse samples if not enough available)
         enhanced_samples = []
@@ -446,25 +445,26 @@ def get_batch(split):
                 else:
                     # Generate new natural sample if needed
                     rand_idx = torch.randint(len(data) - block_size, (1,)).item()
-                    x_sample = torch.from_numpy((data[rand_idx:rand_idx+block_size]).astype(np.int64))
-                    y_sample = torch.from_numpy((data[rand_idx+1:rand_idx+1+block_size]).astype(np.int64))
+                    x_sample = torch.from_numpy((data[rand_idx:rand_idx+block_size]).astype(np.int64)).to(device)
+                    y_sample = torch.from_numpy((data[rand_idx+1:rand_idx+1+block_size]).astype(np.int64)).to(device)
             
             x_batch.append(x_sample)
             y_batch.append(y_sample)
         
         x = torch.stack(x_batch)
         y = torch.stack(y_batch)
+        # Samples are already on the correct device
     else:
         # Original behavior for validation or when enhanced data is disabled
         ix = torch.randint(len(data) - block_size, (batch_size,))
         x = torch.stack([torch.from_numpy((data[i:i+block_size]).astype(np.int64)) for i in ix])
         y = torch.stack([torch.from_numpy((data[i+1:i+1+block_size]).astype(np.int64)) for i in ix])
-    
-    if device_type == 'cuda':
-        # pin arrays x,y, which allows us to move them to GPU asynchronously (non_blocking=True)
-        x, y = x.pin_memory().to(device, non_blocking=True), y.pin_memory().to(device, non_blocking=True)
-    else:
-        x, y = x.to(device), y.to(device)
+        
+        if device_type == 'cuda':
+            # pin arrays x,y, which allows us to move them to GPU asynchronously (non_blocking=True)
+            x, y = x.pin_memory().to(device, non_blocking=True), y.pin_memory().to(device, non_blocking=True)
+        else:
+            x, y = x.to(device), y.to(device)
     return x, y
 
 # init these up here, can override if init_from='resume' (i.e. from a checkpoint)
@@ -575,24 +575,8 @@ if enhanced_data_probability > 0.0:
         ctx
     )
     
-    # Start background generation
-    enhanced_sample_generator.start()
     print(f"Enhanced data augmentation initialized with probability {enhanced_data_probability}")
-    
-    # Wait for initial buffer filling
-    print("Waiting for initial enhanced sample generation...")
-    import time
-    for i in range(30):  # Wait up to 30 seconds
-        time.sleep(1)
-        buffer_size = enhanced_sample_buffer.size()
-        generated = enhanced_stats['enhanced_samples_generated']
-        print(f"Buffer filling: {buffer_size} samples ready, {generated} generated")
-        if buffer_size >= enhanced_generation_batch_size:  # At least one batch ready
-            break
-    
-    final_buffer_size = enhanced_sample_buffer.size()
-    final_generated = enhanced_stats['enhanced_samples_generated']
-    print(f"✅ Enhanced data ready: {final_buffer_size} samples in buffer, {final_generated} total generated")
+    print("⏳ Background generation will start after model compilation...")
 
 # initialize a GradScaler. If enabled=False scaler is a no-op
 scaler = torch.cuda.amp.GradScaler(enabled=(dtype == 'float16'))
@@ -648,6 +632,26 @@ if wandb_log and master_process:
     import wandb
     wandb.init(project=wandb_project, name=wandb_run_name, config=config)
 
+# start enhanced data generation after model compilation
+if enhanced_data_probability > 0.0 and enhanced_sample_generator is not None:
+    print("🚀 Starting background enhanced sample generation...")
+    enhanced_sample_generator.start()
+    
+    # Wait for initial buffer filling
+    print("Waiting for initial enhanced sample generation...")
+    import time
+    for i in range(30):  # Wait up to 30 seconds
+        time.sleep(1)
+        buffer_size = enhanced_sample_buffer.size()
+        generated = enhanced_stats['enhanced_samples_generated']
+        print(f"Buffer filling: {buffer_size} samples ready, {generated} generated")
+        if buffer_size >= enhanced_generation_batch_size:  # At least one batch ready
+            break
+    
+    final_buffer_size = enhanced_sample_buffer.size()
+    final_generated = enhanced_stats['enhanced_samples_generated']
+    print(f"✅ Enhanced data ready: {final_buffer_size} samples in buffer, {final_generated} total generated")
+
 # training loop
 X, Y = get_batch('train') # fetch the very first batch
 t0 = time.time()
@@ -702,7 +706,9 @@ while True:
                     new_inference_model = GPT(GPTConfig(**model_args))
                     
                     # Handle torch.compile model state dict with _orig_mod prefix
-                    state_dict = raw_model.state_dict()
+                    # Use unoptimized model if available, otherwise use raw_model
+                    source_model = unoptimized_model if compile and 'unoptimized_model' in locals() else raw_model
+                    state_dict = source_model.state_dict()
                     unwanted_prefix = '_orig_mod.'
                     for k,v in list(state_dict.items()):
                         if k.startswith(unwanted_prefix):
