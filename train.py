@@ -281,17 +281,17 @@ class EnhancedSampleGenerator:
                     
                     if samples:
                         self.buffer.add_samples(samples)
+                        # Update global generation count
+                        enhanced_stats['enhanced_samples_generated'] += len(samples)
                 
                 # Update tracking
                 self.last_generated = current_generated
                 self.last_consumed = current_consumed
                 
-                # Log stats every 10 seconds
+                # Optionally log detailed stats every 30 seconds (less frequent)
                 current_time = time.time()
-                if current_time - last_log_time >= 10.0:
-                    buffer_size = self.buffer.size()
-                    print(f"Enhanced data stats: generated={current_generated}, consumed={current_consumed}, "
-                          f"buffer_size={buffer_size}, sleep_time={self.sleep_time:.3f}s")
+                if current_time - last_log_time >= 30.0:
+                    print(f"Enhanced data generator: sleep_time={self.sleep_time:.3f}s, buffer_size={self.buffer.size()}")
                     last_log_time = current_time
                 
                 # Adaptive sleep
@@ -374,6 +374,13 @@ def sample_random_fragments(sequences, block_size):
 # Global enhanced data components (initialized later if needed)
 enhanced_sample_buffer = None
 enhanced_sample_generator = None
+
+# Global statistics tracking
+enhanced_stats = {
+    'total_samples_in_batches': 0,
+    'enhanced_samples_in_batches': 0,
+    'enhanced_samples_generated': 0
+}
 def get_batch(split):
     # We recreate np.memmap every batch to avoid a memory leak, as per
     # https://stackoverflow.com/questions/45132940/numpy-memmap-memory-usage-want-to-iterate-once/61472122#61472122
@@ -388,6 +395,10 @@ def get_batch(split):
         enhanced_mask = determine_batch_composition(batch_size, enhanced_data_probability)
         n_enhanced = enhanced_mask.sum().item()
         n_natural = batch_size - n_enhanced
+        
+        # Update global statistics
+        enhanced_stats['total_samples_in_batches'] += batch_size
+        enhanced_stats['enhanced_samples_in_batches'] += n_enhanced
         
         # Get natural samples
         natural_x = []
@@ -626,6 +637,15 @@ while True:
     if iter_num % eval_interval == 0 and master_process:
         losses = estimate_loss()
         print(f"step {iter_num}: train loss {losses['train']:.4f}, val loss {losses['val']:.4f}")
+        
+        # Enhanced data statistics
+        if enhanced_data_probability > 0.0:
+            total_samples = enhanced_stats['total_samples_in_batches']
+            enhanced_samples = enhanced_stats['enhanced_samples_in_batches']
+            generated_samples = enhanced_stats['enhanced_samples_generated']
+            enhanced_ratio = (enhanced_samples / total_samples * 100) if total_samples > 0 else 0
+            buffer_size = enhanced_sample_buffer.size() if enhanced_sample_buffer else 0
+            print(f"🔥 ENHANCED DATA: Total={total_samples}, Enhanced={enhanced_samples} ({enhanced_ratio:.1f}%), Generated={generated_samples}, Buffer={buffer_size}")
         if wandb_log:
             wandb.log({
                 "iter": iter_num,
