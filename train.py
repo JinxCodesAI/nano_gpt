@@ -38,7 +38,7 @@ log_interval = 1
 eval_iters = 200
 eval_only = False # if True, script exits right after the first eval
 always_save_checkpoint = True # if True, always save a checkpoint after each eval
-init_from = 'scratch' # 'scratch' or 'resume' or 'gpt2*'
+init_from = 'resume' # 'scratch' or 'resume' or 'gpt2*'
 # wandb logging
 wandb_log = False # disabled by default
 wandb_project = 'owt'
@@ -48,6 +48,14 @@ dataset = 'openwebtext'
 gradient_accumulation_steps = 5 * 8 # used to simulate larger batch sizes
 batch_size = 12 # if gradient_accumulation_steps > 1, this is the micro-batch size
 block_size = 1024
+# enhanced data augmentation
+enhanced_data_probability = 0.0 # probability of using enhanced vs natural data (0.0 = disabled)
+min_prefix_length = 50 # minimum prefix length for enhanced data generation
+max_prefix_length = 950 # maximum prefix length for enhanced data generation
+enhanced_generation_temperature = 0.8 # temperature for enhanced data generation
+enhanced_generation_top_k = 200 # top_k for enhanced data generation
+enhanced_buffer_size = 1000 # maximum number of pre-generated enhanced samples in rotating buffer
+enhanced_generation_batch_size = 32 # batch size for parallel enhanced sample generation
 # model
 n_layer = 12
 n_head = 12
@@ -113,6 +121,212 @@ ctx = nullcontext() if device_type == 'cpu' else torch.amp.autocast(device_type=
 
 # poor man's data loader
 data_dir = os.path.join('data', dataset)
+
+# Enhanced data augmentation classes and functions
+import threading
+import queue
+import random
+from collections import deque
+
+class EnhancedSampleBuffer:
+    """Thread-safe rotating buffer for pre-generated enhanced samples"""
+    
+    def __init__(self, max_size):
+        self.max_size = max_size
+        self.buffer = deque(maxlen=max_size)
+        self.lock = threading.Lock()
+    
+    def get_samples(self, n):
+        """Get n random samples from buffer, returns list of (x, y) tensor pairs"""
+        with self.lock:
+            if len(self.buffer) == 0:
+                return []
+            
+            # Sample min(n, available) samples without replacement
+            available = len(self.buffer)
+            n_samples = min(n, available)
+            
+            if n_samples == available:
+                # Take all samples
+                samples = list(self.buffer)
+                self.buffer.clear()
+            else:
+                # Sample randomly without replacement
+                indices = random.sample(range(available), n_samples)
+                samples = [self.buffer[i] for i in sorted(indices, reverse=True)]
+                # Remove sampled items (in reverse order to maintain indices)
+                for i in sorted(indices, reverse=True):
+                    del self.buffer[i]
+            
+            return samples
+    
+    def add_samples(self, samples):
+        """Add samples to buffer, oldest samples are automatically evicted if full"""
+        with self.lock:
+            for sample in samples:
+                self.buffer.append(sample)
+    
+    def clear(self):
+        """Clear all samples from buffer"""
+        with self.lock:
+            self.buffer.clear()
+    
+    def is_full(self):
+        """Check if buffer is at maximum capacity"""
+        with self.lock:
+            return len(self.buffer) >= self.max_size
+    
+    def size(self):
+        """Get current number of samples in buffer"""
+        with self.lock:
+            return len(self.buffer)
+
+class EnhancedSampleGenerator:
+    """Background generator for enhanced samples"""
+    
+    def __init__(self, buffer, inference_model, data, config, device, ctx):
+        self.buffer = buffer
+        self.inference_model = inference_model
+        self.data = data
+        self.config = config
+        self.device = device
+        self.ctx = ctx
+        self.running = False
+        self.thread = None
+        self.stop_event = threading.Event()
+    
+    def start(self):
+        """Start background generation thread"""
+        if self.running:
+            return
+        
+        self.running = True
+        self.stop_event.clear()
+        self.thread = threading.Thread(target=self._generation_loop, daemon=True)
+        self.thread.start()
+    
+    def stop(self):
+        """Stop background generation thread"""
+        if not self.running:
+            return
+        
+        self.running = False
+        self.stop_event.set()
+        if self.thread:
+            self.thread.join(timeout=5.0)
+    
+    def update_model(self, new_inference_model):
+        """Update inference model and clear buffer"""
+        self.inference_model = new_inference_model
+        self.buffer.clear()
+    
+    def is_running(self):
+        """Check if generator is running"""
+        return self.running
+    
+    def _generation_loop(self):
+        """Main generation loop running in background thread"""
+        while not self.stop_event.is_set():
+            try:
+                # Only generate if buffer is not full
+                if not self.buffer.is_full():
+                    # Generate a batch of enhanced samples
+                    samples = generate_enhanced_samples_batch(
+                        self.inference_model, 
+                        self.data, 
+                        self.config['enhanced_generation_batch_size'],
+                        self.config['min_prefix_length'],
+                        self.config['max_prefix_length'],
+                        self.config['block_size'],
+                        self.config['enhanced_generation_temperature'],
+                        self.config['enhanced_generation_top_k'],
+                        self.device,
+                        self.ctx
+                    )
+                    
+                    if samples:
+                        self.buffer.add_samples(samples)
+                
+                # Sleep briefly to avoid busy waiting
+                self.stop_event.wait(0.1)
+                
+            except Exception as e:
+                print(f"Enhanced sample generation error: {e}")
+                self.stop_event.wait(1.0)  # Wait longer on error
+
+def determine_batch_composition(batch_size, probability):
+    """Returns boolean mask indicating which batch elements should be enhanced"""
+    if probability <= 0.0:
+        return torch.zeros(batch_size, dtype=torch.bool)
+    elif probability >= 1.0:
+        return torch.ones(batch_size, dtype=torch.bool)
+    else:
+        return torch.rand(batch_size) < probability
+
+def generate_enhanced_samples_batch(inference_model, data, batch_size, min_prefix_length, 
+                                   max_prefix_length, block_size, temperature, top_k, device, ctx):
+    """Generate batch of enhanced samples for buffer"""
+    if inference_model is None or len(data) <= max_prefix_length:
+        return []
+    
+    samples = []
+    
+    try:
+        with torch.no_grad():
+            with ctx:
+                for _ in range(batch_size):
+                    # Random prefix length
+                    prefix_length = random.randint(min_prefix_length, max_prefix_length)
+                    
+                    # Random starting position for prefix
+                    start_idx = random.randint(0, len(data) - prefix_length - 1)
+                    
+                    # Extract prefix
+                    prefix_data = data[start_idx:start_idx + prefix_length]
+                    prefix_tensor = torch.from_numpy(prefix_data.astype(np.int64)).unsqueeze(0).to(device)
+                    
+                    # Generate continuation
+                    generated = inference_model.generate(
+                        prefix_tensor, 
+                        block_size, 
+                        temperature=temperature, 
+                        top_k=top_k
+                    )
+                    
+                    # Extract random fragment of block_size
+                    generated_seq = generated[0].cpu()
+                    fragment = sample_random_fragments([generated_seq], block_size)
+                    
+                    if fragment:
+                        x = fragment[0]
+                        y = torch.cat([x[1:], torch.tensor([x[-1]])])  # Shift by 1 for target
+                        samples.append((x.to(device), y.to(device)))
+    
+    except Exception as e:
+        print(f"Error generating enhanced samples: {e}")
+        return []
+    
+    return samples
+
+def sample_random_fragments(sequences, block_size):
+    """Extract random fragments of exact block_size from generated sequences"""
+    fragments = []
+    
+    for seq in sequences:
+        if len(seq) < block_size:
+            continue
+        
+        # Random starting position
+        max_start = len(seq) - block_size
+        start_idx = random.randint(0, max_start)
+        fragment = seq[start_idx:start_idx + block_size]
+        fragments.append(fragment)
+    
+    return fragments
+
+# Global enhanced data components (initialized later if needed)
+enhanced_sample_buffer = None
+enhanced_sample_generator = None
 def get_batch(split):
     # We recreate np.memmap every batch to avoid a memory leak, as per
     # https://stackoverflow.com/questions/45132940/numpy-memmap-memory-usage-want-to-iterate-once/61472122#61472122
@@ -120,9 +334,76 @@ def get_batch(split):
         data = np.memmap(os.path.join(data_dir, 'train.bin'), dtype=np.uint16, mode='r')
     else:
         data = np.memmap(os.path.join(data_dir, 'val.bin'), dtype=np.uint16, mode='r')
-    ix = torch.randint(len(data) - block_size, (batch_size,))
-    x = torch.stack([torch.from_numpy((data[i:i+block_size]).astype(np.int64)) for i in ix])
-    y = torch.stack([torch.from_numpy((data[i+1:i+1+block_size]).astype(np.int64)) for i in ix])
+    
+    # Enhanced data augmentation for training split
+    if split == 'train' and enhanced_data_probability > 0.0 and enhanced_sample_buffer is not None:
+        # Determine which batch elements should be enhanced vs natural
+        enhanced_mask = determine_batch_composition(batch_size, enhanced_data_probability)
+        n_enhanced = enhanced_mask.sum().item()
+        n_natural = batch_size - n_enhanced
+        
+        # Get natural samples
+        natural_x = []
+        natural_y = []
+        if n_natural > 0:
+            ix_natural = torch.randint(len(data) - block_size, (n_natural,))
+            natural_x = [torch.from_numpy((data[i:i+block_size]).astype(np.int64)) for i in ix_natural]
+            natural_y = [torch.from_numpy((data[i+1:i+1+block_size]).astype(np.int64)) for i in ix_natural]
+        
+        # Get enhanced samples from buffer
+        enhanced_samples = []
+        if n_enhanced > 0:
+            enhanced_samples = enhanced_sample_buffer.get_samples(n_enhanced)
+            # If not enough enhanced samples available, fill with natural samples
+            if len(enhanced_samples) < n_enhanced:
+                shortage = n_enhanced - len(enhanced_samples)
+                ix_fallback = torch.randint(len(data) - block_size, (shortage,))
+                for i in ix_fallback:
+                    x_fallback = torch.from_numpy((data[i:i+block_size]).astype(np.int64))
+                    y_fallback = torch.from_numpy((data[i+1:i+1+block_size]).astype(np.int64))
+                    enhanced_samples.append((x_fallback, y_fallback))
+        
+        # Combine natural and enhanced samples according to mask
+        x_batch = []
+        y_batch = []
+        natural_idx = 0
+        enhanced_idx = 0
+        
+        for i in range(batch_size):
+            if enhanced_mask[i]:
+                # Use enhanced sample
+                if enhanced_idx < len(enhanced_samples):
+                    x_sample, y_sample = enhanced_samples[enhanced_idx]
+                    enhanced_idx += 1
+                else:
+                    # Fallback to natural if enhanced samples exhausted
+                    x_sample = natural_x[natural_idx] if natural_idx < len(natural_x) else torch.from_numpy((data[torch.randint(len(data) - block_size, (1,)).item():torch.randint(len(data) - block_size, (1,)).item()+block_size]).astype(np.int64))
+                    y_sample = natural_y[natural_idx] if natural_idx < len(natural_y) else torch.from_numpy((data[torch.randint(len(data) - block_size, (1,)).item()+1:torch.randint(len(data) - block_size, (1,)).item()+1+block_size]).astype(np.int64))
+                    if natural_idx < len(natural_x):
+                        natural_idx += 1
+            else:
+                # Use natural sample
+                if natural_idx < len(natural_x):
+                    x_sample = natural_x[natural_idx]
+                    y_sample = natural_y[natural_idx]
+                    natural_idx += 1
+                else:
+                    # Generate new natural sample if needed
+                    rand_idx = torch.randint(len(data) - block_size, (1,)).item()
+                    x_sample = torch.from_numpy((data[rand_idx:rand_idx+block_size]).astype(np.int64))
+                    y_sample = torch.from_numpy((data[rand_idx+1:rand_idx+1+block_size]).astype(np.int64))
+            
+            x_batch.append(x_sample)
+            y_batch.append(y_sample)
+        
+        x = torch.stack(x_batch)
+        y = torch.stack(y_batch)
+    else:
+        # Original behavior for validation or when enhanced data is disabled
+        ix = torch.randint(len(data) - block_size, (batch_size,))
+        x = torch.stack([torch.from_numpy((data[i:i+block_size]).astype(np.int64)) for i in ix])
+        y = torch.stack([torch.from_numpy((data[i+1:i+1+block_size]).astype(np.int64)) for i in ix])
+    
     if device_type == 'cuda':
         # pin arrays x,y, which allows us to move them to GPU asynchronously (non_blocking=True)
         x, y = x.pin_memory().to(device, non_blocking=True), y.pin_memory().to(device, non_blocking=True)
@@ -191,6 +472,56 @@ if block_size < model.config.block_size:
     model.crop_block_size(block_size)
     model_args['block_size'] = block_size # so that the checkpoint will have the right value
 model.to(device)
+
+# initialize enhanced data augmentation if enabled
+inference_model = None
+if enhanced_data_probability > 0.0:
+    print("Initializing enhanced data augmentation...")
+    
+    # Create inference model copy
+    if init_from == 'scratch':
+        inference_gptconf = GPTConfig(**model_args)
+        inference_model = GPT(inference_gptconf)
+        inference_model.load_state_dict(model.state_dict())
+    elif init_from == 'resume':
+        inference_gptconf = GPTConfig(**model_args)
+        inference_model = GPT(inference_gptconf)
+        inference_model.load_state_dict(model.state_dict())
+    elif init_from.startswith('gpt2'):
+        override_args = dict(dropout=0.0)
+        inference_model = GPT.from_pretrained(init_from, override_args)
+    
+    inference_model.eval()
+    inference_model.to(device)
+    
+    # Initialize enhanced data components
+    enhanced_sample_buffer = EnhancedSampleBuffer(enhanced_buffer_size)
+    
+    # Load training data for enhanced sample generation
+    train_data = np.memmap(os.path.join(data_dir, 'train.bin'), dtype=np.uint16, mode='r')
+    
+    # Create enhanced sample generator config
+    enhanced_config = {
+        'enhanced_generation_batch_size': enhanced_generation_batch_size,
+        'min_prefix_length': min_prefix_length,
+        'max_prefix_length': max_prefix_length,
+        'block_size': block_size,
+        'enhanced_generation_temperature': enhanced_generation_temperature,
+        'enhanced_generation_top_k': enhanced_generation_top_k,
+    }
+    
+    enhanced_sample_generator = EnhancedSampleGenerator(
+        enhanced_sample_buffer,
+        inference_model,
+        train_data,
+        enhanced_config,
+        device,
+        ctx
+    )
+    
+    # Start background generation
+    enhanced_sample_generator.start()
+    print(f"Enhanced data augmentation initialized with probability {enhanced_data_probability}")
 
 # initialize a GradScaler. If enabled=False scaler is a no-op
 scaler = torch.cuda.amp.GradScaler(enabled=(dtype == 'float16'))
@@ -284,6 +615,16 @@ while True:
                 }
                 print(f"saving checkpoint to {out_dir}")
                 torch.save(checkpoint, os.path.join(out_dir, 'ckpt.pt'))
+                
+                # Update inference model with new checkpoint if enhanced data is enabled
+                if enhanced_data_probability > 0.0 and enhanced_sample_generator is not None:
+                    print("Updating inference model with new checkpoint...")
+                    new_inference_model = GPT(GPTConfig(**model_args))
+                    new_inference_model.load_state_dict(raw_model.state_dict())
+                    new_inference_model.eval()
+                    new_inference_model.to(device)
+                    enhanced_sample_generator.update_model(new_inference_model)
+                    print("Inference model updated and buffer cleared")
     if iter_num == 0 and eval_only:
         break
 
@@ -331,6 +672,11 @@ while True:
     # termination conditions
     if iter_num > max_iters:
         break
+
+# Cleanup enhanced data augmentation
+if enhanced_data_probability > 0.0 and enhanced_sample_generator is not None:
+    print("Stopping enhanced sample generator...")
+    enhanced_sample_generator.stop()
 
 if ddp:
     destroy_process_group()
