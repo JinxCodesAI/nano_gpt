@@ -1,0 +1,595 @@
+Calculating target architecture based on schedule...
+
+============================================================
+       TARGET MODEL ARCHITECTURE (at end of schedule)
+============================================================
+  n_layer                | 6
+  n_head                 | 12
+  n_embd                 | 768
+  n_hidden               | 768
+  block_size             | 1024
+  vocab_size             | 50304
+  dropout                | 0.0
+  bias                   | False
+  embedding_mode         | standard
+  attn_lora_rank         | 0
+  embedding_rank         | 0
+  lora_alpha             | 0.0
+============================================================
+
+
+============================================================
+           INITIAL MODEL ARCHITECTURE (at Iter 0)
+============================================================
+  n_layer                | 3
+  n_head                 | 12
+  n_embd                 | 768
+  n_hidden               | 768
+  block_size             | 1024
+  vocab_size             | 50304
+  dropout                | 0.0
+  bias                   | False
+  embedding_mode         | lora
+  attn_lora_rank         | 48
+  embedding_rank         | 48
+  lora_alpha             | 1.0
+============================================================
+
+
+Detailed parameter count:
+  total                  | Total:   52,149,504 | Trainable:    8,207,616
+  token_embeddings       | Total:    2,451,456 | Trainable:    2,451,456
+  position_embeddings    | Total:            0 | Trainable:            0
+  attention_layers       | Total:    7,520,256 | Trainable:    2,211,840
+  feed_forward_layers    | Total:    3,538,944 | Trainable:    3,538,944
+  layer_norms            | Total:        4,608 | Trainable:        4,608
+  final_layer_norm       | Total:          768 | Trainable:          768
+  language_model_head    | Total:   38,633,472 | Trainable:            0
+------------------------------------------------------------
+eval every:100
+step 1300: train loss 6.6237, val loss 6.5743
+saving checkpoint to out
+
+=== SCALING OPERATION TRIGGERED (DDP SYNC) ===
+Operation: merge_lora_weights
+Trigger reason: Loss threshold
+Current val loss: 6.5743, Trigger loss: 6.7000
+Iterations since last op: 1300, Max wait: 1500
+Executing operation: merge_lora_weights first burn with value: None
+Performing architectural operation: merge_lora_weights
+Merging LoRA weights into main weights...
+LoRA weights merged and reset.
+
+Detailed parameter count:
+  total                  | Total:   52,149,504 | Trainable:    8,207,616
+  token_embeddings       | Total:    2,451,456 | Trainable:    2,451,456
+  position_embeddings    | Total:            0 | Trainable:            0
+  attention_layers       | Total:    7,520,256 | Trainable:    2,211,840
+  feed_forward_layers    | Total:    3,538,944 | Trainable:    3,538,944
+  layer_norms            | Total:        4,608 | Trainable:        4,608
+  final_layer_norm       | Total:          768 | Trainable:          768
+  language_model_head    | Total:   38,633,472 | Trainable:            0
+------------------------------------------------------------
+Re-configuring optimizer after architectural change...
+num decayed parameter tensors: 17, with 8,202,240 parameters
+num non-decayed parameter tensors: 7, with 5,376 parameters
+using fused AdamW: True
+Transferring optimizer state for existing parameters...
+Transferred optimizer state for 0 / 28 parameters
+Re-compiling the model...
+
+============================================================
+             ARCHITECTURE CHANGE (at Iter 1300)
+============================================================
+  n_layer                | 3
+  n_head                 | 12
+  n_embd                 | 768
+  n_hidden               | 768
+  block_size             | 1024
+  vocab_size             | 50304
+  dropout                | 0.0
+  bias                   | False
+  embedding_mode         | lora
+  attn_lora_rank         | 48
+  embedding_rank         | 48
+  lora_alpha             | 1.0
+============================================================
+
+Architectural operation completed successfully.
+=== SCALING OPERATION COMPLETE ===
+
+
+=== SCALING OPERATION TRIGGERED (DDP SYNC) ===
+Operation: change_lr
+Trigger reason: Loss threshold
+Current val loss: 6.5743, Trigger loss: 100.0000
+Iterations since last op: 0, Max wait: 1
+Executing operation: change_lr  with value: 0.5
+LR multiplier: 10.0000 -> 5.0000
+=== SCALING OPERATION COMPLETE ===
+
+
+=== SCALING OPERATION TRIGGERED (DDP SYNC) ===
+Operation: reset_lr_schedule
+Trigger reason: Loss threshold
+Current val loss: 6.5743, Trigger loss: 100.0000
+Iterations since last op: 0, Max wait: 1
+Executing operation: reset_lr_schedule  with value: None
+LR schedule offset: 0 -> 1300
+=== SCALING OPERATION COMPLETE ===
+
+
+=== SCALING OPERATION TRIGGERED (DDP SYNC) ===
+Operation: change_warmup_iters
+Trigger reason: Loss threshold
+Current val loss: 6.5743, Trigger loss: 100.0000
+Iterations since last op: 0, Max wait: 1
+Executing operation: change_warmup_iters  with value: 2
+Warmup iters multiplier: 1.0000 -> 2.0000
+=== SCALING OPERATION COMPLETE ===
+
+
+=== SCALING OPERATION TRIGGERED (DDP SYNC) ===
+Operation: stack_layers
+Trigger reason: Loss threshold
+Current val loss: 6.5743, Trigger loss: 100.0000
+Iterations since last op: 0, Max wait: 1
+Executing operation: stack_layers first burn with value: 2
+Performing architectural operation: stack_layers
+Stacking layers: current depth 3, creating 6 total layers.
+Model now has 6 layers.
+
+Detailed parameter count:
+  total                  | Total:   63,213,312 | Trainable:   13,963,008
+  token_embeddings       | Total:    2,451,456 | Trainable:    2,451,456
+  position_embeddings    | Total:            0 | Trainable:            0
+  attention_layers       | Total:   15,040,512 | Trainable:    4,423,680
+  feed_forward_layers    | Total:    7,077,888 | Trainable:    7,077,888
+  layer_norms            | Total:        9,216 | Trainable:        9,216
+  final_layer_norm       | Total:          768 | Trainable:          768
+  language_model_head    | Total:   38,633,472 | Trainable:            0
+------------------------------------------------------------
+Re-configuring optimizer after architectural change...
+num decayed parameter tensors: 32, with 13,953,024 parameters
+num non-decayed parameter tensors: 13, with 9,984 parameters
+using fused AdamW: True
+Transferring optimizer state for existing parameters...
+Transferred optimizer state for 0 / 52 parameters
+Re-compiling the model...
+
+============================================================
+             ARCHITECTURE CHANGE (at Iter 1300)
+============================================================
+  n_layer                | 6
+  n_head                 | 12
+  n_embd                 | 768
+  n_hidden               | 768
+  block_size             | 1024
+  vocab_size             | 50304
+  dropout                | 0.0
+  bias                   | False
+  embedding_mode         | lora
+  attn_lora_rank         | 48
+  embedding_rank         | 48
+  lora_alpha             | 1.0
+============================================================
+
+Architectural operation completed successfully.
+Re-evaluating validation loss after operation...
+W0720 15:16:47.587000 154945 /system/conda/miniconda3/envs/cloudspace/lib/python3.10/site-packages/torch/_inductor/utils.py:1250] [0/1] Not enough SMs to use max_autotune_gemm mode
+New val loss after operation: 7.0684
+iter 1300: loss 7.2119, lr 0.01000, time 29380.74ms, mfu -100.00%
+iter 1310: loss 6.6790, lr 0.00014, time 738.58ms, mfu 31.97%
+iter 1320: loss 6.9022, lr 0.00026, time 750.72ms, mfu 31.91%
+iter 1330: loss 6.5604, lr 0.00039, time 744.05ms, mfu 31.90%
+iter 1340: loss 6.6590, lr 0.00051, time 761.07ms, mfu 31.81%
+iter 1350: loss 6.4327, lr 0.00064, time 765.29ms, mfu 31.71%
+iter 1360: loss 6.7595, lr 0.00076, time 763.94ms, mfu 31.63%
+iter 1370: loss 6.5940, lr 0.00089, time 772.60ms, mfu 31.52%
+iter 1380: loss 6.5425, lr 0.00101, time 777.20ms, mfu 31.41%
+iter 1390: loss 6.4398, lr 0.00113, time 783.87ms, mfu 31.28%
+step 1400: train loss 6.5824, val loss 6.5703
+saving checkpoint to out
+
+=== SCALING OPERATION TRIGGERED (DDP SYNC) ===
+Operation: change_lr
+Trigger reason: Loss threshold
+Current val loss: 6.5703, Trigger loss: 100.0000
+Iterations since last op: 100, Max wait: 1
+Executing operation: change_lr  with value: 0.5
+LR multiplier: 5.0000 -> 2.5000
+=== SCALING OPERATION COMPLETE ===
+
+
+=== SCALING OPERATION TRIGGERED (DDP SYNC) ===
+Operation: reset_lr_schedule
+Trigger reason: Loss threshold
+Current val loss: 6.5703, Trigger loss: 100.0000
+Iterations since last op: 0, Max wait: 1
+Executing operation: reset_lr_schedule  with value: None
+LR schedule offset: 1300 -> 1400
+=== SCALING OPERATION COMPLETE ===
+
+
+=== SCALING OPERATION TRIGGERED (DDP SYNC) ===
+Operation: change_warmup_iters
+Trigger reason: Loss threshold
+Current val loss: 6.5703, Trigger loss: 100.0000
+Iterations since last op: 0, Max wait: 1
+Executing operation: change_warmup_iters  with value: 2
+Warmup iters multiplier: 2.0000 -> 4.0000
+=== SCALING OPERATION COMPLETE ===
+
+merge_lora_weights 6.570259094238281 6.2 2500
+iter 1400: loss 6.5015, lr 0.00126, time 5764.42ms, mfu 28.56%
+iter 1410: loss 6.6265, lr 0.00003, time 794.07ms, mfu 28.68%
+iter 1420: loss 6.2972, lr 0.00007, time 797.04ms, mfu 28.77%
+iter 1430: loss 6.4489, lr 0.00010, time 800.96ms, mfu 28.84%
+iter 1440: loss 6.6784, lr 0.00013, time 795.15ms, mfu 28.93%
+iter 1450: loss 6.5031, lr 0.00016, time 798.84ms, mfu 28.99%
+iter 1460: loss 6.6973, lr 0.00019, time 793.24ms, mfu 29.07%
+iter 1470: loss 6.6465, lr 0.00022, time 791.54ms, mfu 29.14%
+iter 1480: loss 6.5472, lr 0.00025, time 794.74ms, mfu 29.20%
+iter 1490: loss 6.4621, lr 0.00028, time 789.81ms, mfu 29.27%
+step 1500: train loss 6.5998, val loss 6.5672
+saving checkpoint to out
+merge_lora_weights 6.5672197341918945 6.2 2500
+iter 1500: loss 6.5745, lr 0.00032, time 5722.21ms, mfu 26.76%
+iter 1510: loss 6.6212, lr 0.00035, time 786.57ms, mfu 27.08%
+iter 1520: loss 6.5299, lr 0.00038, time 792.75ms, mfu 27.35%
+iter 1530: loss 6.6866, lr 0.00041, time 792.88ms, mfu 27.59%
+iter 1540: loss 6.6269, lr 0.00044, time 799.29ms, mfu 27.79%
+iter 1550: loss 6.5735, lr 0.00047, time 800.38ms, mfu 27.96%
+iter 1560: loss 6.6830, lr 0.00050, time 799.07ms, mfu 28.12%
+iter 1570: loss 6.5553, lr 0.00053, time 799.69ms, mfu 28.26%
+iter 1580: loss 6.5016, lr 0.00056, time 798.32ms, mfu 28.39%
+iter 1590: loss 6.4657, lr 0.00060, time 800.34ms, mfu 28.50%
+step 1600: train loss 6.6129, val loss 6.5573
+saving checkpoint to out
+merge_lora_weights 6.5572829246521 6.2 2500
+iter 1600: loss 6.5662, lr 0.00063, time 5761.85ms, mfu 26.06%
+iter 1610: loss 6.6436, lr 0.00066, time 794.14ms, mfu 26.43%
+iter 1620: loss 6.5035, lr 0.00069, time 798.42ms, mfu 26.74%
+iter 1630: loss 6.4987, lr 0.00072, time 795.29ms, mfu 27.04%
+iter 1640: loss 6.5563, lr 0.00075, time 790.45ms, mfu 27.32%
+iter 1650: loss 6.6631, lr 0.00078, time 800.52ms, mfu 27.54%
+iter 1660: loss 6.4440, lr 0.00081, time 797.58ms, mfu 27.74%
+iter 1670: loss 6.5161, lr 0.00085, time 799.01ms, mfu 27.92%
+iter 1680: loss 6.6120, lr 0.00088, time 794.13ms, mfu 28.10%
+iter 1690: loss 6.4901, lr 0.00091, time 794.71ms, mfu 28.26%
+step 1700: train loss 6.5498, val loss 6.5083
+saving checkpoint to out
+merge_lora_weights 6.508282661437988 6.2 2500
+iter 1700: loss 6.5794, lr 0.00094, time 5767.85ms, mfu 25.85%
+iter 1710: loss 6.4597, lr 0.00097, time 795.22ms, mfu 26.23%
+iter 1720: loss 6.6202, lr 0.00100, time 800.22ms, mfu 26.56%
+iter 1730: loss 6.5009, lr 0.00103, time 799.58ms, mfu 26.86%
+iter 1740: loss 6.5530, lr 0.00106, time 801.57ms, mfu 27.12%
+iter 1750: loss 6.5895, lr 0.00110, time 800.45ms, mfu 27.35%
+iter 1760: loss 6.5452, lr 0.00113, time 798.19ms, mfu 27.58%
+iter 1770: loss 6.6029, lr 0.00116, time 792.13ms, mfu 27.80%
+iter 1780: loss 6.6702, lr 0.00119, time 798.31ms, mfu 27.98%
+iter 1790: loss 6.4921, lr 0.00122, time 792.67ms, mfu 28.16%
+step 1800: train loss 6.5521, val loss 6.5588
+saving checkpoint to out
+merge_lora_weights 6.558772087097168 6.2 2500
+iter 1800: loss 6.7191, lr 0.00125, time 5793.07ms, mfu 25.75%
+iter 1810: loss 6.6434, lr 0.00128, time 792.64ms, mfu 26.15%
+iter 1820: loss 6.5028, lr 0.00131, time 799.02ms, mfu 26.49%
+iter 1830: loss 6.4829, lr 0.00135, time 795.75ms, mfu 26.81%
+iter 1840: loss 6.4447, lr 0.00138, time 800.26ms, mfu 27.08%
+iter 1850: loss 6.6254, lr 0.00141, time 797.81ms, mfu 27.33%
+iter 1860: loss 6.5466, lr 0.00144, time 801.01ms, mfu 27.54%
+iter 1870: loss 6.5123, lr 0.00147, time 800.90ms, mfu 27.74%
+iter 1880: loss 6.4572, lr 0.00150, time 800.63ms, mfu 27.91%
+iter 1890: loss 6.4303, lr 0.00153, time 794.16ms, mfu 28.09%
+step 1900: train loss 6.5152, val loss 6.4772
+saving checkpoint to out
+merge_lora_weights 6.477194309234619 6.2 2500
+iter 1900: loss 6.7235, lr 0.00156, time 5793.63ms, mfu 25.69%
+iter 1910: loss 6.4042, lr 0.00159, time 797.09ms, mfu 26.09%
+iter 1920: loss 6.6281, lr 0.00163, time 795.12ms, mfu 26.45%
+iter 1930: loss 6.5472, lr 0.00166, time 790.36ms, mfu 26.79%
+iter 1940: loss 6.5081, lr 0.00169, time 802.89ms, mfu 27.05%
+iter 1950: loss 6.4532, lr 0.00172, time 799.63ms, mfu 27.30%
+iter 1960: loss 6.4348, lr 0.00175, time 798.48ms, mfu 27.52%
+iter 1970: loss 6.4756, lr 0.00178, time 798.27ms, mfu 27.73%
+iter 1980: loss 6.3313, lr 0.00181, time 801.20ms, mfu 27.90%
+iter 1990: loss 6.5811, lr 0.00184, time 799.16ms, mfu 28.07%
+step 2000: train loss 6.4977, val loss 6.4918
+saving checkpoint to out
+merge_lora_weights 6.491757869720459 6.2 2500
+iter 2000: loss 6.4130, lr 0.00188, time 5767.36ms, mfu 25.67%
+iter 2010: loss 6.6822, lr 0.00191, time 788.72ms, mfu 26.10%
+iter 2020: loss 6.4610, lr 0.00194, time 794.81ms, mfu 26.46%
+iter 2030: loss 6.4641, lr 0.00197, time 799.28ms, mfu 26.77%
+iter 2040: loss 6.5149, lr 0.00200, time 797.94ms, mfu 27.05%
+iter 2050: loss 6.6445, lr 0.00203, time 796.16ms, mfu 27.31%
+iter 2060: loss 6.4367, lr 0.00206, time 801.02ms, mfu 27.52%
+iter 2070: loss 6.3016, lr 0.00209, time 797.28ms, mfu 27.73%
+iter 2080: loss 6.6518, lr 0.00213, time 800.06ms, mfu 27.91%
+iter 2090: loss 6.3474, lr 0.00216, time 800.90ms, mfu 28.07%
+step 2100: train loss 6.4292, val loss 6.4650
+saving checkpoint to out
+merge_lora_weights 6.46503210067749 6.2 2500
+iter 2100: loss 6.5431, lr 0.00219, time 5763.86ms, mfu 25.67%
+iter 2110: loss 6.6688, lr 0.00222, time 793.81ms, mfu 26.08%
+iter 2120: loss 6.3656, lr 0.00225, time 793.86ms, mfu 26.44%
+iter 2130: loss 6.3993, lr 0.00228, time 801.04ms, mfu 26.75%
+iter 2140: loss 6.4383, lr 0.00231, time 799.92ms, mfu 27.02%
+iter 2150: loss 6.5100, lr 0.00234, time 798.26ms, mfu 27.28%
+iter 2160: loss 6.3998, lr 0.00238, time 798.21ms, mfu 27.51%
+iter 2170: loss 6.3599, lr 0.00241, time 798.40ms, mfu 27.72%
+iter 2180: loss 6.2461, lr 0.00244, time 798.54ms, mfu 27.90%
+iter 2190: loss 6.4711, lr 0.00247, time 798.63ms, mfu 28.07%
+step 2200: train loss 6.3760, val loss 6.4163
+saving checkpoint to out
+merge_lora_weights 6.41631555557251 6.2 2500
+iter 2200: loss 6.4253, lr 0.00250, time 5775.91ms, mfu 25.67%
+iter 2210: loss 6.4704, lr 0.00250, time 796.71ms, mfu 26.07%
+iter 2220: loss 6.3269, lr 0.00250, time 794.65ms, mfu 26.43%
+iter 2230: loss 6.4571, lr 0.00250, time 800.93ms, mfu 26.73%
+iter 2240: loss 6.4691, lr 0.00250, time 799.25ms, mfu 27.01%
+iter 2250: loss 6.2771, lr 0.00250, time 799.08ms, mfu 27.27%
+iter 2260: loss 6.3908, lr 0.00250, time 799.03ms, mfu 27.50%
+iter 2270: loss 6.3675, lr 0.00250, time 796.81ms, mfu 27.71%
+iter 2280: loss 6.4008, lr 0.00250, time 800.59ms, mfu 27.89%
+iter 2290: loss 6.3381, lr 0.00250, time 798.22ms, mfu 28.06%
+step 2300: train loss 6.3299, val loss 6.3768
+saving checkpoint to out
+merge_lora_weights 6.376753330230713 6.2 2500
+iter 2300: loss 6.2759, lr 0.00250, time 5687.36ms, mfu 25.67%
+iter 2310: loss 6.4249, lr 0.00250, time 798.63ms, mfu 26.06%
+iter 2320: loss 6.3927, lr 0.00250, time 799.12ms, mfu 26.40%
+iter 2330: loss 6.4183, lr 0.00250, time 798.78ms, mfu 26.72%
+iter 2340: loss 6.3891, lr 0.00250, time 795.22ms, mfu 27.02%
+iter 2350: loss 6.1146, lr 0.00250, time 800.06ms, mfu 27.27%
+iter 2360: loss 6.4063, lr 0.00250, time 797.36ms, mfu 27.50%
+iter 2370: loss 6.3508, lr 0.00250, time 801.13ms, mfu 27.70%
+iter 2380: loss 6.2296, lr 0.00250, time 800.99ms, mfu 27.87%
+iter 2390: loss 6.3492, lr 0.00250, time 802.31ms, mfu 28.03%
+step 2400: train loss 6.3162, val loss 6.3057
+saving checkpoint to out
+merge_lora_weights 6.3057146072387695 6.2 2500
+iter 2400: loss 6.4797, lr 0.00250, time 5451.48ms, mfu 25.66%
+iter 2410: loss 6.3629, lr 0.00250, time 795.61ms, mfu 26.06%
+iter 2420: loss 6.3619, lr 0.00250, time 790.18ms, mfu 26.44%
+iter 2430: loss 6.2249, lr 0.00250, time 800.51ms, mfu 26.75%
+iter 2440: loss 6.2388, lr 0.00250, time 800.98ms, mfu 27.02%
+iter 2450: loss 6.4734, lr 0.00250, time 799.18ms, mfu 27.27%
+iter 2460: loss 6.3094, lr 0.00250, time 801.89ms, mfu 27.49%
+iter 2470: loss 6.2282, lr 0.00250, time 799.27ms, mfu 27.69%
+iter 2480: loss 6.4200, lr 0.00250, time 799.79ms, mfu 27.88%
+iter 2490: loss 6.2210, lr 0.00250, time 798.37ms, mfu 28.05%
+step 2500: train loss 6.2521, val loss 6.2601
+saving checkpoint to out
+merge_lora_weights 6.260138511657715 6.2 2500
+iter 2500: loss 6.3381, lr 0.00250, time 5339.98ms, mfu 25.68%
+iter 2510: loss 6.3538, lr 0.00250, time 801.46ms, mfu 26.06%
+iter 2520: loss 6.1190, lr 0.00250, time 799.43ms, mfu 26.41%
+iter 2530: loss 6.2494, lr 0.00250, time 800.79ms, mfu 26.72%
+iter 2540: loss 6.1922, lr 0.00250, time 790.57ms, mfu 27.03%
+iter 2550: loss 6.1787, lr 0.00250, time 797.61ms, mfu 27.29%
+iter 2560: loss 6.3367, lr 0.00250, time 798.63ms, mfu 27.52%
+iter 2570: loss 6.2446, lr 0.00250, time 799.44ms, mfu 27.72%
+iter 2580: loss 6.2511, lr 0.00250, time 799.71ms, mfu 27.90%
+iter 2590: loss 6.1857, lr 0.00250, time 798.88ms, mfu 28.06%
+step 2600: train loss 6.2225, val loss 6.2535
+saving checkpoint to out
+merge_lora_weights 6.253525733947754 6.2 2500
+iter 2600: loss 5.9225, lr 0.00250, time 5425.43ms, mfu 25.69%
+iter 2610: loss 6.3223, lr 0.00250, time 792.91ms, mfu 26.10%
+iter 2620: loss 6.2669, lr 0.00250, time 788.26ms, mfu 26.49%
+iter 2630: loss 6.3075, lr 0.00250, time 798.07ms, mfu 26.80%
+iter 2640: loss 6.1539, lr 0.00250, time 797.84ms, mfu 27.07%
+iter 2650: loss 6.3500, lr 0.00250, time 797.87ms, mfu 27.33%
+iter 2660: loss 6.1963, lr 0.00250, time 800.70ms, mfu 27.54%
+iter 2670: loss 6.1219, lr 0.00250, time 799.54ms, mfu 27.74%
+iter 2680: loss 6.1605, lr 0.00250, time 800.57ms, mfu 27.92%
+iter 2690: loss 6.2040, lr 0.00250, time 797.79ms, mfu 28.08%
+step 2700: train loss 6.1897, val loss 6.2426
+saving checkpoint to out
+merge_lora_weights 6.242608547210693 6.2 2500
+iter 2700: loss 6.2352, lr 0.00250, time 5442.19ms, mfu 25.71%
+iter 2710: loss 6.3029, lr 0.00250, time 799.78ms, mfu 26.09%
+iter 2720: loss 6.1675, lr 0.00250, time 800.34ms, mfu 26.43%
+iter 2730: loss 6.3643, lr 0.00250, time 801.69ms, mfu 26.73%
+iter 2740: loss 6.1881, lr 0.00250, time 798.60ms, mfu 27.02%
+iter 2750: loss 6.2586, lr 0.00250, time 801.28ms, mfu 27.26%
+iter 2760: loss 6.1718, lr 0.00250, time 798.23ms, mfu 27.49%
+iter 2770: loss 6.1107, lr 0.00250, time 800.56ms, mfu 27.69%
+iter 2780: loss 6.1467, lr 0.00250, time 798.79ms, mfu 27.88%
+iter 2790: loss 6.0550, lr 0.00250, time 800.55ms, mfu 28.04%
+step 2800: train loss 6.1745, val loss 6.2009
+saving checkpoint to out
+merge_lora_weights 6.20087194442749 6.2 2500
+iter 2800: loss 6.0199, lr 0.00250, time 5880.66ms, mfu 25.64%
+iter 2810: loss 6.1686, lr 0.00250, time 797.85ms, mfu 26.03%
+iter 2820: loss 6.1611, lr 0.00250, time 799.68ms, mfu 26.38%
+iter 2830: loss 6.1570, lr 0.00250, time 799.44ms, mfu 26.70%
+iter 2840: loss 6.1272, lr 0.00250, time 798.39ms, mfu 26.98%
+iter 2850: loss 6.1803, lr 0.00250, time 800.87ms, mfu 27.23%
+iter 2860: loss 6.1400, lr 0.00250, time 802.18ms, mfu 27.45%
+iter 2870: loss 6.1076, lr 0.00250, time 798.63ms, mfu 27.66%
+iter 2880: loss 6.1812, lr 0.00250, time 797.57ms, mfu 27.86%
+iter 2890: loss 6.2725, lr 0.00250, time 794.42ms, mfu 28.04%
+step 2900: train loss 6.1874, val loss 6.1580
+saving checkpoint to out
+
+=== SCALING OPERATION TRIGGERED (DDP SYNC) ===
+Operation: merge_lora_weights
+Trigger reason: Loss threshold
+Current val loss: 6.1580, Trigger loss: 6.2000
+Iterations since last op: 1500, Max wait: 2500
+Executing operation: merge_lora_weights first burn with value: None
+Performing architectural operation: merge_lora_weights
+Merging LoRA weights into main weights...
+LoRA weights merged and reset.
+
+Detailed parameter count:
+  total                  | Total:   63,213,312 | Trainable:   13,963,008
+  token_embeddings       | Total:    2,451,456 | Trainable:    2,451,456
+  position_embeddings    | Total:            0 | Trainable:            0
+  attention_layers       | Total:   15,040,512 | Trainable:    4,423,680
+  feed_forward_layers    | Total:    7,077,888 | Trainable:    7,077,888
+  layer_norms            | Total:        9,216 | Trainable:        9,216
+  final_layer_norm       | Total:          768 | Trainable:          768
+  language_model_head    | Total:   38,633,472 | Trainable:            0
+------------------------------------------------------------
+Re-configuring optimizer after architectural change...
+num decayed parameter tensors: 32, with 13,953,024 parameters
+num non-decayed parameter tensors: 13, with 9,984 parameters
+using fused AdamW: True
+Transferring optimizer state for existing parameters...
+Transferred optimizer state for 0 / 52 parameters
+Re-compiling the model...
+
+============================================================
+             ARCHITECTURE CHANGE (at Iter 2900)
+============================================================
+  n_layer                | 6
+  n_head                 | 12
+  n_embd                 | 768
+  n_hidden               | 768
+  block_size             | 1024
+  vocab_size             | 50304
+  dropout                | 0.0
+  bias                   | False
+  embedding_mode         | lora
+  attn_lora_rank         | 48
+  embedding_rank         | 48
+  lora_alpha             | 1.0
+============================================================
+
+Architectural operation completed successfully.
+=== SCALING OPERATION COMPLETE ===
+
+
+=== SCALING OPERATION TRIGGERED (DDP SYNC) ===
+Operation: change_lr
+Trigger reason: Loss threshold
+Current val loss: 6.1580, Trigger loss: 100.0000
+Iterations since last op: 0, Max wait: 1
+Executing operation: change_lr  with value: 0.5
+LR multiplier: 2.5000 -> 1.2500
+=== SCALING OPERATION COMPLETE ===
+
+
+=== SCALING OPERATION TRIGGERED (DDP SYNC) ===
+Operation: reset_lr_schedule
+Trigger reason: Loss threshold
+Current val loss: 6.1580, Trigger loss: 100.0000
+Iterations since last op: 0, Max wait: 1
+Executing operation: reset_lr_schedule  with value: None
+LR schedule offset: 1400 -> 2900
+=== SCALING OPERATION COMPLETE ===
+
+
+=== SCALING OPERATION TRIGGERED (DDP SYNC) ===
+Operation: change_warmup_iters
+Trigger reason: Loss threshold
+Current val loss: 6.1580, Trigger loss: 100.0000
+Iterations since last op: 0, Max wait: 1
+Executing operation: change_warmup_iters  with value: 2
+Warmup iters multiplier: 4.0000 -> 8.0000
+=== SCALING OPERATION COMPLETE ===
+
+merge_lora_weights 6.158042907714844 5.5 4500
+iter 2900: loss 6.1939, lr 0.00250, time 5872.67ms, mfu 25.64%
+iter 2910: loss 6.0423, lr 0.00001, time 793.65ms, mfu 26.05%
+iter 2920: loss 6.1228, lr 0.00002, time 797.71ms, mfu 26.41%
+iter 2930: loss 6.0704, lr 0.00002, time 791.01ms, mfu 26.75%
+iter 2940: loss 6.1251, lr 0.00003, time 797.43ms, mfu 27.04%
+iter 2950: loss 5.8532, lr 0.00004, time 792.06ms, mfu 27.31%
+iter 2960: loss 6.0337, lr 0.00005, time 799.11ms, mfu 27.54%
+iter 2970: loss 6.0484, lr 0.00006, time 797.10ms, mfu 27.74%
+iter 2980: loss 6.0748, lr 0.00006, time 801.49ms, mfu 27.92%
+iter 2990: loss 6.0002, lr 0.00007, time 798.71ms, mfu 28.08%
+step 3000: train loss 6.0099, val loss 6.0539
+saving checkpoint to out
+merge_lora_weights 6.0539398193359375 5.5 4500
+iter 3000: loss 6.0448, lr 0.00008, time 5777.34ms, mfu 25.68%
+Traceback (most recent call last):
+  File "/teamspace/studios/this_studio/nanoGPT/train.py", line 809, in <module>
+    training_logger.log_step(iter_num, losses['train'], new_val_loss)
+  File "/home/zeus/miniconda3/envs/cloudspace/lib/python3.10/site-packages/torch/nn/modules/module.py", line 1751, in _wrapped_call_impl
+    return self._call_impl(*args, **kwargs)
+  File "/home/zeus/miniconda3/envs/cloudspace/lib/python3.10/site-packages/torch/nn/modules/module.py", line 1762, in _call_impl
+    return forward_call(*args, **kwargs)
+  File "/home/zeus/miniconda3/envs/cloudspace/lib/python3.10/site-packages/torch/_dynamo/eval_frame.py", line 655, in _fn
+    return fn(*args, **kwargs)
+  File "/home/zeus/miniconda3/envs/cloudspace/lib/python3.10/site-packages/torch/nn/modules/module.py", line 1751, in _wrapped_call_impl
+    return self._call_impl(*args, **kwargs)
+  File "/home/zeus/miniconda3/envs/cloudspace/lib/python3.10/site-packages/torch/nn/modules/module.py", line 1762, in _call_impl
+    return forward_call(*args, **kwargs)
+  File "/teamspace/studios/this_studio/nanoGPT/model.py", line 420, in forward
+    _update_counts(block.ln_1, 'layer_norms')
+  File "/home/zeus/miniconda3/envs/cloudspace/lib/python3.10/site-packages/torch/_dynamo/eval_frame.py", line 838, in _fn
+    return fn(*args, **kwargs)
+  File "/home/zeus/miniconda3/envs/cloudspace/lib/python3.10/site-packages/torch/_functorch/aot_autograd.py", line 1201, in forward
+    return compiled_fn(full_args)
+  File "/home/zeus/miniconda3/envs/cloudspace/lib/python3.10/site-packages/torch/_functorch/_aot_autograd/runtime_wrappers.py", line 315, in runtime_wrapper
+    all_outs = call_func_at_runtime_with_args(
+  File "/home/zeus/miniconda3/envs/cloudspace/lib/python3.10/site-packages/torch/_functorch/_aot_autograd/utils.py", line 126, in call_func_at_runtime_with_args
+    out = normalize_as_list(f(args))
+  File "/home/zeus/miniconda3/envs/cloudspace/lib/python3.10/site-packages/torch/_functorch/_aot_autograd/utils.py", line 100, in g
+    return f(*args)
+  File "/home/zeus/miniconda3/envs/cloudspace/lib/python3.10/site-packages/torch/autograd/function.py", line 575, in apply
+    return super().apply(*args, **kwargs)  # type: ignore[misc]
+  File "/home/zeus/miniconda3/envs/cloudspace/lib/python3.10/site-packages/torch/_functorch/_aot_autograd/runtime_wrappers.py", line 1937, in forward
+    fw_outs = call_func_at_runtime_with_args(
+  File "/home/zeus/miniconda3/envs/cloudspace/lib/python3.10/site-packages/torch/_functorch/_aot_autograd/utils.py", line 126, in call_func_at_runtime_with_args
+    out = normalize_as_list(f(args))
+  File "/home/zeus/miniconda3/envs/cloudspace/lib/python3.10/site-packages/torch/_functorch/_aot_autograd/runtime_wrappers.py", line 495, in wrapper
+    return compiled_fn(runtime_args)
+  File "/home/zeus/miniconda3/envs/cloudspace/lib/python3.10/site-packages/torch/_functorch/_aot_autograd/runtime_wrappers.py", line 689, in inner_fn
+    outs = compiled_fn(args)
+  File "/home/zeus/miniconda3/envs/cloudspace/lib/python3.10/site-packages/torch/_inductor/output_code.py", line 460, in __call__
+    return self.current_callable(inputs)
+  File "/home/zeus/miniconda3/envs/cloudspace/lib/python3.10/site-packages/torch/_inductor/utils.py", line 2404, in run
+    return model(new_inputs)
+  File "/tmp/torchinductor_adamskrodzki/xz/cxzbwqqmitdol6yycg64r7oar3vsq6lfo6pvzhmh4nf52tcnxphd.py", line 1915, in call
+    extern_kernels.mm(reinterpret_tensor(buf138, (32768, 768), (768, 1), 0), buf140, out=buf141)
+KeyboardInterrupt
+Traceback (most recent call last):
+  File "/teamspace/studios/this_studio/nanoGPT/train.py", line 809, in <module>
+    training_logger.log_step(iter_num, losses['train'], new_val_loss)
+  File "/home/zeus/miniconda3/envs/cloudspace/lib/python3.10/site-packages/torch/nn/modules/module.py", line 1751, in _wrapped_call_impl
+    return self._call_impl(*args, **kwargs)
+  File "/home/zeus/miniconda3/envs/cloudspace/lib/python3.10/site-packages/torch/nn/modules/module.py", line 1762, in _call_impl
+    return forward_call(*args, **kwargs)
+  File "/home/zeus/miniconda3/envs/cloudspace/lib/python3.10/site-packages/torch/_dynamo/eval_frame.py", line 655, in _fn
+    return fn(*args, **kwargs)
+  File "/home/zeus/miniconda3/envs/cloudspace/lib/python3.10/site-packages/torch/nn/modules/module.py", line 1751, in _wrapped_call_impl
+    return self._call_impl(*args, **kwargs)
+  File "/home/zeus/miniconda3/envs/cloudspace/lib/python3.10/site-packages/torch/nn/modules/module.py", line 1762, in _call_impl
+    return forward_call(*args, **kwargs)
+  File "/teamspace/studios/this_studio/nanoGPT/model.py", line 420, in forward
+    _update_counts(block.ln_1, 'layer_norms')
+  File "/home/zeus/miniconda3/envs/cloudspace/lib/python3.10/site-packages/torch/_dynamo/eval_frame.py", line 838, in _fn
+    return fn(*args, **kwargs)
+  File "/home/zeus/miniconda3/envs/cloudspace/lib/python3.10/site-packages/torch/_functorch/aot_autograd.py", line 1201, in forward
+    return compiled_fn(full_args)
+  File "/home/zeus/miniconda3/envs/cloudspace/lib/python3.10/site-packages/torch/_functorch/_aot_autograd/runtime_wrappers.py", line 315, in runtime_wrapper
+    all_outs = call_func_at_runtime_with_args(
+  File "/home/zeus/miniconda3/envs/cloudspace/lib/python3.10/site-packages/torch/_functorch/_aot_autograd/utils.py", line 126, in call_func_at_runtime_with_args
+    out = normalize_as_list(f(args))
+  File "/home/zeus/miniconda3/envs/cloudspace/lib/python3.10/site-packages/torch/_functorch/_aot_autograd/utils.py", line 100, in g
+    return f(*args)
+  File "/home/zeus/miniconda3/envs/cloudspace/lib/python3.10/site-packages/torch/autograd/function.py", line 575, in apply
+    return super().apply(*args, **kwargs)  # type: ignore[misc]
+  File "/home/zeus/miniconda3/envs/cloudspace/lib/python3.10/site-packages/torch/_functorch/_aot_autograd/runtime_wrappers.py", line 1937, in forward
+    fw_outs = call_func_at_runtime_with_args(
+  File "/home/zeus/miniconda3/envs/cloudspace/lib/python3.10/site-packages/torch/_functorch/_aot_autograd/utils.py", line 126, in call_func_at_runtime_with_args
+    out = normalize_as_list(f(args))
+  File "/home/zeus/miniconda3/envs/cloudspace/lib/python3.10/site-packages/torch/_functorch/_aot_autograd/runtime_wrappers.py", line 495, in wrapper
+    return compiled_fn(runtime_args)
+  File "/home/zeus/miniconda3/envs/cloudspace/lib/python3.10/site-packages/torch/_functorch/_aot_autograd/runtime_wrappers.py", line 689, in inner_fn
+    outs = compiled_fn(args)
+  File "/home/zeus/miniconda3/envs/cloudspace/lib/python3.10/site-packages/torch/_inductor/output_code.py", line 460, in __call__
+    return self.current_callable(inputs)
+  File "/home/zeus/miniconda3/envs/cloudspace/lib/python3.10/site-packages/torch/_inductor/utils.py", line 2404, in run
+    return model(new_inputs)
+  File "/tmp/torchinductor_adamskrodzki/xz/cxzbwqqmitdol6yycg64r7oar3vsq6lfo6pvzhmh4nf52tcnxphd.py", line 1915, in call
+    extern_kernels.mm(reinterpret_tensor(buf138, (32768, 768), (768, 1), 0), buf140, out=buf141)
+KeyboardInterrupt

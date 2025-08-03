@@ -1,0 +1,59 @@
+================================================================================
+Training run started at 2025-07-20 14:51:19
+================================================================================
+Configuration:
+----------------------------------------
+always_save_checkpoint: True
+attn_lora_rank: 48
+attn_lora_rank_divisor: 16
+backend: nccl
+batch_size: 32
+batch_size_multiplier: 1.0
+beta1: 0.9
+beta2: 0.95
+bias: False
+block_size: 1024
+compile: True
+dataset: fineweb10B
+decay_lr: True
+device: cuda
+dropout: 0.0
+dtype: bfloat16
+embedding_mode: lora
+embedding_rank: 768
+eval_interval: 100
+eval_interval_multiplier: 1.0
+eval_iters: 10
+eval_iters_multiplier: 1.0
+eval_only: False
+file_logging: True
+grad_accum_multiplier: 1.0
+grad_clip: 1.0
+gradient_accumulation_steps: 2
+init_from: scratch
+learning_rate: 0.001
+log_dir: logs
+log_interval: 10
+lora_alpha: 1.0
+lora_alpha_multiplier: 1.0
+lr_decay_iters: 600000
+lr_multiplier: 10
+max_iters: 600000
+min_lr: 6e-05
+n_embd: 768
+n_head: 12
+n_hidden_divisor: 4
+n_layer: 12
+n_layer_divisor: 4
+out_dir: out
+rotary_base: 10000.0
+rotary_max_position_embeddings: 2048
+use_rotary_embeddings: True
+vocab_lora_rank_divisor: 1
+wandb_log: True
+wandb_project: owt
+wandb_run_name: gpt2
+warmup_iters: 200
+warmup_iters_multiplier: 1.0
+weight_decay: 0.1
+----------------------------------------

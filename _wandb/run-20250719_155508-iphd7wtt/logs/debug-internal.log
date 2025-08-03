@@ -1,0 +1,6 @@
+{"time":"2025-07-19T15:55:09.075896624Z","level":"INFO","msg":"stream: starting","core version":"0.21.0"}
+{"time":"2025-07-19T15:55:09.218628922Z","level":"INFO","msg":"stream: created new stream","id":"iphd7wtt"}
+{"time":"2025-07-19T15:55:09.218808732Z","level":"INFO","msg":"stream: started","id":"iphd7wtt"}
+{"time":"2025-07-19T15:55:09.218930288Z","level":"INFO","msg":"sender: started","stream_id":"iphd7wtt"}
+{"time":"2025-07-19T15:55:09.218994006Z","level":"INFO","msg":"handler: started","stream_id":"iphd7wtt"}
+{"time":"2025-07-19T15:55:09.219066014Z","level":"INFO","msg":"writer: Do: started","stream_id":"iphd7wtt"}

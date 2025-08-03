@@ -1,0 +1,6 @@
+{"time":"2025-07-19T23:30:18.732772187Z","level":"INFO","msg":"stream: starting","core version":"0.21.0"}
+{"time":"2025-07-19T23:30:18.882744147Z","level":"INFO","msg":"stream: created new stream","id":"qnayto20"}
+{"time":"2025-07-19T23:30:18.88282215Z","level":"INFO","msg":"stream: started","id":"qnayto20"}
+{"time":"2025-07-19T23:30:18.882953658Z","level":"INFO","msg":"writer: Do: started","stream_id":"qnayto20"}
+{"time":"2025-07-19T23:30:18.882951312Z","level":"INFO","msg":"handler: started","stream_id":"qnayto20"}
+{"time":"2025-07-19T23:30:18.882983576Z","level":"INFO","msg":"sender: started","stream_id":"qnayto20"}

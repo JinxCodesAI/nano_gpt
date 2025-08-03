@@ -1,0 +1,81 @@
+================================================================================
+Training run started at 2025-07-20 16:25:25
+================================================================================
+Configuration:
+----------------------------------------
+always_save_checkpoint: True
+attn_lora_rank: 48
+attn_lora_rank_divisor: 16
+backend: nccl
+batch_size: 32
+batch_size_multiplier: 1.0
+beta1: 0.9
+beta2: 0.95
+bias: False
+block_size: 1024
+compile: True
+dataset: fineweb10B
+decay_lr: True
+device: cuda
+dropout: 0.0
+dtype: bfloat16
+embedding_mode: lora
+embedding_rank: 48
+eval_interval: 100
+eval_interval_multiplier: 1.0
+eval_iters: 10
+eval_iters_multiplier: 1.0
+eval_only: False
+file_logging: True
+grad_accum_multiplier: 1.0
+grad_clip: 1.0
+gradient_accumulation_steps: 2
+init_from: scratch
+learning_rate: 0.001
+log_dir: logs
+log_interval: 10
+lora_alpha: 1.0
+lora_alpha_multiplier: 1.0
+lr_decay_iters: 600000
+lr_multiplier: 10
+max_iters: 600000
+min_lr: 6e-05
+n_embd: 768
+n_head: 12
+n_hidden_divisor: 4
+n_layer: 12
+n_layer_divisor: 4
+out_dir: out
+rotary_base: 10000.0
+rotary_max_position_embeddings: 2048
+use_rotary_embeddings: True
+vocab_lora_rank_divisor: 16
+wandb_log: True
+wandb_project: owt
+wandb_run_name: gpt2
+warmup_iters: 200
+warmup_iters_multiplier: 1.0
+weight_decay: 0.1
+----------------------------------------
+[2025-07-20 16:25:38] step 0: train loss 10.9644, val loss 10.9694
+[2025-07-20 16:26:38] step 100: train loss 8.5482, val loss 8.5730
+[2025-07-20 16:27:41] step 200: train loss 7.9680, val loss 7.9879
+[2025-07-20 16:27:41] OPERATION_START: merge_lora_weights first burn | iter=200 | value=None | trigger=Loss threshold | val_loss=7.9879 | trigger_loss=8.0000 | max_wait=1500
+[2025-07-20 16:27:41] OPERATION_SUCCESS: merge_lora_weights | iter=200 | status=merged
+[2025-07-20 16:27:41] OPERATION_START: change_lr  | iter=200 | value=0.3 | trigger=Loss threshold | val_loss=7.9879 | trigger_loss=100.0000 | max_wait=1
+[2025-07-20 16:27:41] OPERATION_SUCCESS: change_lr | iter=200 | old=10 | new=3.0
+[2025-07-20 16:27:41] OPERATION_START: reset_lr_schedule  | iter=200 | value=None | trigger=Loss threshold | val_loss=7.9879 | trigger_loss=100.0000 | max_wait=1
+[2025-07-20 16:27:41] OPERATION_SUCCESS: reset_lr_schedule | iter=200 | old=0 | new=200
+[2025-07-20 16:28:42] step 300: train loss 7.7937, val loss 7.8069
+[2025-07-20 16:29:44] step 400: train loss 7.6086, val loss 7.5615
+[2025-07-20 16:30:46] step 500: train loss 7.4465, val loss 7.4313
+[2025-07-20 16:31:48] step 600: train loss 7.2976, val loss 7.3416
+[2025-07-20 16:32:51] step 700: train loss 7.2885, val loss 7.2974
+[2025-07-20 16:33:53] step 800: train loss 7.1349, val loss 7.2127
+[2025-07-20 16:34:55] step 900: train loss 7.1263, val loss 7.1325
+[2025-07-20 16:35:57] step 1000: train loss 7.0246, val loss 7.0459
+[2025-07-20 16:36:59] step 1100: train loss 7.0559, val loss 7.0268
+[2025-07-20 16:38:01] step 1200: train loss 6.9748, val loss 6.9095
+[2025-07-20 16:39:03] step 1300: train loss 6.9028, val loss 6.9338
+[2025-07-20 16:40:05] step 1400: train loss 6.8693, val loss 6.8893
+[2025-07-20 16:41:08] step 1500: train loss 6.8499, val loss 6.8500

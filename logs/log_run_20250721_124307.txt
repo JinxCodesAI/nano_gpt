@@ -1,0 +1,236 @@
+================================================================================
+Training run started at 2025-07-21 12:43:07
+================================================================================
+Configuration:
+----------------------------------------
+always_save_checkpoint: True
+attn_lora_rank: 0
+attn_lora_rank_divisor: 0
+backend: nccl
+batch_size: 1
+batch_size_multiplier: 1.0
+beta1: 0.9
+beta2: 0.95
+bias: False
+block_size: 128
+compile: False
+dataset: shakespeare_char
+decay_lr: True
+device: cpu
+dropout: 0.0
+dtype: float16
+embedding_mode: standard
+embedding_rank: 0
+eval_interval: 10
+eval_interval_multiplier: 1.0
+eval_iters: 5
+eval_iters_multiplier: 1.0
+eval_only: False
+file_logging: True
+grad_accum_multiplier: 1.0
+grad_clip: 1.0
+gradient_accumulation_steps: 1
+init_from: resume
+learning_rate: 0.006
+log_dir: logs
+log_interval: 1
+lora_alpha: 1.0
+lora_alpha_multiplier: 1.0
+lr_decay_iters: 600000
+lr_multiplier: 1.0
+max_iters: 600000
+min_lr: 6e-05
+n_embd: 16
+n_head: 2
+n_hidden_divisor: 1
+n_layer: 2
+n_layer_divisor: 1
+num_train_shards: 1
+out_dir: out_resume
+rotary_base: 10000.0
+rotary_max_position_embeddings: 2048
+use_rotary_embeddings: False
+vocab_lora_rank_divisor: 0
+wandb_log: False
+wandb_project: owt
+wandb_run_name: gpt2
+warmup_iters: 10
+warmup_iters_multiplier: 1.0
+weight_decay: 0.1
+----------------------------------------
+[2025-07-21 12:43:07] step 920: train loss 2.5924, val loss 2.6589
+[2025-07-21 12:43:07] OPERATION_START: merge_lora_weights first burn | iter=920 | value=None | trigger=Timeout | val_loss=2.6589 | trigger_loss=1.5000 | max_wait=500
+[2025-07-21 12:43:07] OPERATION_SUCCESS: merge_lora_weights | iter=920 | status=merged
+[2025-07-21 12:43:07] OPERATION_START: change_lr  | iter=920 | value=0.7 | trigger=Loss threshold | val_loss=2.6589 | trigger_loss=100.0000 | max_wait=1
+[2025-07-21 12:43:07] OPERATION_SUCCESS: change_lr | iter=920 | old=1.0 | new=0.7
+[2025-07-21 12:43:07] step 930: train loss 2.6606, val loss 2.6057
+[2025-07-21 12:43:07] step 940: train loss 2.5669, val loss 2.6430
+[2025-07-21 12:43:07] step 950: train loss 2.6188, val loss 2.5394
+[2025-07-21 12:43:07] step 960: train loss 2.6606, val loss 2.7018
+[2025-07-21 12:43:07] step 970: train loss 2.6122, val loss 2.6462
+[2025-07-21 12:43:07] step 980: train loss 2.6421, val loss 2.4809
+[2025-07-21 12:43:07] step 990: train loss 2.5225, val loss 2.5638
+[2025-07-21 12:43:07] step 1000: train loss 2.5265, val loss 2.6133
+[2025-07-21 12:43:07] step 1010: train loss 2.6533, val loss 2.5431
+[2025-07-21 12:43:07] step 1020: train loss 2.5781, val loss 2.6789
+[2025-07-21 12:43:07] step 1030: train loss 2.6010, val loss 2.6677
+[2025-07-21 12:43:07] step 1040: train loss 2.5892, val loss 2.5215
+[2025-07-21 12:43:08] step 1050: train loss 2.5344, val loss 2.5729
+[2025-07-21 12:43:08] step 1060: train loss 2.6312, val loss 2.6450
+[2025-07-21 12:43:08] step 1070: train loss 2.6047, val loss 2.5882
+[2025-07-21 12:43:08] step 1080: train loss 2.5356, val loss 2.6683
+[2025-07-21 12:43:08] step 1090: train loss 2.4987, val loss 2.5689
+[2025-07-21 12:43:08] step 1100: train loss 2.5330, val loss 2.5467
+[2025-07-21 12:43:08] step 1110: train loss 2.6369, val loss 2.5700
+[2025-07-21 12:43:08] step 1120: train loss 2.4709, val loss 2.5481
+[2025-07-21 12:43:08] step 1130: train loss 2.6497, val loss 2.6889
+[2025-07-21 12:43:08] step 1140: train loss 2.6575, val loss 2.5791
+[2025-07-21 12:43:08] step 1150: train loss 2.5930, val loss 2.6506
+[2025-07-21 12:43:08] step 1160: train loss 2.5276, val loss 2.6168
+[2025-07-21 12:43:08] step 1170: train loss 2.5843, val loss 2.5785
+[2025-07-21 12:43:08] step 1180: train loss 2.5485, val loss 2.6176
+[2025-07-21 12:43:09] step 1190: train loss 2.5908, val loss 2.4794
+[2025-07-21 12:43:09] step 1200: train loss 2.4985, val loss 2.5995
+[2025-07-21 12:43:09] step 1210: train loss 2.6376, val loss 2.5782
+[2025-07-21 12:43:09] step 1220: train loss 2.5980, val loss 2.4879
+[2025-07-21 12:43:09] step 1230: train loss 2.5684, val loss 2.6927
+[2025-07-21 12:43:09] step 1240: train loss 2.5350, val loss 2.5857
+[2025-07-21 12:43:09] step 1250: train loss 2.6604, val loss 2.5676
+[2025-07-21 12:43:09] step 1260: train loss 2.5602, val loss 2.5717
+[2025-07-21 12:43:09] step 1270: train loss 2.5407, val loss 2.4009
+[2025-07-21 12:43:09] step 1280: train loss 2.5251, val loss 2.5368
+[2025-07-21 12:43:09] step 1290: train loss 2.6790, val loss 2.5866
+[2025-07-21 12:43:10] step 1300: train loss 2.5801, val loss 2.6020
+[2025-07-21 12:43:10] step 1310: train loss 2.4857, val loss 2.5457
+[2025-07-21 12:43:10] step 1320: train loss 2.4854, val loss 2.5578
+[2025-07-21 12:43:10] step 1330: train loss 2.5814, val loss 2.4225
+[2025-07-21 12:43:10] step 1340: train loss 2.5565, val loss 2.6465
+[2025-07-21 12:43:10] step 1350: train loss 2.5293, val loss 2.5319
+[2025-07-21 12:43:10] step 1360: train loss 2.7091, val loss 2.5793
+[2025-07-21 12:43:10] step 1370: train loss 2.5996, val loss 2.6337
+[2025-07-21 12:43:10] step 1380: train loss 2.4814, val loss 2.6512
+[2025-07-21 12:43:10] step 1390: train loss 2.5461, val loss 2.5443
+[2025-07-21 12:43:10] step 1400: train loss 2.6729, val loss 2.5973
+[2025-07-21 12:43:10] step 1410: train loss 2.5364, val loss 2.5143
+[2025-07-21 12:43:10] step 1420: train loss 2.6328, val loss 2.5923
+[2025-07-21 12:43:10] OPERATION_START: merge_lora_weights first burn | iter=1420 | value=None | trigger=Timeout | val_loss=2.5923 | trigger_loss=1.5000 | max_wait=500
+[2025-07-21 12:43:10] OPERATION_SUCCESS: merge_lora_weights | iter=1420 | status=merged
+[2025-07-21 12:43:10] step 1430: train loss 2.5671, val loss 2.6912
+[2025-07-21 12:43:10] step 1440: train loss 2.5382, val loss 2.6388
+[2025-07-21 12:43:10] step 1450: train loss 2.6366, val loss 2.6419
+[2025-07-21 12:43:11] step 1460: train loss 2.4399, val loss 2.5965
+[2025-07-21 12:43:11] step 1470: train loss 2.6209, val loss 2.5146
+[2025-07-21 12:43:11] step 1480: train loss 2.4857, val loss 2.6027
+[2025-07-21 12:43:11] step 1490: train loss 2.5144, val loss 2.5682
+[2025-07-21 12:43:11] step 1500: train loss 2.5278, val loss 2.6224
+[2025-07-21 12:43:11] step 1510: train loss 2.5188, val loss 2.5861
+[2025-07-21 12:43:11] step 1520: train loss 2.5397, val loss 2.5737
+[2025-07-21 12:43:11] step 1530: train loss 2.5288, val loss 2.6005
+[2025-07-21 12:43:11] step 1540: train loss 2.5494, val loss 2.5479
+[2025-07-21 12:43:11] step 1550: train loss 2.4759, val loss 2.5924
+[2025-07-21 12:43:11] step 1560: train loss 2.5763, val loss 2.4922
+[2025-07-21 12:43:11] step 1570: train loss 2.5985, val loss 2.5860
+[2025-07-21 12:43:11] step 1580: train loss 2.5232, val loss 2.4937
+[2025-07-21 12:43:11] step 1590: train loss 2.6003, val loss 2.4774
+[2025-07-21 12:43:11] step 1600: train loss 2.5036, val loss 2.4355
+[2025-07-21 12:43:11] step 1610: train loss 2.5294, val loss 2.5751
+[2025-07-21 12:43:12] step 1620: train loss 2.5380, val loss 2.5921
+[2025-07-21 12:43:12] step 1630: train loss 2.4603, val loss 2.5629
+[2025-07-21 12:43:12] step 1640: train loss 2.5945, val loss 2.5849
+[2025-07-21 12:43:12] step 1650: train loss 2.5554, val loss 2.5063
+[2025-07-21 12:43:12] step 1660: train loss 2.5491, val loss 2.5515
+[2025-07-21 12:43:12] step 1670: train loss 2.5752, val loss 2.5872
+[2025-07-21 12:43:12] step 1680: train loss 2.5367, val loss 2.4826
+[2025-07-21 12:43:12] step 1690: train loss 2.4927, val loss 2.5421
+[2025-07-21 12:43:12] step 1700: train loss 2.5196, val loss 2.5601
+[2025-07-21 12:43:12] step 1710: train loss 2.4776, val loss 2.5574
+[2025-07-21 12:43:12] step 1720: train loss 2.4439, val loss 2.5320
+[2025-07-21 12:43:12] step 1730: train loss 2.5585, val loss 2.6193
+[2025-07-21 12:43:12] step 1740: train loss 2.5885, val loss 2.5437
+[2025-07-21 12:43:12] step 1750: train loss 2.4398, val loss 2.5129
+[2025-07-21 12:43:12] step 1760: train loss 2.5926, val loss 2.5085
+[2025-07-21 12:43:12] step 1770: train loss 2.4445, val loss 2.5872
+[2025-07-21 12:43:13] step 1780: train loss 2.5512, val loss 2.5694
+[2025-07-21 12:43:13] step 1790: train loss 2.5573, val loss 2.6058
+[2025-07-21 12:43:13] step 1800: train loss 2.5990, val loss 2.5917
+[2025-07-21 12:43:13] step 1810: train loss 2.5187, val loss 2.5462
+[2025-07-21 12:43:13] step 1820: train loss 2.5208, val loss 2.7577
+[2025-07-21 12:43:13] step 1830: train loss 2.5805, val loss 2.7356
+[2025-07-21 12:43:13] step 1840: train loss 2.4839, val loss 2.5312
+[2025-07-21 12:43:13] step 1850: train loss 2.5528, val loss 2.6026
+[2025-07-21 12:43:13] step 1860: train loss 2.5480, val loss 2.5385
+[2025-07-21 12:43:13] step 1870: train loss 2.5210, val loss 2.6756
+[2025-07-21 12:43:13] step 1880: train loss 2.5625, val loss 2.5568
+[2025-07-21 12:43:13] step 1890: train loss 2.6551, val loss 2.5416
+[2025-07-21 12:43:13] step 1900: train loss 2.4989, val loss 2.5838
+[2025-07-21 12:43:13] step 1910: train loss 2.5679, val loss 2.5258
+[2025-07-21 12:43:14] step 1920: train loss 2.6058, val loss 2.5259
+[2025-07-21 12:43:14] step 1930: train loss 2.5637, val loss 2.5174
+[2025-07-21 12:43:14] step 1940: train loss 2.5055, val loss 2.5510
+[2025-07-21 12:43:14] step 1950: train loss 2.5297, val loss 2.5714
+[2025-07-21 12:43:14] step 1960: train loss 2.3436, val loss 2.5957
+[2025-07-21 12:43:14] step 1970: train loss 2.5315, val loss 2.5162
+[2025-07-21 12:43:14] step 1980: train loss 2.4972, val loss 2.5672
+[2025-07-21 12:43:14] step 1990: train loss 2.5514, val loss 2.5670
+[2025-07-21 12:43:14] step 2000: train loss 2.6171, val loss 2.5903
+[2025-07-21 12:43:14] step 2010: train loss 2.4774, val loss 2.6166
+[2025-07-21 12:43:14] step 2020: train loss 2.5212, val loss 2.6007
+[2025-07-21 12:43:14] step 2030: train loss 2.5537, val loss 2.5456
+[2025-07-21 12:43:15] step 2040: train loss 2.5867, val loss 2.5407
+[2025-07-21 12:43:15] step 2050: train loss 2.6037, val loss 2.5063
+[2025-07-21 12:43:15] step 2060: train loss 2.6142, val loss 2.5389
+[2025-07-21 12:43:15] step 2070: train loss 2.5424, val loss 2.5518
+[2025-07-21 12:43:15] step 2080: train loss 2.5076, val loss 2.4847
+[2025-07-21 12:43:15] step 2090: train loss 2.5497, val loss 2.5544
+[2025-07-21 12:43:15] step 2100: train loss 2.4536, val loss 2.5417
+[2025-07-21 12:43:15] step 2110: train loss 2.5144, val loss 2.5376
+[2025-07-21 12:43:15] step 2120: train loss 2.5575, val loss 2.5165
+[2025-07-21 12:43:15] step 2130: train loss 2.5915, val loss 2.5114
+[2025-07-21 12:43:15] step 2140: train loss 2.6292, val loss 2.5087
+[2025-07-21 12:43:15] step 2150: train loss 2.5174, val loss 2.5175
+[2025-07-21 12:43:15] step 2160: train loss 2.5474, val loss 2.5934
+[2025-07-21 12:43:15] step 2170: train loss 2.4632, val loss 2.5660
+[2025-07-21 12:43:15] step 2180: train loss 2.5131, val loss 2.4537
+[2025-07-21 12:43:15] step 2190: train loss 2.5645, val loss 2.6741
+[2025-07-21 12:43:16] step 2200: train loss 2.4395, val loss 2.4296
+[2025-07-21 12:43:16] step 2210: train loss 2.5163, val loss 2.5350
+[2025-07-21 12:43:16] step 2220: train loss 2.5571, val loss 2.5761
+[2025-07-21 12:43:16] step 2230: train loss 2.4977, val loss 2.5939
+[2025-07-21 12:43:16] step 2240: train loss 2.5714, val loss 2.4999
+[2025-07-21 12:43:16] step 2250: train loss 2.5738, val loss 2.5645
+[2025-07-21 12:43:16] step 2260: train loss 2.5332, val loss 2.5357
+[2025-07-21 12:43:16] step 2270: train loss 2.5628, val loss 2.5709
+[2025-07-21 12:43:16] step 2280: train loss 2.5380, val loss 2.5777
+[2025-07-21 12:43:16] step 2290: train loss 2.5127, val loss 2.4537
+[2025-07-21 12:43:16] step 2300: train loss 2.5317, val loss 2.5356
+[2025-07-21 12:43:16] step 2310: train loss 2.4494, val loss 2.5464
+[2025-07-21 12:43:16] step 2320: train loss 2.5384, val loss 2.5427
+[2025-07-21 12:43:16] step 2330: train loss 2.5087, val loss 2.5907
+[2025-07-21 12:43:16] step 2340: train loss 2.5957, val loss 2.4828
+[2025-07-21 12:43:16] step 2350: train loss 2.6130, val loss 2.5783
+[2025-07-21 12:43:17] step 2360: train loss 2.5903, val loss 2.4995
+[2025-07-21 12:43:17] step 2370: train loss 2.5634, val loss 2.4817
+[2025-07-21 12:43:17] step 2380: train loss 2.5554, val loss 2.5273
+[2025-07-21 12:43:17] step 2390: train loss 2.5649, val loss 2.6703
+[2025-07-21 12:43:17] step 2400: train loss 2.4884, val loss 2.5050
+[2025-07-21 12:43:17] step 2410: train loss 2.5030, val loss 2.4667
+[2025-07-21 12:43:17] step 2420: train loss 2.3991, val loss 2.4560
+[2025-07-21 12:43:17] step 2430: train loss 2.4475, val loss 2.5125
+[2025-07-21 12:43:17] step 2440: train loss 2.5039, val loss 2.6042
+[2025-07-21 12:43:17] step 2450: train loss 2.5695, val loss 2.6037
+[2025-07-21 12:43:17] step 2460: train loss 2.4581, val loss 2.4652
+[2025-07-21 12:43:17] step 2470: train loss 2.4950, val loss 2.5971
+[2025-07-21 12:43:17] step 2480: train loss 2.4861, val loss 2.5423
+[2025-07-21 12:43:17] step 2490: train loss 2.5591, val loss 2.5972
+[2025-07-21 12:43:17] step 2500: train loss 2.5669, val loss 2.5902
+[2025-07-21 12:43:17] step 2510: train loss 2.5803, val loss 2.5317
+[2025-07-21 12:43:18] step 2520: train loss 2.4280, val loss 2.6094
+[2025-07-21 12:43:18] step 2530: train loss 2.4571, val loss 2.5263
+[2025-07-21 12:43:18] step 2540: train loss 2.5256, val loss 2.4812
+[2025-07-21 12:43:18] step 2550: train loss 2.5662, val loss 2.5853
+[2025-07-21 12:43:18] step 2560: train loss 2.5311, val loss 2.5086
+[2025-07-21 12:43:18] step 2570: train loss 2.6421, val loss 2.4287
+[2025-07-21 12:43:18] step 2580: train loss 2.5165, val loss 2.6857
+[2025-07-21 12:43:18] step 2590: train loss 2.5728, val loss 2.5966
+[2025-07-21 12:43:18] step 2600: train loss 2.5339, val loss 2.5911
+[2025-07-21 12:43:18] step 2610: train loss 2.4882, val loss 2.5475

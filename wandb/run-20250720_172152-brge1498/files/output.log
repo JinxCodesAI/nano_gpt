@@ -1,0 +1,205 @@
+Calculating target architecture based on schedule...
+
+============================================================
+       TARGET MODEL ARCHITECTURE (at end of schedule)
+============================================================
+  n_layer                | 6
+  n_head                 | 12
+  n_embd                 | 768
+  n_hidden               | 1536
+  block_size             | 1024
+  vocab_size             | 50304
+  dropout                | 0.0
+  bias                   | False
+  embedding_mode         | standard
+  attn_lora_rank         | 0
+  embedding_rank         | 0
+  lora_alpha             | 0.0
+============================================================
+
+
+============================================================
+           INITIAL MODEL ARCHITECTURE (at Iter 0)
+============================================================
+  n_layer                | 3
+  n_head                 | 12
+  n_embd                 | 768
+  n_hidden               | 768
+  block_size             | 1024
+  vocab_size             | 50304
+  dropout                | 0.0
+  bias                   | False
+  embedding_mode         | lora
+  attn_lora_rank         | 48
+  embedding_rank         | 48
+  lora_alpha             | 1.0
+============================================================
+
+
+Detailed parameter count:
+  total                  | Total:   52,149,504 | Trainable:    8,207,616
+  token_embeddings       | Total:    2,451,456 | Trainable:    2,451,456
+  position_embeddings    | Total:            0 | Trainable:            0
+  attention_layers       | Total:    7,520,256 | Trainable:    2,211,840
+  feed_forward_layers    | Total:    3,538,944 | Trainable:    3,538,944
+  layer_norms            | Total:        4,608 | Trainable:        4,608
+  final_layer_norm       | Total:          768 | Trainable:          768
+  language_model_head    | Total:   38,633,472 | Trainable:            0
+------------------------------------------------------------
+eval every:100
+Traceback (most recent call last):
+  File "/teamspace/studios/this_studio/nanoGPT/train.py", line 725, in <module>
+    losses = estimate_loss()
+  File "/home/zeus/miniconda3/envs/cloudspace/lib/python3.10/site-packages/torch/utils/_contextlib.py", line 116, in decorate_context
+    return func(*args, **kwargs)
+  File "/teamspace/studios/this_studio/nanoGPT/train.py", line 397, in estimate_loss
+    logits, loss = model(X, Y)
+  File "/home/zeus/miniconda3/envs/cloudspace/lib/python3.10/site-packages/torch/nn/modules/module.py", line 1751, in _wrapped_call_impl
+    return self._call_impl(*args, **kwargs)
+  File "/home/zeus/miniconda3/envs/cloudspace/lib/python3.10/site-packages/torch/nn/modules/module.py", line 1762, in _call_impl
+    return forward_call(*args, **kwargs)
+  File "/home/zeus/miniconda3/envs/cloudspace/lib/python3.10/site-packages/torch/_dynamo/eval_frame.py", line 655, in _fn
+    return fn(*args, **kwargs)
+  File "/home/zeus/miniconda3/envs/cloudspace/lib/python3.10/site-packages/torch/nn/modules/module.py", line 1751, in _wrapped_call_impl
+    return self._call_impl(*args, **kwargs)
+  File "/home/zeus/miniconda3/envs/cloudspace/lib/python3.10/site-packages/torch/nn/modules/module.py", line 1762, in _call_impl
+    return forward_call(*args, **kwargs)
+  File "/home/zeus/miniconda3/envs/cloudspace/lib/python3.10/site-packages/torch/_dynamo/convert_frame.py", line 1432, in __call__
+    return self._torchdynamo_orig_callable(
+  File "/home/zeus/miniconda3/envs/cloudspace/lib/python3.10/site-packages/torch/_dynamo/convert_frame.py", line 1213, in __call__
+    result = self._inner_convert(
+  File "/home/zeus/miniconda3/envs/cloudspace/lib/python3.10/site-packages/torch/_dynamo/convert_frame.py", line 598, in __call__
+    return _compile(
+  File "/home/zeus/miniconda3/envs/cloudspace/lib/python3.10/site-packages/torch/_dynamo/convert_frame.py", line 1059, in _compile
+    guarded_code = compile_inner(code, one_graph, hooks, transform)
+  File "/home/zeus/miniconda3/envs/cloudspace/lib/python3.10/site-packages/torch/_utils_internal.py", line 97, in wrapper_function
+    return function(*args, **kwargs)
+  File "/home/zeus/miniconda3/envs/cloudspace/lib/python3.10/site-packages/torch/_dynamo/convert_frame.py", line 761, in compile_inner
+    return _compile_inner(code, one_graph, hooks, transform)
+  File "/home/zeus/miniconda3/envs/cloudspace/lib/python3.10/site-packages/torch/_dynamo/convert_frame.py", line 797, in _compile_inner
+    out_code = transform_code_object(code, transform)
+  File "/home/zeus/miniconda3/envs/cloudspace/lib/python3.10/site-packages/torch/_dynamo/bytecode_transformation.py", line 1422, in transform_code_object
+    transformations(instructions, code_options)
+  File "/home/zeus/miniconda3/envs/cloudspace/lib/python3.10/site-packages/torch/_dynamo/convert_frame.py", line 257, in _fn
+    return fn(*args, **kwargs)
+  File "/home/zeus/miniconda3/envs/cloudspace/lib/python3.10/site-packages/torch/_dynamo/convert_frame.py", line 715, in transform
+    tracer.run()
+  File "/home/zeus/miniconda3/envs/cloudspace/lib/python3.10/site-packages/torch/_dynamo/symbolic_convert.py", line 3500, in run
+    super().run()
+  File "/home/zeus/miniconda3/envs/cloudspace/lib/python3.10/site-packages/torch/_dynamo/symbolic_convert.py", line 1337, in run
+    while self.step():
+  File "/home/zeus/miniconda3/envs/cloudspace/lib/python3.10/site-packages/torch/_dynamo/symbolic_convert.py", line 1246, in step
+    self.dispatch_table[inst.opcode](self, inst)
+  File "/home/zeus/miniconda3/envs/cloudspace/lib/python3.10/site-packages/torch/_dynamo/symbolic_convert.py", line 3701, in RETURN_VALUE
+    self._return(inst)
+  File "/home/zeus/miniconda3/envs/cloudspace/lib/python3.10/site-packages/torch/_dynamo/symbolic_convert.py", line 3686, in _return
+    self.output.compile_subgraph(
+  File "/home/zeus/miniconda3/envs/cloudspace/lib/python3.10/site-packages/torch/_dynamo/output_graph.py", line 1179, in compile_subgraph
+    self.compile_and_call_fx_graph(
+  File "/home/zeus/miniconda3/envs/cloudspace/lib/python3.10/site-packages/torch/_dynamo/output_graph.py", line 1437, in compile_and_call_fx_graph
+    compiled_fn = self.call_user_compiler(gm)
+  File "/home/zeus/miniconda3/envs/cloudspace/lib/python3.10/site-packages/torch/_dynamo/output_graph.py", line 1487, in call_user_compiler
+    return self._call_user_compiler(gm)
+  File "/home/zeus/miniconda3/envs/cloudspace/lib/python3.10/site-packages/torch/_dynamo/output_graph.py", line 1519, in _call_user_compiler
+    compiled_fn = compiler_fn(gm, self.example_inputs())
+  File "/home/zeus/miniconda3/envs/cloudspace/lib/python3.10/site-packages/torch/_dynamo/repro/after_dynamo.py", line 150, in __call__
+    compiled_gm = compiler_fn(gm, example_inputs)
+  File "/home/zeus/miniconda3/envs/cloudspace/lib/python3.10/site-packages/torch/__init__.py", line 2347, in __call__
+    return compile_fx(model_, inputs_, config_patches=self.config)
+  File "/home/zeus/miniconda3/envs/cloudspace/lib/python3.10/site-packages/torch/_inductor/compile_fx.py", line 2089, in compile_fx
+    return aot_autograd(
+  File "/home/zeus/miniconda3/envs/cloudspace/lib/python3.10/site-packages/torch/_dynamo/backends/common.py", line 101, in __call__
+    cg = aot_module_simplified(gm, example_inputs, **self.kwargs)
+  File "/home/zeus/miniconda3/envs/cloudspace/lib/python3.10/site-packages/torch/_functorch/aot_autograd.py", line 1160, in aot_module_simplified
+    compiled_fn = AOTAutogradCache.load(
+  File "/home/zeus/miniconda3/envs/cloudspace/lib/python3.10/site-packages/torch/_functorch/_aot_autograd/autograd_cache.py", line 702, in load
+    compiled_fn = entry.wrap_post_compile(args, aot_config, fx_config)
+  File "/home/zeus/miniconda3/envs/cloudspace/lib/python3.10/site-packages/torch/_functorch/_aot_autograd/autograd_cache.py", line 520, in wrap_post_compile
+    compiled_fw_func = self.compiled_fw.load(args, fx_config)
+  File "/home/zeus/miniconda3/envs/cloudspace/lib/python3.10/site-packages/torch/_functorch/_aot_autograd/autograd_cache.py", line 367, in load
+    result, cache_info = FxGraphCache.load_with_key(
+  File "/home/zeus/miniconda3/envs/cloudspace/lib/python3.10/site-packages/torch/_inductor/codecache.py", line 1296, in load_with_key
+    compiled_graph, cache_info = FxGraphCache._lookup_graph(
+  File "/home/zeus/miniconda3/envs/cloudspace/lib/python3.10/site-packages/torch/_inductor/codecache.py", line 1049, in _lookup_graph
+    triton_bundler_meta = TritonBundler.read_and_emit(bundle)
+  File "/home/zeus/miniconda3/envs/cloudspace/lib/python3.10/site-packages/torch/_inductor/triton_bundler.py", line 234, in read_and_emit
+    if os.path.exists(directory) and len(os.listdir(directory)) != 0:
+KeyboardInterrupt
+Traceback (most recent call last):
+  File "/teamspace/studios/this_studio/nanoGPT/train.py", line 725, in <module>
+    losses = estimate_loss()
+  File "/home/zeus/miniconda3/envs/cloudspace/lib/python3.10/site-packages/torch/utils/_contextlib.py", line 116, in decorate_context
+    return func(*args, **kwargs)
+  File "/teamspace/studios/this_studio/nanoGPT/train.py", line 397, in estimate_loss
+    logits, loss = model(X, Y)
+  File "/home/zeus/miniconda3/envs/cloudspace/lib/python3.10/site-packages/torch/nn/modules/module.py", line 1751, in _wrapped_call_impl
+    return self._call_impl(*args, **kwargs)
+  File "/home/zeus/miniconda3/envs/cloudspace/lib/python3.10/site-packages/torch/nn/modules/module.py", line 1762, in _call_impl
+    return forward_call(*args, **kwargs)
+  File "/home/zeus/miniconda3/envs/cloudspace/lib/python3.10/site-packages/torch/_dynamo/eval_frame.py", line 655, in _fn
+    return fn(*args, **kwargs)
+  File "/home/zeus/miniconda3/envs/cloudspace/lib/python3.10/site-packages/torch/nn/modules/module.py", line 1751, in _wrapped_call_impl
+    return self._call_impl(*args, **kwargs)
+  File "/home/zeus/miniconda3/envs/cloudspace/lib/python3.10/site-packages/torch/nn/modules/module.py", line 1762, in _call_impl
+    return forward_call(*args, **kwargs)
+  File "/home/zeus/miniconda3/envs/cloudspace/lib/python3.10/site-packages/torch/_dynamo/convert_frame.py", line 1432, in __call__
+    return self._torchdynamo_orig_callable(
+  File "/home/zeus/miniconda3/envs/cloudspace/lib/python3.10/site-packages/torch/_dynamo/convert_frame.py", line 1213, in __call__
+    result = self._inner_convert(
+  File "/home/zeus/miniconda3/envs/cloudspace/lib/python3.10/site-packages/torch/_dynamo/convert_frame.py", line 598, in __call__
+    return _compile(
+  File "/home/zeus/miniconda3/envs/cloudspace/lib/python3.10/site-packages/torch/_dynamo/convert_frame.py", line 1059, in _compile
+    guarded_code = compile_inner(code, one_graph, hooks, transform)
+  File "/home/zeus/miniconda3/envs/cloudspace/lib/python3.10/site-packages/torch/_utils_internal.py", line 97, in wrapper_function
+    return function(*args, **kwargs)
+  File "/home/zeus/miniconda3/envs/cloudspace/lib/python3.10/site-packages/torch/_dynamo/convert_frame.py", line 761, in compile_inner
+    return _compile_inner(code, one_graph, hooks, transform)
+  File "/home/zeus/miniconda3/envs/cloudspace/lib/python3.10/site-packages/torch/_dynamo/convert_frame.py", line 797, in _compile_inner
+    out_code = transform_code_object(code, transform)
+  File "/home/zeus/miniconda3/envs/cloudspace/lib/python3.10/site-packages/torch/_dynamo/bytecode_transformation.py", line 1422, in transform_code_object
+    transformations(instructions, code_options)
+  File "/home/zeus/miniconda3/envs/cloudspace/lib/python3.10/site-packages/torch/_dynamo/convert_frame.py", line 257, in _fn
+    return fn(*args, **kwargs)
+  File "/home/zeus/miniconda3/envs/cloudspace/lib/python3.10/site-packages/torch/_dynamo/convert_frame.py", line 715, in transform
+    tracer.run()
+  File "/home/zeus/miniconda3/envs/cloudspace/lib/python3.10/site-packages/torch/_dynamo/symbolic_convert.py", line 3500, in run
+    super().run()
+  File "/home/zeus/miniconda3/envs/cloudspace/lib/python3.10/site-packages/torch/_dynamo/symbolic_convert.py", line 1337, in run
+    while self.step():
+  File "/home/zeus/miniconda3/envs/cloudspace/lib/python3.10/site-packages/torch/_dynamo/symbolic_convert.py", line 1246, in step
+    self.dispatch_table[inst.opcode](self, inst)
+  File "/home/zeus/miniconda3/envs/cloudspace/lib/python3.10/site-packages/torch/_dynamo/symbolic_convert.py", line 3701, in RETURN_VALUE
+    self._return(inst)
+  File "/home/zeus/miniconda3/envs/cloudspace/lib/python3.10/site-packages/torch/_dynamo/symbolic_convert.py", line 3686, in _return
+    self.output.compile_subgraph(
+  File "/home/zeus/miniconda3/envs/cloudspace/lib/python3.10/site-packages/torch/_dynamo/output_graph.py", line 1179, in compile_subgraph
+    self.compile_and_call_fx_graph(
+  File "/home/zeus/miniconda3/envs/cloudspace/lib/python3.10/site-packages/torch/_dynamo/output_graph.py", line 1437, in compile_and_call_fx_graph
+    compiled_fn = self.call_user_compiler(gm)
+  File "/home/zeus/miniconda3/envs/cloudspace/lib/python3.10/site-packages/torch/_dynamo/output_graph.py", line 1487, in call_user_compiler
+    return self._call_user_compiler(gm)
+  File "/home/zeus/miniconda3/envs/cloudspace/lib/python3.10/site-packages/torch/_dynamo/output_graph.py", line 1519, in _call_user_compiler
+    compiled_fn = compiler_fn(gm, self.example_inputs())
+  File "/home/zeus/miniconda3/envs/cloudspace/lib/python3.10/site-packages/torch/_dynamo/repro/after_dynamo.py", line 150, in __call__
+    compiled_gm = compiler_fn(gm, example_inputs)
+  File "/home/zeus/miniconda3/envs/cloudspace/lib/python3.10/site-packages/torch/__init__.py", line 2347, in __call__
+    return compile_fx(model_, inputs_, config_patches=self.config)
+  File "/home/zeus/miniconda3/envs/cloudspace/lib/python3.10/site-packages/torch/_inductor/compile_fx.py", line 2089, in compile_fx
+    return aot_autograd(
+  File "/home/zeus/miniconda3/envs/cloudspace/lib/python3.10/site-packages/torch/_dynamo/backends/common.py", line 101, in __call__
+    cg = aot_module_simplified(gm, example_inputs, **self.kwargs)
+  File "/home/zeus/miniconda3/envs/cloudspace/lib/python3.10/site-packages/torch/_functorch/aot_autograd.py", line 1160, in aot_module_simplified
+    compiled_fn = AOTAutogradCache.load(
+  File "/home/zeus/miniconda3/envs/cloudspace/lib/python3.10/site-packages/torch/_functorch/_aot_autograd/autograd_cache.py", line 702, in load
+    compiled_fn = entry.wrap_post_compile(args, aot_config, fx_config)
+  File "/home/zeus/miniconda3/envs/cloudspace/lib/python3.10/site-packages/torch/_functorch/_aot_autograd/autograd_cache.py", line 520, in wrap_post_compile
+    compiled_fw_func = self.compiled_fw.load(args, fx_config)
+  File "/home/zeus/miniconda3/envs/cloudspace/lib/python3.10/site-packages/torch/_functorch/_aot_autograd/autograd_cache.py", line 367, in load
+    result, cache_info = FxGraphCache.load_with_key(
+  File "/home/zeus/miniconda3/envs/cloudspace/lib/python3.10/site-packages/torch/_inductor/codecache.py", line 1296, in load_with_key
+    compiled_graph, cache_info = FxGraphCache._lookup_graph(
+  File "/home/zeus/miniconda3/envs/cloudspace/lib/python3.10/site-packages/torch/_inductor/codecache.py", line 1049, in _lookup_graph
+    triton_bundler_meta = TritonBundler.read_and_emit(bundle)
+  File "/home/zeus/miniconda3/envs/cloudspace/lib/python3.10/site-packages/torch/_inductor/triton_bundler.py", line 234, in read_and_emit
+    if os.path.exists(directory) and len(os.listdir(directory)) != 0:
+KeyboardInterrupt

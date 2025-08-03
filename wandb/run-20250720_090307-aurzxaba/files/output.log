@@ -1,0 +1,43 @@
+
+Detailed parameter count:
+  total                  | Total:   52,149,504 | Trainable:    8,207,616
+  token_embeddings       | Total:    2,451,456 | Trainable:    2,451,456
+  position_embeddings    | Total:            0 | Trainable:            0
+  attention_layers       | Total:    7,520,256 | Trainable:    2,211,840
+  feed_forward_layers    | Total:    3,538,944 | Trainable:    3,538,944
+  layer_norms            | Total:        4,608 | Trainable:        4,608
+  final_layer_norm       | Total:          768 | Trainable:          768
+  language_model_head    | Total:   38,633,472 | Trainable:            0
+------------------------------------------------------------
+step 0: train loss 10.9689, val loss 10.9694
+iter 0: loss 10.9466, lr 0.00005, time 7247.77ms, mfu -100.00%
+iter 10: loss 9.6010, lr 0.00055, time 540.27ms, mfu 34.21%
+iter 20: loss 9.6069, lr 0.00104, time 542.13ms, mfu 34.19%
+iter 30: loss 9.3634, lr 0.00154, time 552.99ms, mfu 34.12%
+iter 40: loss 9.1567, lr 0.00204, time 558.05ms, mfu 34.02%
+iter 50: loss 8.9787, lr 0.00254, time 557.65ms, mfu 33.93%
+iter 60: loss 8.8479, lr 0.00303, time 565.25ms, mfu 33.81%
+iter 70: loss 8.8143, lr 0.00353, time 566.80ms, mfu 33.69%
+iter 80: loss 8.5707, lr 0.00403, time 565.56ms, mfu 33.58%
+iter 90: loss 8.5687, lr 0.00453, time 575.71ms, mfu 33.44%
+step 100: train loss 8.5721, val loss 8.5767
+saving checkpoint to out
+
+=== SCALING OPERATION TRIGGERED (DDP SYNC) ===
+Operation: merge_lora_weights
+Trigger reason: Timeout
+Current val loss: 8.5767, Trigger loss: 1.0000
+Iterations since last op: 100, Max wait: 100
+Executing operation: merge_lora_weights  with value: None
+Traceback (most recent call last):
+  File "/teamspace/studios/this_studio/nanoGPT/train.py", line 620, in <module>
+    operation_succeeded = execute_operation(next_op, trigger_reason, current_val_loss, iter_num)
+  File "/teamspace/studios/this_studio/nanoGPT/train.py", line 361, in execute_operation
+    if op_name in architectural_ops:
+NameError: name 'op_name' is not defined. Did you mean: 'op_label'?
+Traceback (most recent call last):
+  File "/teamspace/studios/this_studio/nanoGPT/train.py", line 620, in <module>
+    operation_succeeded = execute_operation(next_op, trigger_reason, current_val_loss, iter_num)
+  File "/teamspace/studios/this_studio/nanoGPT/train.py", line 361, in execute_operation
+    if op_name in architectural_ops:
+NameError: name 'op_name' is not defined. Did you mean: 'op_label'?

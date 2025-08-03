@@ -1,0 +1,71 @@
+Calculating target architecture based on schedule...
+
+============================================================
+       TARGET MODEL ARCHITECTURE (at end of schedule)
+============================================================
+  n_layer                | 0
+  n_head                 | 12
+  n_embd                 | 768
+  n_hidden               | 384
+  block_size             | 1024
+  vocab_size             | 50304
+  dropout                | 0.0
+  bias                   | False
+  embedding_mode         | standard
+  attn_lora_rank         | 0
+  embedding_rank         | 0
+  lora_alpha             | 0.0
+============================================================
+
+
+============================================================
+           INITIAL MODEL ARCHITECTURE (at Iter 0)
+============================================================
+  n_layer                | 0
+  n_head                 | 12
+  n_embd                 | 768
+  n_hidden               | 192
+  block_size             | 1024
+  vocab_size             | 50304
+  dropout                | 0.0
+  bias                   | False
+  embedding_mode         | lora
+  attn_lora_rank         | 0
+  embedding_rank         | 0
+  lora_alpha             | 1.0
+============================================================
+
+
+Detailed parameter count:
+  total                  | Total:   38,634,240 | Trainable:   38,634,240
+  token_embeddings       | Total:            0 | Trainable:            0
+  position_embeddings    | Total:            0 | Trainable:            0
+  attention_layers       | Total:            0 | Trainable:            0
+  feed_forward_layers    | Total:            0 | Trainable:            0
+  layer_norms            | Total:            0 | Trainable:            0
+  final_layer_norm       | Total:          768 | Trainable:          768
+  language_model_head    | Total:   38,633,472 | Trainable:   38,633,472
+------------------------------------------------------------
+eval every:200
+step 0: train loss 15.1491, val loss 15.1569
+raw_model.config.n_layer=0
+--- Model Analysis ---
+  Embedding Utilization: 97.53% (749/768)
+Warning: Model did not return attention scores.
+----------------------
+merge_lora_weights 15.156898498535156 4.0 200
+iter 0: loss 15.1471, lr 0.00000, time 4874.83ms, mfu -100.00%
+iter 10: loss 15.1355, lr 0.00001, time 16.15ms, mfu 777.51%
+iter 20: loss 15.1028, lr 0.00001, time 8.18ms, mfu 853.18%
+iter 30: loss 15.0168, lr 0.00002, time 12.61ms, mfu 867.43%
+iter 40: loss 14.9378, lr 0.00002, time 12.97ms, mfu 877.47%
+iter 50: loss 14.8091, lr 0.00003, time 11.12ms, mfu 902.62%
+iter 60: loss 14.6762, lr 0.00003, time 16.64ms, mfu 887.80%
+iter 70: loss 14.5191, lr 0.00004, time 9.60ms, mfu 929.73%
+iter 80: loss 14.3063, lr 0.00004, time 8.80ms, mfu 979.50%
+iter 90: loss 14.1162, lr 0.00005, time 18.19ms, mfu 950.56%
+iter 100: loss 13.9064, lr 0.00005, time 11.48ms, mfu 964.91%
+iter 110: loss 13.6558, lr 0.00006, time 9.56ms, mfu 999.69%
+iter 120: loss 13.3695, lr 0.00006, time 16.30ms, mfu 976.75%
+iter 130: loss 13.0782, lr 0.00007, time 12.59ms, mfu 978.82%
+iter 140: loss 12.8020, lr 0.00007, time 14.86ms, mfu 965.44%

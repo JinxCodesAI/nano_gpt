@@ -1,0 +1,191 @@
+step 0: train loss 10.9274, val loss 10.9282
+iter 0: loss 10.9344, lr 0.00000, time 9933.22ms, mfu -100.00%
+iter 10: loss 9.5750, lr 0.00003, time 1617.80ms, mfu 26.83%
+iter 20: loss 8.9937, lr 0.00006, time 1655.15ms, mfu 26.77%
+iter 30: loss 8.3711, lr 0.00009, time 1615.07ms, mfu 26.78%
+step 40: train loss 7.8078, val loss 7.8218
+saving checkpoint to out
+iter 40: loss 7.8530, lr 0.00012, time 9400.06ms, mfu 24.56%
+iter 50: loss 7.2501, lr 0.00015, time 1594.83ms, mfu 24.83%
+iter 60: loss 7.3893, lr 0.00018, time 1611.87ms, mfu 25.04%
+iter 70: loss 6.8261, lr 0.00021, time 1621.37ms, mfu 25.21%
+step 80: train loss 6.7618, val loss 6.6834
+saving checkpoint to out
+
+=== SCALING OPERATION TRIGGERED (DDP SYNC) ===
+Operation: change_lr
+Trigger reason: Loss threshold
+Current val loss: 6.6834, Trigger loss: 7.2000
+Iterations since last op: 80, Max wait: 200
+Executing operation: change_lr with value: 0.3
+LR multiplier: 10.0000 -> 3.0000
+=== SCALING OPERATION COMPLETE ===
+
+
+=== SCALING OPERATION TRIGGERED (DDP SYNC) ===
+Operation: change_eval_interval
+Trigger reason: Loss threshold
+Current val loss: 6.6834, Trigger loss: 7.1000
+Iterations since last op: 0, Max wait: 500
+Executing operation: change_eval_interval with value: 2.5
+Eval interval multiplier: 0.0400 -> 0.1000 current interval: 100.0
+=== SCALING OPERATION COMPLETE ===
+
+
+=== SCALING OPERATION TRIGGERED (DDP SYNC) ===
+Operation: change_eval_iters
+Trigger reason: Loss threshold
+Current val loss: 6.6834, Trigger loss: 6.9000
+Iterations since last op: 0, Max wait: 500
+Executing operation: change_eval_iters with value: 2.5
+Eval iters multiplier: 0.0500 -> 0.1250  current evals: 25.0
+=== SCALING OPERATION COMPLETE ===
+
+iter 80: loss 6.9495, lr 0.00024, time 8798.76ms, mfu 23.18%
+iter 90: loss 6.7197, lr 0.00008, time 1620.65ms, mfu 23.54%
+step 100: train loss 6.6271, val loss 6.6689
+saving checkpoint to out
+iter 100: loss 6.7718, lr 0.00009, time 12527.77ms, mfu 21.53%
+iter 110: loss 6.8042, lr 0.00010, time 1623.11ms, mfu 22.06%
+iter 120: loss 6.5901, lr 0.00011, time 1621.99ms, mfu 22.53%
+iter 130: loss 6.7002, lr 0.00012, time 1618.17ms, mfu 22.96%
+iter 140: loss 6.5369, lr 0.00013, time 1620.01ms, mfu 23.34%
+iter 150: loss 6.4418, lr 0.00014, time 1614.26ms, mfu 23.69%
+iter 160: loss 6.4991, lr 0.00014, time 1614.22ms, mfu 24.01%
+iter 170: loss 6.2565, lr 0.00015, time 1613.60ms, mfu 24.30%
+iter 180: loss 6.2744, lr 0.00016, time 1618.79ms, mfu 24.55%
+iter 190: loss 6.1060, lr 0.00017, time 1617.90ms, mfu 24.78%
+step 200: train loss 6.1916, val loss 6.2086
+saving checkpoint to out
+
+=== SCALING OPERATION TRIGGERED (DDP SYNC) ===
+Operation: change_grad_accum
+Trigger reason: Loss threshold
+Current val loss: 6.2086, Trigger loss: 6.5000
+Iterations since last op: 120, Max wait: 1200
+Executing operation: change_grad_accum with value: 2.5
+Grad accum steps: 5 -> 5
+=== SCALING OPERATION COMPLETE ===
+
+iter 200: loss 6.2391, lr 0.00018, time 11436.37ms, mfu 22.68%
+iter 210: loss 6.0848, lr 0.00019, time 1626.90ms, mfu 23.08%
+iter 220: loss 6.0352, lr 0.00020, time 1636.92ms, mfu 23.42%
+iter 230: loss 5.9516, lr 0.00021, time 1627.40ms, mfu 23.75%
+iter 240: loss 6.0199, lr 0.00022, time 1618.82ms, mfu 24.06%
+iter 250: loss 6.1047, lr 0.00023, time 1607.99ms, mfu 24.35%
+iter 260: loss 6.0542, lr 0.00023, time 1620.76ms, mfu 24.59%
+iter 270: loss 5.9870, lr 0.00024, time 1621.69ms, mfu 24.81%
+Traceback (most recent call last):
+  File "/teamspace/studios/this_studio/nanoGPT/train.py", line 437, in <module>
+    logits, loss = model(X, Y)
+  File "/home/zeus/miniconda3/envs/cloudspace/lib/python3.10/site-packages/torch/nn/modules/module.py", line 1751, in _wrapped_call_impl
+    return self._call_impl(*args, **kwargs)
+  File "/home/zeus/miniconda3/envs/cloudspace/lib/python3.10/site-packages/torch/nn/modules/module.py", line 1762, in _call_impl
+    return forward_call(*args, **kwargs)
+  File "/home/zeus/miniconda3/envs/cloudspace/lib/python3.10/site-packages/torch/_dynamo/eval_frame.py", line 655, in _fn
+    return fn(*args, **kwargs)
+  File "/home/zeus/miniconda3/envs/cloudspace/lib/python3.10/site-packages/torch/nn/modules/module.py", line 1751, in _wrapped_call_impl
+    return self._call_impl(*args, **kwargs)
+  File "/home/zeus/miniconda3/envs/cloudspace/lib/python3.10/site-packages/torch/nn/modules/module.py", line 1762, in _call_impl
+    return forward_call(*args, **kwargs)
+  File "/teamspace/studios/this_studio/nanoGPT/model.py", line 352, in forward
+    def forward(self, idx, targets=None):
+  File "/home/zeus/miniconda3/envs/cloudspace/lib/python3.10/site-packages/torch/_dynamo/eval_frame.py", line 838, in _fn
+    return fn(*args, **kwargs)
+  File "/home/zeus/miniconda3/envs/cloudspace/lib/python3.10/site-packages/torch/_functorch/aot_autograd.py", line 1201, in forward
+    return compiled_fn(full_args)
+  File "/home/zeus/miniconda3/envs/cloudspace/lib/python3.10/site-packages/torch/_functorch/_aot_autograd/runtime_wrappers.py", line 315, in runtime_wrapper
+    all_outs = call_func_at_runtime_with_args(
+  File "/home/zeus/miniconda3/envs/cloudspace/lib/python3.10/site-packages/torch/_functorch/_aot_autograd/utils.py", line 126, in call_func_at_runtime_with_args
+    out = normalize_as_list(f(args))
+  File "/home/zeus/miniconda3/envs/cloudspace/lib/python3.10/site-packages/torch/_functorch/_aot_autograd/utils.py", line 100, in g
+    return f(*args)
+  File "/home/zeus/miniconda3/envs/cloudspace/lib/python3.10/site-packages/torch/autograd/function.py", line 575, in apply
+    return super().apply(*args, **kwargs)  # type: ignore[misc]
+  File "/home/zeus/miniconda3/envs/cloudspace/lib/python3.10/site-packages/torch/_functorch/_aot_autograd/runtime_wrappers.py", line 1937, in forward
+    fw_outs = call_func_at_runtime_with_args(
+  File "/home/zeus/miniconda3/envs/cloudspace/lib/python3.10/site-packages/torch/_functorch/_aot_autograd/utils.py", line 126, in call_func_at_runtime_with_args
+    out = normalize_as_list(f(args))
+  File "/home/zeus/miniconda3/envs/cloudspace/lib/python3.10/site-packages/torch/_functorch/_aot_autograd/runtime_wrappers.py", line 495, in wrapper
+    return compiled_fn(runtime_args)
+  File "/home/zeus/miniconda3/envs/cloudspace/lib/python3.10/site-packages/torch/_inductor/output_code.py", line 460, in __call__
+    return self.current_callable(inputs)
+  File "/home/zeus/miniconda3/envs/cloudspace/lib/python3.10/site-packages/torch/_inductor/utils.py", line 2404, in run
+    return model(new_inputs)
+  File "/tmp/torchinductor_adamskrodzki/5y/c5ynbj6pfybrxj7lvuoag4ehs5sqyeo7f7ocglkyayti5xd7w6fj.py", line 1724, in call
+    triton_poi_fused__to_copy_add_cat_mul_2.run(buf144, primals_45, primals_46, buf145, buf146, 9437184, stream=stream0)
+  File "/home/zeus/miniconda3/envs/cloudspace/lib/python3.10/site-packages/torch/_inductor/runtime/triton_heuristics.py", line 956, in run
+    return launcher(
+  File "<string>", line 5, in launcher
+  File "/home/zeus/miniconda3/envs/cloudspace/lib/python3.10/site-packages/triton/backends/nvidia/driver.py", line 529, in __call__
+    self.launch(gridX, gridY, gridZ, stream, function, self.launch_cooperative_grid, global_scratch, *args)
+KeyboardInterrupt
+Traceback (most recent call last):
+  File "/teamspace/studios/this_studio/nanoGPT/train.py", line 437, in <module>
+    logits, loss = model(X, Y)
+  File "/home/zeus/miniconda3/envs/cloudspace/lib/python3.10/site-packages/torch/nn/modules/module.py", line 1751, in _wrapped_call_impl
+    return self._call_impl(*args, **kwargs)
+  File "/home/zeus/miniconda3/envs/cloudspace/lib/python3.10/site-packages/torch/nn/modules/module.py", line 1762, in _call_impl
+    return forward_call(*args, **kwargs)
+  File "/home/zeus/miniconda3/envs/cloudspace/lib/python3.10/site-packages/torch/_dynamo/eval_frame.py", line 655, in _fn
+    return fn(*args, **kwargs)
+  File "/home/zeus/miniconda3/envs/cloudspace/lib/python3.10/site-packages/torch/nn/modules/module.py", line 1751, in _wrapped_call_impl
+    return self._call_impl(*args, **kwargs)
+  File "/home/zeus/miniconda3/envs/cloudspace/lib/python3.10/site-packages/torch/nn/modules/module.py", line 1762, in _call_impl
+    return forward_call(*args, **kwargs)
+  File "/teamspace/studios/this_studio/nanoGPT/model.py", line 352, in forward
+    def forward(self, idx, targets=None):
+  File "/home/zeus/miniconda3/envs/cloudspace/lib/python3.10/site-packages/torch/_dynamo/eval_frame.py", line 838, in _fn
+    return fn(*args, **kwargs)
+  File "/home/zeus/miniconda3/envs/cloudspace/lib/python3.10/site-packages/torch/_functorch/aot_autograd.py", line 1201, in forward
+    return compiled_fn(full_args)
+  File "/home/zeus/miniconda3/envs/cloudspace/lib/python3.10/site-packages/torch/_functorch/_aot_autograd/runtime_wrappers.py", line 315, in runtime_wrapper
+    all_outs = call_func_at_runtime_with_args(
+  File "/home/zeus/miniconda3/envs/cloudspace/lib/python3.10/site-packages/torch/_functorch/_aot_autograd/utils.py", line 126, in call_func_at_runtime_with_args
+    out = normalize_as_list(f(args))
+  File "/home/zeus/miniconda3/envs/cloudspace/lib/python3.10/site-packages/torch/_functorch/_aot_autograd/utils.py", line 100, in g
+    return f(*args)
+  File "/home/zeus/miniconda3/envs/cloudspace/lib/python3.10/site-packages/torch/autograd/function.py", line 575, in apply
+    return super().apply(*args, **kwargs)  # type: ignore[misc]
+  File "/home/zeus/miniconda3/envs/cloudspace/lib/python3.10/site-packages/torch/_functorch/_aot_autograd/runtime_wrappers.py", line 1937, in forward
+    fw_outs = call_func_at_runtime_with_args(
+  File "/home/zeus/miniconda3/envs/cloudspace/lib/python3.10/site-packages/torch/_functorch/_aot_autograd/utils.py", line 126, in call_func_at_runtime_with_args
+    out = normalize_as_list(f(args))
+  File "/home/zeus/miniconda3/envs/cloudspace/lib/python3.10/site-packages/torch/_functorch/_aot_autograd/runtime_wrappers.py", line 495, in wrapper
+    return compiled_fn(runtime_args)
+  File "/home/zeus/miniconda3/envs/cloudspace/lib/python3.10/site-packages/torch/_inductor/output_code.py", line 460, in __call__
+    return self.current_callable(inputs)
+  File "/home/zeus/miniconda3/envs/cloudspace/lib/python3.10/site-packages/torch/_inductor/utils.py", line 2404, in run
+    return model(new_inputs)
+  File "/tmp/torchinductor_adamskrodzki/5y/c5ynbj6pfybrxj7lvuoag4ehs5sqyeo7f7ocglkyayti5xd7w6fj.py", line 1724, in call
+    triton_poi_fused__to_copy_add_cat_mul_2.run(buf144, primals_45, primals_46, buf145, buf146, 9437184, stream=stream0)
+  File "/home/zeus/miniconda3/envs/cloudspace/lib/python3.10/site-packages/torch/_inductor/runtime/triton_heuristics.py", line 956, in run
+    return launcher(
+  File "<string>", line 5, in launcher
+  File "/home/zeus/miniconda3/envs/cloudspace/lib/python3.10/site-packages/triton/backends/nvidia/driver.py", line 529, in __call__
+    self.launch(gridX, gridY, gridZ, stream, function, self.launch_cooperative_grid, global_scratch, *args)
+KeyboardInterrupt
+Exception ignored in atexit callback: <function _start_and_connect_service.<locals>.teardown_atexit at 0x7acdcd0a7400>
+Traceback (most recent call last):
+  File "/home/zeus/miniconda3/envs/cloudspace/lib/python3.10/site-packages/wandb/sdk/lib/service/service_connection.py", line 54, in teardown_atexit
+    conn.teardown(hooks.exit_code)
+  File "/home/zeus/miniconda3/envs/cloudspace/lib/python3.10/site-packages/wandb/sdk/lib/service/service_connection.py", line 182, in teardown
+    self._router.join()
+  File "/home/zeus/miniconda3/envs/cloudspace/lib/python3.10/site-packages/wandb/sdk/interface/router.py", line 75, in join
+    self._thread.join()
+  File "/home/zeus/miniconda3/envs/cloudspace/lib/python3.10/threading.py", line 1096, in join
+    self._wait_for_tstate_lock()
+  File "/home/zeus/miniconda3/envs/cloudspace/lib/python3.10/threading.py", line 1116, in _wait_for_tstate_lock
+    if lock.acquire(block, timeout):
+KeyboardInterrupt:
+Exception ignored in atexit callback: <function shutdown_compile_workers at 0x7acdd71572e0>
+Traceback (most recent call last):
+  File "/home/zeus/miniconda3/envs/cloudspace/lib/python3.10/site-packages/torch/_inductor/async_compile.py", line 113, in shutdown_compile_workers
+    pool.shutdown()
+  File "/home/zeus/miniconda3/envs/cloudspace/lib/python3.10/site-packages/torch/_inductor/compile_worker/subproc_pool.py", line 239, in shutdown
+    self.process.wait(300)
+  File "/home/zeus/miniconda3/envs/cloudspace/lib/python3.10/subprocess.py", line 1209, in wait
+    return self._wait(timeout=timeout)
+  File "/home/zeus/miniconda3/envs/cloudspace/lib/python3.10/subprocess.py", line 1937, in _wait
+    time.sleep(delay)
+KeyboardInterrupt:

@@ -1,0 +1,1139 @@
+Calculating target architecture based on schedule...
+
+============================================================
+       TARGET MODEL ARCHITECTURE (at end of schedule)
+============================================================
+  n_layer                | 6
+  n_head                 | 12
+  n_embd                 | 768
+  n_hidden               | 3072
+  block_size             | 1024
+  vocab_size             | 50304
+  dropout                | 0.0
+  bias                   | False
+  embedding_mode         | lora
+  attn_lora_rank         | 48
+  embedding_rank         | 48
+  lora_alpha             | 1.0
+============================================================
+
+
+============================================================
+           INITIAL MODEL ARCHITECTURE (at Iter 0)
+============================================================
+  n_layer                | 3
+  n_head                 | 12
+  n_embd                 | 768
+  n_hidden               | 768
+  block_size             | 1024
+  vocab_size             | 50304
+  dropout                | 0.0
+  bias                   | False
+  embedding_mode         | lora
+  attn_lora_rank         | 48
+  embedding_rank         | 48
+  lora_alpha             | 1.0
+============================================================
+
+
+Detailed parameter count:
+  total                  | Total:   52,149,504 | Trainable:    8,207,616
+  token_embeddings       | Total:    2,451,456 | Trainable:    2,451,456
+  position_embeddings    | Total:            0 | Trainable:            0
+  attention_layers       | Total:    7,520,256 | Trainable:    2,211,840
+  feed_forward_layers    | Total:    3,538,944 | Trainable:    3,538,944
+  layer_norms            | Total:        4,608 | Trainable:        4,608
+  final_layer_norm       | Total:          768 | Trainable:          768
+  language_model_head    | Total:   38,633,472 | Trainable:            0
+------------------------------------------------------------
+eval every:100
+step 0: train loss 10.9705, val loss 10.9694
+merge_lora_weights 10.969396591186523 8.0 500
+iter 0: loss 10.9693, lr 0.00005, time 7228.04ms, mfu -100.00%
+iter 10: loss 9.5995, lr 0.00055, time 574.60ms, mfu 32.16%
+iter 20: loss 9.4509, lr 0.00104, time 573.22ms, mfu 32.17%
+iter 30: loss 9.2538, lr 0.00154, time 578.38ms, mfu 32.15%
+iter 40: loss 9.1605, lr 0.00204, time 580.74ms, mfu 32.12%
+iter 50: loss 9.0398, lr 0.00254, time 578.51ms, mfu 32.10%
+iter 60: loss 8.8648, lr 0.00303, time 578.60ms, mfu 32.08%
+iter 70: loss 8.7121, lr 0.00353, time 583.39ms, mfu 32.04%
+iter 80: loss 8.6792, lr 0.00403, time 578.45ms, mfu 32.03%
+iter 90: loss 8.5513, lr 0.00453, time 580.80ms, mfu 32.01%
+step 100: train loss 8.5439, val loss 8.5786
+saving checkpoint to out
+merge_lora_weights 8.578604698181152 8.0 500
+iter 100: loss 8.5801, lr 0.00502, time 4730.45ms, mfu 29.20%
+iter 110: loss 8.5264, lr 0.00552, time 571.97ms, mfu 29.51%
+iter 120: loss 8.4187, lr 0.00602, time 574.92ms, mfu 29.78%
+iter 130: loss 8.3386, lr 0.00652, time 572.02ms, mfu 30.03%
+iter 140: loss 8.2846, lr 0.00701, time 566.36ms, mfu 30.29%
+iter 150: loss 8.2141, lr 0.00751, time 569.77ms, mfu 30.50%
+iter 160: loss 8.1145, lr 0.00801, time 572.90ms, mfu 30.68%
+iter 170: loss 8.0806, lr 0.00851, time 575.98ms, mfu 30.82%
+iter 180: loss 8.1271, lr 0.00900, time 575.69ms, mfu 30.95%
+iter 190: loss 7.9545, lr 0.00950, time 580.77ms, mfu 31.03%
+step 200: train loss 7.9812, val loss 7.9733
+saving checkpoint to out
+
+=== SCALING OPERATION TRIGGERED (DDP SYNC) ===
+Operation: merge_lora_weights
+Trigger reason: Loss threshold
+Current val loss: 7.9733, Trigger loss: 8.0000
+Iterations since last op: 200, Max wait: 500
+Executing operation: merge_lora_weights first burn with value: None
+Performing architectural operation: merge_lora_weights
+Merging LoRA weights into main weights...
+LoRA weights merged and reset.
+
+Detailed parameter count:
+  total                  | Total:   52,149,504 | Trainable:    8,207,616
+  token_embeddings       | Total:    2,451,456 | Trainable:    2,451,456
+  position_embeddings    | Total:            0 | Trainable:            0
+  attention_layers       | Total:    7,520,256 | Trainable:    2,211,840
+  feed_forward_layers    | Total:    3,538,944 | Trainable:    3,538,944
+  layer_norms            | Total:        4,608 | Trainable:        4,608
+  final_layer_norm       | Total:          768 | Trainable:          768
+  language_model_head    | Total:   38,633,472 | Trainable:            0
+------------------------------------------------------------
+Re-configuring optimizer after architectural change...
+num decayed parameter tensors: 17, with 8,202,240 parameters
+num non-decayed parameter tensors: 7, with 5,376 parameters
+using fused AdamW: True
+Transferring optimizer state for existing parameters...
+Transferred optimizer state for 0 / 28 parameters
+Re-compiling the model...
+
+============================================================
+             ARCHITECTURE CHANGE (at Iter 200)
+============================================================
+  n_layer                | 3
+  n_head                 | 12
+  n_embd                 | 768
+  n_hidden               | 768
+  block_size             | 1024
+  vocab_size             | 50304
+  dropout                | 0.0
+  bias                   | False
+  embedding_mode         | lora
+  attn_lora_rank         | 48
+  embedding_rank         | 48
+  lora_alpha             | 1.0
+============================================================
+
+Architectural operation completed successfully.
+=== SCALING OPERATION COMPLETE ===
+
+
+=== SCALING OPERATION TRIGGERED (DDP SYNC) ===
+Operation: change_lr
+Trigger reason: Loss threshold
+Current val loss: 7.9733, Trigger loss: 100.0000
+Iterations since last op: 0, Max wait: 1
+Executing operation: change_lr  with value: 0.7
+LR multiplier: 10.0000 -> 7.0000
+=== SCALING OPERATION COMPLETE ===
+
+
+=== SCALING OPERATION TRIGGERED (DDP SYNC) ===
+Operation: reset_lr_schedule
+Trigger reason: Loss threshold
+Current val loss: 7.9733, Trigger loss: 100.0000
+Iterations since last op: 0, Max wait: 1
+Executing operation: reset_lr_schedule  with value: None
+LR schedule offset: 0 -> 200
+=== SCALING OPERATION COMPLETE ===
+
+merge_lora_weights 7.9732842445373535 7.4 300
+iter 200: loss 11.3503, lr 0.01000, time 4784.41ms, mfu 28.32%
+iter 210: loss 8.4037, lr 0.00038, time 580.84ms, mfu 28.67%
+iter 220: loss 8.1586, lr 0.00073, time 588.95ms, mfu 28.94%
+iter 230: loss 8.0297, lr 0.00108, time 581.66ms, mfu 29.22%
+iter 240: loss 7.9505, lr 0.00143, time 582.44ms, mfu 29.47%
+iter 250: loss 8.0380, lr 0.00178, time 582.86ms, mfu 29.70%
+iter 260: loss 7.8868, lr 0.00212, time 580.74ms, mfu 29.91%
+iter 270: loss 7.8840, lr 0.00247, time 580.53ms, mfu 30.10%
+iter 280: loss 7.7285, lr 0.00282, time 581.70ms, mfu 30.27%
+iter 290: loss 7.6996, lr 0.00317, time 581.82ms, mfu 30.42%
+step 300: train loss 7.7494, val loss 7.7403
+saving checkpoint to out
+merge_lora_weights 7.740268707275391 7.4 300
+iter 300: loss 7.9021, lr 0.00352, time 4751.74ms, mfu 27.76%
+iter 310: loss 7.7406, lr 0.00387, time 572.30ms, mfu 28.22%
+iter 320: loss 7.6509, lr 0.00421, time 579.52ms, mfu 28.58%
+iter 330: loss 7.6064, lr 0.00456, time 579.94ms, mfu 28.91%
+iter 340: loss 7.6493, lr 0.00491, time 579.81ms, mfu 29.21%
+iter 350: loss 7.5684, lr 0.00526, time 579.92ms, mfu 29.47%
+iter 360: loss 7.5694, lr 0.00561, time 578.90ms, mfu 29.72%
+iter 370: loss 7.5188, lr 0.00596, time 580.98ms, mfu 29.93%
+iter 380: loss 7.6417, lr 0.00630, time 577.36ms, mfu 30.14%
+iter 390: loss 7.4397, lr 0.00665, time 581.29ms, mfu 30.30%
+step 400: train loss 7.5559, val loss 7.4931
+saving checkpoint to out
+merge_lora_weights 7.493136405944824 7.4 300
+iter 400: loss 7.5383, lr 0.00700, time 4965.84ms, mfu 27.64%
+iter 410: loss 7.5664, lr 0.00700, time 575.71ms, mfu 28.09%
+iter 420: loss 7.5348, lr 0.00700, time 577.02ms, mfu 28.48%
+iter 430: loss 7.5842, lr 0.00700, time 579.47ms, mfu 28.82%
+iter 440: loss 7.3483, lr 0.00700, time 578.95ms, mfu 29.13%
+iter 450: loss 7.2691, lr 0.00700, time 580.97ms, mfu 29.40%
+iter 460: loss 7.4154, lr 0.00700, time 579.59ms, mfu 29.65%
+iter 470: loss 7.2506, lr 0.00700, time 578.74ms, mfu 29.88%
+iter 480: loss 7.3636, lr 0.00700, time 580.02ms, mfu 30.08%
+iter 490: loss 7.4657, lr 0.00700, time 578.33ms, mfu 30.26%
+step 500: train loss 7.3822, val loss 7.3583
+saving checkpoint to out
+
+=== SCALING OPERATION TRIGGERED (DDP SYNC) ===
+Operation: merge_lora_weights
+Trigger reason: Loss threshold
+Current val loss: 7.3583, Trigger loss: 7.4000
+Iterations since last op: 300, Max wait: 300
+Executing operation: merge_lora_weights second burn with value: None
+Performing architectural operation: merge_lora_weights
+Merging LoRA weights into main weights...
+LoRA weights merged and reset.
+
+Detailed parameter count:
+  total                  | Total:   52,149,504 | Trainable:    8,207,616
+  token_embeddings       | Total:    2,451,456 | Trainable:    2,451,456
+  position_embeddings    | Total:            0 | Trainable:            0
+  attention_layers       | Total:    7,520,256 | Trainable:    2,211,840
+  feed_forward_layers    | Total:    3,538,944 | Trainable:    3,538,944
+  layer_norms            | Total:        4,608 | Trainable:        4,608
+  final_layer_norm       | Total:          768 | Trainable:          768
+  language_model_head    | Total:   38,633,472 | Trainable:            0
+------------------------------------------------------------
+Re-configuring optimizer after architectural change...
+num decayed parameter tensors: 17, with 8,202,240 parameters
+num non-decayed parameter tensors: 7, with 5,376 parameters
+using fused AdamW: True
+Transferring optimizer state for existing parameters...
+Transferred optimizer state for 0 / 28 parameters
+Re-compiling the model...
+
+============================================================
+             ARCHITECTURE CHANGE (at Iter 500)
+============================================================
+  n_layer                | 3
+  n_head                 | 12
+  n_embd                 | 768
+  n_hidden               | 768
+  block_size             | 1024
+  vocab_size             | 50304
+  dropout                | 0.0
+  bias                   | False
+  embedding_mode         | lora
+  attn_lora_rank         | 48
+  embedding_rank         | 48
+  lora_alpha             | 1.0
+============================================================
+
+Architectural operation completed successfully.
+=== SCALING OPERATION COMPLETE ===
+
+
+=== SCALING OPERATION TRIGGERED (DDP SYNC) ===
+Operation: change_lr
+Trigger reason: Loss threshold
+Current val loss: 7.3583, Trigger loss: 100.0000
+Iterations since last op: 0, Max wait: 1
+Executing operation: change_lr  with value: 0.2
+LR multiplier: 7.0000 -> 1.4000
+=== SCALING OPERATION COMPLETE ===
+
+
+=== SCALING OPERATION TRIGGERED (DDP SYNC) ===
+Operation: change_warmup_iters
+Trigger reason: Loss threshold
+Current val loss: 7.3583, Trigger loss: 100.0000
+Iterations since last op: 0, Max wait: 1
+Executing operation: change_warmup_iters  with value: 5
+Warmup iters multiplier: 1.0000 -> 5.0000
+=== SCALING OPERATION COMPLETE ===
+
+
+=== SCALING OPERATION TRIGGERED (DDP SYNC) ===
+Operation: reset_lr_schedule
+Trigger reason: Loss threshold
+Current val loss: 7.3583, Trigger loss: 100.0000
+Iterations since last op: 0, Max wait: 1
+Executing operation: reset_lr_schedule  with value: None
+LR schedule offset: 200 -> 500
+=== SCALING OPERATION COMPLETE ===
+
+
+=== SCALING OPERATION TRIGGERED (DDP SYNC) ===
+Operation: change_batch_size
+Trigger reason: Loss threshold
+Current val loss: 7.3583, Trigger loss: 100.0000
+Iterations since last op: 0, Max wait: 1
+Executing operation: change_batch_size  with value: 0.5
+Batch size: 32 -> 16
+=== SCALING OPERATION COMPLETE ===
+
+
+=== SCALING OPERATION TRIGGERED (DDP SYNC) ===
+Operation: change_grad_accum
+Trigger reason: Loss threshold
+Current val loss: 7.3583, Trigger loss: 100.0000
+Iterations since last op: 0, Max wait: 1
+Executing operation: change_grad_accum  with value: 2.0
+Grad accum steps: 2 -> 4
+=== SCALING OPERATION COMPLETE ===
+
+
+=== SCALING OPERATION TRIGGERED (DDP SYNC) ===
+Operation: change_lr
+Trigger reason: Loss threshold
+Current val loss: 7.3583, Trigger loss: 100.0000
+Iterations since last op: 0, Max wait: 1
+Executing operation: change_lr  with value: 0.7
+LR multiplier: 1.4000 -> 0.9800
+=== SCALING OPERATION COMPLETE ===
+
+
+=== SCALING OPERATION TRIGGERED (DDP SYNC) ===
+Operation: reset_lr_schedule
+Trigger reason: Loss threshold
+Current val loss: 7.3583, Trigger loss: 100.0000
+Iterations since last op: 0, Max wait: 1
+Executing operation: reset_lr_schedule  with value: None
+LR schedule offset: 500 -> 500
+=== SCALING OPERATION COMPLETE ===
+
+
+=== SCALING OPERATION TRIGGERED (DDP SYNC) ===
+Operation: decrease_vocab_lora_scaling
+Trigger reason: Loss threshold
+Current val loss: 7.3583, Trigger loss: 100.0000
+Iterations since last op: 0, Max wait: 1
+Executing operation: decrease_vocab_lora_scaling first resize with value: 2
+Performing architectural operation: decrease_vocab_lora_scaling
+Resizing embedding LoRA rank to 96.
+
+Detailed parameter count:
+  total                  | Total:   54,600,960 | Trainable:   10,659,072
+  token_embeddings       | Total:    4,902,912 | Trainable:    4,902,912
+  position_embeddings    | Total:            0 | Trainable:            0
+  attention_layers       | Total:    7,520,256 | Trainable:    2,211,840
+  feed_forward_layers    | Total:    3,538,944 | Trainable:    3,538,944
+  layer_norms            | Total:        4,608 | Trainable:        4,608
+  final_layer_norm       | Total:          768 | Trainable:          768
+  language_model_head    | Total:   38,633,472 | Trainable:            0
+------------------------------------------------------------
+Re-configuring optimizer after architectural change...
+num decayed parameter tensors: 17, with 10,653,696 parameters
+num non-decayed parameter tensors: 7, with 5,376 parameters
+using fused AdamW: True
+Transferring optimizer state for existing parameters...
+Transferred optimizer state for 0 / 28 parameters
+Re-compiling the model...
+
+============================================================
+             ARCHITECTURE CHANGE (at Iter 500)
+============================================================
+  n_layer                | 3
+  n_head                 | 12
+  n_embd                 | 768
+  n_hidden               | 768
+  block_size             | 1024
+  vocab_size             | 50304
+  dropout                | 0.0
+  bias                   | False
+  embedding_mode         | lora
+  attn_lora_rank         | 48
+  embedding_rank         | 96
+  lora_alpha             | 1.0
+============================================================
+
+Architectural operation completed successfully.
+Re-evaluating validation loss after operation...
+W0720 12:44:45.259000 14967 /system/conda/miniconda3/envs/cloudspace/lib/python3.10/site-packages/torch/_inductor/utils.py:1250] [0/2] Not enough SMs to use max_autotune_gemm mode
+New val loss after operation: 7.6712
+iter 500: loss 7.6962, lr 0.00700, time 32729.61ms, mfu 27.30%
+iter 510: loss 7.5587, lr 0.00001, time 560.74ms, mfu 28.01%
+iter 520: loss 7.3163, lr 0.00002, time 558.84ms, mfu 28.65%
+iter 530: loss 7.2790, lr 0.00003, time 560.76ms, mfu 29.23%
+iter 540: loss 7.3827, lr 0.00004, time 558.98ms, mfu 29.75%
+iter 550: loss 7.3806, lr 0.00005, time 570.78ms, mfu 30.15%
+iter 560: loss 7.1819, lr 0.00006, time 559.03ms, mfu 30.59%
+iter 570: loss 7.1712, lr 0.00007, time 560.81ms, mfu 30.97%
+iter 580: loss 7.3261, lr 0.00008, time 559.68ms, mfu 31.31%
+iter 590: loss 7.1801, lr 0.00009, time 558.79ms, mfu 31.63%
+step 600: train loss 7.1617, val loss 7.2594
+saving checkpoint to out
+merge_lora_weights 7.259377479553223 7.0 700
+iter 600: loss 7.3572, lr 0.00010, time 3003.91ms, mfu 29.11%
+iter 610: loss 7.2189, lr 0.00011, time 547.42ms, mfu 29.72%
+iter 620: loss 7.3217, lr 0.00012, time 546.19ms, mfu 30.28%
+iter 630: loss 7.3589, lr 0.00013, time 545.29ms, mfu 30.79%
+iter 640: loss 7.1043, lr 0.00014, time 560.34ms, mfu 31.15%
+iter 650: loss 7.2064, lr 0.00015, time 556.05ms, mfu 31.50%
+iter 660: loss 7.1984, lr 0.00016, time 555.08ms, mfu 31.82%
+iter 670: loss 7.1781, lr 0.00017, time 559.15ms, mfu 32.09%
+iter 680: loss 7.1735, lr 0.00018, time 558.00ms, mfu 32.33%
+iter 690: loss 7.2407, lr 0.00019, time 559.33ms, mfu 32.55%
+step 700: train loss 7.2027, val loss 7.1620
+saving checkpoint to out
+merge_lora_weights 7.161950588226318 7.0 700
+iter 700: loss 7.2135, lr 0.00020, time 3208.29ms, mfu 29.89%
+iter 710: loss 7.1787, lr 0.00021, time 560.57ms, mfu 30.34%
+iter 720: loss 7.0376, lr 0.00022, time 559.93ms, mfu 30.75%
+iter 730: loss 7.1490, lr 0.00023, time 561.69ms, mfu 31.11%
+iter 740: loss 7.1801, lr 0.00024, time 558.43ms, mfu 31.45%
+iter 750: loss 6.8710, lr 0.00025, time 561.93ms, mfu 31.73%
+iter 760: loss 7.1813, lr 0.00026, time 559.78ms, mfu 32.01%
+iter 770: loss 6.8980, lr 0.00027, time 561.21ms, mfu 32.24%
+iter 780: loss 6.7814, lr 0.00028, time 560.68ms, mfu 32.45%
+iter 790: loss 7.1753, lr 0.00028, time 561.96ms, mfu 32.64%
+step 800: train loss 7.1028, val loss 7.0612
+saving checkpoint to out
+merge_lora_weights 7.061192989349365 7.0 700
+iter 800: loss 7.4935, lr 0.00029, time 2869.64ms, mfu 30.05%
+iter 810: loss 7.2577, lr 0.00030, time 561.08ms, mfu 30.48%
+iter 820: loss 6.8627, lr 0.00031, time 560.11ms, mfu 30.87%
+iter 830: loss 7.1785, lr 0.00032, time 559.91ms, mfu 31.23%
+iter 840: loss 7.1589, lr 0.00033, time 560.39ms, mfu 31.54%
+iter 850: loss 7.1197, lr 0.00034, time 560.70ms, mfu 31.83%
+iter 860: loss 7.2084, lr 0.00035, time 559.28ms, mfu 32.09%
+iter 870: loss 7.1335, lr 0.00036, time 562.24ms, mfu 32.31%
+iter 880: loss 6.8944, lr 0.00037, time 561.39ms, mfu 32.51%
+iter 890: loss 7.3645, lr 0.00038, time 561.27ms, mfu 32.70%
+step 900: train loss 7.0495, val loss 7.1310
+saving checkpoint to out
+merge_lora_weights 7.131011962890625 7.0 700
+iter 900: loss 7.0833, lr 0.00039, time 2796.73ms, mfu 30.12%
+iter 910: loss 7.1912, lr 0.00040, time 564.89ms, mfu 30.52%
+iter 920: loss 6.7489, lr 0.00041, time 559.01ms, mfu 30.91%
+iter 930: loss 6.9479, lr 0.00042, time 561.74ms, mfu 31.25%
+iter 940: loss 6.9570, lr 0.00043, time 557.84ms, mfu 31.58%
+iter 950: loss 7.2132, lr 0.00044, time 559.37ms, mfu 31.87%
+iter 960: loss 7.2309, lr 0.00045, time 560.91ms, mfu 32.12%
+iter 970: loss 6.8485, lr 0.00046, time 558.16ms, mfu 32.36%
+iter 980: loss 6.8719, lr 0.00047, time 560.35ms, mfu 32.57%
+iter 990: loss 7.1721, lr 0.00048, time 558.69ms, mfu 32.76%
+step 1000: train loss 7.0432, val loss 7.0497
+saving checkpoint to out
+merge_lora_weights 7.049691677093506 7.0 700
+iter 1000: loss 7.1837, lr 0.00049, time 3170.15ms, mfu 30.09%
+iter 1010: loss 7.0710, lr 0.00050, time 547.50ms, mfu 30.60%
+iter 1020: loss 6.9337, lr 0.00051, time 553.13ms, mfu 31.03%
+iter 1030: loss 7.2184, lr 0.00052, time 550.29ms, mfu 31.43%
+iter 1040: loss 7.0128, lr 0.00053, time 550.79ms, mfu 31.79%
+iter 1050: loss 7.0162, lr 0.00054, time 552.46ms, mfu 32.10%
+iter 1060: loss 7.1501, lr 0.00055, time 552.32ms, mfu 32.38%
+iter 1070: loss 7.1130, lr 0.00056, time 555.15ms, mfu 32.61%
+iter 1080: loss 7.0174, lr 0.00057, time 554.16ms, mfu 32.83%
+iter 1090: loss 7.3294, lr 0.00058, time 548.96ms, mfu 33.06%
+step 1100: train loss 6.9981, val loss 7.1258
+saving checkpoint to out
+merge_lora_weights 7.125796318054199 7.0 700
+iter 1100: loss 7.0975, lr 0.00059, time 3093.70ms, mfu 30.38%
+iter 1110: loss 7.0216, lr 0.00060, time 548.17ms, mfu 30.85%
+iter 1120: loss 7.3353, lr 0.00061, time 559.79ms, mfu 31.21%
+iter 1130: loss 7.0406, lr 0.00062, time 559.64ms, mfu 31.54%
+iter 1140: loss 7.3085, lr 0.00063, time 559.75ms, mfu 31.83%
+iter 1150: loss 7.0823, lr 0.00064, time 560.39ms, mfu 32.08%
+iter 1160: loss 7.1148, lr 0.00065, time 556.23ms, mfu 32.34%
+iter 1170: loss 6.9878, lr 0.00066, time 560.50ms, mfu 32.55%
+iter 1180: loss 7.0146, lr 0.00067, time 561.55ms, mfu 32.72%
+iter 1190: loss 6.9875, lr 0.00068, time 556.15ms, mfu 32.92%
+step 1200: train loss 6.9735, val loss 6.9812
+saving checkpoint to out
+
+=== SCALING OPERATION TRIGGERED (DDP SYNC) ===
+Operation: merge_lora_weights
+Trigger reason: Loss threshold
+Current val loss: 6.9812, Trigger loss: 7.0000
+Iterations since last op: 700, Max wait: 700
+Executing operation: merge_lora_weights third burn with value: None
+Performing architectural operation: merge_lora_weights
+Merging LoRA weights into main weights...
+LoRA weights merged and reset.
+
+Detailed parameter count:
+  total                  | Total:   54,600,960 | Trainable:   10,659,072
+  token_embeddings       | Total:    4,902,912 | Trainable:    4,902,912
+  position_embeddings    | Total:            0 | Trainable:            0
+  attention_layers       | Total:    7,520,256 | Trainable:    2,211,840
+  feed_forward_layers    | Total:    3,538,944 | Trainable:    3,538,944
+  layer_norms            | Total:        4,608 | Trainable:        4,608
+  final_layer_norm       | Total:          768 | Trainable:          768
+  language_model_head    | Total:   38,633,472 | Trainable:            0
+------------------------------------------------------------
+Re-configuring optimizer after architectural change...
+num decayed parameter tensors: 17, with 10,653,696 parameters
+num non-decayed parameter tensors: 7, with 5,376 parameters
+using fused AdamW: True
+Transferring optimizer state for existing parameters...
+Transferred optimizer state for 0 / 28 parameters
+Re-compiling the model...
+
+============================================================
+             ARCHITECTURE CHANGE (at Iter 1200)
+============================================================
+  n_layer                | 3
+  n_head                 | 12
+  n_embd                 | 768
+  n_hidden               | 768
+  block_size             | 1024
+  vocab_size             | 50304
+  dropout                | 0.0
+  bias                   | False
+  embedding_mode         | lora
+  attn_lora_rank         | 48
+  embedding_rank         | 96
+  lora_alpha             | 1.0
+============================================================
+
+Architectural operation completed successfully.
+=== SCALING OPERATION COMPLETE ===
+
+
+=== SCALING OPERATION TRIGGERED (DDP SYNC) ===
+Operation: change_batch_size
+Trigger reason: Loss threshold
+Current val loss: 6.9812, Trigger loss: 100.0000
+Iterations since last op: 0, Max wait: 1
+Executing operation: change_batch_size  with value: 0.5
+Batch size: 16 -> 8
+=== SCALING OPERATION COMPLETE ===
+
+
+=== SCALING OPERATION TRIGGERED (DDP SYNC) ===
+Operation: change_grad_accum
+Trigger reason: Loss threshold
+Current val loss: 6.9812, Trigger loss: 100.0000
+Iterations since last op: 0, Max wait: 1
+Executing operation: change_grad_accum  with value: 2.0
+Grad accum steps: 4 -> 8
+=== SCALING OPERATION COMPLETE ===
+
+
+=== SCALING OPERATION TRIGGERED (DDP SYNC) ===
+Operation: decrease_vocab_lora_scaling
+Trigger reason: Loss threshold
+Current val loss: 6.9812, Trigger loss: 100.0000
+Iterations since last op: 0, Max wait: 1
+Executing operation: decrease_vocab_lora_scaling  with value: 0.5
+Performing architectural operation: decrease_vocab_lora_scaling
+Resizing embedding LoRA rank to 48.
+
+Detailed parameter count:
+  total                  | Total:   52,149,504 | Trainable:    8,207,616
+  token_embeddings       | Total:    2,451,456 | Trainable:    2,451,456
+  position_embeddings    | Total:            0 | Trainable:            0
+  attention_layers       | Total:    7,520,256 | Trainable:    2,211,840
+  feed_forward_layers    | Total:    3,538,944 | Trainable:    3,538,944
+  layer_norms            | Total:        4,608 | Trainable:        4,608
+  final_layer_norm       | Total:          768 | Trainable:          768
+  language_model_head    | Total:   38,633,472 | Trainable:            0
+------------------------------------------------------------
+Re-configuring optimizer after architectural change...
+num decayed parameter tensors: 17, with 8,202,240 parameters
+num non-decayed parameter tensors: 7, with 5,376 parameters
+using fused AdamW: True
+Transferring optimizer state for existing parameters...
+Transferred optimizer state for 0 / 28 parameters
+Re-compiling the model...
+
+============================================================
+             ARCHITECTURE CHANGE (at Iter 1200)
+============================================================
+  n_layer                | 3
+  n_head                 | 12
+  n_embd                 | 768
+  n_hidden               | 768
+  block_size             | 1024
+  vocab_size             | 50304
+  dropout                | 0.0
+  bias                   | False
+  embedding_mode         | lora
+  attn_lora_rank         | 48
+  embedding_rank         | 48
+  lora_alpha             | 1.0
+============================================================
+
+Architectural operation completed successfully.
+Re-evaluating validation loss after operation...
+New val loss after operation: 7.0175
+iter 1200: loss 6.8518, lr 0.00069, time 27079.10ms, mfu 29.69%
+iter 1210: loss 7.0276, lr 0.00070, time 544.10ms, mfu 30.12%
+iter 1220: loss 6.6267, lr 0.00071, time 551.92ms, mfu 30.46%
+iter 1230: loss 6.8740, lr 0.00072, time 555.84ms, mfu 30.74%
+iter 1240: loss 7.0391, lr 0.00073, time 561.06ms, mfu 30.96%
+iter 1250: loss 7.2453, lr 0.00074, time 560.31ms, mfu 31.16%
+iter 1260: loss 6.8335, lr 0.00075, time 571.67ms, mfu 31.28%
+iter 1270: loss 6.9912, lr 0.00075, time 561.01ms, mfu 31.44%
+iter 1280: loss 7.0084, lr 0.00076, time 555.65ms, mfu 31.62%
+iter 1290: loss 7.1038, lr 0.00077, time 553.23ms, mfu 31.80%
+step 1300: train loss 6.8636, val loss 7.0104
+saving checkpoint to out
+
+=== SCALING OPERATION TRIGGERED (DDP SYNC) ===
+Operation: change_lr
+Trigger reason: Loss threshold
+Current val loss: 7.0104, Trigger loss: 100.0000
+Iterations since last op: 100, Max wait: 1
+Executing operation: change_lr  with value: 0.7
+LR multiplier: 0.9800 -> 0.6860
+=== SCALING OPERATION COMPLETE ===
+
+
+=== SCALING OPERATION TRIGGERED (DDP SYNC) ===
+Operation: reset_lr_schedule
+Trigger reason: Loss threshold
+Current val loss: 7.0104, Trigger loss: 100.0000
+Iterations since last op: 0, Max wait: 1
+Executing operation: reset_lr_schedule  with value: None
+LR schedule offset: 500 -> 1300
+=== SCALING OPERATION COMPLETE ===
+
+
+=== SCALING OPERATION TRIGGERED (DDP SYNC) ===
+Operation: stack_layers
+Trigger reason: Loss threshold
+Current val loss: 7.0104, Trigger loss: 100.0000
+Iterations since last op: 0, Max wait: 1
+Executing operation: stack_layers third resize with value: 2
+Performing architectural operation: stack_layers
+Stacking layers: current depth 3, creating 6 total layers.
+Model now has 6 layers.
+
+Detailed parameter count:
+  total                  | Total:   63,213,312 | Trainable:   13,963,008
+  token_embeddings       | Total:    2,451,456 | Trainable:    2,451,456
+  position_embeddings    | Total:            0 | Trainable:            0
+  attention_layers       | Total:   15,040,512 | Trainable:    4,423,680
+  feed_forward_layers    | Total:    7,077,888 | Trainable:    7,077,888
+  layer_norms            | Total:        9,216 | Trainable:        9,216
+  final_layer_norm       | Total:          768 | Trainable:          768
+  language_model_head    | Total:   38,633,472 | Trainable:            0
+------------------------------------------------------------
+Re-configuring optimizer after architectural change...
+num decayed parameter tensors: 32, with 13,953,024 parameters
+num non-decayed parameter tensors: 13, with 9,984 parameters
+using fused AdamW: True
+Transferring optimizer state for existing parameters...
+Transferred optimizer state for 0 / 52 parameters
+Re-compiling the model...
+
+============================================================
+             ARCHITECTURE CHANGE (at Iter 1300)
+============================================================
+  n_layer                | 6
+  n_head                 | 12
+  n_embd                 | 768
+  n_hidden               | 768
+  block_size             | 1024
+  vocab_size             | 50304
+  dropout                | 0.0
+  bias                   | False
+  embedding_mode         | lora
+  attn_lora_rank         | 48
+  embedding_rank         | 48
+  lora_alpha             | 1.0
+============================================================
+
+Architectural operation completed successfully.
+Re-evaluating validation loss after operation...
+New val loss after operation: 7.6430
+iter 1300: loss 7.4990, lr 0.00078, time 36626.76ms, mfu 28.69%
+iter 1310: loss 7.2846, lr 0.00001, time 743.93ms, mfu 28.99%
+iter 1320: loss 7.1145, lr 0.00001, time 760.33ms, mfu 29.20%
+iter 1330: loss 7.5378, lr 0.00002, time 760.72ms, mfu 29.38%
+iter 1340: loss 7.4447, lr 0.00003, time 766.02ms, mfu 29.53%
+iter 1350: loss 7.2604, lr 0.00003, time 764.52ms, mfu 29.66%
+iter 1360: loss 7.2589, lr 0.00004, time 766.44ms, mfu 29.78%
+iter 1370: loss 7.2273, lr 0.00005, time 760.42ms, mfu 29.90%
+iter 1380: loss 7.2428, lr 0.00006, time 755.02ms, mfu 30.04%
+iter 1390: loss 7.1551, lr 0.00006, time 760.61ms, mfu 30.14%
+step 1400: train loss 7.0379, val loss 7.0471
+saving checkpoint to out
+merge_lora_weights 7.047120571136475 6.0 600
+iter 1400: loss 6.9926, lr 0.00007, time 2446.52ms, mfu 28.09%
+iter 1410: loss 6.8517, lr 0.00008, time 746.32ms, mfu 28.44%
+iter 1420: loss 7.1434, lr 0.00008, time 754.86ms, mfu 28.73%
+iter 1430: loss 7.0404, lr 0.00009, time 747.22ms, mfu 29.01%
+iter 1440: loss 7.2009, lr 0.00010, time 757.22ms, mfu 29.23%
+iter 1450: loss 6.9116, lr 0.00010, time 755.18ms, mfu 29.43%
+iter 1460: loss 7.0689, lr 0.00011, time 757.11ms, mfu 29.61%
+iter 1470: loss 7.0118, lr 0.00012, time 759.29ms, mfu 29.76%
+iter 1480: loss 7.0653, lr 0.00012, time 761.85ms, mfu 29.88%
+iter 1490: loss 7.2361, lr 0.00013, time 758.94ms, mfu 30.00%
+step 1500: train loss 7.0523, val loss 6.9026
+saving checkpoint to out
+merge_lora_weights 6.90261697769165 6.0 600
+iter 1500: loss 7.2002, lr 0.00014, time 2662.80ms, mfu 27.89%
+iter 1510: loss 6.8969, lr 0.00014, time 752.17ms, mfu 28.24%
+iter 1520: loss 6.9775, lr 0.00015, time 760.01ms, mfu 28.52%
+iter 1530: loss 7.1384, lr 0.00016, time 759.94ms, mfu 28.78%
+iter 1540: loss 6.7520, lr 0.00017, time 756.98ms, mfu 29.02%
+iter 1550: loss 7.0645, lr 0.00017, time 757.60ms, mfu 29.23%
+iter 1560: loss 6.9635, lr 0.00018, time 761.08ms, mfu 29.41%
+iter 1570: loss 6.7689, lr 0.00019, time 758.89ms, mfu 29.58%
+iter 1580: loss 6.8931, lr 0.00019, time 757.92ms, mfu 29.74%
+iter 1590: loss 6.6435, lr 0.00020, time 763.89ms, mfu 29.86%
+step 1600: train loss 6.9979, val loss 6.9349
+saving checkpoint to out
+merge_lora_weights 6.934940338134766 6.0 600
+iter 1600: loss 6.9573, lr 0.00021, time 2902.50ms, mfu 27.68%
+iter 1610: loss 6.8687, lr 0.00021, time 748.92ms, mfu 28.07%
+iter 1620: loss 6.5538, lr 0.00022, time 759.46ms, mfu 28.37%
+iter 1630: loss 7.1300, lr 0.00023, time 758.00ms, mfu 28.65%
+iter 1640: loss 6.9032, lr 0.00023, time 760.14ms, mfu 28.89%
+iter 1650: loss 7.0268, lr 0.00024, time 758.01ms, mfu 29.11%
+iter 1660: loss 6.8600, lr 0.00025, time 759.80ms, mfu 29.31%
+iter 1670: loss 6.9069, lr 0.00025, time 760.58ms, mfu 29.48%
+iter 1680: loss 6.9570, lr 0.00026, time 760.23ms, mfu 29.64%
+iter 1690: loss 6.7161, lr 0.00027, time 759.06ms, mfu 29.79%
+step 1700: train loss 6.8847, val loss 6.9038
+saving checkpoint to out
+merge_lora_weights 6.903848171234131 6.0 600
+iter 1700: loss 6.7082, lr 0.00027, time 2824.53ms, mfu 27.64%
+iter 1710: loss 6.6275, lr 0.00028, time 758.10ms, mfu 27.99%
+iter 1720: loss 6.6223, lr 0.00029, time 757.27ms, mfu 28.31%
+iter 1730: loss 6.9001, lr 0.00030, time 760.73ms, mfu 28.58%
+iter 1740: loss 7.0032, lr 0.00030, time 762.40ms, mfu 28.82%
+iter 1750: loss 7.1727, lr 0.00031, time 760.48ms, mfu 29.04%
+iter 1760: loss 6.8725, lr 0.00032, time 760.03ms, mfu 29.25%
+iter 1770: loss 6.9472, lr 0.00032, time 758.73ms, mfu 29.43%
+iter 1780: loss 7.1979, lr 0.00033, time 760.79ms, mfu 29.59%
+iter 1790: loss 6.5171, lr 0.00034, time 759.96ms, mfu 29.74%
+step 1800: train loss 6.8979, val loss 6.9017
+saving checkpoint to out
+merge_lora_weights 6.901683807373047 6.0 600
+iter 1800: loss 6.9491, lr 0.00034, time 2628.06ms, mfu 27.67%
+iter 1810: loss 7.0901, lr 0.00035, time 752.73ms, mfu 28.04%
+iter 1820: loss 6.7408, lr 0.00036, time 760.89ms, mfu 28.33%
+iter 1830: loss 7.0761, lr 0.00036, time 759.46ms, mfu 28.61%
+iter 1840: loss 7.1617, lr 0.00037, time 759.29ms, mfu 28.86%
+iter 1850: loss 7.1096, lr 0.00038, time 758.66ms, mfu 29.08%
+iter 1860: loss 6.7842, lr 0.00038, time 760.27ms, mfu 29.28%
+iter 1870: loss 6.8143, lr 0.00039, time 760.98ms, mfu 29.46%
+iter 1880: loss 6.9385, lr 0.00040, time 761.02ms, mfu 29.61%
+iter 1890: loss 7.0586, lr 0.00041, time 760.65ms, mfu 29.76%
+step 1900: train loss 6.8594, val loss 6.9280
+saving checkpoint to out
+
+=== SCALING OPERATION TRIGGERED (DDP SYNC) ===
+Operation: merge_lora_weights
+Trigger reason: Timeout
+Current val loss: 6.9280, Trigger loss: 6.0000
+Iterations since last op: 600, Max wait: 600
+Executing operation: merge_lora_weights fourth burn with value: None
+Performing architectural operation: merge_lora_weights
+Merging LoRA weights into main weights...
+LoRA weights merged and reset.
+
+Detailed parameter count:
+  total                  | Total:   63,213,312 | Trainable:   13,963,008
+  token_embeddings       | Total:    2,451,456 | Trainable:    2,451,456
+  position_embeddings    | Total:            0 | Trainable:            0
+  attention_layers       | Total:   15,040,512 | Trainable:    4,423,680
+  feed_forward_layers    | Total:    7,077,888 | Trainable:    7,077,888
+  layer_norms            | Total:        9,216 | Trainable:        9,216
+  final_layer_norm       | Total:          768 | Trainable:          768
+  language_model_head    | Total:   38,633,472 | Trainable:            0
+------------------------------------------------------------
+Re-configuring optimizer after architectural change...
+num decayed parameter tensors: 32, with 13,953,024 parameters
+num non-decayed parameter tensors: 13, with 9,984 parameters
+using fused AdamW: True
+Transferring optimizer state for existing parameters...
+Transferred optimizer state for 0 / 52 parameters
+Re-compiling the model...
+
+============================================================
+             ARCHITECTURE CHANGE (at Iter 1900)
+============================================================
+  n_layer                | 6
+  n_head                 | 12
+  n_embd                 | 768
+  n_hidden               | 768
+  block_size             | 1024
+  vocab_size             | 50304
+  dropout                | 0.0
+  bias                   | False
+  embedding_mode         | lora
+  attn_lora_rank         | 48
+  embedding_rank         | 48
+  lora_alpha             | 1.0
+============================================================
+
+Architectural operation completed successfully.
+=== SCALING OPERATION COMPLETE ===
+
+
+=== SCALING OPERATION TRIGGERED (DDP SYNC) ===
+Operation: widen_mlp
+Trigger reason: Loss threshold
+Current val loss: 6.9280, Trigger loss: 100.0000
+Iterations since last op: 0, Max wait: 1
+Executing operation: widen_mlp second resize with value: 2
+Performing architectural operation: widen_mlp
+Widening MLP layers by a factor of 2.
+MLP hidden dimension widened to 1536.
+
+Detailed parameter count:
+  total                  | Total:   70,291,200 | Trainable:   21,040,896
+  token_embeddings       | Total:    2,451,456 | Trainable:    2,451,456
+  position_embeddings    | Total:            0 | Trainable:            0
+  attention_layers       | Total:   15,040,512 | Trainable:    4,423,680
+  feed_forward_layers    | Total:   14,155,776 | Trainable:   14,155,776
+  layer_norms            | Total:        9,216 | Trainable:        9,216
+  final_layer_norm       | Total:          768 | Trainable:          768
+  language_model_head    | Total:   38,633,472 | Trainable:            0
+------------------------------------------------------------
+Re-configuring optimizer after architectural change...
+num decayed parameter tensors: 32, with 21,030,912 parameters
+num non-decayed parameter tensors: 13, with 9,984 parameters
+using fused AdamW: True
+Transferring optimizer state for existing parameters...
+Transferred optimizer state for 0 / 52 parameters
+Re-compiling the model...
+
+============================================================
+             ARCHITECTURE CHANGE (at Iter 1900)
+============================================================
+  n_layer                | 6
+  n_head                 | 12
+  n_embd                 | 768
+  n_hidden               | 1536
+  block_size             | 1024
+  vocab_size             | 50304
+  dropout                | 0.0
+  bias                   | False
+  embedding_mode         | lora
+  attn_lora_rank         | 48
+  embedding_rank         | 48
+  lora_alpha             | 1.0
+============================================================
+
+Architectural operation completed successfully.
+Re-evaluating validation loss after operation...
+New val loss after operation: 6.9137
+iter 1900: loss 6.9211, lr 0.00041, time 36920.77ms, mfu 26.85%
+iter 1910: loss 6.7546, lr 0.00042, time 814.92ms, mfu 27.34%
+iter 1920: loss 6.6745, lr 0.00043, time 824.12ms, mfu 27.75%
+iter 1930: loss 7.1016, lr 0.00043, time 832.75ms, mfu 28.09%
+iter 1940: loss 6.8778, lr 0.00044, time 830.13ms, mfu 28.40%
+iter 1950: loss 6.7512, lr 0.00045, time 830.85ms, mfu 28.68%
+iter 1960: loss 6.8992, lr 0.00045, time 823.10ms, mfu 28.96%
+iter 1970: loss 7.0622, lr 0.00046, time 820.36ms, mfu 29.22%
+iter 1980: loss 7.1909, lr 0.00047, time 823.29ms, mfu 29.45%
+iter 1990: loss 6.7412, lr 0.00047, time 818.77ms, mfu 29.67%
+step 2000: train loss 6.8312, val loss 6.8515
+saving checkpoint to out
+
+=== SCALING OPERATION TRIGGERED (DDP SYNC) ===
+Operation: change_batch_size
+Trigger reason: Loss threshold
+Current val loss: 6.8515, Trigger loss: 100.0000
+Iterations since last op: 100, Max wait: 1
+Executing operation: change_batch_size  with value: 0.5
+Batch size: 8 -> 4
+=== SCALING OPERATION COMPLETE ===
+
+
+=== SCALING OPERATION TRIGGERED (DDP SYNC) ===
+Operation: change_grad_accum
+Trigger reason: Loss threshold
+Current val loss: 6.8515, Trigger loss: 100.0000
+Iterations since last op: 0, Max wait: 1
+Executing operation: change_grad_accum  with value: 2.0
+Grad accum steps: 8 -> 16
+=== SCALING OPERATION COMPLETE ===
+
+
+=== SCALING OPERATION TRIGGERED (DDP SYNC) ===
+Operation: widen_mlp
+Trigger reason: Loss threshold
+Current val loss: 6.8515, Trigger loss: 100.0000
+Iterations since last op: 0, Max wait: 1
+Executing operation: widen_mlp fourth resize with value: 2
+Performing architectural operation: widen_mlp
+Widening MLP layers by a factor of 2.
+MLP hidden dimension widened to 3072.
+
+Detailed parameter count:
+  total                  | Total:   84,446,976 | Trainable:   35,196,672
+  token_embeddings       | Total:    2,451,456 | Trainable:    2,451,456
+  position_embeddings    | Total:            0 | Trainable:            0
+  attention_layers       | Total:   15,040,512 | Trainable:    4,423,680
+  feed_forward_layers    | Total:   28,311,552 | Trainable:   28,311,552
+  layer_norms            | Total:        9,216 | Trainable:        9,216
+  final_layer_norm       | Total:          768 | Trainable:          768
+  language_model_head    | Total:   38,633,472 | Trainable:            0
+------------------------------------------------------------
+Re-configuring optimizer after architectural change...
+num decayed parameter tensors: 32, with 35,186,688 parameters
+num non-decayed parameter tensors: 13, with 9,984 parameters
+using fused AdamW: True
+Transferring optimizer state for existing parameters...
+Transferred optimizer state for 0 / 52 parameters
+Re-compiling the model...
+
+============================================================
+             ARCHITECTURE CHANGE (at Iter 2000)
+============================================================
+  n_layer                | 6
+  n_head                 | 12
+  n_embd                 | 768
+  n_hidden               | 3072
+  block_size             | 1024
+  vocab_size             | 50304
+  dropout                | 0.0
+  bias                   | False
+  embedding_mode         | lora
+  attn_lora_rank         | 48
+  embedding_rank         | 48
+  lora_alpha             | 1.0
+============================================================
+
+Architectural operation completed successfully.
+Re-evaluating validation loss after operation...
+Traceback (most recent call last):
+  File "/teamspace/studios/this_studio/nanoGPT/train.py", line 751, in <module>
+    losses = estimate_loss() # All processes re-evaluate to stay in sync
+  File "/home/zeus/miniconda3/envs/cloudspace/lib/python3.10/site-packages/torch/utils/_contextlib.py", line 116, in decorate_context
+    return func(*args, **kwargs)
+  File "/teamspace/studios/this_studio/nanoGPT/train.py", line 385, in estimate_loss
+    logits, loss = model(X, Y)
+  File "/home/zeus/miniconda3/envs/cloudspace/lib/python3.10/site-packages/torch/nn/modules/module.py", line 1751, in _wrapped_call_impl
+    return self._call_impl(*args, **kwargs)
+  File "/home/zeus/miniconda3/envs/cloudspace/lib/python3.10/site-packages/torch/nn/modules/module.py", line 1762, in _call_impl
+    return forward_call(*args, **kwargs)
+  File "/home/zeus/miniconda3/envs/cloudspace/lib/python3.10/site-packages/torch/_dynamo/eval_frame.py", line 655, in _fn
+    return fn(*args, **kwargs)
+  File "/home/zeus/miniconda3/envs/cloudspace/lib/python3.10/site-packages/torch/nn/modules/module.py", line 1751, in _wrapped_call_impl
+    return self._call_impl(*args, **kwargs)
+  File "/home/zeus/miniconda3/envs/cloudspace/lib/python3.10/site-packages/torch/nn/modules/module.py", line 1762, in _call_impl
+    return forward_call(*args, **kwargs)
+  File "/home/zeus/miniconda3/envs/cloudspace/lib/python3.10/site-packages/torch/_dynamo/convert_frame.py", line 1432, in __call__
+    return self._torchdynamo_orig_callable(
+  File "/home/zeus/miniconda3/envs/cloudspace/lib/python3.10/site-packages/torch/_dynamo/convert_frame.py", line 1213, in __call__
+    result = self._inner_convert(
+  File "/home/zeus/miniconda3/envs/cloudspace/lib/python3.10/site-packages/torch/_dynamo/convert_frame.py", line 598, in __call__
+    return _compile(
+  File "/home/zeus/miniconda3/envs/cloudspace/lib/python3.10/site-packages/torch/_dynamo/convert_frame.py", line 1059, in _compile
+    guarded_code = compile_inner(code, one_graph, hooks, transform)
+  File "/home/zeus/miniconda3/envs/cloudspace/lib/python3.10/site-packages/torch/_utils_internal.py", line 97, in wrapper_function
+    return function(*args, **kwargs)
+  File "/home/zeus/miniconda3/envs/cloudspace/lib/python3.10/site-packages/torch/_dynamo/convert_frame.py", line 761, in compile_inner
+    return _compile_inner(code, one_graph, hooks, transform)
+  File "/home/zeus/miniconda3/envs/cloudspace/lib/python3.10/site-packages/torch/_dynamo/convert_frame.py", line 797, in _compile_inner
+    out_code = transform_code_object(code, transform)
+  File "/home/zeus/miniconda3/envs/cloudspace/lib/python3.10/site-packages/torch/_dynamo/bytecode_transformation.py", line 1422, in transform_code_object
+    transformations(instructions, code_options)
+  File "/home/zeus/miniconda3/envs/cloudspace/lib/python3.10/site-packages/torch/_dynamo/convert_frame.py", line 257, in _fn
+    return fn(*args, **kwargs)
+  File "/home/zeus/miniconda3/envs/cloudspace/lib/python3.10/site-packages/torch/_dynamo/convert_frame.py", line 715, in transform
+    tracer.run()
+  File "/home/zeus/miniconda3/envs/cloudspace/lib/python3.10/site-packages/torch/_dynamo/symbolic_convert.py", line 3500, in run
+    super().run()
+  File "/home/zeus/miniconda3/envs/cloudspace/lib/python3.10/site-packages/torch/_dynamo/symbolic_convert.py", line 1337, in run
+    while self.step():
+  File "/home/zeus/miniconda3/envs/cloudspace/lib/python3.10/site-packages/torch/_dynamo/symbolic_convert.py", line 1246, in step
+    self.dispatch_table[inst.opcode](self, inst)
+  File "/home/zeus/miniconda3/envs/cloudspace/lib/python3.10/site-packages/torch/_dynamo/symbolic_convert.py", line 3701, in RETURN_VALUE
+    self._return(inst)
+  File "/home/zeus/miniconda3/envs/cloudspace/lib/python3.10/site-packages/torch/_dynamo/symbolic_convert.py", line 3686, in _return
+    self.output.compile_subgraph(
+  File "/home/zeus/miniconda3/envs/cloudspace/lib/python3.10/site-packages/torch/_dynamo/output_graph.py", line 1179, in compile_subgraph
+    self.compile_and_call_fx_graph(
+  File "/home/zeus/miniconda3/envs/cloudspace/lib/python3.10/site-packages/torch/_dynamo/output_graph.py", line 1437, in compile_and_call_fx_graph
+    compiled_fn = self.call_user_compiler(gm)
+  File "/home/zeus/miniconda3/envs/cloudspace/lib/python3.10/site-packages/torch/_dynamo/output_graph.py", line 1487, in call_user_compiler
+    return self._call_user_compiler(gm)
+  File "/home/zeus/miniconda3/envs/cloudspace/lib/python3.10/site-packages/torch/_dynamo/output_graph.py", line 1519, in _call_user_compiler
+    compiled_fn = compiler_fn(gm, self.example_inputs())
+  File "/home/zeus/miniconda3/envs/cloudspace/lib/python3.10/site-packages/torch/_dynamo/repro/after_dynamo.py", line 150, in __call__
+    compiled_gm = compiler_fn(gm, example_inputs)
+  File "/home/zeus/miniconda3/envs/cloudspace/lib/python3.10/site-packages/torch/__init__.py", line 2347, in __call__
+    return compile_fx(model_, inputs_, config_patches=self.config)
+  File "/home/zeus/miniconda3/envs/cloudspace/lib/python3.10/site-packages/torch/_inductor/compile_fx.py", line 2089, in compile_fx
+    return aot_autograd(
+  File "/home/zeus/miniconda3/envs/cloudspace/lib/python3.10/site-packages/torch/_dynamo/backends/common.py", line 101, in __call__
+    cg = aot_module_simplified(gm, example_inputs, **self.kwargs)
+  File "/home/zeus/miniconda3/envs/cloudspace/lib/python3.10/site-packages/torch/_functorch/aot_autograd.py", line 1160, in aot_module_simplified
+    compiled_fn = AOTAutogradCache.load(
+  File "/home/zeus/miniconda3/envs/cloudspace/lib/python3.10/site-packages/torch/_functorch/_aot_autograd/autograd_cache.py", line 775, in load
+    compiled_fn = dispatch_and_compile()
+  File "/home/zeus/miniconda3/envs/cloudspace/lib/python3.10/site-packages/torch/_functorch/aot_autograd.py", line 1145, in dispatch_and_compile
+    compiled_fn, _ = create_aot_dispatcher_function(
+  File "/home/zeus/miniconda3/envs/cloudspace/lib/python3.10/site-packages/torch/_functorch/aot_autograd.py", line 570, in create_aot_dispatcher_function
+    return _create_aot_dispatcher_function(
+  File "/home/zeus/miniconda3/envs/cloudspace/lib/python3.10/site-packages/torch/_functorch/aot_autograd.py", line 820, in _create_aot_dispatcher_function
+    compiled_fn, fw_metadata = compiler_fn(
+  File "/home/zeus/miniconda3/envs/cloudspace/lib/python3.10/site-packages/torch/_functorch/_aot_autograd/jit_compile_runtime_wrappers.py", line 219, in aot_dispatch_base
+    compiled_fw = compiler(fw_module, updated_flat_args)
+  File "/home/zeus/miniconda3/envs/cloudspace/lib/python3.10/site-packages/torch/_functorch/aot_autograd.py", line 479, in __call__
+    return self.compiler_fn(gm, example_inputs)
+  File "/home/zeus/miniconda3/envs/cloudspace/lib/python3.10/site-packages/torch/_inductor/compile_fx.py", line 1944, in fw_compiler_base
+    return inner_compile(
+  File "/home/zeus/miniconda3/envs/cloudspace/lib/python3.10/site-packages/torch/_inductor/compile_fx.py", line 628, in compile_fx_inner
+    return wrap_compiler_debug(_compile_fx_inner, compiler_name="inductor")(
+  File "/home/zeus/miniconda3/envs/cloudspace/lib/python3.10/site-packages/torch/_dynamo/repro/after_aot.py", line 124, in debug_wrapper
+    inner_compiled_fn = compiler_fn(gm, example_inputs)
+  File "/home/zeus/miniconda3/envs/cloudspace/lib/python3.10/site-packages/torch/_inductor/compile_fx.py", line 745, in _compile_fx_inner
+    mb_compiled_graph = fx_codegen_and_compile(
+  File "/home/zeus/miniconda3/envs/cloudspace/lib/python3.10/site-packages/torch/_inductor/compile_fx.py", line 1295, in fx_codegen_and_compile
+    return scheme.codegen_and_compile(gm, example_inputs, inputs_to_check, graph_kwargs)
+  File "/home/zeus/miniconda3/envs/cloudspace/lib/python3.10/site-packages/torch/_inductor/compile_fx.py", line 1197, in codegen_and_compile
+    compiled_fn = graph.compile_to_module().call
+  File "/home/zeus/miniconda3/envs/cloudspace/lib/python3.10/site-packages/torch/_inductor/graph.py", line 2083, in compile_to_module
+    return self._compile_to_module()
+  File "/home/zeus/miniconda3/envs/cloudspace/lib/python3.10/site-packages/torch/_inductor/graph.py", line 2091, in _compile_to_module
+    self.codegen_with_cpp_wrapper() if self.cpp_wrapper else self.codegen()
+  File "/home/zeus/miniconda3/envs/cloudspace/lib/python3.10/site-packages/torch/_inductor/graph.py", line 1998, in codegen
+    self._update_scheduler()
+  File "/home/zeus/miniconda3/envs/cloudspace/lib/python3.10/site-packages/torch/_inductor/graph.py", line 1992, in _update_scheduler
+    self.scheduler = Scheduler(self.operations)
+  File "/home/zeus/miniconda3/envs/cloudspace/lib/python3.10/site-packages/torch/_inductor/scheduler.py", line 1985, in __init__
+    self._init(nodes)
+  File "/home/zeus/miniconda3/envs/cloudspace/lib/python3.10/site-packages/torch/_inductor/scheduler.py", line 2004, in _init
+    self.nodes = [self.create_scheduler_node(n) for n in nodes]
+  File "/home/zeus/miniconda3/envs/cloudspace/lib/python3.10/site-packages/torch/_inductor/scheduler.py", line 2004, in <listcomp>
+    self.nodes = [self.create_scheduler_node(n) for n in nodes]
+  File "/home/zeus/miniconda3/envs/cloudspace/lib/python3.10/site-packages/torch/_inductor/scheduler.py", line 2143, in create_scheduler_node
+    return SchedulerNode(self, node)
+  File "/home/zeus/miniconda3/envs/cloudspace/lib/python3.10/site-packages/torch/_inductor/scheduler.py", line 1020, in __init__
+    self._compute_attrs()
+  File "/home/zeus/miniconda3/envs/cloudspace/lib/python3.10/site-packages/torch/_inductor/scheduler.py", line 1035, in _compute_attrs
+    self.group = (device, group_fn(self._sizes))
+  File "/home/zeus/miniconda3/envs/cloudspace/lib/python3.10/site-packages/torch/_inductor/codegen/cuda_combined_scheduling.py", line 78, in group_fn
+    return self._triton_scheduling.group_fn(sizes)
+  File "/home/zeus/miniconda3/envs/cloudspace/lib/python3.10/site-packages/torch/_inductor/codegen/simd.py", line 1069, in group_fn
+    return tuple(V.graph.sizevars.simplify(sympy_product(s)) for s in sizes)
+  File "/home/zeus/miniconda3/envs/cloudspace/lib/python3.10/site-packages/torch/_inductor/codegen/simd.py", line 1069, in <genexpr>
+    return tuple(V.graph.sizevars.simplify(sympy_product(s)) for s in sizes)
+  File "/home/zeus/miniconda3/envs/cloudspace/lib/python3.10/site-packages/torch/_inductor/sizevars.py", line 82, in simplify
+    return sympy.expand(expr).xreplace(self.replacements)
+  File "/home/zeus/miniconda3/envs/cloudspace/lib/python3.10/site-packages/sympy/core/function.py", line 2845, in expand
+    return sympify(e).expand(deep=deep, modulus=modulus, **hints)
+  File "/home/zeus/miniconda3/envs/cloudspace/lib/python3.10/site-packages/sympy/core/sympify.py", line 124, in sympify
+    def sympify(a, locals=None, convert_xor=True, strict=False, rational=False,
+KeyboardInterrupt
+Traceback (most recent call last):
+  File "/teamspace/studios/this_studio/nanoGPT/train.py", line 751, in <module>
+    losses = estimate_loss() # All processes re-evaluate to stay in sync
+  File "/home/zeus/miniconda3/envs/cloudspace/lib/python3.10/site-packages/torch/utils/_contextlib.py", line 116, in decorate_context
+    return func(*args, **kwargs)
+  File "/teamspace/studios/this_studio/nanoGPT/train.py", line 385, in estimate_loss
+    logits, loss = model(X, Y)
+  File "/home/zeus/miniconda3/envs/cloudspace/lib/python3.10/site-packages/torch/nn/modules/module.py", line 1751, in _wrapped_call_impl
+    return self._call_impl(*args, **kwargs)
+  File "/home/zeus/miniconda3/envs/cloudspace/lib/python3.10/site-packages/torch/nn/modules/module.py", line 1762, in _call_impl
+    return forward_call(*args, **kwargs)
+  File "/home/zeus/miniconda3/envs/cloudspace/lib/python3.10/site-packages/torch/_dynamo/eval_frame.py", line 655, in _fn
+    return fn(*args, **kwargs)
+  File "/home/zeus/miniconda3/envs/cloudspace/lib/python3.10/site-packages/torch/nn/modules/module.py", line 1751, in _wrapped_call_impl
+    return self._call_impl(*args, **kwargs)
+  File "/home/zeus/miniconda3/envs/cloudspace/lib/python3.10/site-packages/torch/nn/modules/module.py", line 1762, in _call_impl
+    return forward_call(*args, **kwargs)
+  File "/home/zeus/miniconda3/envs/cloudspace/lib/python3.10/site-packages/torch/_dynamo/convert_frame.py", line 1432, in __call__
+    return self._torchdynamo_orig_callable(
+  File "/home/zeus/miniconda3/envs/cloudspace/lib/python3.10/site-packages/torch/_dynamo/convert_frame.py", line 1213, in __call__
+    result = self._inner_convert(
+  File "/home/zeus/miniconda3/envs/cloudspace/lib/python3.10/site-packages/torch/_dynamo/convert_frame.py", line 598, in __call__
+    return _compile(
+  File "/home/zeus/miniconda3/envs/cloudspace/lib/python3.10/site-packages/torch/_dynamo/convert_frame.py", line 1059, in _compile
+    guarded_code = compile_inner(code, one_graph, hooks, transform)
+  File "/home/zeus/miniconda3/envs/cloudspace/lib/python3.10/site-packages/torch/_utils_internal.py", line 97, in wrapper_function
+    return function(*args, **kwargs)
+  File "/home/zeus/miniconda3/envs/cloudspace/lib/python3.10/site-packages/torch/_dynamo/convert_frame.py", line 761, in compile_inner
+    return _compile_inner(code, one_graph, hooks, transform)
+  File "/home/zeus/miniconda3/envs/cloudspace/lib/python3.10/site-packages/torch/_dynamo/convert_frame.py", line 797, in _compile_inner
+    out_code = transform_code_object(code, transform)
+  File "/home/zeus/miniconda3/envs/cloudspace/lib/python3.10/site-packages/torch/_dynamo/bytecode_transformation.py", line 1422, in transform_code_object
+    transformations(instructions, code_options)
+  File "/home/zeus/miniconda3/envs/cloudspace/lib/python3.10/site-packages/torch/_dynamo/convert_frame.py", line 257, in _fn
+    return fn(*args, **kwargs)
+  File "/home/zeus/miniconda3/envs/cloudspace/lib/python3.10/site-packages/torch/_dynamo/convert_frame.py", line 715, in transform
+    tracer.run()
+  File "/home/zeus/miniconda3/envs/cloudspace/lib/python3.10/site-packages/torch/_dynamo/symbolic_convert.py", line 3500, in run
+    super().run()
+  File "/home/zeus/miniconda3/envs/cloudspace/lib/python3.10/site-packages/torch/_dynamo/symbolic_convert.py", line 1337, in run
+    while self.step():
+  File "/home/zeus/miniconda3/envs/cloudspace/lib/python3.10/site-packages/torch/_dynamo/symbolic_convert.py", line 1246, in step
+    self.dispatch_table[inst.opcode](self, inst)
+  File "/home/zeus/miniconda3/envs/cloudspace/lib/python3.10/site-packages/torch/_dynamo/symbolic_convert.py", line 3701, in RETURN_VALUE
+    self._return(inst)
+  File "/home/zeus/miniconda3/envs/cloudspace/lib/python3.10/site-packages/torch/_dynamo/symbolic_convert.py", line 3686, in _return
+    self.output.compile_subgraph(
+  File "/home/zeus/miniconda3/envs/cloudspace/lib/python3.10/site-packages/torch/_dynamo/output_graph.py", line 1179, in compile_subgraph
+    self.compile_and_call_fx_graph(
+  File "/home/zeus/miniconda3/envs/cloudspace/lib/python3.10/site-packages/torch/_dynamo/output_graph.py", line 1437, in compile_and_call_fx_graph
+    compiled_fn = self.call_user_compiler(gm)
+  File "/home/zeus/miniconda3/envs/cloudspace/lib/python3.10/site-packages/torch/_dynamo/output_graph.py", line 1487, in call_user_compiler
+    return self._call_user_compiler(gm)
+  File "/home/zeus/miniconda3/envs/cloudspace/lib/python3.10/site-packages/torch/_dynamo/output_graph.py", line 1519, in _call_user_compiler
+    compiled_fn = compiler_fn(gm, self.example_inputs())
+  File "/home/zeus/miniconda3/envs/cloudspace/lib/python3.10/site-packages/torch/_dynamo/repro/after_dynamo.py", line 150, in __call__
+    compiled_gm = compiler_fn(gm, example_inputs)
+  File "/home/zeus/miniconda3/envs/cloudspace/lib/python3.10/site-packages/torch/__init__.py", line 2347, in __call__
+    return compile_fx(model_, inputs_, config_patches=self.config)
+  File "/home/zeus/miniconda3/envs/cloudspace/lib/python3.10/site-packages/torch/_inductor/compile_fx.py", line 2089, in compile_fx
+    return aot_autograd(
+  File "/home/zeus/miniconda3/envs/cloudspace/lib/python3.10/site-packages/torch/_dynamo/backends/common.py", line 101, in __call__
+    cg = aot_module_simplified(gm, example_inputs, **self.kwargs)
+  File "/home/zeus/miniconda3/envs/cloudspace/lib/python3.10/site-packages/torch/_functorch/aot_autograd.py", line 1160, in aot_module_simplified
+    compiled_fn = AOTAutogradCache.load(
+  File "/home/zeus/miniconda3/envs/cloudspace/lib/python3.10/site-packages/torch/_functorch/_aot_autograd/autograd_cache.py", line 775, in load
+    compiled_fn = dispatch_and_compile()
+  File "/home/zeus/miniconda3/envs/cloudspace/lib/python3.10/site-packages/torch/_functorch/aot_autograd.py", line 1145, in dispatch_and_compile
+    compiled_fn, _ = create_aot_dispatcher_function(
+  File "/home/zeus/miniconda3/envs/cloudspace/lib/python3.10/site-packages/torch/_functorch/aot_autograd.py", line 570, in create_aot_dispatcher_function
+    return _create_aot_dispatcher_function(
+  File "/home/zeus/miniconda3/envs/cloudspace/lib/python3.10/site-packages/torch/_functorch/aot_autograd.py", line 820, in _create_aot_dispatcher_function
+    compiled_fn, fw_metadata = compiler_fn(
+  File "/home/zeus/miniconda3/envs/cloudspace/lib/python3.10/site-packages/torch/_functorch/_aot_autograd/jit_compile_runtime_wrappers.py", line 219, in aot_dispatch_base
+    compiled_fw = compiler(fw_module, updated_flat_args)
+  File "/home/zeus/miniconda3/envs/cloudspace/lib/python3.10/site-packages/torch/_functorch/aot_autograd.py", line 479, in __call__
+    return self.compiler_fn(gm, example_inputs)
+  File "/home/zeus/miniconda3/envs/cloudspace/lib/python3.10/site-packages/torch/_inductor/compile_fx.py", line 1944, in fw_compiler_base
+    return inner_compile(
+  File "/home/zeus/miniconda3/envs/cloudspace/lib/python3.10/site-packages/torch/_inductor/compile_fx.py", line 628, in compile_fx_inner
+    return wrap_compiler_debug(_compile_fx_inner, compiler_name="inductor")(
+  File "/home/zeus/miniconda3/envs/cloudspace/lib/python3.10/site-packages/torch/_dynamo/repro/after_aot.py", line 124, in debug_wrapper
+    inner_compiled_fn = compiler_fn(gm, example_inputs)
+  File "/home/zeus/miniconda3/envs/cloudspace/lib/python3.10/site-packages/torch/_inductor/compile_fx.py", line 745, in _compile_fx_inner
+    mb_compiled_graph = fx_codegen_and_compile(
+  File "/home/zeus/miniconda3/envs/cloudspace/lib/python3.10/site-packages/torch/_inductor/compile_fx.py", line 1295, in fx_codegen_and_compile
+    return scheme.codegen_and_compile(gm, example_inputs, inputs_to_check, graph_kwargs)
+  File "/home/zeus/miniconda3/envs/cloudspace/lib/python3.10/site-packages/torch/_inductor/compile_fx.py", line 1197, in codegen_and_compile
+    compiled_fn = graph.compile_to_module().call
+  File "/home/zeus/miniconda3/envs/cloudspace/lib/python3.10/site-packages/torch/_inductor/graph.py", line 2083, in compile_to_module
+    return self._compile_to_module()
+  File "/home/zeus/miniconda3/envs/cloudspace/lib/python3.10/site-packages/torch/_inductor/graph.py", line 2091, in _compile_to_module
+    self.codegen_with_cpp_wrapper() if self.cpp_wrapper else self.codegen()
+  File "/home/zeus/miniconda3/envs/cloudspace/lib/python3.10/site-packages/torch/_inductor/graph.py", line 1998, in codegen
+    self._update_scheduler()
+  File "/home/zeus/miniconda3/envs/cloudspace/lib/python3.10/site-packages/torch/_inductor/graph.py", line 1992, in _update_scheduler
+    self.scheduler = Scheduler(self.operations)
+  File "/home/zeus/miniconda3/envs/cloudspace/lib/python3.10/site-packages/torch/_inductor/scheduler.py", line 1985, in __init__
+    self._init(nodes)
+  File "/home/zeus/miniconda3/envs/cloudspace/lib/python3.10/site-packages/torch/_inductor/scheduler.py", line 2004, in _init
+    self.nodes = [self.create_scheduler_node(n) for n in nodes]
+  File "/home/zeus/miniconda3/envs/cloudspace/lib/python3.10/site-packages/torch/_inductor/scheduler.py", line 2004, in <listcomp>
+    self.nodes = [self.create_scheduler_node(n) for n in nodes]
+  File "/home/zeus/miniconda3/envs/cloudspace/lib/python3.10/site-packages/torch/_inductor/scheduler.py", line 2143, in create_scheduler_node
+    return SchedulerNode(self, node)
+  File "/home/zeus/miniconda3/envs/cloudspace/lib/python3.10/site-packages/torch/_inductor/scheduler.py", line 1020, in __init__
+    self._compute_attrs()
+  File "/home/zeus/miniconda3/envs/cloudspace/lib/python3.10/site-packages/torch/_inductor/scheduler.py", line 1035, in _compute_attrs
+    self.group = (device, group_fn(self._sizes))
+  File "/home/zeus/miniconda3/envs/cloudspace/lib/python3.10/site-packages/torch/_inductor/codegen/cuda_combined_scheduling.py", line 78, in group_fn
+    return self._triton_scheduling.group_fn(sizes)
+  File "/home/zeus/miniconda3/envs/cloudspace/lib/python3.10/site-packages/torch/_inductor/codegen/simd.py", line 1069, in group_fn
+    return tuple(V.graph.sizevars.simplify(sympy_product(s)) for s in sizes)
+  File "/home/zeus/miniconda3/envs/cloudspace/lib/python3.10/site-packages/torch/_inductor/codegen/simd.py", line 1069, in <genexpr>
+    return tuple(V.graph.sizevars.simplify(sympy_product(s)) for s in sizes)
+  File "/home/zeus/miniconda3/envs/cloudspace/lib/python3.10/site-packages/torch/_inductor/sizevars.py", line 82, in simplify
+    return sympy.expand(expr).xreplace(self.replacements)
+  File "/home/zeus/miniconda3/envs/cloudspace/lib/python3.10/site-packages/sympy/core/function.py", line 2845, in expand
+    return sympify(e).expand(deep=deep, modulus=modulus, **hints)
+  File "/home/zeus/miniconda3/envs/cloudspace/lib/python3.10/site-packages/sympy/core/sympify.py", line 124, in sympify
+    def sympify(a, locals=None, convert_xor=True, strict=False, rational=False,
+KeyboardInterrupt

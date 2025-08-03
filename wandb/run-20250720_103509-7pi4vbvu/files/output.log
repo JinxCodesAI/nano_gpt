@@ -1,0 +1,41 @@
+
+Detailed parameter count:
+  total                  | Total:   52,149,504 | Trainable:    8,207,616
+  token_embeddings       | Total:    2,451,456 | Trainable:    2,451,456
+  position_embeddings    | Total:            0 | Trainable:            0
+  attention_layers       | Total:    7,520,256 | Trainable:    2,211,840
+  feed_forward_layers    | Total:    3,538,944 | Trainable:    3,538,944
+  layer_norms            | Total:        4,608 | Trainable:        4,608
+  final_layer_norm       | Total:          768 | Trainable:          768
+  language_model_head    | Total:   38,633,472 | Trainable:            0
+------------------------------------------------------------
+step 0: train loss 10.9660, val loss 10.9694
+iter 0: loss 10.9710, lr 0.00005, time 7471.25ms, mfu -100.00%
+iter 10: loss 9.6173, lr 0.00055, time 566.71ms, mfu 32.61%
+iter 20: loss 9.3891, lr 0.00104, time 565.36ms, mfu 32.62%
+iter 30: loss 9.3032, lr 0.00154, time 565.44ms, mfu 32.62%
+iter 40: loss 9.2243, lr 0.00204, time 581.06ms, mfu 32.54%
+iter 50: loss 9.0040, lr 0.00254, time 580.33ms, mfu 32.47%
+iter 60: loss 8.9624, lr 0.00303, time 580.64ms, mfu 32.41%
+iter 70: loss 8.7353, lr 0.00353, time 580.36ms, mfu 32.35%
+iter 80: loss 8.6539, lr 0.00403, time 575.84ms, mfu 32.33%
+iter 90: loss 8.6507, lr 0.00453, time 572.10ms, mfu 32.32%
+step 100: train loss 8.5168, val loss 8.5708
+saving checkpoint to out
+iter 100: loss 8.5337, lr 0.00502, time 4988.75ms, mfu 29.46%
+iter 110: loss 8.5200, lr 0.00552, time 570.96ms, mfu 29.75%
+iter 120: loss 8.5126, lr 0.00602, time 574.08ms, mfu 30.00%
+iter 130: loss 8.1177, lr 0.00652, time 573.69ms, mfu 30.22%
+iter 140: loss 8.2722, lr 0.00701, time 575.81ms, mfu 30.41%
+iter 150: loss 8.1121, lr 0.00751, time 571.77ms, mfu 30.60%
+iter 160: loss 8.4075, lr 0.00801, time 574.30ms, mfu 30.76%
+iter 170: loss 8.1429, lr 0.00851, time 576.45ms, mfu 30.89%
+iter 180: loss 8.1734, lr 0.00900, time 574.44ms, mfu 31.01%
+Traceback (most recent call last):
+  File "/teamspace/studios/this_studio/nanoGPT/train.py", line 668, in <module>
+    if iter_num % log_interval == 0 and master_process:
+KeyboardInterrupt
+Traceback (most recent call last):
+  File "/teamspace/studios/this_studio/nanoGPT/train.py", line 668, in <module>
+    if iter_num % log_interval == 0 and master_process:
+KeyboardInterrupt

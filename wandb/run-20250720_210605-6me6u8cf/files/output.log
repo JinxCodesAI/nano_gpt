@@ -1,0 +1,60 @@
+Calculating target architecture based on schedule...
+
+============================================================
+       TARGET MODEL ARCHITECTURE (at end of schedule)
+============================================================
+  n_layer                | 0
+  n_head                 | 12
+  n_embd                 | 768
+  n_hidden               | 384
+  block_size             | 1024
+  vocab_size             | 50304
+  dropout                | 0.0
+  bias                   | False
+  embedding_mode         | standard
+  attn_lora_rank         | 0
+  embedding_rank         | 0
+  lora_alpha             | 0.0
+============================================================
+
+
+============================================================
+           INITIAL MODEL ARCHITECTURE (at Iter 0)
+============================================================
+  n_layer                | 0
+  n_head                 | 12
+  n_embd                 | 768
+  n_hidden               | 192
+  block_size             | 1024
+  vocab_size             | 50304
+  dropout                | 0.0
+  bias                   | False
+  embedding_mode         | lora
+  attn_lora_rank         | 0
+  embedding_rank         | 0
+  lora_alpha             | 1.0
+============================================================
+
+
+Detailed parameter count:
+  total                  | Total:   38,634,240 | Trainable:   38,634,240
+  token_embeddings       | Total:            0 | Trainable:            0
+  position_embeddings    | Total:            0 | Trainable:            0
+  attention_layers       | Total:            0 | Trainable:            0
+  feed_forward_layers    | Total:            0 | Trainable:            0
+  layer_norms            | Total:            0 | Trainable:            0
+  final_layer_norm       | Total:          768 | Trainable:          768
+  language_model_head    | Total:   38,633,472 | Trainable:   38,633,472
+------------------------------------------------------------
+eval every:200
+W0720 21:06:09.228000 54580 /system/conda/miniconda3/envs/cloudspace/lib/python3.10/site-packages/torch/_inductor/utils.py:1250] [0/0] Not enough SMs to use max_autotune_gemm mode
+step 0: train loss 15.1592, val loss 15.1569
+--- Model Analysis ---
+Traceback (most recent call last):
+  File "/teamspace/studios/this_studio/nanoGPT/train.py", line 747, in <module>
+    print(f"  Embedding Utilization (L{idx}): {rank_util:.2%} ({eff_rank}/{full_rank})")
+NameError: name 'idx' is not defined. Did you mean: 'id'?
+Traceback (most recent call last):
+  File "/teamspace/studios/this_studio/nanoGPT/train.py", line 747, in <module>
+    print(f"  Embedding Utilization (L{idx}): {rank_util:.2%} ({eff_rank}/{full_rank})")
+NameError: name 'idx' is not defined. Did you mean: 'id'?

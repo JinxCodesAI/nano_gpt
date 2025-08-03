@@ -1,0 +1,12 @@
+{"time":"2025-07-19T00:00:59.007500226Z","level":"INFO","msg":"stream: starting","core version":"0.21.0"}
+{"time":"2025-07-19T00:00:59.150164398Z","level":"INFO","msg":"stream: created new stream","id":"xtsstgrc"}
+{"time":"2025-07-19T00:00:59.150267861Z","level":"INFO","msg":"stream: started","id":"xtsstgrc"}
+{"time":"2025-07-19T00:00:59.150332721Z","level":"INFO","msg":"writer: Do: started","stream_id":"xtsstgrc"}
+{"time":"2025-07-19T00:00:59.150350854Z","level":"INFO","msg":"handler: started","stream_id":"xtsstgrc"}
+{"time":"2025-07-19T00:00:59.150334263Z","level":"INFO","msg":"sender: started","stream_id":"xtsstgrc"}
+{"time":"2025-07-19T00:18:55.610510592Z","level":"INFO","msg":"stream: closing","id":"xtsstgrc"}
+{"time":"2025-07-19T00:18:55.832689752Z","level":"INFO","msg":"fileTransfer: Close: file transfer manager closed"}
+{"time":"2025-07-19T00:18:55.906471883Z","level":"INFO","msg":"handler: closed","stream_id":"xtsstgrc"}
+{"time":"2025-07-19T00:18:55.90654601Z","level":"INFO","msg":"writer: Close: closed","stream_id":"xtsstgrc"}
+{"time":"2025-07-19T00:18:55.906574395Z","level":"INFO","msg":"sender: closed","stream_id":"xtsstgrc"}
+{"time":"2025-07-19T00:18:55.906675545Z","level":"INFO","msg":"stream: closed","id":"xtsstgrc"}

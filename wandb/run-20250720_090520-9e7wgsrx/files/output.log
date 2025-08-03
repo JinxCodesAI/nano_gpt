@@ -1,0 +1,137 @@
+
+Detailed parameter count:
+  total                  | Total:   52,149,504 | Trainable:    8,207,616
+  token_embeddings       | Total:    2,451,456 | Trainable:    2,451,456
+  position_embeddings    | Total:            0 | Trainable:            0
+  attention_layers       | Total:    7,520,256 | Trainable:    2,211,840
+  feed_forward_layers    | Total:    3,538,944 | Trainable:    3,538,944
+  layer_norms            | Total:        4,608 | Trainable:        4,608
+  final_layer_norm       | Total:          768 | Trainable:          768
+  language_model_head    | Total:   38,633,472 | Trainable:            0
+------------------------------------------------------------
+step 0: train loss 10.9653, val loss 10.9694
+iter 0: loss 10.9694, lr 0.00005, time 7698.26ms, mfu -100.00%
+iter 10: loss 9.6392, lr 0.00055, time 549.69ms, mfu 33.62%
+iter 20: loss 9.4391, lr 0.00104, time 560.57ms, mfu 33.55%
+iter 30: loss 9.2719, lr 0.00154, time 566.64ms, mfu 33.46%
+iter 40: loss 9.1740, lr 0.00204, time 589.13ms, mfu 33.25%
+iter 50: loss 9.0542, lr 0.00254, time 580.97ms, mfu 33.11%
+iter 60: loss 8.8785, lr 0.00303, time 579.34ms, mfu 32.99%
+iter 70: loss 8.7111, lr 0.00353, time 587.04ms, mfu 32.84%
+iter 80: loss 8.6108, lr 0.00403, time 587.69ms, mfu 32.70%
+iter 90: loss 8.6805, lr 0.00453, time 586.29ms, mfu 32.58%
+step 100: train loss 8.5684, val loss 8.5819
+saving checkpoint to out
+
+=== SCALING OPERATION TRIGGERED (DDP SYNC) ===
+Operation: merge_lora_weights
+Trigger reason: Timeout
+Current val loss: 8.5819, Trigger loss: 1.0000
+Iterations since last op: 100, Max wait: 100
+Executing operation: merge_lora_weights  with value: None
+Performing architectural operation: merge_lora_weights
+Merging LoRA weights into main weights...
+LoRA weights merged and reset.
+
+Detailed parameter count:
+  total                  | Total:   52,149,504 | Trainable:    8,207,616
+  token_embeddings       | Total:    2,451,456 | Trainable:    2,451,456
+  position_embeddings    | Total:            0 | Trainable:            0
+  attention_layers       | Total:    7,520,256 | Trainable:    2,211,840
+  feed_forward_layers    | Total:    3,538,944 | Trainable:    3,538,944
+  layer_norms            | Total:        4,608 | Trainable:        4,608
+  final_layer_norm       | Total:          768 | Trainable:          768
+  language_model_head    | Total:   38,633,472 | Trainable:            0
+------------------------------------------------------------
+Re-configuring optimizer after architectural change...
+num decayed parameter tensors: 17, with 8,202,240 parameters
+num non-decayed parameter tensors: 7, with 5,376 parameters
+using fused AdamW: True
+Transferring optimizer state for existing parameters...
+Transferred optimizer state for 0 / 28 parameters
+Re-compiling the model...
+Architectural operation completed successfully.
+=== SCALING OPERATION COMPLETE ===
+
+
+=== SCALING OPERATION TRIGGERED (DDP SYNC) ===
+Operation: change_lr
+Trigger reason: Loss threshold
+Current val loss: 8.5819, Trigger loss: 100.0000
+Iterations since last op: 0, Max wait: 1
+Executing operation: change_lr  with value: 0.5
+LR multiplier: 10.0000 -> 5.0000
+=== SCALING OPERATION COMPLETE ===
+
+
+=== SCALING OPERATION TRIGGERED (DDP SYNC) ===
+Operation: reset_lr_schedule
+Trigger reason: Loss threshold
+Current val loss: 8.5819, Trigger loss: 100.0000
+Iterations since last op: 0, Max wait: 1
+Executing operation: reset_lr_schedule  with value: None
+LR schedule offset: 0 -> 100
+=== SCALING OPERATION COMPLETE ===
+
+iter 100: loss 8.4216, lr 0.00502, time 4984.10ms, mfu 29.69%
+iter 110: loss 8.5013, lr 0.00027, time 575.34ms, mfu 29.94%
+iter 120: loss 8.3665, lr 0.00052, time 571.26ms, mfu 30.18%
+iter 130: loss 8.4845, lr 0.00077, time 567.40ms, mfu 30.42%
+iter 140: loss 8.4186, lr 0.00102, time 574.62ms, mfu 30.59%
+iter 150: loss 8.3769, lr 0.00127, time 572.50ms, mfu 30.76%
+iter 160: loss 8.3506, lr 0.00152, time 574.82ms, mfu 30.90%
+iter 170: loss 8.2482, lr 0.00177, time 566.22ms, mfu 31.07%
+iter 180: loss 8.2059, lr 0.00201, time 575.87ms, mfu 31.17%
+iter 190: loss 8.1541, lr 0.00226, time 573.02ms, mfu 31.28%
+step 200: train loss 8.1420, val loss 8.1626
+saving checkpoint to out
+
+=== SCALING OPERATION TRIGGERED (DDP SYNC) ===
+Operation: merge_lora_weights
+Trigger reason: Timeout
+Current val loss: 8.1626, Trigger loss: 1.0000
+Iterations since last op: 100, Max wait: 100
+Executing operation: merge_lora_weights  with value: None
+Performing architectural operation: merge_lora_weights
+Merging LoRA weights into main weights...
+LoRA weights merged and reset.
+
+Detailed parameter count:
+  total                  | Total:   52,149,504 | Trainable:    8,207,616
+  token_embeddings       | Total:    2,451,456 | Trainable:    2,451,456
+  position_embeddings    | Total:            0 | Trainable:            0
+  attention_layers       | Total:    7,520,256 | Trainable:    2,211,840
+  feed_forward_layers    | Total:    3,538,944 | Trainable:    3,538,944
+  layer_norms            | Total:        4,608 | Trainable:        4,608
+  final_layer_norm       | Total:          768 | Trainable:          768
+  language_model_head    | Total:   38,633,472 | Trainable:            0
+------------------------------------------------------------
+Re-configuring optimizer after architectural change...
+num decayed parameter tensors: 17, with 8,202,240 parameters
+num non-decayed parameter tensors: 7, with 5,376 parameters
+using fused AdamW: True
+Transferring optimizer state for existing parameters...
+Transferred optimizer state for 0 / 28 parameters
+Re-compiling the model...
+Architectural operation completed successfully.
+=== SCALING OPERATION COMPLETE ===
+
+
+=== SCALING OPERATION TRIGGERED (DDP SYNC) ===
+Operation: change_warmup_iters
+Trigger reason: Loss threshold
+Current val loss: 8.1626, Trigger loss: 100.0000
+Iterations since last op: 0, Max wait: 1
+Executing operation: change_warmup_iters  with value: 2.0
+Traceback (most recent call last):
+  File "/teamspace/studios/this_studio/nanoGPT/train.py", line 621, in <module>
+    operation_succeeded = execute_operation(next_op, trigger_reason, current_val_loss, iter_num)
+  File "/teamspace/studios/this_studio/nanoGPT/train.py", line 529, in execute_operation
+    gradient_accumulation_steps = new_grad_accum
+UnboundLocalError: local variable 'new_grad_accum' referenced before assignment
+Traceback (most recent call last):
+  File "/teamspace/studios/this_studio/nanoGPT/train.py", line 621, in <module>
+    operation_succeeded = execute_operation(next_op, trigger_reason, current_val_loss, iter_num)
+  File "/teamspace/studios/this_studio/nanoGPT/train.py", line 529, in execute_operation
+    gradient_accumulation_steps = new_grad_accum
+UnboundLocalError: local variable 'new_grad_accum' referenced before assignment

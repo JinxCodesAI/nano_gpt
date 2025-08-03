@@ -1,0 +1,7 @@
+{"time":"2025-07-18T23:58:01.620367061Z","level":"INFO","msg":"main: starting server","port-filename":"/tmp/tmpss9ek9sp/port-33142.txt","pid":33142,"log-level":0,"disable-analytics":false,"shutdown-on-parent-exit":false,"enable-dcgm-profiling":false}
+{"time":"2025-07-18T23:58:01.621276563Z","level":"INFO","msg":"server: will exit if parent process dies","ppid":33142}
+{"time":"2025-07-18T23:58:01.621250092Z","level":"INFO","msg":"server: accepting connections","addr":{"Name":"/tmp/wandb-33142-33288-2088159207/socket","Net":"unix"}}
+{"time":"2025-07-18T23:58:01.797860192Z","level":"INFO","msg":"connection: ManageConnectionData: new connection created","id":"1(@)"}
+{"time":"2025-07-18T23:58:01.806687038Z","level":"INFO","msg":"handleInformInit: received","streamId":"dutuwfce","id":"1(@)"}
+{"time":"2025-07-18T23:58:01.956470824Z","level":"INFO","msg":"handleInformInit: stream started","streamId":"dutuwfce","id":"1(@)"}
+{"time":"2025-07-19T00:00:50.379475868Z","level":"INFO","msg":"server: parent process exited, terminating service process"}

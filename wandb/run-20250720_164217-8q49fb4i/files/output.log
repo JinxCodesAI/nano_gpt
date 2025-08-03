@@ -1,0 +1,986 @@
+Calculating target architecture based on schedule...
+
+============================================================
+       TARGET MODEL ARCHITECTURE (at end of schedule)
+============================================================
+  n_layer                | 6
+  n_head                 | 12
+  n_embd                 | 768
+  n_hidden               | 1536
+  block_size             | 1024
+  vocab_size             | 50304
+  dropout                | 0.0
+  bias                   | False
+  embedding_mode         | standard
+  attn_lora_rank         | 0
+  embedding_rank         | 0
+  lora_alpha             | 0.0
+============================================================
+
+
+============================================================
+           INITIAL MODEL ARCHITECTURE (at Iter 0)
+============================================================
+  n_layer                | 3
+  n_head                 | 12
+  n_embd                 | 768
+  n_hidden               | 768
+  block_size             | 1024
+  vocab_size             | 50304
+  dropout                | 0.0
+  bias                   | False
+  embedding_mode         | lora
+  attn_lora_rank         | 48
+  embedding_rank         | 48
+  lora_alpha             | 1.0
+============================================================
+
+
+Detailed parameter count:
+  total                  | Total:   52,149,504 | Trainable:    8,207,616
+  token_embeddings       | Total:    2,451,456 | Trainable:    2,451,456
+  position_embeddings    | Total:            0 | Trainable:            0
+  attention_layers       | Total:    7,520,256 | Trainable:    2,211,840
+  feed_forward_layers    | Total:    3,538,944 | Trainable:    3,538,944
+  layer_norms            | Total:        4,608 | Trainable:        4,608
+  final_layer_norm       | Total:          768 | Trainable:          768
+  language_model_head    | Total:   38,633,472 | Trainable:            0
+------------------------------------------------------------
+eval every:100
+step 0: train loss 10.9683, val loss 10.9694
+--- Model Analysis ---
+  MLP Rank Utilization (L0): 71.09% (546/768)
+--- Model Analysis ---
+Attention Q  | 547/768         | 71.22%
+Attention K  | 547/768         | 71.22%
+Attention V  | 546/768         | 71.09%
+--- Model Analysis ---
+  MLP Rank Utilization (L1): 71.09% (546/768)
+--- Model Analysis ---
+Attention Q  | 547/768         | 71.22%
+Attention K  | 547/768         | 71.22%
+Attention V  | 547/768         | 71.22%
+--- Model Analysis ---
+  MLP Rank Utilization (L2): 71.22% (547/768)
+--- Model Analysis ---
+Attention Q  | 547/768         | 71.22%
+Attention K  | 546/768         | 71.09%
+Attention V  | 547/768         | 71.22%
+--- Model Analysis ---
+  Embedding Utilization (L2): 97.53% (749/768)
+  Average Attention Entropy:  5.8975
+----------------------
+merge_lora_weights 10.969396591186523 8.0 1500
+iter 0: loss 10.9718, lr 0.00005, time 10282.14ms, mfu -100.00%
+iter 10: loss 9.6387, lr 0.00055, time 549.44ms, mfu 33.64%
+iter 20: loss 9.5444, lr 0.00104, time 561.89ms, mfu 33.56%
+iter 30: loss 9.3201, lr 0.00154, time 563.24ms, mfu 33.49%
+[34m[1mwandb[0m: [33mWARNING[0m Fatal error while uploading data. Some run data will not be synced, but it will still be written to disk. Use `wandb sync` at the end of the run to try uploading.
+iter 40: loss 9.1409, lr 0.00204, time 560.54ms, mfu 33.43%
+iter 50: loss 9.0245, lr 0.00254, time 578.77ms, mfu 33.28%
+iter 60: loss 8.8554, lr 0.00303, time 581.94ms, mfu 33.13%
+iter 70: loss 8.8051, lr 0.00353, time 588.88ms, mfu 32.96%
+iter 80: loss 8.7291, lr 0.00403, time 586.97ms, mfu 32.81%
+iter 90: loss 8.6175, lr 0.00453, time 584.21ms, mfu 32.69%
+step 100: train loss 8.5642, val loss 8.5753
+--- Model Analysis ---
+  MLP Rank Utilization (L0): 65.10% (500/768)
+--- Model Analysis ---
+Attention Q  | 547/768         | 71.22%
+Attention K  | 547/768         | 71.22%
+Attention V  | 546/768         | 71.09%
+--- Model Analysis ---
+  MLP Rank Utilization (L1): 66.54% (511/768)
+--- Model Analysis ---
+Attention Q  | 547/768         | 71.22%
+Attention K  | 547/768         | 71.22%
+Attention V  | 547/768         | 71.22%
+--- Model Analysis ---
+  MLP Rank Utilization (L2): 67.58% (519/768)
+--- Model Analysis ---
+Attention Q  | 547/768         | 71.22%
+Attention K  | 546/768         | 71.09%
+Attention V  | 547/768         | 71.22%
+--- Model Analysis ---
+  Embedding Utilization (L2): 97.53% (749/768)
+  Average Attention Entropy:  5.4126
+----------------------
+saving checkpoint to out
+merge_lora_weights 8.575297355651855 8.0 1500
+iter 100: loss 8.6547, lr 0.00502, time 5901.18ms, mfu 29.74%
+iter 110: loss 8.4546, lr 0.00552, time 568.10ms, mfu 30.02%
+iter 120: loss 8.4718, lr 0.00602, time 576.12ms, mfu 30.22%
+iter 130: loss 8.3797, lr 0.00652, time 576.47ms, mfu 30.40%
+iter 140: loss 8.2857, lr 0.00701, time 577.61ms, mfu 30.56%
+iter 150: loss 8.3403, lr 0.00751, time 577.71ms, mfu 30.71%
+iter 160: loss 8.1160, lr 0.00801, time 575.42ms, mfu 30.85%
+iter 170: loss 8.1301, lr 0.00851, time 576.88ms, mfu 30.97%
+iter 180: loss 7.9937, lr 0.00900, time 573.77ms, mfu 31.09%
+iter 190: loss 8.0409, lr 0.00950, time 576.99ms, mfu 31.18%
+step 200: train loss 7.9645, val loss 7.9978
+--- Model Analysis ---
+  MLP Rank Utilization (L0): 60.03% (461/768)
+--- Model Analysis ---
+Attention Q  | 547/768         | 71.22%
+Attention K  | 547/768         | 71.22%
+Attention V  | 546/768         | 71.09%
+--- Model Analysis ---
+  MLP Rank Utilization (L1): 50.65% (389/768)
+--- Model Analysis ---
+Attention Q  | 547/768         | 71.22%
+Attention K  | 547/768         | 71.22%
+Attention V  | 547/768         | 71.22%
+--- Model Analysis ---
+  MLP Rank Utilization (L2): 52.08% (400/768)
+--- Model Analysis ---
+Attention Q  | 547/768         | 71.22%
+Attention K  | 546/768         | 71.09%
+Attention V  | 547/768         | 71.22%
+--- Model Analysis ---
+  Embedding Utilization (L2): 97.53% (749/768)
+  Average Attention Entropy:  4.5642
+----------------------
+saving checkpoint to out
+
+=== SCALING OPERATION TRIGGERED (DDP SYNC) ===
+Operation: merge_lora_weights
+Trigger reason: Loss threshold
+Current val loss: 7.9978, Trigger loss: 8.0000
+Iterations since last op: 200, Max wait: 1500
+Executing operation: merge_lora_weights first burn with value: None
+Performing architectural operation: merge_lora_weights
+Merging LoRA weights into main weights...
+LoRA weights merged and reset.
+
+Detailed parameter count:
+  total                  | Total:   52,149,504 | Trainable:    8,207,616
+  token_embeddings       | Total:    2,451,456 | Trainable:    2,451,456
+  position_embeddings    | Total:            0 | Trainable:            0
+  attention_layers       | Total:    7,520,256 | Trainable:    2,211,840
+  feed_forward_layers    | Total:    3,538,944 | Trainable:    3,538,944
+  layer_norms            | Total:        4,608 | Trainable:        4,608
+  final_layer_norm       | Total:          768 | Trainable:          768
+  language_model_head    | Total:   38,633,472 | Trainable:            0
+------------------------------------------------------------
+Re-configuring optimizer after architectural change...
+num decayed parameter tensors: 17, with 8,202,240 parameters
+num non-decayed parameter tensors: 7, with 5,376 parameters
+using fused AdamW: True
+Transferring optimizer state for existing parameters...
+Transferred optimizer state for 0 / 28 parameters
+Re-compiling the model...
+
+============================================================
+             ARCHITECTURE CHANGE (at Iter 200)
+============================================================
+  n_layer                | 3
+  n_head                 | 12
+  n_embd                 | 768
+  n_hidden               | 768
+  block_size             | 1024
+  vocab_size             | 50304
+  dropout                | 0.0
+  bias                   | False
+  embedding_mode         | lora
+  attn_lora_rank         | 48
+  embedding_rank         | 48
+  lora_alpha             | 1.0
+============================================================
+
+Architectural operation completed successfully.
+=== SCALING OPERATION COMPLETE ===
+
+
+=== SCALING OPERATION TRIGGERED (DDP SYNC) ===
+Operation: change_lr
+Trigger reason: Loss threshold
+Current val loss: 7.9978, Trigger loss: 100.0000
+Iterations since last op: 0, Max wait: 1
+Executing operation: change_lr  with value: 0.3
+LR multiplier: 10.0000 -> 3.0000
+=== SCALING OPERATION COMPLETE ===
+
+
+=== SCALING OPERATION TRIGGERED (DDP SYNC) ===
+Operation: reset_lr_schedule
+Trigger reason: Loss threshold
+Current val loss: 7.9978, Trigger loss: 100.0000
+Iterations since last op: 0, Max wait: 1
+Executing operation: reset_lr_schedule  with value: None
+LR schedule offset: 0 -> 200
+=== SCALING OPERATION COMPLETE ===
+
+merge_lora_weights 7.997755527496338 6.7 1500
+iter 200: loss 12.0727, lr 0.01000, time 6052.56ms, mfu 28.37%
+iter 210: loss 9.0557, lr 0.00016, time 575.33ms, mfu 28.75%
+iter 220: loss 8.3985, lr 0.00031, time 578.05ms, mfu 29.07%
+iter 230: loss 8.2078, lr 0.00046, time 580.14ms, mfu 29.35%
+iter 240: loss 8.0401, lr 0.00061, time 582.11ms, mfu 29.59%
+iter 250: loss 8.0912, lr 0.00076, time 580.66ms, mfu 29.81%
+iter 260: loss 7.8930, lr 0.00091, time 582.94ms, mfu 30.00%
+iter 270: loss 7.9517, lr 0.00106, time 578.68ms, mfu 30.19%
+iter 280: loss 7.8641, lr 0.00121, time 578.18ms, mfu 30.37%
+iter 290: loss 7.7358, lr 0.00136, time 578.18ms, mfu 30.53%
+step 300: train loss 7.8596, val loss 7.8562
+--- Model Analysis ---
+  MLP Rank Utilization (L0): 60.16% (462/768)
+--- Model Analysis ---
+Attention Q  | 543/768         | 70.70%
+Attention K  | 545/768         | 70.96%
+Attention V  | 546/768         | 71.09%
+--- Model Analysis ---
+  MLP Rank Utilization (L1): 50.52% (388/768)
+--- Model Analysis ---
+Attention Q  | 544/768         | 70.83%
+Attention K  | 544/768         | 70.83%
+Attention V  | 547/768         | 71.22%
+--- Model Analysis ---
+  MLP Rank Utilization (L2): 51.69% (397/768)
+--- Model Analysis ---
+Attention Q  | 544/768         | 70.83%
+Attention K  | 543/768         | 70.70%
+Attention V  | 547/768         | 71.22%
+--- Model Analysis ---
+  Embedding Utilization (L2): 97.27% (747/768)
+  Average Attention Entropy:  4.5604
+----------------------
+saving checkpoint to out
+merge_lora_weights 7.8561835289001465 6.7 1500
+iter 300: loss 7.7250, lr 0.00151, time 6036.26ms, mfu 27.78%
+iter 310: loss 7.8484, lr 0.00166, time 568.96ms, mfu 28.25%
+iter 320: loss 7.7678, lr 0.00181, time 576.64ms, mfu 28.63%
+iter 330: loss 7.7203, lr 0.00196, time 579.64ms, mfu 28.96%
+iter 340: loss 7.8818, lr 0.00210, time 579.95ms, mfu 29.25%
+iter 350: loss 7.6275, lr 0.00225, time 579.07ms, mfu 29.52%
+iter 360: loss 7.6549, lr 0.00240, time 578.64ms, mfu 29.76%
+iter 370: loss 7.8590, lr 0.00255, time 579.27ms, mfu 29.97%
+iter 380: loss 7.5316, lr 0.00270, time 580.23ms, mfu 30.16%
+iter 390: loss 7.7051, lr 0.00285, time 579.05ms, mfu 30.34%
+step 400: train loss 7.5865, val loss 7.5946
+--- Model Analysis ---
+  MLP Rank Utilization (L0): 61.33% (471/768)
+--- Model Analysis ---
+Attention Q  | 543/768         | 70.70%
+Attention K  | 545/768         | 70.96%
+Attention V  | 546/768         | 71.09%
+--- Model Analysis ---
+  MLP Rank Utilization (L1): 50.26% (386/768)
+--- Model Analysis ---
+Attention Q  | 544/768         | 70.83%
+Attention K  | 544/768         | 70.83%
+Attention V  | 547/768         | 71.22%
+--- Model Analysis ---
+  MLP Rank Utilization (L2): 50.65% (389/768)
+--- Model Analysis ---
+Attention Q  | 544/768         | 70.83%
+Attention K  | 543/768         | 70.70%
+Attention V  | 547/768         | 71.22%
+--- Model Analysis ---
+  Embedding Utilization (L2): 97.27% (747/768)
+  Average Attention Entropy:  4.3756
+----------------------
+saving checkpoint to out
+merge_lora_weights 7.594606876373291 6.7 1500
+iter 400: loss 7.6361, lr 0.00300, time 5980.16ms, mfu 27.61%
+iter 410: loss 7.7832, lr 0.00300, time 574.40ms, mfu 28.07%
+iter 420: loss 7.6166, lr 0.00300, time 580.10ms, mfu 28.45%
+iter 430: loss 7.7907, lr 0.00300, time 580.48ms, mfu 28.79%
+iter 440: loss 7.5246, lr 0.00300, time 582.09ms, mfu 29.08%
+iter 450: loss 7.3901, lr 0.00300, time 581.65ms, mfu 29.35%
+iter 460: loss 7.6386, lr 0.00300, time 578.13ms, mfu 29.61%
+iter 470: loss 7.6178, lr 0.00300, time 577.96ms, mfu 29.85%
+iter 480: loss 7.4619, lr 0.00300, time 582.00ms, mfu 30.04%
+iter 490: loss 7.5539, lr 0.00300, time 578.17ms, mfu 30.23%
+step 500: train loss 7.5082, val loss 7.4592
+--- Model Analysis ---
+  MLP Rank Utilization (L0): 61.98% (476/768)
+--- Model Analysis ---
+Attention Q  | 543/768         | 70.70%
+Attention K  | 545/768         | 70.96%
+Attention V  | 546/768         | 71.09%
+--- Model Analysis ---
+  MLP Rank Utilization (L1): 50.00% (384/768)
+--- Model Analysis ---
+Attention Q  | 544/768         | 70.83%
+Attention K  | 544/768         | 70.83%
+Attention V  | 547/768         | 71.22%
+--- Model Analysis ---
+  MLP Rank Utilization (L2): 49.48% (380/768)
+--- Model Analysis ---
+Attention Q  | 544/768         | 70.83%
+Attention K  | 543/768         | 70.70%
+Attention V  | 547/768         | 71.22%
+--- Model Analysis ---
+  Embedding Utilization (L2): 97.27% (747/768)
+  Average Attention Entropy:  4.2979
+----------------------
+saving checkpoint to out
+merge_lora_weights 7.4591827392578125 6.7 1500
+iter 500: loss 7.4175, lr 0.00300, time 6067.14ms, mfu 27.51%
+iter 510: loss 7.5782, lr 0.00300, time 573.22ms, mfu 27.99%
+iter 520: loss 7.4369, lr 0.00300, time 580.31ms, mfu 28.37%
+iter 530: loss 7.3478, lr 0.00300, time 582.86ms, mfu 28.71%
+iter 540: loss 7.5202, lr 0.00300, time 579.92ms, mfu 29.02%
+iter 550: loss 7.4963, lr 0.00300, time 582.21ms, mfu 29.29%
+iter 560: loss 7.4724, lr 0.00300, time 578.66ms, mfu 29.56%
+iter 570: loss 7.4202, lr 0.00300, time 580.79ms, mfu 29.78%
+iter 580: loss 7.2701, lr 0.00300, time 579.36ms, mfu 30.00%
+iter 590: loss 7.3869, lr 0.00300, time 582.21ms, mfu 30.17%
+step 600: train loss 7.3464, val loss 7.3637
+--- Model Analysis ---
+  MLP Rank Utilization (L0): 62.63% (481/768)
+--- Model Analysis ---
+Attention Q  | 543/768         | 70.70%
+Attention K  | 545/768         | 70.96%
+Attention V  | 546/768         | 71.09%
+--- Model Analysis ---
+  MLP Rank Utilization (L1): 49.87% (383/768)
+--- Model Analysis ---
+Attention Q  | 544/768         | 70.83%
+Attention K  | 544/768         | 70.83%
+Attention V  | 547/768         | 71.22%
+--- Model Analysis ---
+  MLP Rank Utilization (L2): 48.70% (374/768)
+--- Model Analysis ---
+Attention Q  | 544/768         | 70.83%
+Attention K  | 543/768         | 70.70%
+Attention V  | 547/768         | 71.22%
+--- Model Analysis ---
+  Embedding Utilization (L2): 97.27% (747/768)
+  Average Attention Entropy:  4.2597
+----------------------
+saving checkpoint to out
+merge_lora_weights 7.363681793212891 6.7 1500
+iter 600: loss 7.4559, lr 0.00300, time 5882.81ms, mfu 27.47%
+iter 610: loss 7.2708, lr 0.00300, time 577.50ms, mfu 27.92%
+iter 620: loss 7.3582, lr 0.00300, time 578.24ms, mfu 28.32%
+iter 630: loss 7.1799, lr 0.00300, time 577.99ms, mfu 28.69%
+iter 640: loss 7.2966, lr 0.00300, time 577.57ms, mfu 29.02%
+iter 650: loss 7.5343, lr 0.00300, time 580.77ms, mfu 29.30%
+iter 660: loss 7.3966, lr 0.00300, time 582.86ms, mfu 29.54%
+iter 670: loss 7.3288, lr 0.00300, time 581.38ms, mfu 29.77%
+iter 680: loss 7.1188, lr 0.00300, time 583.17ms, mfu 29.96%
+iter 690: loss 7.2507, lr 0.00300, time 579.99ms, mfu 30.15%
+step 700: train loss 7.2642, val loss 7.3243
+--- Model Analysis ---
+  MLP Rank Utilization (L0): 62.89% (483/768)
+--- Model Analysis ---
+Attention Q  | 543/768         | 70.70%
+Attention K  | 545/768         | 70.96%
+Attention V  | 546/768         | 71.09%
+--- Model Analysis ---
+  MLP Rank Utilization (L1): 49.87% (383/768)
+--- Model Analysis ---
+Attention Q  | 544/768         | 70.83%
+Attention K  | 544/768         | 70.83%
+Attention V  | 547/768         | 71.22%
+--- Model Analysis ---
+  MLP Rank Utilization (L2): 48.57% (373/768)
+--- Model Analysis ---
+Attention Q  | 544/768         | 70.83%
+Attention K  | 543/768         | 70.70%
+Attention V  | 547/768         | 71.22%
+--- Model Analysis ---
+  Embedding Utilization (L2): 97.27% (747/768)
+  Average Attention Entropy:  4.2133
+----------------------
+saving checkpoint to out
+merge_lora_weights 7.324291229248047 6.7 1500
+iter 700: loss 7.2519, lr 0.00300, time 6030.00ms, mfu 27.44%
+iter 710: loss 7.2685, lr 0.00300, time 577.02ms, mfu 27.90%
+iter 720: loss 7.0923, lr 0.00300, time 581.04ms, mfu 28.29%
+iter 730: loss 7.1566, lr 0.00300, time 580.29ms, mfu 28.65%
+iter 740: loss 7.2820, lr 0.00300, time 580.17ms, mfu 28.97%
+iter 750: loss 7.2230, lr 0.00300, time 579.59ms, mfu 29.26%
+iter 760: loss 7.4865, lr 0.00300, time 578.84ms, mfu 29.53%
+iter 770: loss 7.1729, lr 0.00300, time 583.86ms, mfu 29.74%
+iter 780: loss 7.0860, lr 0.00300, time 579.74ms, mfu 29.95%
+iter 790: loss 7.3627, lr 0.00300, time 580.42ms, mfu 30.14%
+step 800: train loss 7.1622, val loss 7.2267
+--- Model Analysis ---
+  MLP Rank Utilization (L0): 63.15% (485/768)
+--- Model Analysis ---
+Attention Q  | 543/768         | 70.70%
+Attention K  | 545/768         | 70.96%
+Attention V  | 546/768         | 71.09%
+--- Model Analysis ---
+  MLP Rank Utilization (L1): 50.13% (385/768)
+--- Model Analysis ---
+Attention Q  | 544/768         | 70.83%
+Attention K  | 544/768         | 70.83%
+Attention V  | 547/768         | 71.22%
+--- Model Analysis ---
+  MLP Rank Utilization (L2): 48.44% (372/768)
+--- Model Analysis ---
+Attention Q  | 544/768         | 70.83%
+Attention K  | 543/768         | 70.70%
+Attention V  | 547/768         | 71.22%
+--- Model Analysis ---
+  Embedding Utilization (L2): 97.27% (747/768)
+  Average Attention Entropy:  4.2557
+----------------------
+saving checkpoint to out
+merge_lora_weights 7.226721286773682 6.7 1500
+iter 800: loss 7.2231, lr 0.00300, time 5974.41ms, mfu 27.44%
+iter 810: loss 7.1705, lr 0.00300, time 575.08ms, mfu 27.91%
+iter 820: loss 7.2086, lr 0.00300, time 580.08ms, mfu 28.30%
+iter 830: loss 7.0909, lr 0.00300, time 575.78ms, mfu 28.68%
+iter 840: loss 7.1800, lr 0.00300, time 579.87ms, mfu 29.00%
+iter 850: loss 7.2161, lr 0.00300, time 582.40ms, mfu 29.27%
+iter 860: loss 7.0879, lr 0.00300, time 577.74ms, mfu 29.54%
+iter 870: loss 7.0808, lr 0.00300, time 581.20ms, mfu 29.77%
+iter 880: loss 7.0356, lr 0.00300, time 578.27ms, mfu 29.99%
+iter 890: loss 7.0853, lr 0.00300, time 577.16ms, mfu 30.19%
+step 900: train loss 7.0964, val loss 7.1433
+--- Model Analysis ---
+  MLP Rank Utilization (L0): 63.41% (487/768)
+--- Model Analysis ---
+Attention Q  | 543/768         | 70.70%
+Attention K  | 545/768         | 70.96%
+Attention V  | 546/768         | 71.09%
+--- Model Analysis ---
+  MLP Rank Utilization (L1): 50.26% (386/768)
+--- Model Analysis ---
+Attention Q  | 544/768         | 70.83%
+Attention K  | 544/768         | 70.83%
+Attention V  | 547/768         | 71.22%
+--- Model Analysis ---
+  MLP Rank Utilization (L2): 48.57% (373/768)
+--- Model Analysis ---
+Attention Q  | 544/768         | 70.83%
+Attention K  | 543/768         | 70.70%
+Attention V  | 547/768         | 71.22%
+--- Model Analysis ---
+  Embedding Utilization (L2): 97.27% (747/768)
+  Average Attention Entropy:  4.2464
+----------------------
+saving checkpoint to out
+merge_lora_weights 7.14325475692749 6.7 1500
+iter 900: loss 7.0938, lr 0.00300, time 6069.24ms, mfu 27.48%
+iter 910: loss 7.0174, lr 0.00300, time 578.10ms, mfu 27.93%
+iter 920: loss 7.1288, lr 0.00300, time 582.74ms, mfu 28.30%
+iter 930: loss 7.0393, lr 0.00300, time 579.36ms, mfu 28.66%
+iter 940: loss 7.1564, lr 0.00300, time 580.52ms, mfu 28.98%
+iter 950: loss 6.8176, lr 0.00300, time 581.50ms, mfu 29.26%
+iter 960: loss 7.0191, lr 0.00300, time 581.11ms, mfu 29.52%
+iter 970: loss 7.2009, lr 0.00300, time 581.18ms, mfu 29.74%
+iter 980: loss 7.1422, lr 0.00300, time 578.87ms, mfu 29.96%
+iter 990: loss 7.1044, lr 0.00300, time 580.66ms, mfu 30.15%
+step 1000: train loss 7.0592, val loss 7.0658
+--- Model Analysis ---
+  MLP Rank Utilization (L0): 63.67% (489/768)
+--- Model Analysis ---
+Attention Q  | 543/768         | 70.70%
+Attention K  | 545/768         | 70.96%
+Attention V  | 546/768         | 71.09%
+--- Model Analysis ---
+  MLP Rank Utilization (L1): 50.52% (388/768)
+--- Model Analysis ---
+Attention Q  | 544/768         | 70.83%
+Attention K  | 544/768         | 70.83%
+Attention V  | 547/768         | 71.22%
+--- Model Analysis ---
+  MLP Rank Utilization (L2): 48.70% (374/768)
+--- Model Analysis ---
+Attention Q  | 544/768         | 70.83%
+Attention K  | 543/768         | 70.70%
+Attention V  | 547/768         | 71.22%
+--- Model Analysis ---
+  Embedding Utilization (L2): 97.27% (747/768)
+  Average Attention Entropy:  4.2408
+----------------------
+saving checkpoint to out
+merge_lora_weights 7.065770626068115 6.7 1500
+iter 1000: loss 7.0447, lr 0.00300, time 5970.17ms, mfu 27.44%
+iter 1010: loss 7.1334, lr 0.00300, time 576.79ms, mfu 27.90%
+iter 1020: loss 7.0337, lr 0.00300, time 581.48ms, mfu 28.29%
+iter 1030: loss 7.0156, lr 0.00300, time 578.55ms, mfu 28.66%
+iter 1040: loss 6.9686, lr 0.00300, time 579.28ms, mfu 28.98%
+iter 1050: loss 6.9883, lr 0.00300, time 581.33ms, mfu 29.26%
+iter 1060: loss 6.8554, lr 0.00300, time 581.34ms, mfu 29.51%
+iter 1070: loss 7.0819, lr 0.00300, time 581.17ms, mfu 29.74%
+iter 1080: loss 6.9711, lr 0.00300, time 579.85ms, mfu 29.96%
+iter 1090: loss 6.8560, lr 0.00300, time 577.34ms, mfu 30.16%
+step 1100: train loss 7.0154, val loss 7.0372
+--- Model Analysis ---
+  MLP Rank Utilization (L0): 64.19% (493/768)
+--- Model Analysis ---
+Attention Q  | 543/768         | 70.70%
+Attention K  | 545/768         | 70.96%
+Attention V  | 546/768         | 71.09%
+--- Model Analysis ---
+  MLP Rank Utilization (L1): 50.65% (389/768)
+--- Model Analysis ---
+Attention Q  | 544/768         | 70.83%
+Attention K  | 544/768         | 70.83%
+Attention V  | 547/768         | 71.22%
+--- Model Analysis ---
+  MLP Rank Utilization (L2): 48.83% (375/768)
+--- Model Analysis ---
+Attention Q  | 544/768         | 70.83%
+Attention K  | 543/768         | 70.70%
+Attention V  | 547/768         | 71.22%
+--- Model Analysis ---
+  Embedding Utilization (L2): 97.27% (747/768)
+  Average Attention Entropy:  4.2159
+----------------------
+saving checkpoint to out
+merge_lora_weights 7.037219047546387 6.7 1500
+iter 1100: loss 6.9378, lr 0.00300, time 5714.30ms, mfu 27.47%
+iter 1110: loss 7.0383, lr 0.00300, time 577.80ms, mfu 27.92%
+iter 1120: loss 6.8446, lr 0.00300, time 580.85ms, mfu 28.31%
+iter 1130: loss 6.8262, lr 0.00300, time 581.57ms, mfu 28.66%
+iter 1140: loss 6.9668, lr 0.00300, time 581.31ms, mfu 28.97%
+iter 1150: loss 6.8727, lr 0.00300, time 581.20ms, mfu 29.25%
+iter 1160: loss 6.9603, lr 0.00300, time 582.93ms, mfu 29.50%
+iter 1170: loss 7.1110, lr 0.00300, time 582.60ms, mfu 29.72%
+iter 1180: loss 7.0578, lr 0.00300, time 579.27ms, mfu 29.94%
+iter 1190: loss 7.1365, lr 0.00300, time 583.12ms, mfu 30.11%
+step 1200: train loss 6.9975, val loss 6.9451
+--- Model Analysis ---
+  MLP Rank Utilization (L0): 64.45% (495/768)
+--- Model Analysis ---
+Attention Q  | 543/768         | 70.70%
+Attention K  | 545/768         | 70.96%
+Attention V  | 546/768         | 71.09%
+--- Model Analysis ---
+  MLP Rank Utilization (L1): 50.78% (390/768)
+--- Model Analysis ---
+Attention Q  | 544/768         | 70.83%
+Attention K  | 544/768         | 70.83%
+Attention V  | 547/768         | 71.22%
+--- Model Analysis ---
+  MLP Rank Utilization (L2): 48.96% (376/768)
+--- Model Analysis ---
+Attention Q  | 544/768         | 70.83%
+Attention K  | 543/768         | 70.70%
+Attention V  | 547/768         | 71.22%
+--- Model Analysis ---
+  Embedding Utilization (L2): 97.27% (747/768)
+  Average Attention Entropy:  4.2463
+----------------------
+saving checkpoint to out
+merge_lora_weights 6.945059776306152 6.7 1500
+iter 1200: loss 6.9597, lr 0.00300, time 5905.22ms, mfu 27.42%
+iter 1210: loss 7.0188, lr 0.00300, time 578.68ms, mfu 27.87%
+iter 1220: loss 6.9030, lr 0.00300, time 577.73ms, mfu 28.28%
+iter 1230: loss 6.9595, lr 0.00300, time 580.65ms, mfu 28.63%
+iter 1240: loss 6.9737, lr 0.00300, time 579.93ms, mfu 28.96%
+iter 1250: loss 7.0574, lr 0.00300, time 581.44ms, mfu 29.24%
+iter 1260: loss 7.0858, lr 0.00300, time 584.36ms, mfu 29.48%
+iter 1270: loss 6.9957, lr 0.00300, time 579.43ms, mfu 29.72%
+iter 1280: loss 7.0835, lr 0.00300, time 580.33ms, mfu 29.93%
+iter 1290: loss 6.8890, lr 0.00300, time 581.52ms, mfu 30.12%
+step 1300: train loss 6.9008, val loss 6.9612
+--- Model Analysis ---
+  MLP Rank Utilization (L0): 64.84% (498/768)
+--- Model Analysis ---
+Attention Q  | 543/768         | 70.70%
+Attention K  | 545/768         | 70.96%
+Attention V  | 546/768         | 71.09%
+--- Model Analysis ---
+  MLP Rank Utilization (L1): 51.04% (392/768)
+--- Model Analysis ---
+Attention Q  | 544/768         | 70.83%
+Attention K  | 544/768         | 70.83%
+Attention V  | 547/768         | 71.22%
+--- Model Analysis ---
+  MLP Rank Utilization (L2): 49.22% (378/768)
+--- Model Analysis ---
+Attention Q  | 544/768         | 70.83%
+Attention K  | 543/768         | 70.70%
+Attention V  | 547/768         | 71.22%
+--- Model Analysis ---
+  Embedding Utilization (L2): 97.27% (747/768)
+  Average Attention Entropy:  4.1721
+----------------------
+saving checkpoint to out
+merge_lora_weights 6.96124792098999 6.7 1500
+iter 1300: loss 6.7980, lr 0.00300, time 5983.08ms, mfu 27.41%
+iter 1310: loss 7.0184, lr 0.00300, time 583.36ms, mfu 27.84%
+iter 1320: loss 7.0007, lr 0.00300, time 581.25ms, mfu 28.24%
+iter 1330: loss 6.8616, lr 0.00300, time 580.40ms, mfu 28.60%
+iter 1340: loss 6.7957, lr 0.00300, time 575.65ms, mfu 28.95%
+iter 1350: loss 6.9943, lr 0.00300, time 579.04ms, mfu 29.24%
+iter 1360: loss 6.8547, lr 0.00300, time 580.84ms, mfu 29.50%
+iter 1370: loss 6.9530, lr 0.00300, time 582.90ms, mfu 29.72%
+iter 1380: loss 6.8854, lr 0.00300, time 579.41ms, mfu 29.94%
+iter 1390: loss 6.8182, lr 0.00300, time 579.40ms, mfu 30.13%
+step 1400: train loss 6.8827, val loss 6.9096
+--- Model Analysis ---
+  MLP Rank Utilization (L0): 65.23% (501/768)
+--- Model Analysis ---
+Attention Q  | 543/768         | 70.70%
+Attention K  | 545/768         | 70.96%
+Attention V  | 546/768         | 71.09%
+--- Model Analysis ---
+  MLP Rank Utilization (L1): 51.30% (394/768)
+--- Model Analysis ---
+Attention Q  | 544/768         | 70.83%
+Attention K  | 544/768         | 70.83%
+Attention V  | 547/768         | 71.22%
+--- Model Analysis ---
+  MLP Rank Utilization (L2): 49.61% (381/768)
+--- Model Analysis ---
+Attention Q  | 544/768         | 70.83%
+Attention K  | 543/768         | 70.70%
+Attention V  | 547/768         | 71.22%
+--- Model Analysis ---
+  Embedding Utilization (L2): 97.27% (747/768)
+  Average Attention Entropy:  4.1914
+----------------------
+saving checkpoint to out
+merge_lora_weights 6.909646511077881 6.7 1500
+iter 1400: loss 6.7928, lr 0.00300, time 5585.56ms, mfu 27.45%
+iter 1410: loss 6.8332, lr 0.00300, time 577.07ms, mfu 27.91%
+iter 1420: loss 6.9184, lr 0.00300, time 577.37ms, mfu 28.32%
+iter 1430: loss 7.0027, lr 0.00300, time 582.14ms, mfu 28.66%
+iter 1440: loss 6.9479, lr 0.00300, time 578.11ms, mfu 28.99%
+iter 1450: loss 7.0022, lr 0.00300, time 580.32ms, mfu 29.28%
+iter 1460: loss 6.9213, lr 0.00300, time 584.27ms, mfu 29.51%
+iter 1470: loss 6.7822, lr 0.00300, time 578.11ms, mfu 29.76%
+iter 1480: loss 6.7884, lr 0.00300, time 581.35ms, mfu 29.96%
+iter 1490: loss 6.8412, lr 0.00300, time 579.87ms, mfu 30.15%
+step 1500: train loss 6.9131, val loss 6.8728
+--- Model Analysis ---
+  MLP Rank Utilization (L0): 65.49% (503/768)
+--- Model Analysis ---
+Attention Q  | 543/768         | 70.70%
+Attention K  | 545/768         | 70.96%
+Attention V  | 546/768         | 71.09%
+--- Model Analysis ---
+  MLP Rank Utilization (L1): 51.56% (396/768)
+--- Model Analysis ---
+Attention Q  | 544/768         | 70.83%
+Attention K  | 544/768         | 70.83%
+Attention V  | 547/768         | 71.22%
+--- Model Analysis ---
+  MLP Rank Utilization (L2): 49.87% (383/768)
+--- Model Analysis ---
+Attention Q  | 544/768         | 70.83%
+Attention K  | 543/768         | 70.70%
+Attention V  | 547/768         | 71.22%
+--- Model Analysis ---
+  Embedding Utilization (L2): 97.27% (747/768)
+  Average Attention Entropy:  4.1326
+----------------------
+saving checkpoint to out
+merge_lora_weights 6.872781276702881 6.7 1500
+iter 1500: loss 6.7998, lr 0.00300, time 5982.14ms, mfu 27.45%
+iter 1510: loss 6.8070, lr 0.00300, time 575.74ms, mfu 27.91%
+iter 1520: loss 6.8512, lr 0.00300, time 578.21ms, mfu 28.32%
+iter 1530: loss 6.7854, lr 0.00300, time 585.71ms, mfu 28.64%
+iter 1540: loss 6.7755, lr 0.00300, time 582.47ms, mfu 28.95%
+iter 1550: loss 6.7555, lr 0.00300, time 579.60ms, mfu 29.24%
+iter 1560: loss 6.8585, lr 0.00300, time 579.08ms, mfu 29.51%
+iter 1570: loss 6.8291, lr 0.00300, time 585.54ms, mfu 29.71%
+iter 1580: loss 6.7185, lr 0.00300, time 584.83ms, mfu 29.90%
+iter 1590: loss 6.8663, lr 0.00300, time 583.67ms, mfu 30.08%
+step 1600: train loss 6.7855, val loss 6.8026
+--- Model Analysis ---
+  MLP Rank Utilization (L0): 65.76% (505/768)
+--- Model Analysis ---
+Attention Q  | 543/768         | 70.70%
+Attention K  | 545/768         | 70.96%
+Attention V  | 546/768         | 71.09%
+--- Model Analysis ---
+  MLP Rank Utilization (L1): 51.95% (399/768)
+--- Model Analysis ---
+Attention Q  | 544/768         | 70.83%
+Attention K  | 544/768         | 70.83%
+Attention V  | 547/768         | 71.22%
+--- Model Analysis ---
+  MLP Rank Utilization (L2): 50.26% (386/768)
+--- Model Analysis ---
+Attention Q  | 544/768         | 70.83%
+Attention K  | 543/768         | 70.70%
+Attention V  | 547/768         | 71.22%
+--- Model Analysis ---
+  Embedding Utilization (L2): 97.27% (747/768)
+  Average Attention Entropy:  4.1298
+----------------------
+saving checkpoint to out
+merge_lora_weights 6.8025803565979 6.7 1500
+iter 1600: loss 6.9785, lr 0.00300, time 6002.60ms, mfu 27.38%
+iter 1610: loss 6.6199, lr 0.00300, time 578.99ms, mfu 27.83%
+iter 1620: loss 6.6969, lr 0.00300, time 582.28ms, mfu 28.22%
+iter 1630: loss 6.7523, lr 0.00300, time 580.80ms, mfu 28.58%
+iter 1640: loss 6.9804, lr 0.00300, time 578.56ms, mfu 28.92%
+iter 1650: loss 6.7446, lr 0.00300, time 576.39ms, mfu 29.23%
+iter 1660: loss 6.8489, lr 0.00300, time 580.38ms, mfu 29.49%
+iter 1670: loss 6.6675, lr 0.00300, time 580.07ms, mfu 29.73%
+iter 1680: loss 6.7072, lr 0.00300, time 579.90ms, mfu 29.94%
+iter 1690: loss 6.8389, lr 0.00300, time 580.42ms, mfu 30.13%
+step 1700: train loss 6.7863, val loss 6.7978
+--- Model Analysis ---
+  MLP Rank Utilization (L0): 66.02% (507/768)
+--- Model Analysis ---
+Attention Q  | 543/768         | 70.70%
+Attention K  | 545/768         | 70.96%
+Attention V  | 546/768         | 71.09%
+--- Model Analysis ---
+  MLP Rank Utilization (L1): 52.34% (402/768)
+--- Model Analysis ---
+Attention Q  | 544/768         | 70.83%
+Attention K  | 544/768         | 70.83%
+Attention V  | 547/768         | 71.22%
+--- Model Analysis ---
+  MLP Rank Utilization (L2): 50.65% (389/768)
+--- Model Analysis ---
+Attention Q  | 544/768         | 70.83%
+Attention K  | 543/768         | 70.70%
+Attention V  | 547/768         | 71.22%
+--- Model Analysis ---
+  Embedding Utilization (L2): 97.27% (747/768)
+  Average Attention Entropy:  4.1452
+----------------------
+saving checkpoint to out
+
+=== SCALING OPERATION TRIGGERED (DDP SYNC) ===
+Operation: merge_lora_weights
+Trigger reason: Timeout
+Current val loss: 6.7978, Trigger loss: 6.7000
+Iterations since last op: 1500, Max wait: 1500
+Executing operation: merge_lora_weights first burn with value: None
+Performing architectural operation: merge_lora_weights
+Merging LoRA weights into main weights...
+LoRA weights merged and reset.
+
+Detailed parameter count:
+  total                  | Total:   52,149,504 | Trainable:    8,207,616
+  token_embeddings       | Total:    2,451,456 | Trainable:    2,451,456
+  position_embeddings    | Total:            0 | Trainable:            0
+  attention_layers       | Total:    7,520,256 | Trainable:    2,211,840
+  feed_forward_layers    | Total:    3,538,944 | Trainable:    3,538,944
+  layer_norms            | Total:        4,608 | Trainable:        4,608
+  final_layer_norm       | Total:          768 | Trainable:          768
+  language_model_head    | Total:   38,633,472 | Trainable:            0
+------------------------------------------------------------
+Re-configuring optimizer after architectural change...
+num decayed parameter tensors: 17, with 8,202,240 parameters
+num non-decayed parameter tensors: 7, with 5,376 parameters
+using fused AdamW: True
+Transferring optimizer state for existing parameters...
+Transferred optimizer state for 0 / 28 parameters
+Re-compiling the model...
+
+============================================================
+             ARCHITECTURE CHANGE (at Iter 1700)
+============================================================
+  n_layer                | 3
+  n_head                 | 12
+  n_embd                 | 768
+  n_hidden               | 768
+  block_size             | 1024
+  vocab_size             | 50304
+  dropout                | 0.0
+  bias                   | False
+  embedding_mode         | lora
+  attn_lora_rank         | 48
+  embedding_rank         | 48
+  lora_alpha             | 1.0
+============================================================
+
+Architectural operation completed successfully.
+=== SCALING OPERATION COMPLETE ===
+
+
+=== SCALING OPERATION TRIGGERED (DDP SYNC) ===
+Operation: change_lr
+Trigger reason: Loss threshold
+Current val loss: 6.7978, Trigger loss: 100.0000
+Iterations since last op: 0, Max wait: 1
+Executing operation: change_lr  with value: 0.5
+LR multiplier: 3.0000 -> 1.5000
+=== SCALING OPERATION COMPLETE ===
+
+
+=== SCALING OPERATION TRIGGERED (DDP SYNC) ===
+Operation: reset_lr_schedule
+Trigger reason: Loss threshold
+Current val loss: 6.7978, Trigger loss: 100.0000
+Iterations since last op: 0, Max wait: 1
+Executing operation: reset_lr_schedule  with value: None
+LR schedule offset: 200 -> 1700
+=== SCALING OPERATION COMPLETE ===
+
+
+=== SCALING OPERATION TRIGGERED (DDP SYNC) ===
+Operation: change_warmup_iters
+Trigger reason: Loss threshold
+Current val loss: 6.7978, Trigger loss: 100.0000
+Iterations since last op: 0, Max wait: 1
+Executing operation: change_warmup_iters  with value: 2
+Warmup iters multiplier: 1.0000 -> 2.0000
+=== SCALING OPERATION COMPLETE ===
+
+
+=== SCALING OPERATION TRIGGERED (DDP SYNC) ===
+Operation: stack_layers
+Trigger reason: Loss threshold
+Current val loss: 6.7978, Trigger loss: 100.0000
+Iterations since last op: 0, Max wait: 1
+Executing operation: stack_layers first burn with value: 2
+Performing architectural operation: stack_layers
+Stacking layers: current depth 3, creating 6 total layers.
+Model now has 6 layers.
+
+Detailed parameter count:
+  total                  | Total:   63,213,312 | Trainable:   13,963,008
+  token_embeddings       | Total:    2,451,456 | Trainable:    2,451,456
+  position_embeddings    | Total:            0 | Trainable:            0
+  attention_layers       | Total:   15,040,512 | Trainable:    4,423,680
+  feed_forward_layers    | Total:    7,077,888 | Trainable:    7,077,888
+  layer_norms            | Total:        9,216 | Trainable:        9,216
+  final_layer_norm       | Total:          768 | Trainable:          768
+  language_model_head    | Total:   38,633,472 | Trainable:            0
+------------------------------------------------------------
+Re-configuring optimizer after architectural change...
+num decayed parameter tensors: 32, with 13,953,024 parameters
+num non-decayed parameter tensors: 13, with 9,984 parameters
+using fused AdamW: True
+Transferring optimizer state for existing parameters...
+Transferred optimizer state for 0 / 52 parameters
+Re-compiling the model...
+
+============================================================
+             ARCHITECTURE CHANGE (at Iter 1700)
+============================================================
+  n_layer                | 6
+  n_head                 | 12
+  n_embd                 | 768
+  n_hidden               | 768
+  block_size             | 1024
+  vocab_size             | 50304
+  dropout                | 0.0
+  bias                   | False
+  embedding_mode         | lora
+  attn_lora_rank         | 48
+  embedding_rank         | 48
+  lora_alpha             | 1.0
+============================================================
+
+Architectural operation completed successfully.
+Re-evaluating validation loss after operation...
+New val loss after operation: 9.1340
+iter 1700: loss 9.0218, lr 0.00300, time 11000.12ms, mfu 27.34%
+iter 1710: loss 7.5372, lr 0.00004, time 795.12ms, mfu 27.57%
+iter 1720: loss 7.2934, lr 0.00008, time 799.78ms, mfu 27.77%
+iter 1730: loss 7.0849, lr 0.00012, time 800.06ms, mfu 27.94%
+iter 1740: loss 6.7163, lr 0.00015, time 798.33ms, mfu 28.10%
+iter 1750: loss 6.6569, lr 0.00019, time 798.06ms, mfu 28.25%
+iter 1760: loss 6.7052, lr 0.00023, time 800.19ms, mfu 28.38%
+Traceback (most recent call last):
+  File "/teamspace/studios/this_studio/nanoGPT/train.py", line 855, in <module>
+    break # No operation was triggered, exit the while loop
+  File "/home/zeus/miniconda3/envs/cloudspace/lib/python3.10/site-packages/torch/nn/modules/module.py", line 1751, in _wrapped_call_impl
+    return self._call_impl(*args, **kwargs)
+  File "/home/zeus/miniconda3/envs/cloudspace/lib/python3.10/site-packages/torch/nn/modules/module.py", line 1762, in _call_impl
+    return forward_call(*args, **kwargs)
+  File "/home/zeus/miniconda3/envs/cloudspace/lib/python3.10/site-packages/torch/_dynamo/eval_frame.py", line 655, in _fn
+    return fn(*args, **kwargs)
+  File "/home/zeus/miniconda3/envs/cloudspace/lib/python3.10/site-packages/torch/nn/modules/module.py", line 1751, in _wrapped_call_impl
+    return self._call_impl(*args, **kwargs)
+  File "/home/zeus/miniconda3/envs/cloudspace/lib/python3.10/site-packages/torch/nn/modules/module.py", line 1762, in _call_impl
+    return forward_call(*args, **kwargs)
+  File "/teamspace/studios/this_studio/nanoGPT/model.py", line 444, in forward
+    def forward(self, idx, targets=None, return_attention=False):
+  File "/home/zeus/miniconda3/envs/cloudspace/lib/python3.10/site-packages/torch/_dynamo/eval_frame.py", line 838, in _fn
+    return fn(*args, **kwargs)
+  File "/home/zeus/miniconda3/envs/cloudspace/lib/python3.10/site-packages/torch/_functorch/aot_autograd.py", line 1201, in forward
+    return compiled_fn(full_args)
+  File "/home/zeus/miniconda3/envs/cloudspace/lib/python3.10/site-packages/torch/_functorch/_aot_autograd/runtime_wrappers.py", line 315, in runtime_wrapper
+    all_outs = call_func_at_runtime_with_args(
+  File "/home/zeus/miniconda3/envs/cloudspace/lib/python3.10/site-packages/torch/_functorch/_aot_autograd/utils.py", line 126, in call_func_at_runtime_with_args
+    out = normalize_as_list(f(args))
+  File "/home/zeus/miniconda3/envs/cloudspace/lib/python3.10/site-packages/torch/_functorch/_aot_autograd/utils.py", line 100, in g
+    return f(*args)
+  File "/home/zeus/miniconda3/envs/cloudspace/lib/python3.10/site-packages/torch/autograd/function.py", line 575, in apply
+    return super().apply(*args, **kwargs)  # type: ignore[misc]
+  File "/home/zeus/miniconda3/envs/cloudspace/lib/python3.10/site-packages/torch/_functorch/_aot_autograd/runtime_wrappers.py", line 1937, in forward
+    fw_outs = call_func_at_runtime_with_args(
+  File "/home/zeus/miniconda3/envs/cloudspace/lib/python3.10/site-packages/torch/_functorch/_aot_autograd/utils.py", line 126, in call_func_at_runtime_with_args
+    out = normalize_as_list(f(args))
+  File "/home/zeus/miniconda3/envs/cloudspace/lib/python3.10/site-packages/torch/_functorch/_aot_autograd/runtime_wrappers.py", line 495, in wrapper
+    return compiled_fn(runtime_args)
+  File "/home/zeus/miniconda3/envs/cloudspace/lib/python3.10/site-packages/torch/_inductor/output_code.py", line 460, in __call__
+    return self.current_callable(inputs)
+  File "/home/zeus/miniconda3/envs/cloudspace/lib/python3.10/site-packages/torch/_inductor/utils.py", line 2404, in run
+    return model(new_inputs)
+  File "/tmp/torchinductor_adamskrodzki/xz/cxzbwqqmitdol6yycg64r7oar3vsq6lfo6pvzhmh4nf52tcnxphd.py", line 1730, in call
+    triton_per_fused__to_copy_add_native_layer_norm_native_layer_norm_backward_12.run(buf35, buf57, buf67, primals_25, buf71, buf73, buf221, 32768, 768, stream=stream0)
+  File "/home/zeus/miniconda3/envs/cloudspace/lib/python3.10/site-packages/torch/_inductor/runtime/triton_heuristics.py", line 956, in run
+    return launcher(
+  File "<string>", line 5, in launcher
+  File "/home/zeus/miniconda3/envs/cloudspace/lib/python3.10/site-packages/triton/backends/nvidia/driver.py", line 529, in __call__
+    self.launch(gridX, gridY, gridZ, stream, function, self.launch_cooperative_grid, global_scratch, *args)
+KeyboardInterrupt
+Traceback (most recent call last):
+  File "/teamspace/studios/this_studio/nanoGPT/train.py", line 855, in <module>
+    break # No operation was triggered, exit the while loop
+  File "/home/zeus/miniconda3/envs/cloudspace/lib/python3.10/site-packages/torch/nn/modules/module.py", line 1751, in _wrapped_call_impl
+    return self._call_impl(*args, **kwargs)
+  File "/home/zeus/miniconda3/envs/cloudspace/lib/python3.10/site-packages/torch/nn/modules/module.py", line 1762, in _call_impl
+    return forward_call(*args, **kwargs)
+  File "/home/zeus/miniconda3/envs/cloudspace/lib/python3.10/site-packages/torch/_dynamo/eval_frame.py", line 655, in _fn
+    return fn(*args, **kwargs)
+  File "/home/zeus/miniconda3/envs/cloudspace/lib/python3.10/site-packages/torch/nn/modules/module.py", line 1751, in _wrapped_call_impl
+    return self._call_impl(*args, **kwargs)
+  File "/home/zeus/miniconda3/envs/cloudspace/lib/python3.10/site-packages/torch/nn/modules/module.py", line 1762, in _call_impl
+    return forward_call(*args, **kwargs)
+  File "/teamspace/studios/this_studio/nanoGPT/model.py", line 444, in forward
+    def forward(self, idx, targets=None, return_attention=False):
+  File "/home/zeus/miniconda3/envs/cloudspace/lib/python3.10/site-packages/torch/_dynamo/eval_frame.py", line 838, in _fn
+    return fn(*args, **kwargs)
+  File "/home/zeus/miniconda3/envs/cloudspace/lib/python3.10/site-packages/torch/_functorch/aot_autograd.py", line 1201, in forward
+    return compiled_fn(full_args)
+  File "/home/zeus/miniconda3/envs/cloudspace/lib/python3.10/site-packages/torch/_functorch/_aot_autograd/runtime_wrappers.py", line 315, in runtime_wrapper
+    all_outs = call_func_at_runtime_with_args(
+  File "/home/zeus/miniconda3/envs/cloudspace/lib/python3.10/site-packages/torch/_functorch/_aot_autograd/utils.py", line 126, in call_func_at_runtime_with_args
+    out = normalize_as_list(f(args))
+  File "/home/zeus/miniconda3/envs/cloudspace/lib/python3.10/site-packages/torch/_functorch/_aot_autograd/utils.py", line 100, in g
+    return f(*args)
+  File "/home/zeus/miniconda3/envs/cloudspace/lib/python3.10/site-packages/torch/autograd/function.py", line 575, in apply
+    return super().apply(*args, **kwargs)  # type: ignore[misc]
+  File "/home/zeus/miniconda3/envs/cloudspace/lib/python3.10/site-packages/torch/_functorch/_aot_autograd/runtime_wrappers.py", line 1937, in forward
+    fw_outs = call_func_at_runtime_with_args(
+  File "/home/zeus/miniconda3/envs/cloudspace/lib/python3.10/site-packages/torch/_functorch/_aot_autograd/utils.py", line 126, in call_func_at_runtime_with_args
+    out = normalize_as_list(f(args))
+  File "/home/zeus/miniconda3/envs/cloudspace/lib/python3.10/site-packages/torch/_functorch/_aot_autograd/runtime_wrappers.py", line 495, in wrapper
+    return compiled_fn(runtime_args)
+  File "/home/zeus/miniconda3/envs/cloudspace/lib/python3.10/site-packages/torch/_inductor/output_code.py", line 460, in __call__
+    return self.current_callable(inputs)
+  File "/home/zeus/miniconda3/envs/cloudspace/lib/python3.10/site-packages/torch/_inductor/utils.py", line 2404, in run
+    return model(new_inputs)
+  File "/tmp/torchinductor_adamskrodzki/xz/cxzbwqqmitdol6yycg64r7oar3vsq6lfo6pvzhmh4nf52tcnxphd.py", line 1730, in call
+    triton_per_fused__to_copy_add_native_layer_norm_native_layer_norm_backward_12.run(buf35, buf57, buf67, primals_25, buf71, buf73, buf221, 32768, 768, stream=stream0)
+  File "/home/zeus/miniconda3/envs/cloudspace/lib/python3.10/site-packages/torch/_inductor/runtime/triton_heuristics.py", line 956, in run
+    return launcher(
+  File "<string>", line 5, in launcher
+  File "/home/zeus/miniconda3/envs/cloudspace/lib/python3.10/site-packages/triton/backends/nvidia/driver.py", line 529, in __call__
+    self.launch(gridX, gridY, gridZ, stream, function, self.launch_cooperative_grid, global_scratch, *args)
+KeyboardInterrupt
+Exception ignored in atexit callback: <function _start_and_connect_service.<locals>.teardown_atexit at 0x78c614e95ab0>
+Traceback (most recent call last):
+  File "/home/zeus/miniconda3/envs/cloudspace/lib/python3.10/site-packages/wandb/sdk/lib/service/service_connection.py", line 54, in teardown_atexit
+    conn.teardown(hooks.exit_code)
+  File "/home/zeus/miniconda3/envs/cloudspace/lib/python3.10/site-packages/wandb/sdk/lib/service/service_connection.py", line 182, in teardown
+    self._router.join()
+  File "/home/zeus/miniconda3/envs/cloudspace/lib/python3.10/site-packages/wandb/sdk/interface/router.py", line 75, in join
+    self._thread.join()
+  File "/home/zeus/miniconda3/envs/cloudspace/lib/python3.10/threading.py", line 1096, in join
+    self._wait_for_tstate_lock()
+  File "/home/zeus/miniconda3/envs/cloudspace/lib/python3.10/threading.py", line 1116, in _wait_for_tstate_lock
+    if lock.acquire(block, timeout):
+KeyboardInterrupt:
+Exception ignored in atexit callback: <function shutdown_compile_workers at 0x78c64211d900>
+Traceback (most recent call last):
+  File "/home/zeus/miniconda3/envs/cloudspace/lib/python3.10/site-packages/torch/_inductor/async_compile.py", line 113, in shutdown_compile_workers
+    pool.shutdown()
+  File "/home/zeus/miniconda3/envs/cloudspace/lib/python3.10/site-packages/torch/_inductor/compile_worker/subproc_pool.py", line 239, in shutdown
+    self.process.wait(300)
+  File "/home/zeus/miniconda3/envs/cloudspace/lib/python3.10/subprocess.py", line 1209, in wait
+    return self._wait(timeout=timeout)
+  File "/home/zeus/miniconda3/envs/cloudspace/lib/python3.10/subprocess.py", line 1937, in _wait
+    time.sleep(delay)
+KeyboardInterrupt:

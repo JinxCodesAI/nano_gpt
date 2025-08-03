@@ -1,0 +1,186 @@
+Calculating target architecture based on schedule...
+
+============================================================
+       TARGET MODEL ARCHITECTURE (at end of schedule)
+============================================================
+  n_layer                | 6
+  n_head                 | 12
+  n_embd                 | 768
+  n_hidden               | 1536
+  block_size             | 1024
+  vocab_size             | 50304
+  dropout                | 0.0
+  bias                   | False
+  embedding_mode         | standard
+  attn_lora_rank         | 0
+  embedding_rank         | 0
+  lora_alpha             | 0.0
+============================================================
+
+
+============================================================
+           INITIAL MODEL ARCHITECTURE (at Iter 0)
+============================================================
+  n_layer                | 3
+  n_head                 | 12
+  n_embd                 | 768
+  n_hidden               | 768
+  block_size             | 1024
+  vocab_size             | 50304
+  dropout                | 0.0
+  bias                   | False
+  embedding_mode         | lora
+  attn_lora_rank         | 48
+  embedding_rank         | 48
+  lora_alpha             | 1.0
+============================================================
+
+
+Detailed parameter count:
+  total                  | Total:   52,149,504 | Trainable:    8,207,616
+  token_embeddings       | Total:    2,451,456 | Trainable:    2,451,456
+  position_embeddings    | Total:            0 | Trainable:            0
+  attention_layers       | Total:    7,520,256 | Trainable:    2,211,840
+  feed_forward_layers    | Total:    3,538,944 | Trainable:    3,538,944
+  layer_norms            | Total:        4,608 | Trainable:        4,608
+  final_layer_norm       | Total:          768 | Trainable:          768
+  language_model_head    | Total:   38,633,472 | Trainable:            0
+------------------------------------------------------------
+eval every:100
+step 0: train loss 10.9679, val loss 10.9694
+W0720 15:46:38.830000 178480 /system/conda/miniconda3/envs/cloudspace/lib/python3.10/site-packages/torch/_inductor/utils.py:1250] [0/1] Not enough SMs to use max_autotune_gemm mode
+--- Model Analysis ---
+  MLP Rank Utilization (L0): 71.09% (546/768)
+  Average Attention Entropy:  5.8975
+----------------------
+merge_lora_weights 10.969396591186523 6.7 1500
+iter 0: loss 10.9696, lr 0.00005, time 16132.58ms, mfu -100.00%
+iter 10: loss 9.5824, lr 0.00055, time 532.33ms, mfu 34.72%
+iter 20: loss 9.4490, lr 0.00104, time 533.88ms, mfu 34.71%
+iter 30: loss 9.2669, lr 0.00154, time 540.47ms, mfu 34.65%
+iter 40: loss 9.1941, lr 0.00204, time 543.01ms, mfu 34.59%
+iter 50: loss 9.0064, lr 0.00254, time 543.67ms, mfu 34.53%
+iter 60: loss 8.8955, lr 0.00303, time 554.90ms, mfu 34.41%
+iter 70: loss 8.8257, lr 0.00353, time 556.85ms, mfu 34.29%
+iter 80: loss 8.6921, lr 0.00403, time 558.91ms, mfu 34.17%
+iter 90: loss 8.6814, lr 0.00453, time 561.74ms, mfu 34.04%
+step 100: train loss 8.5297, val loss 8.5740
+--- Model Analysis ---
+  MLP Rank Utilization (L0): 65.10% (500/768)
+  Average Attention Entropy:  5.4693
+----------------------
+saving checkpoint to out
+merge_lora_weights 8.573991775512695 6.7 1500
+iter 100: loss 8.5752, lr 0.00502, time 5291.59ms, mfu 30.98%
+iter 110: loss 8.4820, lr 0.00552, time 585.18ms, mfu 31.04%
+iter 120: loss 8.5208, lr 0.00602, time 573.62ms, mfu 31.16%
+iter 130: loss 8.4193, lr 0.00652, time 581.27ms, mfu 31.22%
+iter 140: loss 8.2349, lr 0.00701, time 578.20ms, mfu 31.30%
+iter 150: loss 8.3759, lr 0.00751, time 580.83ms, mfu 31.35%
+iter 160: loss 8.1445, lr 0.00801, time 572.87ms, mfu 31.44%
+iter 170: loss 8.0180, lr 0.00851, time 577.95ms, mfu 31.49%
+iter 180: loss 8.0486, lr 0.00900, time 579.62ms, mfu 31.53%
+iter 190: loss 7.8903, lr 0.00950, time 580.79ms, mfu 31.56%
+step 200: train loss 7.9793, val loss 7.9884
+--- Model Analysis ---
+  MLP Rank Utilization (L0): 59.90% (460/768)
+  Average Attention Entropy:  4.4405
+----------------------
+saving checkpoint to out
+merge_lora_weights 7.988424777984619 6.7 1500
+iter 200: loss 8.0722, lr 0.01000, time 5398.39ms, mfu 28.75%
+iter 210: loss 7.9494, lr 0.01000, time 578.41ms, mfu 29.07%
+iter 220: loss 7.8605, lr 0.01000, time 578.42ms, mfu 29.36%
+iter 230: loss 7.7277, lr 0.01000, time 580.19ms, mfu 29.61%
+iter 240: loss 7.8242, lr 0.01000, time 574.37ms, mfu 29.86%
+iter 250: loss 7.7560, lr 0.01000, time 573.71ms, mfu 30.10%
+iter 260: loss 7.8203, lr 0.01000, time 575.27ms, mfu 30.30%
+iter 270: loss 7.6460, lr 0.01000, time 573.02ms, mfu 30.50%
+iter 280: loss 7.8201, lr 0.01000, time 577.61ms, mfu 30.65%
+iter 290: loss 7.7030, lr 0.01000, time 581.59ms, mfu 30.76%
+step 300: train loss 7.6876, val loss 7.6795
+--- Model Analysis ---
+  MLP Rank Utilization (L0): 56.51% (434/768)
+  Average Attention Entropy:  4.2608
+----------------------
+saving checkpoint to out
+merge_lora_weights 7.67946720123291 6.7 1500
+iter 300: loss 7.6586, lr 0.01000, time 5334.64ms, mfu 28.03%
+iter 310: loss 7.7297, lr 0.01000, time 569.56ms, mfu 28.47%
+iter 320: loss 7.6860, lr 0.01000, time 575.35ms, mfu 28.84%
+iter 330: loss 7.5831, lr 0.01000, time 580.91ms, mfu 29.13%
+iter 340: loss 7.5377, lr 0.01000, time 578.59ms, mfu 29.41%
+iter 350: loss 7.4711, lr 0.01000, time 580.94ms, mfu 29.65%
+iter 360: loss 7.5531, lr 0.01000, time 580.02ms, mfu 29.87%
+iter 370: loss 7.4188, lr 0.01000, time 578.83ms, mfu 30.08%
+iter 380: loss 7.4873, lr 0.01000, time 580.69ms, mfu 30.25%
+iter 390: loss 7.5897, lr 0.01000, time 577.06ms, mfu 30.43%
+step 400: train loss 7.4614, val loss 7.4035
+--- Model Analysis ---
+  MLP Rank Utilization (L0): 53.78% (413/768)
+  Average Attention Entropy:  4.1363
+----------------------
+saving checkpoint to out
+merge_lora_weights 7.40350866317749 6.7 1500
+iter 400: loss 7.3726, lr 0.01000, time 5492.08ms, mfu 27.72%
+iter 410: loss 7.4700, lr 0.01000, time 574.26ms, mfu 28.17%
+iter 420: loss 7.4904, lr 0.01000, time 579.86ms, mfu 28.54%
+iter 430: loss 7.7186, lr 0.01000, time 575.74ms, mfu 28.90%
+iter 440: loss 7.3943, lr 0.01000, time 576.39ms, mfu 29.21%
+iter 450: loss 7.3839, lr 0.01000, time 581.96ms, mfu 29.47%
+iter 460: loss 7.2683, lr 0.01000, time 579.92ms, mfu 29.71%
+iter 470: loss 7.3868, lr 0.01000, time 580.75ms, mfu 29.92%
+iter 480: loss 7.4892, lr 0.01000, time 577.93ms, mfu 30.12%
+iter 490: loss 7.3527, lr 0.01000, time 581.50ms, mfu 30.29%
+step 500: train loss 7.3207, val loss 7.3121
+--- Model Analysis ---
+  MLP Rank Utilization (L0): 51.43% (395/768)
+  Average Attention Entropy:  4.0781
+----------------------
+saving checkpoint to out
+merge_lora_weights 7.3121209144592285 6.7 1500
+iter 500: loss 7.4429, lr 0.01000, time 5371.06ms, mfu 27.61%
+iter 510: loss 7.5076, lr 0.01000, time 573.00ms, mfu 28.07%
+iter 520: loss 7.3810, lr 0.01000, time 578.68ms, mfu 28.46%
+iter 530: loss 7.2277, lr 0.01000, time 578.55ms, mfu 28.81%
+iter 540: loss 7.3371, lr 0.01000, time 579.93ms, mfu 29.11%
+iter 550: loss 7.2765, lr 0.01000, time 580.89ms, mfu 29.38%
+iter 560: loss 7.1815, lr 0.01000, time 580.52ms, mfu 29.63%
+iter 570: loss 7.2626, lr 0.01000, time 580.01ms, mfu 29.85%
+iter 580: loss 7.1989, lr 0.01000, time 578.58ms, mfu 30.06%
+iter 590: loss 7.3151, lr 0.01000, time 581.16ms, mfu 30.23%
+step 600: train loss 7.2011, val loss 7.2417
+--- Model Analysis ---
+  MLP Rank Utilization (L0): 48.83% (375/768)
+  Average Attention Entropy:  3.9701
+----------------------
+saving checkpoint to out
+merge_lora_weights 7.241719722747803 6.7 1500
+iter 600: loss 7.2454, lr 0.01000, time 4956.14ms, mfu 27.58%
+iter 610: loss 7.3008, lr 0.01000, time 574.06ms, mfu 28.04%
+iter 620: loss 7.4233, lr 0.01000, time 573.64ms, mfu 28.46%
+iter 630: loss 7.3608, lr 0.01000, time 580.39ms, mfu 28.80%
+iter 640: loss 7.1990, lr 0.01000, time 579.20ms, mfu 29.11%
+iter 650: loss 7.2296, lr 0.01000, time 578.88ms, mfu 29.39%
+iter 660: loss 7.1321, lr 0.01000, time 578.54ms, mfu 29.65%
+iter 670: loss 7.1571, lr 0.01000, time 576.50ms, mfu 29.89%
+iter 680: loss 7.1038, lr 0.01000, time 579.38ms, mfu 30.09%
+iter 690: loss 7.2038, lr 0.01000, time 579.70ms, mfu 30.27%
+step 700: train loss 7.1515, val loss 7.2311
+--- Model Analysis ---
+  MLP Rank Utilization (L0): 46.48% (357/768)
+  Average Attention Entropy:  3.9232
+----------------------
+saving checkpoint to out
+merge_lora_weights 7.231064796447754 6.7 1500
+iter 700: loss 7.1095, lr 0.01000, time 5473.39ms, mfu 27.58%
+iter 710: loss 7.0887, lr 0.01000, time 571.27ms, mfu 28.06%
+iter 720: loss 7.0988, lr 0.01000, time 579.49ms, mfu 28.44%
+Traceback (most recent call last):
+  File "/teamspace/studios/this_studio/nanoGPT/train.py", line 850, in <module>
+    if iter_num % log_interval == 0 and master_process:
+KeyboardInterrupt
+Traceback (most recent call last):
+  File "/teamspace/studios/this_studio/nanoGPT/train.py", line 850, in <module>
+    if iter_num % log_interval == 0 and master_process:
+KeyboardInterrupt

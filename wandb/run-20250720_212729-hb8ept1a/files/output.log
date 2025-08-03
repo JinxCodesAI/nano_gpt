@@ -1,0 +1,174 @@
+Calculating target architecture based on schedule...
+
+============================================================
+       TARGET MODEL ARCHITECTURE (at end of schedule)
+============================================================
+  n_layer                | 2
+  n_head                 | 12
+  n_embd                 | 768
+  n_hidden               | 768
+  block_size             | 1024
+  vocab_size             | 50304
+  dropout                | 0.0
+  bias                   | False
+  embedding_mode         | standard
+  attn_lora_rank         | 0
+  embedding_rank         | 0
+  lora_alpha             | 0.0
+============================================================
+
+
+============================================================
+           INITIAL MODEL ARCHITECTURE (at Iter 0)
+============================================================
+  n_layer                | 1
+  n_head                 | 12
+  n_embd                 | 768
+  n_hidden               | 768
+  block_size             | 1024
+  vocab_size             | 50304
+  dropout                | 0.0
+  bias                   | False
+  embedding_mode         | lora
+  attn_lora_rank         | 0
+  embedding_rank         | 0
+  lora_alpha             | 1.0
+============================================================
+
+
+Detailed parameter count:
+  total                  | Total:   42,174,720 | Trainable:   42,174,720
+  token_embeddings       | Total:            0 | Trainable:            0
+  position_embeddings    | Total:            0 | Trainable:            0
+  attention_layers       | Total:    2,359,296 | Trainable:    2,359,296
+  feed_forward_layers    | Total:    1,179,648 | Trainable:    1,179,648
+  layer_norms            | Total:        1,536 | Trainable:        1,536
+  final_layer_norm       | Total:          768 | Trainable:          768
+  language_model_head    | Total:   38,633,472 | Trainable:   38,633,472
+------------------------------------------------------------
+eval every:200
+step 400: train loss 6.3241, val loss 6.3592
+raw_model.config.n_layer=1
+doing something 0
+  MLP Rank Utilization (L0): 71.09% (546/768)
+--- Model Analysis ---
+  Embedding Utilization: 97.14% (746/768)
+  Average Attention Entropy:  5.5033
+----------------------
+saving checkpoint to out
+
+=== SCALING OPERATION TRIGGERED (DDP SYNC) ===
+Operation: reset_lr_schedule
+Trigger reason: Loss threshold
+Current val loss: 6.3592, Trigger loss: 100.0000
+Iterations since last op: 400, Max wait: 1
+Executing operation: reset_lr_schedule  with value: None
+LR schedule offset: 0 -> 400
+=== SCALING OPERATION COMPLETE ===
+
+
+=== SCALING OPERATION TRIGGERED (DDP SYNC) ===
+Operation: stack_layers
+Trigger reason: Loss threshold
+Current val loss: 6.3592, Trigger loss: 100.0000
+Iterations since last op: 0, Max wait: 1
+Executing operation: stack_layers first burn with value: 2
+Performing architectural operation: stack_layers
+Stacking layers: current depth 1, creating 2 total layers.
+Model now has 2 layers.
+
+Detailed parameter count:
+  total                  | Total:   45,715,200 | Trainable:   45,715,200
+  token_embeddings       | Total:            0 | Trainable:            0
+  position_embeddings    | Total:            0 | Trainable:            0
+  attention_layers       | Total:    4,718,592 | Trainable:    4,718,592
+  feed_forward_layers    | Total:    2,359,296 | Trainable:    2,359,296
+  layer_norms            | Total:        3,072 | Trainable:        3,072
+  final_layer_norm       | Total:          768 | Trainable:          768
+  language_model_head    | Total:   38,633,472 | Trainable:   38,633,472
+------------------------------------------------------------
+Re-configuring optimizer after architectural change...
+num decayed parameter tensors: 9, with 45,711,360 parameters
+num non-decayed parameter tensors: 5, with 3,840 parameters
+using fused AdamW: True
+Transferring optimizer state for existing parameters...
+Transferred optimizer state for 0 / 14 parameters
+Re-compiling the model...
+
+============================================================
+             ARCHITECTURE CHANGE (at Iter 400)
+============================================================
+  n_layer                | 2
+  n_head                 | 12
+  n_embd                 | 768
+  n_hidden               | 768
+  block_size             | 1024
+  vocab_size             | 50304
+  dropout                | 0.0
+  bias                   | False
+  embedding_mode         | lora
+  attn_lora_rank         | 0
+  embedding_rank         | 0
+  lora_alpha             | 1.0
+============================================================
+
+Architectural operation completed successfully.
+Re-evaluating validation loss after operation...
+W0720 21:27:37.346000 79937 /system/conda/miniconda3/envs/cloudspace/lib/python3.10/site-packages/torch/_inductor/utils.py:1250] [0/2] Not enough SMs to use max_autotune_gemm mode
+New val loss after operation: 6.8216
+Traceback (most recent call last):
+  File "/teamspace/studios/this_studio/nanoGPT/train.py", line 855, in <module>
+    scaler.scale(loss).backward()
+  File "/home/zeus/miniconda3/envs/cloudspace/lib/python3.10/site-packages/torch/_tensor.py", line 648, in backward
+    torch.autograd.backward(
+  File "/home/zeus/miniconda3/envs/cloudspace/lib/python3.10/site-packages/torch/autograd/__init__.py", line 353, in backward
+    _engine_run_backward(
+  File "/home/zeus/miniconda3/envs/cloudspace/lib/python3.10/site-packages/torch/autograd/graph.py", line 824, in _engine_run_backward
+    return Variable._execution_engine.run_backward(  # Calls into the C++ engine to run the backward pass
+  File "/home/zeus/miniconda3/envs/cloudspace/lib/python3.10/site-packages/torch/autograd/function.py", line 307, in apply
+    return user_fn(self, *args)
+  File "/home/zeus/miniconda3/envs/cloudspace/lib/python3.10/site-packages/torch/_functorch/_aot_autograd/runtime_wrappers.py", line 2111, in backward
+    return impl_fn()
+  File "/home/zeus/miniconda3/envs/cloudspace/lib/python3.10/site-packages/torch/_functorch/_aot_autograd/runtime_wrappers.py", line 2097, in impl_fn
+    out = CompiledFunction._backward_impl(ctx, all_args)
+  File "/home/zeus/miniconda3/envs/cloudspace/lib/python3.10/site-packages/torch/_functorch/_aot_autograd/runtime_wrappers.py", line 2217, in _backward_impl
+    out = call_func_at_runtime_with_args(
+  File "/home/zeus/miniconda3/envs/cloudspace/lib/python3.10/site-packages/torch/_functorch/_aot_autograd/utils.py", line 126, in call_func_at_runtime_with_args
+    out = normalize_as_list(f(args))
+  File "/home/zeus/miniconda3/envs/cloudspace/lib/python3.10/site-packages/torch/_dynamo/eval_frame.py", line 838, in _fn
+    return fn(*args, **kwargs)
+  File "/home/zeus/miniconda3/envs/cloudspace/lib/python3.10/site-packages/torch/_inductor/output_code.py", line 460, in __call__
+    return self.current_callable(inputs)
+  File "/home/zeus/miniconda3/envs/cloudspace/lib/python3.10/site-packages/torch/_inductor/utils.py", line 2404, in run
+    return model(new_inputs)
+  File "/tmp/torchinductor_adamskrodzki/3r/c3rebd5o2tfxdvdh3467b4n52ltfxrm4m2qwlhqtx3cdkqq4xwyx.py", line 1086, in call
+    buf1 = empty_strided_cuda((32, 1024, 50304), (51511296, 50304, 1), torch.bfloat16)
+torch.OutOfMemoryError: CUDA out of memory. Tried to allocate 3.07 GiB. GPU 0 has a total capacity of 21.96 GiB of which 1.66 GiB is free. Process 149043 has 11.45 GiB memory in use. Process 164305 has 8.84 GiB memory in use. Of the allocated memory 8.32 GiB is allocated by PyTorch, and 269.01 MiB is reserved by PyTorch but unallocated. If reserved but unallocated memory is large try setting PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True to avoid fragmentation.  See documentation for Memory Management  (https://pytorch.org/docs/stable/notes/cuda.html#environment-variables)
+Traceback (most recent call last):
+  File "/teamspace/studios/this_studio/nanoGPT/train.py", line 855, in <module>
+    scaler.scale(loss).backward()
+  File "/home/zeus/miniconda3/envs/cloudspace/lib/python3.10/site-packages/torch/_tensor.py", line 648, in backward
+    torch.autograd.backward(
+  File "/home/zeus/miniconda3/envs/cloudspace/lib/python3.10/site-packages/torch/autograd/__init__.py", line 353, in backward
+    _engine_run_backward(
+  File "/home/zeus/miniconda3/envs/cloudspace/lib/python3.10/site-packages/torch/autograd/graph.py", line 824, in _engine_run_backward
+    return Variable._execution_engine.run_backward(  # Calls into the C++ engine to run the backward pass
+  File "/home/zeus/miniconda3/envs/cloudspace/lib/python3.10/site-packages/torch/autograd/function.py", line 307, in apply
+    return user_fn(self, *args)
+  File "/home/zeus/miniconda3/envs/cloudspace/lib/python3.10/site-packages/torch/_functorch/_aot_autograd/runtime_wrappers.py", line 2111, in backward
+    return impl_fn()
+  File "/home/zeus/miniconda3/envs/cloudspace/lib/python3.10/site-packages/torch/_functorch/_aot_autograd/runtime_wrappers.py", line 2097, in impl_fn
+    out = CompiledFunction._backward_impl(ctx, all_args)
+  File "/home/zeus/miniconda3/envs/cloudspace/lib/python3.10/site-packages/torch/_functorch/_aot_autograd/runtime_wrappers.py", line 2217, in _backward_impl
+    out = call_func_at_runtime_with_args(
+  File "/home/zeus/miniconda3/envs/cloudspace/lib/python3.10/site-packages/torch/_functorch/_aot_autograd/utils.py", line 126, in call_func_at_runtime_with_args
+    out = normalize_as_list(f(args))
+  File "/home/zeus/miniconda3/envs/cloudspace/lib/python3.10/site-packages/torch/_dynamo/eval_frame.py", line 838, in _fn
+    return fn(*args, **kwargs)
+  File "/home/zeus/miniconda3/envs/cloudspace/lib/python3.10/site-packages/torch/_inductor/output_code.py", line 460, in __call__
+    return self.current_callable(inputs)
+  File "/home/zeus/miniconda3/envs/cloudspace/lib/python3.10/site-packages/torch/_inductor/utils.py", line 2404, in run
+    return model(new_inputs)
+  File "/tmp/torchinductor_adamskrodzki/3r/c3rebd5o2tfxdvdh3467b4n52ltfxrm4m2qwlhqtx3cdkqq4xwyx.py", line 1086, in call
+    buf1 = empty_strided_cuda((32, 1024, 50304), (51511296, 50304, 1), torch.bfloat16)
+torch.OutOfMemoryError: CUDA out of memory. Tried to allocate 3.07 GiB. GPU 0 has a total capacity of 21.96 GiB of which 1.66 GiB is free. Process 149043 has 11.45 GiB memory in use. Process 164305 has 8.84 GiB memory in use. Of the allocated memory 8.32 GiB is allocated by PyTorch, and 269.01 MiB is reserved by PyTorch but unallocated. If reserved but unallocated memory is large try setting PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True to avoid fragmentation.  See documentation for Memory Management  (https://pytorch.org/docs/stable/notes/cuda.html#environment-variables)

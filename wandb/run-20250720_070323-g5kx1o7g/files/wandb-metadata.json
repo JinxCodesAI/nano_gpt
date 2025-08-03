@@ -1,0 +1,44 @@
+{
+  "os":  "Linux-6.8.0-1032-gcp-x86_64-with-glibc2.31",
+  "python":  "CPython 3.10.10",
+  "startedAt":  "2025-07-20T07:03:23.413872Z",
+  "args":  [
+    "config/L4_dynamic_start.py",
+    "--scaling_schedule_file=configs/L4_TrainGrowAdapt_schedule.json"
+  ],
+  "program":  "/teamspace/studios/this_studio/nanoGPT/train.py",
+  "codePath":  "train.py",
+  "codePathLocal":  "train.py",
+  "git":  {
+    "remote":  "https://github.com/JinxCodesAI/nano_gpt.git",
+    "commit":  "bc7a3ec3a4881ffe49271fd8a0dc88b57b0e55b8"
+  },
+  "email":  "adamskrodzki@gmail.com",
+  "root":  "/teamspace/studios/this_studio/nanoGPT",
+  "host":  "cs-01k0k9vxj6ay5m21y4bqf9ec87",
+  "executable":  "/home/zeus/miniconda3/envs/cloudspace/bin/python",
+  "cpu_count":  4,
+  "cpu_count_logical":  8,
+  "gpu":  "NVIDIA L4",
+  "gpu_count":  1,
+  "disk":  {
+    "/":  {
+      "total":  "395184570368",
+      "used":  "45306290176"
+    }
+  },
+  "memory":  {
+    "total":  "33652183040"
+  },
+  "gpu_nvidia":  [
+    {
+      "name":  "NVIDIA L4",
+      "memoryTotal":  "24152899584",
+      "cudaCores":  7424,
+      "architecture":  "Ada",
+      "uuid":  "GPU-b30a0579-e4cb-5da7-cb0b-d0e05a81db58"
+    }
+  ],
+  "cudaVersion":  "12.2",
+  "writerId":  "g52gztd0atdq8ym2o54jjrhq5ebss6gd"
+}

@@ -1,0 +1,88 @@
+================================================================================
+Training run started at 2025-07-21 11:27:40
+================================================================================
+Configuration:
+----------------------------------------
+always_save_checkpoint: True
+attn_lora_rank: 0
+attn_lora_rank_divisor: 0
+backend: nccl
+batch_size: 1
+batch_size_multiplier: 1.0
+beta1: 0.9
+beta2: 0.95
+bias: False
+block_size: 128
+compile: False
+dataset: shakespeare_char
+decay_lr: True
+device: cpu
+dropout: 0.0
+dtype: float16
+embedding_mode: standard
+embedding_rank: 0
+eval_interval: 10
+eval_interval_multiplier: 1.0
+eval_iters: 5
+eval_iters_multiplier: 1.0
+eval_only: False
+file_logging: True
+grad_accum_multiplier: 1.0
+grad_clip: 1.0
+gradient_accumulation_steps: 1
+init_from: scratch
+learning_rate: 0.006
+log_dir: logs
+log_interval: 1
+lora_alpha: 1.0
+lora_alpha_multiplier: 1.0
+lr_decay_iters: 600000
+lr_multiplier: 1.0
+max_iters: 600000
+min_lr: 6e-05
+n_embd: 16
+n_head: 2
+n_hidden_divisor: 1
+n_layer: 2
+n_layer_divisor: 1
+num_train_shards: 1
+out_dir: out_resume
+rotary_base: 10000.0
+rotary_max_position_embeddings: 2048
+use_rotary_embeddings: False
+vocab_lora_rank_divisor: 0
+wandb_log: False
+wandb_project: owt
+wandb_run_name: gpt2
+warmup_iters: 10
+warmup_iters_multiplier: 1.0
+weight_decay: 0.1
+----------------------------------------
+[2025-07-21 11:27:40] step 0: train loss 4.1732, val loss 4.1720
+[2025-07-21 11:27:40] step 10: train loss 3.8767, val loss 3.8371
+[2025-07-21 11:27:41] step 20: train loss 3.4285, val loss 3.4406
+[2025-07-21 11:27:41] step 30: train loss 3.3843, val loss 3.3827
+[2025-07-21 11:27:41] step 40: train loss 3.3693, val loss 3.3691
+[2025-07-21 11:27:41] step 50: train loss 3.2230, val loss 3.2813
+[2025-07-21 11:27:41] step 60: train loss 3.1936, val loss 3.1143
+[2025-07-21 11:27:41] step 70: train loss 3.1215, val loss 3.1672
+[2025-07-21 11:27:41] step 80: train loss 3.1294, val loss 3.1550
+[2025-07-21 11:27:41] step 90: train loss 3.2015, val loss 3.1154
+[2025-07-21 11:27:41] step 100: train loss 2.9804, val loss 3.1661
+[2025-07-21 11:27:41] step 110: train loss 3.0785, val loss 3.0399
+[2025-07-21 11:27:41] step 120: train loss 2.9687, val loss 2.9150
+[2025-07-21 11:27:41] step 130: train loss 2.8501, val loss 2.9330
+[2025-07-21 11:27:42] step 140: train loss 2.9607, val loss 2.9781
+[2025-07-21 11:27:42] step 150: train loss 2.8998, val loss 2.9047
+[2025-07-21 11:27:42] step 160: train loss 2.8425, val loss 2.9994
+[2025-07-21 11:27:42] step 170: train loss 2.8779, val loss 2.8924
+[2025-07-21 11:27:42] step 180: train loss 2.8579, val loss 2.8701
+[2025-07-21 11:27:42] step 190: train loss 2.8893, val loss 2.8472
+[2025-07-21 11:27:42] step 200: train loss 2.7819, val loss 2.8025
+[2025-07-21 11:27:42] step 210: train loss 2.9246, val loss 2.9202
+[2025-07-21 11:27:42] step 220: train loss 2.9208, val loss 2.7950
+[2025-07-21 11:27:42] step 230: train loss 2.8204, val loss 2.8132
+[2025-07-21 11:27:42] step 240: train loss 2.7430, val loss 2.8153
+[2025-07-21 11:27:42] step 250: train loss 2.7468, val loss 2.7455
+[2025-07-21 11:27:43] step 260: train loss 2.7468, val loss 2.7918
+[2025-07-21 11:27:43] step 270: train loss 2.7192, val loss 2.6879

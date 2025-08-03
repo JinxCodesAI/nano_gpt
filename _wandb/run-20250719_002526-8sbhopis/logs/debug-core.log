@@ -1,0 +1,7 @@
+{"time":"2025-07-19T00:25:26.523578578Z","level":"INFO","msg":"main: starting server","port-filename":"/tmp/tmp17spisab/port-64488.txt","pid":64488,"log-level":0,"disable-analytics":false,"shutdown-on-parent-exit":false,"enable-dcgm-profiling":false}
+{"time":"2025-07-19T00:25:26.524435125Z","level":"INFO","msg":"server: will exit if parent process dies","ppid":64488}
+{"time":"2025-07-19T00:25:26.524404003Z","level":"INFO","msg":"server: accepting connections","addr":{"Name":"/tmp/wandb-64488-64654-241732370/socket","Net":"unix"}}
+{"time":"2025-07-19T00:25:26.700302029Z","level":"INFO","msg":"connection: ManageConnectionData: new connection created","id":"1(@)"}
+{"time":"2025-07-19T00:25:26.709844277Z","level":"INFO","msg":"handleInformInit: received","streamId":"8sbhopis","id":"1(@)"}
+{"time":"2025-07-19T00:25:26.852077177Z","level":"INFO","msg":"handleInformInit: stream started","streamId":"8sbhopis","id":"1(@)"}
+{"time":"2025-07-19T00:34:50.9475101Z","level":"INFO","msg":"server: parent process exited, terminating service process"}

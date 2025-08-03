@@ -1,0 +1,111 @@
+step 0: train loss 10.9378, val loss 10.9071
+iter 0: loss 10.9439, lr 0.00000, time 8338.78ms, mfu -100.00%
+iter 10: loss 9.7046, lr 0.00003, time 1455.98ms, mfu 19.87%
+iter 20: loss 8.9971, lr 0.00006, time 1460.60ms, mfu 19.87%
+iter 30: loss 8.6778, lr 0.00009, time 1455.24ms, mfu 19.87%
+step 40: train loss 7.6502, val loss 8.0471
+saving checkpoint to out
+iter 40: loss 7.5501, lr 0.00012, time 7695.97ms, mfu 18.26%
+iter 50: loss 7.1505, lr 0.00015, time 1440.56ms, mfu 18.44%
+iter 60: loss 7.2341, lr 0.00018, time 1446.58ms, mfu 18.60%
+iter 70: loss 6.9045, lr 0.00021, time 1451.25ms, mfu 18.73%
+step 80: train loss 6.9192, val loss 6.7896
+saving checkpoint to out
+
+=== SCALING OPERATION TRIGGERED (DDP SYNC) ===
+Operation: change_lr
+Trigger reason: Loss threshold
+Current val loss: 6.7896, Trigger loss: 7.2000
+Iterations since last op: 80, Max wait: 200
+Executing operation: change_lr with value: 0.3
+LR multiplier: 10.0000 -> 3.0000
+=== SCALING OPERATION COMPLETE ===
+
+
+=== SCALING OPERATION TRIGGERED (DDP SYNC) ===
+Operation: change_eval_interval
+Trigger reason: Loss threshold
+Current val loss: 6.7896, Trigger loss: 7.1000
+Iterations since last op: 0, Max wait: 500
+Executing operation: change_eval_interval with value: 2.5
+Eval interval multiplier: 0.0400 -> 0.1000 current interval: 100.0
+=== SCALING OPERATION COMPLETE ===
+
+
+=== SCALING OPERATION TRIGGERED (DDP SYNC) ===
+Operation: change_eval_iters
+Trigger reason: Loss threshold
+Current val loss: 6.7896, Trigger loss: 6.9000
+Iterations since last op: 0, Max wait: 500
+Executing operation: change_eval_iters with value: 2.5
+Eval iters multiplier: 0.0500 -> 0.1250  current evals: 25.0
+=== SCALING OPERATION COMPLETE ===
+
+iter 80: loss 6.5934, lr 0.00024, time 7499.20ms, mfu 17.24%
+iter 90: loss 6.3348, lr 0.00008, time 1455.66ms, mfu 17.51%
+step 100: train loss 6.8388, val loss 6.8316
+saving checkpoint to out
+iter 100: loss 6.9821, lr 0.00009, time 7219.45ms, mfu 16.16%
+iter 110: loss 6.7551, lr 0.00010, time 1455.16ms, mfu 16.53%
+iter 120: loss 7.6015, lr 0.00011, time 1455.26ms, mfu 16.87%
+iter 130: loss 8.1774, lr 0.00012, time 1454.85ms, mfu 17.17%
+iter 140: loss 7.4130, lr 0.00013, time 1449.45ms, mfu 17.45%
+iter 150: loss 6.5046, lr 0.00014, time 1450.38ms, mfu 17.70%
+iter 160: loss 6.2205, lr 0.00014, time 1449.37ms, mfu 17.92%
+iter 170: loss 6.5385, lr 0.00015, time 1447.82ms, mfu 18.13%
+iter 180: loss 6.3089, lr 0.00016, time 1451.35ms, mfu 18.31%
+iter 190: loss 5.8675, lr 0.00017, time 1455.71ms, mfu 18.47%
+step 200: train loss 6.3350, val loss 6.2078
+saving checkpoint to out
+iter 200: loss 5.9743, lr 0.00018, time 7550.47ms, mfu 17.00%
+iter 210: loss 5.6910, lr 0.00019, time 1454.34ms, mfu 17.29%
+iter 220: loss 4.9507, lr 0.00020, time 1455.98ms, mfu 17.55%
+iter 230: loss 6.7289, lr 0.00021, time 1452.68ms, mfu 17.79%
+iter 240: loss 5.6529, lr 0.00022, time 1454.17ms, mfu 18.00%
+iter 250: loss 6.1072, lr 0.00023, time 1449.74ms, mfu 18.19%
+iter 260: loss 5.7421, lr 0.00023, time 1447.72ms, mfu 18.37%
+iter 270: loss 6.4409, lr 0.00024, time 1451.50ms, mfu 18.53%
+Traceback (most recent call last):
+  File "/teamspace/studios/this_studio/nanoGPT/train.py", line 440, in <module>
+    scaler.scale(loss).backward()
+  File "/home/zeus/miniconda3/envs/cloudspace/lib/python3.10/site-packages/torch/_tensor.py", line 648, in backward
+    torch.autograd.backward(
+  File "/home/zeus/miniconda3/envs/cloudspace/lib/python3.10/site-packages/torch/autograd/__init__.py", line 353, in backward
+    _engine_run_backward(
+  File "/home/zeus/miniconda3/envs/cloudspace/lib/python3.10/site-packages/torch/autograd/graph.py", line 824, in _engine_run_backward
+    return Variable._execution_engine.run_backward(  # Calls into the C++ engine to run the backward pass
+KeyboardInterrupt
+Traceback (most recent call last):
+  File "/teamspace/studios/this_studio/nanoGPT/train.py", line 440, in <module>
+    scaler.scale(loss).backward()
+  File "/home/zeus/miniconda3/envs/cloudspace/lib/python3.10/site-packages/torch/_tensor.py", line 648, in backward
+    torch.autograd.backward(
+  File "/home/zeus/miniconda3/envs/cloudspace/lib/python3.10/site-packages/torch/autograd/__init__.py", line 353, in backward
+    _engine_run_backward(
+  File "/home/zeus/miniconda3/envs/cloudspace/lib/python3.10/site-packages/torch/autograd/graph.py", line 824, in _engine_run_backward
+    return Variable._execution_engine.run_backward(  # Calls into the C++ engine to run the backward pass
+KeyboardInterrupt
+Exception ignored in atexit callback: <function _start_and_connect_service.<locals>.teardown_atexit at 0x7ca56cf18040>
+Traceback (most recent call last):
+  File "/home/zeus/miniconda3/envs/cloudspace/lib/python3.10/site-packages/wandb/sdk/lib/service/service_connection.py", line 54, in teardown_atexit
+    conn.teardown(hooks.exit_code)
+  File "/home/zeus/miniconda3/envs/cloudspace/lib/python3.10/site-packages/wandb/sdk/lib/service/service_connection.py", line 182, in teardown
+    self._router.join()
+  File "/home/zeus/miniconda3/envs/cloudspace/lib/python3.10/site-packages/wandb/sdk/interface/router.py", line 75, in join
+    self._thread.join()
+  File "/home/zeus/miniconda3/envs/cloudspace/lib/python3.10/threading.py", line 1096, in join
+    self._wait_for_tstate_lock()
+  File "/home/zeus/miniconda3/envs/cloudspace/lib/python3.10/threading.py", line 1116, in _wait_for_tstate_lock
+    if lock.acquire(block, timeout):
+KeyboardInterrupt:
+Exception ignored in atexit callback: <function shutdown_compile_workers at 0x7ca576f4b370>
+Traceback (most recent call last):
+  File "/home/zeus/miniconda3/envs/cloudspace/lib/python3.10/site-packages/torch/_inductor/async_compile.py", line 113, in shutdown_compile_workers
+    pool.shutdown()
+  File "/home/zeus/miniconda3/envs/cloudspace/lib/python3.10/site-packages/torch/_inductor/compile_worker/subproc_pool.py", line 239, in shutdown
+    self.process.wait(300)
+  File "/home/zeus/miniconda3/envs/cloudspace/lib/python3.10/subprocess.py", line 1209, in wait
+    return self._wait(timeout=timeout)
+  File "/home/zeus/miniconda3/envs/cloudspace/lib/python3.10/subprocess.py", line 1937, in _wait
+    time.sleep(delay)
+KeyboardInterrupt:

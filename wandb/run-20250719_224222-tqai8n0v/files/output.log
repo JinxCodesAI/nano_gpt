@@ -1,0 +1,283 @@
+
+Detailed parameter count:
+  total                  | Total:   52,149,504 | Trainable:    8,207,616
+  token_embeddings       | Total:    2,451,456 | Trainable:    2,451,456
+  position_embeddings    | Total:            0 | Trainable:            0
+  attention_layers       | Total:    7,520,256 | Trainable:    2,211,840
+  feed_forward_layers    | Total:    3,538,944 | Trainable:    3,538,944
+  layer_norms            | Total:        4,608 | Trainable:        4,608
+  final_layer_norm       | Total:          768 | Trainable:          768
+  language_model_head    | Total:   38,633,472 | Trainable:            0
+------------------------------------------------------------
+W0719 22:42:27.542000 174552 /system/conda/miniconda3/envs/cloudspace/lib/python3.10/site-packages/torch/_inductor/utils.py:1250] [0/0] Not enough SMs to use max_autotune_gemm mode
+step 0: train loss 10.9691, val loss 10.9694
+iter 0: loss 10.9620, lr 0.00000, time 23992.32ms, mfu -100.00%
+iter 10: loss 10.1246, lr 0.00003, time 553.36ms, mfu 33.40%
+iter 20: loss 9.6496, lr 0.00006, time 541.28ms, mfu 33.47%
+iter 30: loss 9.6153, lr 0.00009, time 552.24ms, mfu 33.47%
+iter 40: loss 9.4705, lr 0.00012, time 560.73ms, mfu 33.42%
+iter 50: loss 9.3688, lr 0.00015, time 564.13ms, mfu 33.35%
+iter 60: loss 9.2583, lr 0.00018, time 560.40ms, mfu 33.32%
+iter 70: loss 9.1441, lr 0.00021, time 568.69ms, mfu 33.23%
+iter 80: loss 9.1755, lr 0.00024, time 578.11ms, mfu 33.11%
+iter 90: loss 9.0915, lr 0.00027, time 580.45ms, mfu 32.98%
+step 100: train loss 8.9892, val loss 8.9996
+saving checkpoint to out
+
+=== SCALING OPERATION TRIGGERED (DDP SYNC) ===
+Operation: decrease_attn_lora_scaling
+Trigger reason: Loss threshold
+Current val loss: 8.9996, Trigger loss: 9.0000
+Iterations since last op: 100, Max wait: 300
+Executing operation: decrease_attn_lora_scaling with value: 0.5
+Performing architectural operation: decrease_attn_lora_scaling
+Resizing attention LoRA rank to 24.
+
+Detailed parameter count:
+  total                  | Total:   51,928,320 | Trainable:    7,986,432
+  token_embeddings       | Total:    2,451,456 | Trainable:    2,451,456
+  position_embeddings    | Total:            0 | Trainable:            0
+  attention_layers       | Total:    7,299,072 | Trainable:    1,990,656
+  feed_forward_layers    | Total:    3,538,944 | Trainable:    3,538,944
+  layer_norms            | Total:        4,608 | Trainable:        4,608
+  final_layer_norm       | Total:          768 | Trainable:          768
+  language_model_head    | Total:   38,633,472 | Trainable:            0
+------------------------------------------------------------
+Re-configuring optimizer after architectural change...
+num decayed parameter tensors: 17, with 7,981,056 parameters
+num non-decayed parameter tensors: 7, with 5,376 parameters
+using fused AdamW: True
+Transferring optimizer state for existing parameters...
+Transferred optimizer state for 0 / 28 parameters
+Re-compiling the model...
+Architectural operation completed successfully.
+Re-evaluating validation loss after operation...
+New val loss after operation: 8.9787
+iter 100: loss 8.9736, lr 0.00030, time 22518.95ms, mfu 29.76%
+iter 110: loss 9.1134, lr 0.00033, time 579.21ms, mfu 29.97%
+iter 120: loss 8.9132, lr 0.00036, time 594.32ms, mfu 30.07%
+iter 130: loss 8.8597, lr 0.00039, time 591.29ms, mfu 30.17%
+iter 140: loss 8.8598, lr 0.00042, time 587.11ms, mfu 30.29%
+iter 150: loss 8.7843, lr 0.00045, time 582.93ms, mfu 30.42%
+iter 160: loss 8.8029, lr 0.00048, time 577.86ms, mfu 30.56%
+iter 170: loss 8.7342, lr 0.00051, time 580.89ms, mfu 30.68%
+iter 180: loss 8.7085, lr 0.00054, time 576.30ms, mfu 30.80%
+iter 190: loss 8.7244, lr 0.00057, time 580.26ms, mfu 30.90%
+step 200: train loss 8.7150, val loss 8.7026
+saving checkpoint to out
+
+=== SCALING OPERATION TRIGGERED (DDP SYNC) ===
+Operation: decrease_vocab_lora_scaling
+Trigger reason: Loss threshold
+Current val loss: 8.7026, Trigger loss: 100.0000
+Iterations since last op: 100, Max wait: 1
+Executing operation: decrease_vocab_lora_scaling with value: 0.5
+Performing architectural operation: decrease_vocab_lora_scaling
+Resizing embedding LoRA rank to 24.
+
+Detailed parameter count:
+  total                  | Total:   50,702,592 | Trainable:    6,760,704
+  token_embeddings       | Total:    1,225,728 | Trainable:    1,225,728
+  position_embeddings    | Total:            0 | Trainable:            0
+  attention_layers       | Total:    7,299,072 | Trainable:    1,990,656
+  feed_forward_layers    | Total:    3,538,944 | Trainable:    3,538,944
+  layer_norms            | Total:        4,608 | Trainable:        4,608
+  final_layer_norm       | Total:          768 | Trainable:          768
+  language_model_head    | Total:   38,633,472 | Trainable:            0
+------------------------------------------------------------
+Re-configuring optimizer after architectural change...
+num decayed parameter tensors: 17, with 6,755,328 parameters
+num non-decayed parameter tensors: 7, with 5,376 parameters
+using fused AdamW: True
+Transferring optimizer state for existing parameters...
+Transferred optimizer state for 0 / 28 parameters
+Re-compiling the model...
+Architectural operation completed successfully.
+Re-evaluating validation loss after operation...
+New val loss after operation: 8.6746
+iter 200: loss 8.6827, lr 0.00060, time 23528.32ms, mfu 27.88%
+iter 210: loss 8.6618, lr 0.00060, time 566.98ms, mfu 28.27%
+iter 220: loss 8.7341, lr 0.00060, time 595.38ms, mfu 28.47%
+iter 230: loss 8.6472, lr 0.00060, time 582.33ms, mfu 28.71%
+iter 240: loss 8.4477, lr 0.00060, time 589.05ms, mfu 28.90%
+iter 250: loss 8.5893, lr 0.00060, time 596.61ms, mfu 29.03%
+iter 260: loss 8.5948, lr 0.00060, time 588.33ms, mfu 29.19%
+iter 270: loss 8.5953, lr 0.00060, time 591.60ms, mfu 29.31%
+iter 280: loss 8.5710, lr 0.00060, time 584.91ms, mfu 29.46%
+iter 290: loss 8.5179, lr 0.00060, time 580.27ms, mfu 29.62%
+step 300: train loss 8.5314, val loss 8.5517
+saving checkpoint to out
+
+=== SCALING OPERATION TRIGGERED (DDP SYNC) ===
+Operation: change_warmup_iters
+Trigger reason: Loss threshold
+Current val loss: 8.5517, Trigger loss: 100.0000
+Iterations since last op: 100, Max wait: 1
+Executing operation: change_warmup_iters with value: 1.5
+Warmup iters multiplier: 1.0000 -> 1.5000
+=== SCALING OPERATION COMPLETE ===
+
+
+=== SCALING OPERATION TRIGGERED (DDP SYNC) ===
+Operation: reset_lr_schedule
+Trigger reason: Loss threshold
+Current val loss: 8.5517, Trigger loss: 100.0000
+Iterations since last op: 0, Max wait: 1
+Executing operation: reset_lr_schedule with value: None
+LR schedule offset: 0 -> 300
+=== SCALING OPERATION COMPLETE ===
+
+iter 300: loss 8.5145, lr 0.00060, time 4964.23ms, mfu 27.02%
+iter 310: loss 8.5221, lr 0.00002, time 576.84ms, mfu 27.44%
+iter 320: loss 8.5048, lr 0.00004, time 573.06ms, mfu 27.84%
+iter 330: loss 8.6108, lr 0.00006, time 576.42ms, mfu 28.18%
+iter 340: loss 8.5867, lr 0.00008, time 574.07ms, mfu 28.50%
+iter 350: loss 8.5727, lr 0.00010, time 577.65ms, mfu 28.77%
+iter 360: loss 8.4214, lr 0.00012, time 575.79ms, mfu 29.02%
+iter 370: loss 8.4510, lr 0.00014, time 577.87ms, mfu 29.23%
+iter 380: loss 8.5564, lr 0.00016, time 578.01ms, mfu 29.43%
+iter 390: loss 8.5210, lr 0.00018, time 579.51ms, mfu 29.59%
+step 400: train loss 8.4215, val loss 8.4421
+saving checkpoint to out
+
+=== SCALING OPERATION TRIGGERED (DDP SYNC) ===
+Operation: stack_layers
+Trigger reason: Loss threshold
+Current val loss: 8.4421, Trigger loss: 8.5000
+Iterations since last op: 100, Max wait: 1000
+Executing operation: stack_layers with value: 2
+Performing architectural operation: stack_layers
+Stacking layers: current depth 3, creating 6 total layers.
+Model now has 6 layers.
+
+Detailed parameter count:
+  total                  | Total:   61,545,216 | Trainable:   12,294,912
+  token_embeddings       | Total:    1,225,728 | Trainable:    1,225,728
+  position_embeddings    | Total:            0 | Trainable:            0
+  attention_layers       | Total:   14,598,144 | Trainable:    3,981,312
+  feed_forward_layers    | Total:    7,077,888 | Trainable:    7,077,888
+  layer_norms            | Total:        9,216 | Trainable:        9,216
+  final_layer_norm       | Total:          768 | Trainable:          768
+  language_model_head    | Total:   38,633,472 | Trainable:            0
+------------------------------------------------------------
+Re-configuring optimizer after architectural change...
+num decayed parameter tensors: 32, with 12,284,928 parameters
+num non-decayed parameter tensors: 13, with 9,984 parameters
+using fused AdamW: True
+Transferring optimizer state for existing parameters...
+Transferred optimizer state for 0 / 52 parameters
+Re-compiling the model...
+Architectural operation completed successfully.
+Re-evaluating validation loss after operation...
+New val loss after operation: 8.7596
+iter 400: loss 8.7590, lr 0.00020, time 27047.60ms, mfu 26.72%
+iter 410: loss 8.4585, lr 0.00022, time 794.55ms, mfu 26.95%
+iter 420: loss 8.4739, lr 0.00024, time 817.02ms, mfu 27.08%
+Traceback (most recent call last):
+  File "/teamspace/studios/this_studio/nanoGPT/train.py", line 632, in <module>
+    logits, loss = model(X, Y)
+  File "/home/zeus/miniconda3/envs/cloudspace/lib/python3.10/site-packages/torch/nn/modules/module.py", line 1751, in _wrapped_call_impl
+    return self._call_impl(*args, **kwargs)
+  File "/home/zeus/miniconda3/envs/cloudspace/lib/python3.10/site-packages/torch/nn/modules/module.py", line 1762, in _call_impl
+    return forward_call(*args, **kwargs)
+  File "/home/zeus/miniconda3/envs/cloudspace/lib/python3.10/site-packages/torch/_dynamo/eval_frame.py", line 655, in _fn
+    return fn(*args, **kwargs)
+  File "/home/zeus/miniconda3/envs/cloudspace/lib/python3.10/site-packages/torch/nn/modules/module.py", line 1751, in _wrapped_call_impl
+    return self._call_impl(*args, **kwargs)
+  File "/home/zeus/miniconda3/envs/cloudspace/lib/python3.10/site-packages/torch/nn/modules/module.py", line 1762, in _call_impl
+    return forward_call(*args, **kwargs)
+  File "/teamspace/studios/this_studio/nanoGPT/model.py", line 420, in forward
+    def forward(self, idx, targets=None):
+  File "/home/zeus/miniconda3/envs/cloudspace/lib/python3.10/site-packages/torch/_dynamo/eval_frame.py", line 838, in _fn
+    return fn(*args, **kwargs)
+  File "/home/zeus/miniconda3/envs/cloudspace/lib/python3.10/site-packages/torch/_functorch/aot_autograd.py", line 1201, in forward
+    return compiled_fn(full_args)
+  File "/home/zeus/miniconda3/envs/cloudspace/lib/python3.10/site-packages/torch/_functorch/_aot_autograd/runtime_wrappers.py", line 315, in runtime_wrapper
+    all_outs = call_func_at_runtime_with_args(
+  File "/home/zeus/miniconda3/envs/cloudspace/lib/python3.10/site-packages/torch/_functorch/_aot_autograd/utils.py", line 126, in call_func_at_runtime_with_args
+    out = normalize_as_list(f(args))
+  File "/home/zeus/miniconda3/envs/cloudspace/lib/python3.10/site-packages/torch/_functorch/_aot_autograd/utils.py", line 100, in g
+    return f(*args)
+  File "/home/zeus/miniconda3/envs/cloudspace/lib/python3.10/site-packages/torch/autograd/function.py", line 575, in apply
+    return super().apply(*args, **kwargs)  # type: ignore[misc]
+  File "/home/zeus/miniconda3/envs/cloudspace/lib/python3.10/site-packages/torch/_functorch/_aot_autograd/runtime_wrappers.py", line 1937, in forward
+    fw_outs = call_func_at_runtime_with_args(
+  File "/home/zeus/miniconda3/envs/cloudspace/lib/python3.10/site-packages/torch/_functorch/_aot_autograd/utils.py", line 126, in call_func_at_runtime_with_args
+    out = normalize_as_list(f(args))
+  File "/home/zeus/miniconda3/envs/cloudspace/lib/python3.10/site-packages/torch/_functorch/_aot_autograd/runtime_wrappers.py", line 495, in wrapper
+    return compiled_fn(runtime_args)
+  File "/home/zeus/miniconda3/envs/cloudspace/lib/python3.10/site-packages/torch/_functorch/_aot_autograd/runtime_wrappers.py", line 689, in inner_fn
+    outs = compiled_fn(args)
+  File "/home/zeus/miniconda3/envs/cloudspace/lib/python3.10/site-packages/torch/_inductor/output_code.py", line 460, in __call__
+    return self.current_callable(inputs)
+  File "/home/zeus/miniconda3/envs/cloudspace/lib/python3.10/site-packages/torch/_inductor/utils.py", line 2404, in run
+    return model(new_inputs)
+  File "/tmp/torchinductor_adamskrodzki/53/c53sp5wzk2ltgqcadszjlel3w2h5bs4lpkwfa3jo74seqpah4tce.py", line 2051, in call
+    extern_kernels.mm(reinterpret_tensor(buf193, (32768, 768), (768, 1), 0), buf192, out=buf194)
+KeyboardInterrupt
+Traceback (most recent call last):
+  File "/teamspace/studios/this_studio/nanoGPT/train.py", line 632, in <module>
+    logits, loss = model(X, Y)
+  File "/home/zeus/miniconda3/envs/cloudspace/lib/python3.10/site-packages/torch/nn/modules/module.py", line 1751, in _wrapped_call_impl
+    return self._call_impl(*args, **kwargs)
+  File "/home/zeus/miniconda3/envs/cloudspace/lib/python3.10/site-packages/torch/nn/modules/module.py", line 1762, in _call_impl
+    return forward_call(*args, **kwargs)
+  File "/home/zeus/miniconda3/envs/cloudspace/lib/python3.10/site-packages/torch/_dynamo/eval_frame.py", line 655, in _fn
+    return fn(*args, **kwargs)
+  File "/home/zeus/miniconda3/envs/cloudspace/lib/python3.10/site-packages/torch/nn/modules/module.py", line 1751, in _wrapped_call_impl
+    return self._call_impl(*args, **kwargs)
+  File "/home/zeus/miniconda3/envs/cloudspace/lib/python3.10/site-packages/torch/nn/modules/module.py", line 1762, in _call_impl
+    return forward_call(*args, **kwargs)
+  File "/teamspace/studios/this_studio/nanoGPT/model.py", line 420, in forward
+    def forward(self, idx, targets=None):
+  File "/home/zeus/miniconda3/envs/cloudspace/lib/python3.10/site-packages/torch/_dynamo/eval_frame.py", line 838, in _fn
+    return fn(*args, **kwargs)
+  File "/home/zeus/miniconda3/envs/cloudspace/lib/python3.10/site-packages/torch/_functorch/aot_autograd.py", line 1201, in forward
+    return compiled_fn(full_args)
+  File "/home/zeus/miniconda3/envs/cloudspace/lib/python3.10/site-packages/torch/_functorch/_aot_autograd/runtime_wrappers.py", line 315, in runtime_wrapper
+    all_outs = call_func_at_runtime_with_args(
+  File "/home/zeus/miniconda3/envs/cloudspace/lib/python3.10/site-packages/torch/_functorch/_aot_autograd/utils.py", line 126, in call_func_at_runtime_with_args
+    out = normalize_as_list(f(args))
+  File "/home/zeus/miniconda3/envs/cloudspace/lib/python3.10/site-packages/torch/_functorch/_aot_autograd/utils.py", line 100, in g
+    return f(*args)
+  File "/home/zeus/miniconda3/envs/cloudspace/lib/python3.10/site-packages/torch/autograd/function.py", line 575, in apply
+    return super().apply(*args, **kwargs)  # type: ignore[misc]
+  File "/home/zeus/miniconda3/envs/cloudspace/lib/python3.10/site-packages/torch/_functorch/_aot_autograd/runtime_wrappers.py", line 1937, in forward
+    fw_outs = call_func_at_runtime_with_args(
+  File "/home/zeus/miniconda3/envs/cloudspace/lib/python3.10/site-packages/torch/_functorch/_aot_autograd/utils.py", line 126, in call_func_at_runtime_with_args
+    out = normalize_as_list(f(args))
+  File "/home/zeus/miniconda3/envs/cloudspace/lib/python3.10/site-packages/torch/_functorch/_aot_autograd/runtime_wrappers.py", line 495, in wrapper
+    return compiled_fn(runtime_args)
+  File "/home/zeus/miniconda3/envs/cloudspace/lib/python3.10/site-packages/torch/_functorch/_aot_autograd/runtime_wrappers.py", line 689, in inner_fn
+    outs = compiled_fn(args)
+  File "/home/zeus/miniconda3/envs/cloudspace/lib/python3.10/site-packages/torch/_inductor/output_code.py", line 460, in __call__
+    return self.current_callable(inputs)
+  File "/home/zeus/miniconda3/envs/cloudspace/lib/python3.10/site-packages/torch/_inductor/utils.py", line 2404, in run
+    return model(new_inputs)
+  File "/tmp/torchinductor_adamskrodzki/53/c53sp5wzk2ltgqcadszjlel3w2h5bs4lpkwfa3jo74seqpah4tce.py", line 2051, in call
+    extern_kernels.mm(reinterpret_tensor(buf193, (32768, 768), (768, 1), 0), buf192, out=buf194)
+KeyboardInterrupt
+Exception ignored in atexit callback: <function _start_and_connect_service.<locals>.teardown_atexit at 0x7f7dc7cc4820>
+Traceback (most recent call last):
+  File "/home/zeus/miniconda3/envs/cloudspace/lib/python3.10/site-packages/wandb/sdk/lib/service/service_connection.py", line 54, in teardown_atexit
+    conn.teardown(hooks.exit_code)
+  File "/home/zeus/miniconda3/envs/cloudspace/lib/python3.10/site-packages/wandb/sdk/lib/service/service_connection.py", line 182, in teardown
+    self._router.join()
+  File "/home/zeus/miniconda3/envs/cloudspace/lib/python3.10/site-packages/wandb/sdk/interface/router.py", line 75, in join
+    self._thread.join()
+  File "/home/zeus/miniconda3/envs/cloudspace/lib/python3.10/threading.py", line 1096, in join
+    self._wait_for_tstate_lock()
+  File "/home/zeus/miniconda3/envs/cloudspace/lib/python3.10/threading.py", line 1116, in _wait_for_tstate_lock
+    if lock.acquire(block, timeout):
+KeyboardInterrupt:
+Exception ignored in atexit callback: <function shutdown_compile_workers at 0x7f7de4894550>
+Traceback (most recent call last):
+  File "/home/zeus/miniconda3/envs/cloudspace/lib/python3.10/site-packages/torch/_inductor/async_compile.py", line 113, in shutdown_compile_workers
+    pool.shutdown()
+  File "/home/zeus/miniconda3/envs/cloudspace/lib/python3.10/site-packages/torch/_inductor/compile_worker/subproc_pool.py", line 239, in shutdown
+    self.process.wait(300)
+  File "/home/zeus/miniconda3/envs/cloudspace/lib/python3.10/subprocess.py", line 1209, in wait
+    return self._wait(timeout=timeout)
+  File "/home/zeus/miniconda3/envs/cloudspace/lib/python3.10/subprocess.py", line 1937, in _wait
+    time.sleep(delay)
+KeyboardInterrupt:

@@ -1,0 +1,450 @@
+
+Detailed parameter count:
+  total                  | Total:   52,149,504 | Trainable:    8,207,616
+  token_embeddings       | Total:    2,451,456 | Trainable:    2,451,456
+  position_embeddings    | Total:            0 | Trainable:            0
+  attention_layers       | Total:    7,520,256 | Trainable:    2,211,840
+  feed_forward_layers    | Total:    3,538,944 | Trainable:    3,538,944
+  layer_norms            | Total:        4,608 | Trainable:        4,608
+  final_layer_norm       | Total:          768 | Trainable:          768
+  language_model_head    | Total:   38,633,472 | Trainable:            0
+------------------------------------------------------------
+step 0: train loss 10.9680, val loss 10.9694
+iter 0: loss 10.9694, lr 0.00000, time 6993.09ms, mfu -100.00%
+iter 10: loss 10.0954, lr 0.00003, time 582.63ms, mfu 31.72%
+iter 20: loss 9.6916, lr 0.00006, time 571.86ms, mfu 31.78%
+iter 30: loss 9.6252, lr 0.00009, time 574.95ms, mfu 31.82%
+iter 40: loss 9.4945, lr 0.00012, time 579.54ms, mfu 31.82%
+iter 50: loss 9.3518, lr 0.00015, time 589.90ms, mfu 31.77%
+iter 60: loss 9.2033, lr 0.00018, time 589.23ms, mfu 31.73%
+iter 70: loss 9.1130, lr 0.00021, time 592.20ms, mfu 31.68%
+iter 80: loss 9.0950, lr 0.00024, time 584.55ms, mfu 31.67%
+iter 90: loss 8.9745, lr 0.00027, time 585.24ms, mfu 31.66%
+step 100: train loss 8.9655, val loss 8.9969
+saving checkpoint to out
+
+=== SCALING OPERATION TRIGGERED (DDP SYNC) ===
+Operation: merge_lora_weights
+Trigger reason: Timeout
+Current val loss: 8.9969, Trigger loss: 1.0000
+Iterations since last op: 100, Max wait: 100
+Executing operation: merge_lora_weights with value: None
+Performing architectural operation: merge_lora_weights
+Merging LoRA weights into main weights...
+LoRA weights merged and reset.
+
+Detailed parameter count:
+  total                  | Total:   52,149,504 | Trainable:    8,207,616
+  token_embeddings       | Total:    2,451,456 | Trainable:    2,451,456
+  position_embeddings    | Total:            0 | Trainable:            0
+  attention_layers       | Total:    7,520,256 | Trainable:    2,211,840
+  feed_forward_layers    | Total:    3,538,944 | Trainable:    3,538,944
+  layer_norms            | Total:        4,608 | Trainable:        4,608
+  final_layer_norm       | Total:          768 | Trainable:          768
+  language_model_head    | Total:   38,633,472 | Trainable:            0
+------------------------------------------------------------
+Re-configuring optimizer after architectural change...
+num decayed parameter tensors: 17, with 8,202,240 parameters
+num non-decayed parameter tensors: 7, with 5,376 parameters
+using fused AdamW: True
+Transferring optimizer state for existing parameters...
+Transferred optimizer state for 0 / 28 parameters
+Re-compiling the model...
+Architectural operation completed successfully.
+Re-evaluating validation loss after operation...
+New val loss after operation: 8.9489
+iter 100: loss 8.8877, lr 0.00030, time 7115.17ms, mfu 28.76%
+iter 110: loss 8.9959, lr 0.00033, time 575.90ms, mfu 29.09%
+iter 120: loss 8.9119, lr 0.00036, time 571.60ms, mfu 29.41%
+iter 130: loss 8.9002, lr 0.00039, time 574.20ms, mfu 29.69%
+iter 140: loss 9.0201, lr 0.00042, time 567.71ms, mfu 29.98%
+iter 150: loss 8.7860, lr 0.00045, time 575.97ms, mfu 30.19%
+iter 160: loss 8.6373, lr 0.00048, time 575.05ms, mfu 30.38%
+iter 170: loss 8.7404, lr 0.00051, time 580.11ms, mfu 30.53%
+iter 180: loss 8.7706, lr 0.00054, time 580.17ms, mfu 30.66%
+iter 190: loss 8.6620, lr 0.00057, time 579.99ms, mfu 30.78%
+step 200: train loss 8.6901, val loss 8.6858
+saving checkpoint to out
+
+=== SCALING OPERATION TRIGGERED (DDP SYNC) ===
+Operation: merge_lora_weights
+Trigger reason: Timeout
+Current val loss: 8.6858, Trigger loss: 1.0000
+Iterations since last op: 100, Max wait: 100
+Executing operation: merge_lora_weights with value: None
+Performing architectural operation: merge_lora_weights
+Merging LoRA weights into main weights...
+LoRA weights merged and reset.
+
+Detailed parameter count:
+  total                  | Total:   52,149,504 | Trainable:    8,207,616
+  token_embeddings       | Total:    2,451,456 | Trainable:    2,451,456
+  position_embeddings    | Total:            0 | Trainable:            0
+  attention_layers       | Total:    7,520,256 | Trainable:    2,211,840
+  feed_forward_layers    | Total:    3,538,944 | Trainable:    3,538,944
+  layer_norms            | Total:        4,608 | Trainable:        4,608
+  final_layer_norm       | Total:          768 | Trainable:          768
+  language_model_head    | Total:   38,633,472 | Trainable:            0
+------------------------------------------------------------
+Re-configuring optimizer after architectural change...
+num decayed parameter tensors: 17, with 8,202,240 parameters
+num non-decayed parameter tensors: 7, with 5,376 parameters
+using fused AdamW: True
+Transferring optimizer state for existing parameters...
+Transferred optimizer state for 0 / 28 parameters
+Re-compiling the model...
+Architectural operation completed successfully.
+Re-evaluating validation loss after operation...
+New val loss after operation: 8.6774
+iter 200: loss 8.6920, lr 0.00060, time 7148.38ms, mfu 27.96%
+iter 210: loss 8.9344, lr 0.00060, time 583.66ms, mfu 28.33%
+iter 220: loss 8.7886, lr 0.00060, time 581.15ms, mfu 28.68%
+iter 230: loss 8.5783, lr 0.00060, time 580.74ms, mfu 28.99%
+iter 240: loss 8.6379, lr 0.00060, time 584.06ms, mfu 29.26%
+iter 250: loss 8.6563, lr 0.00060, time 580.02ms, mfu 29.52%
+iter 260: loss 8.6675, lr 0.00060, time 581.10ms, mfu 29.75%
+iter 270: loss 8.5815, lr 0.00060, time 584.67ms, mfu 29.93%
+iter 280: loss 8.6170, lr 0.00060, time 581.07ms, mfu 30.12%
+iter 290: loss 8.5349, lr 0.00060, time 580.29ms, mfu 30.29%
+step 300: train loss 8.5432, val loss 8.5355
+saving checkpoint to out
+
+=== SCALING OPERATION TRIGGERED (DDP SYNC) ===
+Operation: merge_lora_weights
+Trigger reason: Timeout
+Current val loss: 8.5355, Trigger loss: 1.0000
+Iterations since last op: 100, Max wait: 100
+Executing operation: merge_lora_weights with value: None
+Performing architectural operation: merge_lora_weights
+Merging LoRA weights into main weights...
+LoRA weights merged and reset.
+
+Detailed parameter count:
+  total                  | Total:   52,149,504 | Trainable:    8,207,616
+  token_embeddings       | Total:    2,451,456 | Trainable:    2,451,456
+  position_embeddings    | Total:            0 | Trainable:            0
+  attention_layers       | Total:    7,520,256 | Trainable:    2,211,840
+  feed_forward_layers    | Total:    3,538,944 | Trainable:    3,538,944
+  layer_norms            | Total:        4,608 | Trainable:        4,608
+  final_layer_norm       | Total:          768 | Trainable:          768
+  language_model_head    | Total:   38,633,472 | Trainable:            0
+------------------------------------------------------------
+Re-configuring optimizer after architectural change...
+num decayed parameter tensors: 17, with 8,202,240 parameters
+num non-decayed parameter tensors: 7, with 5,376 parameters
+using fused AdamW: True
+Transferring optimizer state for existing parameters...
+Transferred optimizer state for 0 / 28 parameters
+Re-compiling the model...
+Architectural operation completed successfully.
+Re-evaluating validation loss after operation...
+New val loss after operation: 8.5563
+iter 300: loss 8.6043, lr 0.00060, time 7299.62ms, mfu 27.52%
+iter 310: loss 8.4517, lr 0.00060, time 581.75ms, mfu 27.94%
+iter 320: loss 8.4971, lr 0.00060, time 581.85ms, mfu 28.32%
+iter 330: loss 8.6291, lr 0.00060, time 579.48ms, mfu 28.68%
+iter 340: loss 8.5103, lr 0.00060, time 576.04ms, mfu 29.02%
+iter 350: loss 8.4822, lr 0.00060, time 582.96ms, mfu 29.29%
+iter 360: loss 8.5300, lr 0.00060, time 585.61ms, mfu 29.52%
+iter 370: loss 8.4571, lr 0.00060, time 582.56ms, mfu 29.74%
+iter 380: loss 8.3775, lr 0.00060, time 584.24ms, mfu 29.93%
+iter 390: loss 8.5246, lr 0.00060, time 584.33ms, mfu 30.10%
+step 400: train loss 8.4723, val loss 8.4680
+saving checkpoint to out
+
+=== SCALING OPERATION TRIGGERED (DDP SYNC) ===
+Operation: stack_layers
+Trigger reason: Loss threshold
+Current val loss: 8.4680, Trigger loss: 100.0000
+Iterations since last op: 100, Max wait: 1
+Executing operation: stack_layers with value: 2
+Performing architectural operation: stack_layers
+Stacking layers: current depth 3, creating 6 total layers.
+Model now has 6 layers.
+
+Detailed parameter count:
+  total                  | Total:   63,213,312 | Trainable:   13,963,008
+  token_embeddings       | Total:    2,451,456 | Trainable:    2,451,456
+  position_embeddings    | Total:            0 | Trainable:            0
+  attention_layers       | Total:   15,040,512 | Trainable:    4,423,680
+  feed_forward_layers    | Total:    7,077,888 | Trainable:    7,077,888
+  layer_norms            | Total:        9,216 | Trainable:        9,216
+  final_layer_norm       | Total:          768 | Trainable:          768
+  language_model_head    | Total:   38,633,472 | Trainable:            0
+------------------------------------------------------------
+Re-configuring optimizer after architectural change...
+num decayed parameter tensors: 32, with 13,953,024 parameters
+num non-decayed parameter tensors: 13, with 9,984 parameters
+using fused AdamW: True
+Transferring optimizer state for existing parameters...
+Transferred optimizer state for 0 / 52 parameters
+Re-compiling the model...
+Architectural operation completed successfully.
+Re-evaluating validation loss after operation...
+W0719 23:04:09.393000 201263 /system/conda/miniconda3/envs/cloudspace/lib/python3.10/site-packages/torch/_inductor/utils.py:1250] [0/2] Not enough SMs to use max_autotune_gemm mode
+New val loss after operation: 8.7259
+iter 400: loss 8.5669, lr 0.00060, time 27779.80ms, mfu 27.17%
+iter 410: loss 8.5730, lr 0.00060, time 788.43ms, mfu 27.45%
+iter 420: loss 8.3766, lr 0.00060, time 799.14ms, mfu 27.66%
+iter 430: loss 8.3364, lr 0.00060, time 816.12ms, mfu 27.79%
+iter 440: loss 8.4515, lr 0.00060, time 821.70ms, mfu 27.88%
+iter 450: loss 8.4591, lr 0.00060, time 816.40ms, mfu 27.98%
+iter 460: loss 8.4348, lr 0.00060, time 804.12ms, mfu 28.12%
+iter 470: loss 8.4868, lr 0.00060, time 795.56ms, mfu 28.28%
+iter 480: loss 8.3255, lr 0.00060, time 797.39ms, mfu 28.41%
+iter 490: loss 8.3572, lr 0.00060, time 785.43ms, mfu 28.58%
+step 500: train loss 8.3358, val loss 8.3614
+saving checkpoint to out
+
+=== SCALING OPERATION TRIGGERED (DDP SYNC) ===
+Operation: change_warmup_iters
+Trigger reason: Loss threshold
+Current val loss: 8.3614, Trigger loss: 100.0000
+Iterations since last op: 100, Max wait: 1
+Executing operation: change_warmup_iters with value: 1.5
+Warmup iters multiplier: 1.0000 -> 1.5000
+=== SCALING OPERATION COMPLETE ===
+
+
+=== SCALING OPERATION TRIGGERED (DDP SYNC) ===
+Operation: reset_lr_schedule
+Trigger reason: Loss threshold
+Current val loss: 8.3614, Trigger loss: 100.0000
+Iterations since last op: 0, Max wait: 1
+Executing operation: reset_lr_schedule with value: None
+LR schedule offset: 0 -> 500
+=== SCALING OPERATION COMPLETE ===
+
+iter 500: loss 8.2922, lr 0.00060, time 5673.74ms, mfu 26.13%
+iter 510: loss 8.4056, lr 0.00002, time 788.50ms, mfu 26.51%
+iter 520: loss 8.4258, lr 0.00004, time 790.64ms, mfu 26.85%
+iter 530: loss 8.4072, lr 0.00006, time 799.24ms, mfu 27.12%
+iter 540: loss 8.3079, lr 0.00008, time 801.27ms, mfu 27.35%
+iter 550: loss 8.4112, lr 0.00010, time 801.08ms, mfu 27.56%
+iter 560: loss 8.2315, lr 0.00012, time 806.99ms, mfu 27.73%
+iter 570: loss 8.2323, lr 0.00014, time 802.81ms, mfu 27.90%
+iter 580: loss 8.3721, lr 0.00016, time 804.84ms, mfu 28.04%
+iter 590: loss 8.2673, lr 0.00018, time 795.14ms, mfu 28.21%
+step 600: train loss 8.2877, val loss 8.3241
+saving checkpoint to out
+
+=== SCALING OPERATION TRIGGERED (DDP SYNC) ===
+Operation: merge_lora_weights
+Trigger reason: Timeout
+Current val loss: 8.3241, Trigger loss: 1.0000
+Iterations since last op: 100, Max wait: 100
+Executing operation: merge_lora_weights with value: None
+Performing architectural operation: merge_lora_weights
+Merging LoRA weights into main weights...
+LoRA weights merged and reset.
+
+Detailed parameter count:
+  total                  | Total:   63,213,312 | Trainable:   13,963,008
+  token_embeddings       | Total:    2,451,456 | Trainable:    2,451,456
+  position_embeddings    | Total:            0 | Trainable:            0
+  attention_layers       | Total:   15,040,512 | Trainable:    4,423,680
+  feed_forward_layers    | Total:    7,077,888 | Trainable:    7,077,888
+  layer_norms            | Total:        9,216 | Trainable:        9,216
+  final_layer_norm       | Total:          768 | Trainable:          768
+  language_model_head    | Total:   38,633,472 | Trainable:            0
+------------------------------------------------------------
+Re-configuring optimizer after architectural change...
+num decayed parameter tensors: 32, with 13,953,024 parameters
+num non-decayed parameter tensors: 13, with 9,984 parameters
+using fused AdamW: True
+Transferring optimizer state for existing parameters...
+Transferred optimizer state for 0 / 52 parameters
+Re-compiling the model...
+Architectural operation completed successfully.
+Re-evaluating validation loss after operation...
+New val loss after operation: 8.2885
+iter 600: loss 8.3134, lr 0.00020, time 8289.18ms, mfu 25.67%
+iter 610: loss 8.3413, lr 0.00022, time 792.80ms, mfu 26.08%
+iter 620: loss 8.3220, lr 0.00024, time 799.47ms, mfu 26.43%
+iter 630: loss 8.3658, lr 0.00026, time 799.05ms, mfu 26.74%
+iter 640: loss 8.2670, lr 0.00028, time 799.28ms, mfu 27.02%
+iter 650: loss 8.1691, lr 0.00030, time 802.74ms, mfu 27.26%
+iter 660: loss 8.1470, lr 0.00032, time 799.66ms, mfu 27.49%
+iter 670: loss 8.1947, lr 0.00034, time 799.71ms, mfu 27.69%
+iter 680: loss 8.1819, lr 0.00036, time 800.85ms, mfu 27.87%
+iter 690: loss 8.1344, lr 0.00038, time 800.46ms, mfu 28.03%
+step 700: train loss 8.2146, val loss 8.2015
+saving checkpoint to out
+
+=== SCALING OPERATION TRIGGERED (DDP SYNC) ===
+Operation: merge_lora_weights
+Trigger reason: Timeout
+Current val loss: 8.2015, Trigger loss: 1.0000
+Iterations since last op: 100, Max wait: 100
+Executing operation: merge_lora_weights with value: None
+Performing architectural operation: merge_lora_weights
+Merging LoRA weights into main weights...
+LoRA weights merged and reset.
+
+Detailed parameter count:
+  total                  | Total:   63,213,312 | Trainable:   13,963,008
+  token_embeddings       | Total:    2,451,456 | Trainable:    2,451,456
+  position_embeddings    | Total:            0 | Trainable:            0
+  attention_layers       | Total:   15,040,512 | Trainable:    4,423,680
+  feed_forward_layers    | Total:    7,077,888 | Trainable:    7,077,888
+  layer_norms            | Total:        9,216 | Trainable:        9,216
+  final_layer_norm       | Total:          768 | Trainable:          768
+  language_model_head    | Total:   38,633,472 | Trainable:            0
+------------------------------------------------------------
+Re-configuring optimizer after architectural change...
+num decayed parameter tensors: 32, with 13,953,024 parameters
+num non-decayed parameter tensors: 13, with 9,984 parameters
+using fused AdamW: True
+Transferring optimizer state for existing parameters...
+Transferred optimizer state for 0 / 52 parameters
+Re-compiling the model...
+Architectural operation completed successfully.
+Re-evaluating validation loss after operation...
+New val loss after operation: 8.1714
+iter 700: loss 8.1748, lr 0.00040, time 8106.01ms, mfu 25.52%
+iter 710: loss 8.2840, lr 0.00042, time 797.29ms, mfu 25.93%
+iter 720: loss 8.1201, lr 0.00044, time 798.47ms, mfu 26.29%
+iter 730: loss 8.1104, lr 0.00046, time 798.70ms, mfu 26.62%
+iter 740: loss 8.0987, lr 0.00048, time 800.35ms, mfu 26.91%
+iter 750: loss 8.1378, lr 0.00050, time 799.63ms, mfu 27.17%
+iter 760: loss 8.0550, lr 0.00052, time 802.20ms, mfu 27.40%
+iter 770: loss 8.1263, lr 0.00054, time 801.22ms, mfu 27.60%
+iter 780: loss 8.1408, lr 0.00056, time 799.61ms, mfu 27.79%
+iter 790: loss 8.1716, lr 0.00058, time 799.23ms, mfu 27.97%
+step 800: train loss 8.0323, val loss 8.0141
+saving checkpoint to out
+
+=== SCALING OPERATION TRIGGERED (DDP SYNC) ===
+Operation: merge_lora_weights
+Trigger reason: Timeout
+Current val loss: 8.0141, Trigger loss: 1.0000
+Iterations since last op: 100, Max wait: 100
+Executing operation: merge_lora_weights with value: None
+Performing architectural operation: merge_lora_weights
+Merging LoRA weights into main weights...
+LoRA weights merged and reset.
+
+Detailed parameter count:
+  total                  | Total:   63,213,312 | Trainable:   13,963,008
+  token_embeddings       | Total:    2,451,456 | Trainable:    2,451,456
+  position_embeddings    | Total:            0 | Trainable:            0
+  attention_layers       | Total:   15,040,512 | Trainable:    4,423,680
+  feed_forward_layers    | Total:    7,077,888 | Trainable:    7,077,888
+  layer_norms            | Total:        9,216 | Trainable:        9,216
+  final_layer_norm       | Total:          768 | Trainable:          768
+  language_model_head    | Total:   38,633,472 | Trainable:            0
+------------------------------------------------------------
+Re-configuring optimizer after architectural change...
+num decayed parameter tensors: 32, with 13,953,024 parameters
+num non-decayed parameter tensors: 13, with 9,984 parameters
+using fused AdamW: True
+Transferring optimizer state for existing parameters...
+Transferred optimizer state for 0 / 52 parameters
+Re-compiling the model...
+Architectural operation completed successfully.
+Re-evaluating validation loss after operation...
+New val loss after operation: 7.9953
+iter 800: loss 8.0615, lr 0.00060, time 8851.35ms, mfu 25.44%
+iter 810: loss 8.0880, lr 0.00060, time 799.56ms, mfu 25.85%
+iter 820: loss 8.2329, lr 0.00060, time 799.00ms, mfu 26.22%
+iter 830: loss 7.9094, lr 0.00060, time 800.53ms, mfu 26.55%
+iter 840: loss 7.9608, lr 0.00060, time 801.41ms, mfu 26.84%
+iter 850: loss 8.0296, lr 0.00060, time 801.58ms, mfu 27.10%
+iter 860: loss 8.0906, lr 0.00060, time 798.79ms, mfu 27.34%
+iter 870: loss 7.9557, lr 0.00060, time 797.74ms, mfu 27.57%
+iter 880: loss 7.8502, lr 0.00060, time 800.33ms, mfu 27.76%
+iter 890: loss 7.8797, lr 0.00060, time 800.76ms, mfu 27.93%
+step 900: train loss 7.9027, val loss 7.8888
+saving checkpoint to out
+
+=== SCALING OPERATION TRIGGERED (DDP SYNC) ===
+Operation: stack_layers
+Trigger reason: Loss threshold
+Current val loss: 7.8888, Trigger loss: 100.0000
+Iterations since last op: 100, Max wait: 1
+Executing operation: stack_layers with value: 2
+Performing architectural operation: stack_layers
+Stacking layers: current depth 6, creating 12 total layers.
+Model now has 12 layers.
+
+Detailed parameter count:
+  total                  | Total:   85,340,928 | Trainable:   25,473,792
+  token_embeddings       | Total:    2,451,456 | Trainable:    2,451,456
+  position_embeddings    | Total:            0 | Trainable:            0
+  attention_layers       | Total:   30,081,024 | Trainable:    8,847,360
+  feed_forward_layers    | Total:   14,155,776 | Trainable:   14,155,776
+  layer_norms            | Total:       18,432 | Trainable:       18,432
+  final_layer_norm       | Total:          768 | Trainable:          768
+  language_model_head    | Total:   38,633,472 | Trainable:            0
+------------------------------------------------------------
+Re-configuring optimizer after architectural change...
+num decayed parameter tensors: 62, with 25,454,592 parameters
+num non-decayed parameter tensors: 25, with 19,200 parameters
+using fused AdamW: True
+Transferring optimizer state for existing parameters...
+Transferred optimizer state for 0 / 100 parameters
+Re-compiling the model...
+Architectural operation completed successfully.
+Re-evaluating validation loss after operation...
+New val loss after operation: 8.0341
+iter 900: loss 8.0822, lr 0.00060, time 44662.92ms, mfu 25.22%
+iter 910: loss 8.0806, lr 0.00060, time 1220.30ms, mfu 25.47%
+iter 920: loss 7.9077, lr 0.00060, time 1259.28ms, mfu 25.61%
+iter 930: loss 7.8793, lr 0.00060, time 1259.22ms, mfu 25.74%
+iter 940: loss 7.8797, lr 0.00060, time 1229.78ms, mfu 25.92%
+iter 950: loss 7.8998, lr 0.00060, time 1217.59ms, mfu 26.11%
+iter 960: loss 7.9742, lr 0.00060, time 1208.04ms, mfu 26.30%
+iter 970: loss 7.7834, lr 0.00060, time 1212.06ms, mfu 26.47%
+iter 980: loss 7.9770, lr 0.00060, time 1217.46ms, mfu 26.60%
+iter 990: loss 7.8730, lr 0.00060, time 1228.32ms, mfu 26.70%
+step 1000: train loss 7.7559, val loss 7.7594
+saving checkpoint to out
+iter 1000: loss 7.8706, lr 0.00060, time 7316.51ms, mfu 24.49%
+iter 1010: loss 7.8674, lr 0.00060, time 1236.36ms, mfu 24.78%
+iter 1020: loss 7.7638, lr 0.00060, time 1235.94ms, mfu 25.04%
+iter 1030: loss 7.8118, lr 0.00060, time 1228.66ms, mfu 25.30%
+iter 1040: loss 7.6706, lr 0.00060, time 1221.68ms, mfu 25.54%
+Traceback (most recent call last):
+  File "/teamspace/studios/this_studio/nanoGPT/train.py", line 635, in <module>
+    scaler.scale(loss).backward()
+  File "/home/zeus/miniconda3/envs/cloudspace/lib/python3.10/site-packages/torch/_tensor.py", line 648, in backward
+    torch.autograd.backward(
+  File "/home/zeus/miniconda3/envs/cloudspace/lib/python3.10/site-packages/torch/autograd/__init__.py", line 353, in backward
+    _engine_run_backward(
+  File "/home/zeus/miniconda3/envs/cloudspace/lib/python3.10/site-packages/torch/autograd/graph.py", line 824, in _engine_run_backward
+    return Variable._execution_engine.run_backward(  # Calls into the C++ engine to run the backward pass
+KeyboardInterrupt
+Traceback (most recent call last):
+  File "/teamspace/studios/this_studio/nanoGPT/train.py", line 635, in <module>
+    scaler.scale(loss).backward()
+  File "/home/zeus/miniconda3/envs/cloudspace/lib/python3.10/site-packages/torch/_tensor.py", line 648, in backward
+    torch.autograd.backward(
+  File "/home/zeus/miniconda3/envs/cloudspace/lib/python3.10/site-packages/torch/autograd/__init__.py", line 353, in backward
+    _engine_run_backward(
+  File "/home/zeus/miniconda3/envs/cloudspace/lib/python3.10/site-packages/torch/autograd/graph.py", line 824, in _engine_run_backward
+    return Variable._execution_engine.run_backward(  # Calls into the C++ engine to run the backward pass
+KeyboardInterrupt
+Exception ignored in atexit callback: <function _start_and_connect_service.<locals>.teardown_atexit at 0x724e0883caf0>
+Traceback (most recent call last):
+  File "/home/zeus/miniconda3/envs/cloudspace/lib/python3.10/site-packages/wandb/sdk/lib/service/service_connection.py", line 54, in teardown_atexit
+    conn.teardown(hooks.exit_code)
+  File "/home/zeus/miniconda3/envs/cloudspace/lib/python3.10/site-packages/wandb/sdk/lib/service/service_connection.py", line 182, in teardown
+    self._router.join()
+  File "/home/zeus/miniconda3/envs/cloudspace/lib/python3.10/site-packages/wandb/sdk/interface/router.py", line 75, in join
+    self._thread.join()
+  File "/home/zeus/miniconda3/envs/cloudspace/lib/python3.10/threading.py", line 1096, in join
+    self._wait_for_tstate_lock()
+  File "/home/zeus/miniconda3/envs/cloudspace/lib/python3.10/threading.py", line 1116, in _wait_for_tstate_lock
+    if lock.acquire(block, timeout):
+KeyboardInterrupt:
+Exception ignored in atexit callback: <function shutdown_compile_workers at 0x724e255a0550>
+Traceback (most recent call last):
+  File "/home/zeus/miniconda3/envs/cloudspace/lib/python3.10/site-packages/torch/_inductor/async_compile.py", line 113, in shutdown_compile_workers
+    pool.shutdown()
+  File "/home/zeus/miniconda3/envs/cloudspace/lib/python3.10/site-packages/torch/_inductor/compile_worker/subproc_pool.py", line 239, in shutdown
+    self.process.wait(300)
+  File "/home/zeus/miniconda3/envs/cloudspace/lib/python3.10/subprocess.py", line 1209, in wait
+    return self._wait(timeout=timeout)
+  File "/home/zeus/miniconda3/envs/cloudspace/lib/python3.10/subprocess.py", line 1937, in _wait
+    time.sleep(delay)
+KeyboardInterrupt:

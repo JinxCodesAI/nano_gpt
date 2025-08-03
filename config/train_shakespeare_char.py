@@ -20,11 +20,11 @@ block_size = 256 # context of up to 256 previous characters
 
 # enhanced data augmentation settings
 # uncomment to experiment with enhanced data to reduce overfitting
-# enhanced_data_probability = 0.1 # 10% enhanced data
-# min_prefix_length = 64 # shorter prefixes for character-level
-# max_prefix_length = 192 # shorter prefixes for character-level  
-# enhanced_generation_temperature = 0.9 # slightly more creative
-# enhanced_buffer_size = 500 # smaller buffer for this small dataset
+enhanced_data_probability = 0.5 # 50% enhanced data
+min_prefix_length = 20 # shorter prefixes for character-level
+max_prefix_length = 230 # shorter prefixes for character-level  
+enhanced_generation_temperature = 0.3 # slightly more creative
+enhanced_buffer_size = 2000 # smaller buffer for this small dataset
 
 # baby GPT model :)
 n_layer = 6

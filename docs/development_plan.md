@@ -53,6 +53,7 @@ For each training batch when `split == 'train'`:
    - Thread-safe rotating buffer for pre-generated enhanced samples
    - Methods: `get_samples(n)`, `add_samples(samples)`, `clear()`, `is_full()`, `size()`
    - Handles buffer overflow by replacing oldest samples
+   - **Sample Reuse**: Samples are reused (sampling with replacement) for efficiency when generation is slower than consumption
 
 2. **`EnhancedSampleGenerator` class**
    - Background generator running in separate thread
@@ -84,6 +85,7 @@ For each training batch when `split == 'train'`:
   - Zero latency for enhanced sample retrieval during training
   - Minimal overhead when `enhanced_data_probability = 0.0` (disabled)
   - Background generation rate adjustable based on consumption
+  - **Sample Reuse**: Graceful handling when generation is slower than consumption by reusing available samples
 - **Thread Safety**: Thread-safe buffer operations for concurrent access
 - **Device Consistency**: Maintains proper device placement for all tensors
 
@@ -94,7 +96,7 @@ For each training batch when `split == 'train'`:
 3. **Empty Batches**: When no enhanced elements are selected
 4. **Model Compilation**: Compatible with PyTorch 2.0 model compilation
 5. **Inference Model Lag**: Handles cases where inference model is behind training model
-6. **Buffer Underflow**: Graceful fallback to natural data when buffer is empty
+6. **Buffer Underflow**: Graceful fallback to natural data when buffer is empty, sample reuse when buffer has fewer samples than requested
 7. **Thread Termination**: Proper cleanup of background generation thread
 8. **Memory Pressure**: Buffer size auto-adjustment based on available memory
 

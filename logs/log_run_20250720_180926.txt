@@ -1,0 +1,66 @@
+================================================================================
+Training run started at 2025-07-20 18:09:26
+================================================================================
+Configuration:
+----------------------------------------
+always_save_checkpoint: False
+attn_lora_rank: 48
+attn_lora_rank_divisor: 16
+backend: nccl
+batch_size: 32
+batch_size_multiplier: 1.0
+beta1: 0.9
+beta2: 0.95
+bias: False
+block_size: 1024
+compile: True
+dataset: fineweb10B
+decay_lr: True
+device: cuda
+dropout: 0.0
+dtype: bfloat16
+embedding_mode: lora
+embedding_rank: 48
+eval_interval: 200
+eval_interval_multiplier: 1.0
+eval_iters: 10
+eval_iters_multiplier: 1.0
+eval_only: False
+file_logging: True
+grad_accum_multiplier: 1.0
+grad_clip: 1.0
+gradient_accumulation_steps: 1
+init_from: resume
+learning_rate: 0.001
+log_dir: logs
+log_interval: 10
+lora_alpha: 1.0
+lora_alpha_multiplier: 1.0
+lr_decay_iters: 600000
+lr_multiplier: 0.5
+max_iters: 600000
+min_lr: 6e-05
+n_embd: 768
+n_head: 12
+n_hidden_divisor: 4
+n_layer: 12
+n_layer_divisor: 4
+out_dir: out
+rotary_base: 10000.0
+rotary_max_position_embeddings: 2048
+use_rotary_embeddings: True
+vocab_lora_rank_divisor: 16
+wandb_log: True
+wandb_project: owt
+wandb_run_name: gpt2
+warmup_iters: 200
+warmup_iters_multiplier: 1.0
+weight_decay: 0.1
+----------------------------------------
+[2025-07-20 18:09:39] step 1800: train loss 7.5807, val loss 7.5327
+[2025-07-20 18:10:43] step 2000: train loss 7.5232, val loss 7.5349
+[2025-07-20 18:11:44] step 2200: train loss 7.4303, val loss 7.4612
+[2025-07-20 18:12:47] step 2400: train loss 7.3983, val loss 7.4042
+[2025-07-20 18:13:49] step 2600: train loss 7.3620, val loss 7.2924
+[2025-07-20 18:14:52] step 2800: train loss 7.3107, val loss 7.2936
+[2025-07-20 18:15:53] step 3000: train loss 7.3040, val loss 7.2712

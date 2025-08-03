@@ -135,6 +135,8 @@ class EnhancedSampleBuffer:
         self.max_size = max_size
         self.buffer = deque(maxlen=max_size)
         self.lock = threading.Lock()
+        self.total_consumed = 0
+        self.total_generated = 0
     
     def get_samples(self, n):
         """Get n random samples from buffer, returns list of (x, y) tensor pairs"""
@@ -142,22 +144,15 @@ class EnhancedSampleBuffer:
             if len(self.buffer) == 0:
                 return []
             
-            # Sample min(n, available) samples without replacement
+            # Sample with replacement to reuse samples if generation is slow
             available = len(self.buffer)
-            n_samples = min(n, available)
+            samples = []
             
-            if n_samples == available:
-                # Take all samples
-                samples = list(self.buffer)
-                self.buffer.clear()
-            else:
-                # Sample randomly without replacement
-                indices = random.sample(range(available), n_samples)
-                samples = [self.buffer[i] for i in sorted(indices, reverse=True)]
-                # Remove sampled items (in reverse order to maintain indices)
-                for i in sorted(indices, reverse=True):
-                    del self.buffer[i]
+            for _ in range(n):
+                idx = random.randint(0, available - 1)
+                samples.append(self.buffer[idx])
             
+            self.total_consumed += n
             return samples
     
     def add_samples(self, samples):
@@ -165,11 +160,15 @@ class EnhancedSampleBuffer:
         with self.lock:
             for sample in samples:
                 self.buffer.append(sample)
+            self.total_generated += len(samples)
     
     def clear(self):
         """Clear all samples from buffer"""
         with self.lock:
             self.buffer.clear()
+            # Reset counters when buffer is cleared (e.g., model update)
+            self.total_consumed = 0
+            self.total_generated = 0
     
     def is_full(self):
         """Check if buffer is at maximum capacity"""
@@ -180,6 +179,11 @@ class EnhancedSampleBuffer:
         """Get current number of samples in buffer"""
         with self.lock:
             return len(self.buffer)
+    
+    def get_consumption_stats(self):
+        """Get generation and consumption statistics"""
+        with self.lock:
+            return self.total_generated, self.total_consumed
 
 class EnhancedSampleGenerator:
     """Background generator for enhanced samples"""
@@ -194,6 +198,13 @@ class EnhancedSampleGenerator:
         self.running = False
         self.thread = None
         self.stop_event = threading.Event()
+        
+        # Adaptive generation timing
+        self.last_generated = 0
+        self.last_consumed = 0
+        self.sleep_time = 0.1  # Start with 100ms
+        self.min_sleep = 0.01  # Minimum 10ms
+        self.max_sleep = 1.0   # Maximum 1s
     
     def start(self):
         """Start background generation thread"""
@@ -219,6 +230,9 @@ class EnhancedSampleGenerator:
         """Update inference model and clear buffer"""
         self.inference_model = new_inference_model
         self.buffer.clear()
+        # Reset counters when model is updated
+        self.last_generated = 0
+        self.last_consumed = 0
     
     def is_running(self):
         """Check if generator is running"""
@@ -226,8 +240,29 @@ class EnhancedSampleGenerator:
     
     def _generation_loop(self):
         """Main generation loop running in background thread"""
+        import time
+        last_log_time = time.time()
+        
         while not self.stop_event.is_set():
             try:
+                # Get current stats
+                current_generated, current_consumed = self.buffer.get_consumption_stats()
+                
+                # Calculate recent activity
+                recent_generated = current_generated - self.last_generated
+                recent_consumed = current_consumed - self.last_consumed
+                
+                # Adjust sleep time based on generation vs consumption balance
+                # Target: generated = 2 * consumed
+                if recent_consumed > 0:
+                    target_generated = 2 * recent_consumed
+                    if recent_generated < target_generated:
+                        # Need to generate more, reduce sleep time
+                        self.sleep_time = max(self.min_sleep, self.sleep_time * 0.8)
+                    elif recent_generated > target_generated * 1.5:
+                        # Generating too much, increase sleep time
+                        self.sleep_time = min(self.max_sleep, self.sleep_time * 1.2)
+                
                 # Only generate if buffer is not full
                 if not self.buffer.is_full():
                     # Generate a batch of enhanced samples
@@ -247,8 +282,20 @@ class EnhancedSampleGenerator:
                     if samples:
                         self.buffer.add_samples(samples)
                 
-                # Sleep briefly to avoid busy waiting
-                self.stop_event.wait(0.1)
+                # Update tracking
+                self.last_generated = current_generated
+                self.last_consumed = current_consumed
+                
+                # Log stats every 10 seconds
+                current_time = time.time()
+                if current_time - last_log_time >= 10.0:
+                    buffer_size = self.buffer.size()
+                    print(f"Enhanced data stats: generated={current_generated}, consumed={current_consumed}, "
+                          f"buffer_size={buffer_size}, sleep_time={self.sleep_time:.3f}s")
+                    last_log_time = current_time
+                
+                # Adaptive sleep
+                self.stop_event.wait(self.sleep_time)
                 
             except Exception as e:
                 print(f"Enhanced sample generation error: {e}")
@@ -350,18 +397,10 @@ def get_batch(split):
             natural_x = [torch.from_numpy((data[i:i+block_size]).astype(np.int64)) for i in ix_natural]
             natural_y = [torch.from_numpy((data[i+1:i+1+block_size]).astype(np.int64)) for i in ix_natural]
         
-        # Get enhanced samples from buffer
+        # Get enhanced samples from buffer (reuse samples if not enough available)
         enhanced_samples = []
         if n_enhanced > 0:
             enhanced_samples = enhanced_sample_buffer.get_samples(n_enhanced)
-            # If not enough enhanced samples available, fill with natural samples
-            if len(enhanced_samples) < n_enhanced:
-                shortage = n_enhanced - len(enhanced_samples)
-                ix_fallback = torch.randint(len(data) - block_size, (shortage,))
-                for i in ix_fallback:
-                    x_fallback = torch.from_numpy((data[i:i+block_size]).astype(np.int64))
-                    y_fallback = torch.from_numpy((data[i+1:i+1+block_size]).astype(np.int64))
-                    enhanced_samples.append((x_fallback, y_fallback))
         
         # Combine natural and enhanced samples according to mask
         x_batch = []
@@ -370,19 +409,12 @@ def get_batch(split):
         enhanced_idx = 0
         
         for i in range(batch_size):
-            if enhanced_mask[i]:
+            if enhanced_mask[i] and enhanced_idx < len(enhanced_samples):
                 # Use enhanced sample
-                if enhanced_idx < len(enhanced_samples):
-                    x_sample, y_sample = enhanced_samples[enhanced_idx]
-                    enhanced_idx += 1
-                else:
-                    # Fallback to natural if enhanced samples exhausted
-                    x_sample = natural_x[natural_idx] if natural_idx < len(natural_x) else torch.from_numpy((data[torch.randint(len(data) - block_size, (1,)).item():torch.randint(len(data) - block_size, (1,)).item()+block_size]).astype(np.int64))
-                    y_sample = natural_y[natural_idx] if natural_idx < len(natural_y) else torch.from_numpy((data[torch.randint(len(data) - block_size, (1,)).item()+1:torch.randint(len(data) - block_size, (1,)).item()+1+block_size]).astype(np.int64))
-                    if natural_idx < len(natural_x):
-                        natural_idx += 1
+                x_sample, y_sample = enhanced_samples[enhanced_idx]
+                enhanced_idx += 1
             else:
-                # Use natural sample
+                # Use natural sample (either mask[i] is False or no enhanced samples available)
                 if natural_idx < len(natural_x):
                     x_sample = natural_x[natural_idx]
                     y_sample = natural_y[natural_idx]

@@ -1,0 +1,59 @@
+================================================================================
+Training run started at 2025-07-21 11:19:18
+================================================================================
+Configuration:
+----------------------------------------
+always_save_checkpoint: True
+attn_lora_rank: 0
+attn_lora_rank_divisor: 0
+backend: nccl
+batch_size: 1
+batch_size_multiplier: 1.0
+beta1: 0.9
+beta2: 0.95
+bias: False
+block_size: 128
+compile: False
+dataset: shakespeare_char
+decay_lr: True
+device: cpu
+dropout: 0.0
+dtype: float16
+embedding_mode: standard
+embedding_rank: 0
+eval_interval: 10
+eval_interval_multiplier: 1.0
+eval_iters: 5
+eval_iters_multiplier: 1.0
+eval_only: False
+file_logging: True
+grad_accum_multiplier: 1.0
+grad_clip: 1.0
+gradient_accumulation_steps: 1
+init_from: scratch
+learning_rate: 0.006
+log_dir: logs
+log_interval: 1
+lora_alpha: 1.0
+lora_alpha_multiplier: 1.0
+lr_decay_iters: 600000
+lr_multiplier: 1.0
+max_iters: 600000
+min_lr: 6e-05
+n_embd: 16
+n_head: 2
+n_hidden_divisor: 1
+n_layer: 2
+n_layer_divisor: 1
+out_dir: out_resume
+rotary_base: 10000.0
+rotary_max_position_embeddings: 2048
+use_rotary_embeddings: False
+vocab_lora_rank_divisor: 0
+wandb_log: False
+wandb_project: owt
+wandb_run_name: gpt2
+warmup_iters: 10
+warmup_iters_multiplier: 1.0
+weight_decay: 0.1
+----------------------------------------

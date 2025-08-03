@@ -1,0 +1,229 @@
+Calculating target architecture based on schedule...
+
+============================================================
+       TARGET MODEL ARCHITECTURE (at end of schedule)
+============================================================
+  n_layer                | 2
+  n_head                 | 12
+  n_embd                 | 768
+  n_hidden               | 1536
+  block_size             | 1024
+  vocab_size             | 50304
+  dropout                | 0.0
+  bias                   | False
+  embedding_mode         | standard
+  attn_lora_rank         | 0
+  embedding_rank         | 0
+  lora_alpha             | 0.0
+============================================================
+
+
+============================================================
+           INITIAL MODEL ARCHITECTURE (at Iter 0)
+============================================================
+  n_layer                | 1
+  n_head                 | 12
+  n_embd                 | 768
+  n_hidden               | 768
+  block_size             | 1024
+  vocab_size             | 50304
+  dropout                | 0.0
+  bias                   | False
+  embedding_mode         | lora
+  attn_lora_rank         | 0
+  embedding_rank         | 0
+  lora_alpha             | 1.0
+============================================================
+
+
+Detailed parameter count:
+  total                  | Total:   42,174,720 | Trainable:   42,174,720
+  token_embeddings       | Total:            0 | Trainable:            0
+  position_embeddings    | Total:            0 | Trainable:            0
+  attention_layers       | Total:    2,359,296 | Trainable:    2,359,296
+  feed_forward_layers    | Total:    1,179,648 | Trainable:    1,179,648
+  layer_norms            | Total:        1,536 | Trainable:        1,536
+  final_layer_norm       | Total:          768 | Trainable:          768
+  language_model_head    | Total:   38,633,472 | Trainable:   38,633,472
+------------------------------------------------------------
+eval every:200
+step 0: train loss 10.9611, val loss 10.9784
+raw_model.config.n_layer=1
+doing something 0
+  MLP Rank Utilization (L0): 71.22% (547/768)
+--- Model Analysis ---
+  Embedding Utilization: 97.53% (749/768)
+  Average Attention Entropy:  5.8917
+----------------------
+merge_lora_weights 10.978447914123535 4.0 200
+iter 0: loss 10.9610, lr 0.00000, time 5966.15ms, mfu -100.00%
+iter 10: loss 10.8705, lr 0.00001, time 540.44ms, mfu 26.31%
+iter 20: loss 10.5916, lr 0.00001, time 539.68ms, mfu 26.31%
+iter 30: loss 10.2879, lr 0.00002, time 540.82ms, mfu 26.31%
+iter 40: loss 9.9421, lr 0.00002, time 544.85ms, mfu 26.29%
+iter 50: loss 9.6289, lr 0.00003, time 545.88ms, mfu 26.26%
+iter 60: loss 9.2624, lr 0.00003, time 546.79ms, mfu 26.24%
+iter 70: loss 8.9531, lr 0.00004, time 537.34ms, mfu 26.26%
+iter 80: loss 8.6826, lr 0.00004, time 545.56ms, mfu 26.24%
+iter 90: loss 8.3305, lr 0.00005, time 538.37ms, mfu 26.25%
+iter 100: loss 8.0729, lr 0.00005, time 538.22ms, mfu 26.27%
+iter 110: loss 7.9162, lr 0.00006, time 535.89ms, mfu 26.30%
+iter 120: loss 7.6346, lr 0.00006, time 536.22ms, mfu 26.32%
+iter 130: loss 7.5861, lr 0.00007, time 533.28ms, mfu 26.35%
+iter 140: loss 7.2709, lr 0.00007, time 531.93ms, mfu 26.39%
+iter 150: loss 7.4198, lr 0.00008, time 532.62ms, mfu 26.42%
+iter 160: loss 7.2407, lr 0.00008, time 535.37ms, mfu 26.43%
+iter 170: loss 7.2064, lr 0.00009, time 535.76ms, mfu 26.44%
+iter 180: loss 7.1554, lr 0.00009, time 535.15ms, mfu 26.46%
+iter 190: loss 7.0334, lr 0.00010, time 537.79ms, mfu 26.45%
+step 200: train loss 7.0902, val loss 7.0772
+raw_model.config.n_layer=1
+doing something 0
+  MLP Rank Utilization (L0): 71.09% (546/768)
+--- Model Analysis ---
+  Embedding Utilization: 97.40% (748/768)
+  Average Attention Entropy:  5.6488
+----------------------
+saving checkpoint to out
+
+=== SCALING OPERATION TRIGGERED (DDP SYNC) ===
+Operation: merge_lora_weights
+Trigger reason: Timeout
+Current val loss: 7.0772, Trigger loss: 4.0000
+Iterations since last op: 200, Max wait: 200
+Executing operation: merge_lora_weights first burn with value: None
+Performing architectural operation: merge_lora_weights
+Merging LoRA weights into main weights...
+LoRA weights merged and reset.
+
+Detailed parameter count:
+  total                  | Total:   42,174,720 | Trainable:   42,174,720
+  token_embeddings       | Total:            0 | Trainable:            0
+  position_embeddings    | Total:            0 | Trainable:            0
+  attention_layers       | Total:    2,359,296 | Trainable:    2,359,296
+  feed_forward_layers    | Total:    1,179,648 | Trainable:    1,179,648
+  layer_norms            | Total:        1,536 | Trainable:        1,536
+  final_layer_norm       | Total:          768 | Trainable:          768
+  language_model_head    | Total:   38,633,472 | Trainable:   38,633,472
+------------------------------------------------------------
+Re-configuring optimizer after architectural change...
+num decayed parameter tensors: 5, with 42,172,416 parameters
+num non-decayed parameter tensors: 3, with 2,304 parameters
+using fused AdamW: True
+Transferring optimizer state for existing parameters...
+Transferred optimizer state for 0 / 8 parameters
+Re-compiling the model...
+
+============================================================
+             ARCHITECTURE CHANGE (at Iter 200)
+============================================================
+  n_layer                | 1
+  n_head                 | 12
+  n_embd                 | 768
+  n_hidden               | 768
+  block_size             | 1024
+  vocab_size             | 50304
+  dropout                | 0.0
+  bias                   | False
+  embedding_mode         | lora
+  attn_lora_rank         | 0
+  embedding_rank         | 0
+  lora_alpha             | 1.0
+============================================================
+
+Architectural operation completed successfully.
+=== SCALING OPERATION COMPLETE ===
+
+merge_lora_weights 7.077219009399414 4.0 200
+iter 200: loss 7.0356, lr 0.00010, time 6493.30ms, mfu 24.03%
+iter 210: loss 6.9377, lr 0.00010, time 531.47ms, mfu 24.30%
+iter 220: loss 6.9639, lr 0.00010, time 540.64ms, mfu 24.50%
+iter 230: loss 6.8319, lr 0.00010, time 540.63ms, mfu 24.68%
+iter 240: loss 6.6805, lr 0.00010, time 540.25ms, mfu 24.84%
+iter 250: loss 6.7903, lr 0.00010, time 549.38ms, mfu 24.95%
+iter 260: loss 6.8939, lr 0.00010, time 547.75ms, mfu 25.05%
+iter 270: loss 6.7215, lr 0.00010, time 550.33ms, mfu 25.13%
+iter 280: loss 6.6553, lr 0.00010, time 549.75ms, mfu 25.20%
+iter 290: loss 6.5664, lr 0.00010, time 549.00ms, mfu 25.27%
+iter 300: loss 6.6477, lr 0.00010, time 548.29ms, mfu 25.33%
+iter 310: loss 6.6325, lr 0.00010, time 547.37ms, mfu 25.40%
+iter 320: loss 6.6329, lr 0.00010, time 545.55ms, mfu 25.46%
+iter 330: loss 6.5381, lr 0.00010, time 545.13ms, mfu 25.53%
+iter 340: loss 6.6446, lr 0.00010, time 544.35ms, mfu 25.59%
+iter 350: loss 6.5889, lr 0.00010, time 547.72ms, mfu 25.62%
+iter 360: loss 6.4732, lr 0.00010, time 545.13ms, mfu 25.67%
+iter 370: loss 6.4451, lr 0.00010, time 546.45ms, mfu 25.70%
+iter 380: loss 6.4828, lr 0.00010, time 544.55ms, mfu 25.74%
+iter 390: loss 6.4652, lr 0.00010, time 544.03ms, mfu 25.78%
+step 400: train loss 6.5273, val loss 6.4048
+raw_model.config.n_layer=1
+doing something 0
+  MLP Rank Utilization (L0): 71.09% (546/768)
+--- Model Analysis ---
+  Embedding Utilization: 97.14% (746/768)
+  Average Attention Entropy:  5.5021
+----------------------
+saving checkpoint to out
+
+=== SCALING OPERATION TRIGGERED (DDP SYNC) ===
+Operation: merge_lora_weights
+Trigger reason: Timeout
+Current val loss: 6.4048, Trigger loss: 4.0000
+Iterations since last op: 200, Max wait: 200
+Executing operation: merge_lora_weights first burn with value: None
+Performing architectural operation: merge_lora_weights
+Merging LoRA weights into main weights...
+LoRA weights merged and reset.
+
+Detailed parameter count:
+  total                  | Total:   42,174,720 | Trainable:   42,174,720
+  token_embeddings       | Total:            0 | Trainable:            0
+  position_embeddings    | Total:            0 | Trainable:            0
+  attention_layers       | Total:    2,359,296 | Trainable:    2,359,296
+  feed_forward_layers    | Total:    1,179,648 | Trainable:    1,179,648
+  layer_norms            | Total:        1,536 | Trainable:        1,536
+  final_layer_norm       | Total:          768 | Trainable:          768
+  language_model_head    | Total:   38,633,472 | Trainable:   38,633,472
+------------------------------------------------------------
+Re-configuring optimizer after architectural change...
+num decayed parameter tensors: 5, with 42,172,416 parameters
+num non-decayed parameter tensors: 3, with 2,304 parameters
+using fused AdamW: True
+Transferring optimizer state for existing parameters...
+Transferred optimizer state for 0 / 8 parameters
+Re-compiling the model...
+
+============================================================
+             ARCHITECTURE CHANGE (at Iter 400)
+============================================================
+  n_layer                | 1
+  n_head                 | 12
+  n_embd                 | 768
+  n_hidden               | 768
+  block_size             | 1024
+  vocab_size             | 50304
+  dropout                | 0.0
+  bias                   | False
+  embedding_mode         | lora
+  attn_lora_rank         | 0
+  embedding_rank         | 0
+  lora_alpha             | 1.0
+============================================================
+
+Architectural operation completed successfully.
+=== SCALING OPERATION COMPLETE ===
+
+merge_lora_weights 6.404755592346191 4.0 200
+iter 400: loss 6.4398, lr 0.00010, time 6447.88ms, mfu 23.42%
+iter 410: loss 6.3730, lr 0.00010, time 540.93ms, mfu 23.71%
+iter 420: loss 6.3058, lr 0.00010, time 547.05ms, mfu 23.94%
+iter 430: loss 6.3431, lr 0.00010, time 549.27ms, mfu 24.13%
+iter 440: loss 6.2756, lr 0.00010, time 552.00ms, mfu 24.29%
+iter 450: loss 6.2931, lr 0.00010, time 551.75ms, mfu 24.44%
+iter 460: loss 6.3532, lr 0.00010, time 553.85ms, mfu 24.56%
+iter 470: loss 6.2968, lr 0.00010, time 552.50ms, mfu 24.68%
+iter 480: loss 6.4498, lr 0.00010, time 548.43ms, mfu 24.81%
+iter 490: loss 6.3272, lr 0.00010, time 552.87ms, mfu 24.90%
+iter 500: loss 6.4463, lr 0.00010, time 550.44ms, mfu 24.99%
+iter 510: loss 6.1805, lr 0.00010, time 550.59ms, mfu 25.07%
+iter 520: loss 6.1671, lr 0.00010, time 547.89ms, mfu 25.16%

@@ -1,0 +1,254 @@
+Calculating target architecture based on schedule...
+
+============================================================
+       TARGET MODEL ARCHITECTURE (at end of schedule)
+============================================================
+  n_layer                | 6
+  n_head                 | 12
+  n_embd                 | 768
+  n_hidden               | 1536
+  block_size             | 1024
+  vocab_size             | 50304
+  dropout                | 0.0
+  bias                   | False
+  embedding_mode         | standard
+  attn_lora_rank         | 0
+  embedding_rank         | 0
+  lora_alpha             | 0.0
+============================================================
+
+
+============================================================
+           INITIAL MODEL ARCHITECTURE (at Iter 0)
+============================================================
+  n_layer                | 3
+  n_head                 | 12
+  n_embd                 | 768
+  n_hidden               | 768
+  block_size             | 1024
+  vocab_size             | 50304
+  dropout                | 0.0
+  bias                   | False
+  embedding_mode         | lora
+  attn_lora_rank         | 48
+  embedding_rank         | 48
+  lora_alpha             | 1.0
+============================================================
+
+
+Detailed parameter count:
+  total                  | Total:   52,149,504 | Trainable:    8,207,616
+  token_embeddings       | Total:    2,451,456 | Trainable:    2,451,456
+  position_embeddings    | Total:            0 | Trainable:            0
+  attention_layers       | Total:    7,520,256 | Trainable:    2,211,840
+  feed_forward_layers    | Total:    3,538,944 | Trainable:    3,538,944
+  layer_norms            | Total:        4,608 | Trainable:        4,608
+  final_layer_norm       | Total:          768 | Trainable:          768
+  language_model_head    | Total:   38,633,472 | Trainable:            0
+------------------------------------------------------------
+eval every:100
+step 300: train loss 8.6336, val loss 8.6095
+  MLP Rank Utilization (L0): 71.09% (546/768)
+Attn LoRA    | 43/48           | 89.58%
+  MLP Rank Utilization (L1): 70.70% (543/768)
+Attn LoRA    | 44/48           | 91.67%
+  MLP Rank Utilization (L2): 70.57% (542/768)
+Attn LoRA    | 45/48           | 93.75%
+--- Model Analysis ---
+  Embedding Utilization (L2): 97.53% (749/768)
+  Average Attention Entropy:  5.8931
+----------------------
+Embed LoRA   | 19/48           | 39.58%
+saving checkpoint to out
+merge_lora_weights 8.609458923339844 6.0 1500
+iter 300: loss 8.5152, lr 0.00200, time 10576.51ms, mfu -100.00%
+iter 310: loss 9.3045, lr 0.00200, time 560.78ms, mfu 32.95%
+iter 320: loss 8.9135, lr 0.00200, time 572.94ms, mfu 32.89%
+iter 330: loss 8.8346, lr 0.00200, time 573.33ms, mfu 32.82%
+iter 340: loss 8.7486, lr 0.00200, time 576.31ms, mfu 32.74%
+iter 350: loss 8.5122, lr 0.00200, time 592.64ms, mfu 32.59%
+iter 360: loss 8.5668, lr 0.00200, time 577.65ms, mfu 32.53%
+iter 370: loss 8.5116, lr 0.00200, time 581.14ms, mfu 32.46%
+iter 380: loss 8.5689, lr 0.00200, time 580.08ms, mfu 32.40%
+iter 390: loss 8.4269, lr 0.00200, time 580.78ms, mfu 32.34%
+step 400: train loss 8.3860, val loss 8.4114
+  MLP Rank Utilization (L0): 69.14% (531/768)
+Attn LoRA    | 1/48            | 2.08%
+  MLP Rank Utilization (L1): 67.06% (515/768)
+Attn LoRA    | 1/48            | 2.08%
+  MLP Rank Utilization (L2): 66.54% (511/768)
+Attn LoRA    | 2/48            | 4.17%
+--- Model Analysis ---
+  Embedding Utilization (L2): 97.53% (749/768)
+  Average Attention Entropy:  5.3177
+----------------------
+Embed LoRA   | 2/48            | 4.17%
+saving checkpoint to out
+merge_lora_weights 8.411397933959961 6.0 1500
+iter 400: loss 8.4094, lr 0.00200, time 5985.52ms, mfu 29.41%
+iter 410: loss 8.2967, lr 0.00200, time 566.71ms, mfu 29.73%
+iter 420: loss 8.2512, lr 0.00200, time 575.29ms, mfu 29.97%
+iter 430: loss 8.2268, lr 0.00200, time 574.42ms, mfu 30.19%
+iter 440: loss 8.1560, lr 0.00200, time 571.87ms, mfu 30.40%
+iter 450: loss 8.1783, lr 0.00200, time 575.28ms, mfu 30.58%
+iter 460: loss 8.2288, lr 0.00200, time 577.48ms, mfu 30.72%
+iter 470: loss 8.0804, lr 0.00200, time 575.63ms, mfu 30.86%
+iter 480: loss 7.9890, lr 0.00200, time 573.96ms, mfu 30.99%
+iter 490: loss 7.9946, lr 0.00200, time 574.63ms, mfu 31.11%
+step 500: train loss 7.9969, val loss 8.0136
+  MLP Rank Utilization (L0): 68.88% (529/768)
+Attn LoRA    | 3/48            | 6.25%
+  MLP Rank Utilization (L1): 63.80% (490/768)
+Attn LoRA    | 2/48            | 4.17%
+  MLP Rank Utilization (L2): 63.15% (485/768)
+Attn LoRA    | 2/48            | 4.17%
+--- Model Analysis ---
+  Embedding Utilization (L2): 97.53% (749/768)
+  Average Attention Entropy:  4.9410
+----------------------
+Embed LoRA   | 2/48            | 4.17%
+saving checkpoint to out
+merge_lora_weights 8.013636589050293 6.0 1500
+iter 500: loss 7.9459, lr 0.00200, time 6006.73ms, mfu 28.31%
+iter 510: loss 7.9363, lr 0.00200, time 561.78ms, mfu 28.76%
+iter 520: loss 8.0167, lr 0.00200, time 577.45ms, mfu 29.09%
+iter 530: loss 7.9238, lr 0.00200, time 580.02ms, mfu 29.37%
+iter 540: loss 7.7714, lr 0.00200, time 579.95ms, mfu 29.62%
+iter 550: loss 7.8995, lr 0.00200, time 580.02ms, mfu 29.84%
+iter 560: loss 7.7938, lr 0.00200, time 580.11ms, mfu 30.04%
+iter 570: loss 7.7366, lr 0.00200, time 578.91ms, mfu 30.23%
+iter 580: loss 7.7901, lr 0.00200, time 578.86ms, mfu 30.40%
+iter 590: loss 7.7677, lr 0.00200, time 578.45ms, mfu 30.55%
+step 600: train loss 7.7532, val loss 7.7863
+  MLP Rank Utilization (L0): 68.88% (529/768)
+Attn LoRA    | 4/48            | 8.33%
+  MLP Rank Utilization (L1): 61.33% (471/768)
+Attn LoRA    | 2/48            | 4.17%
+  MLP Rank Utilization (L2): 60.42% (464/768)
+Attn LoRA    | 2/48            | 4.17%
+--- Model Analysis ---
+  Embedding Utilization (L2): 97.53% (749/768)
+  Average Attention Entropy:  4.6288
+----------------------
+Embed LoRA   | 2/48            | 4.17%
+saving checkpoint to out
+merge_lora_weights 7.786282539367676 6.0 1500
+iter 600: loss 7.7350, lr 0.00200, time 6077.59ms, mfu 27.80%
+iter 610: loss 7.8345, lr 0.00200, time 576.98ms, mfu 28.23%
+iter 620: loss 7.8028, lr 0.00200, time 575.90ms, mfu 28.61%
+iter 630: loss 7.7014, lr 0.00200, time 578.89ms, mfu 28.94%
+iter 640: loss 7.5937, lr 0.00200, time 577.44ms, mfu 29.25%
+iter 650: loss 7.6912, lr 0.00200, time 581.09ms, mfu 29.50%
+iter 660: loss 7.7265, lr 0.00200, time 577.27ms, mfu 29.76%
+iter 670: loss 7.5905, lr 0.00200, time 579.28ms, mfu 29.97%
+iter 680: loss 7.6225, lr 0.00200, time 579.59ms, mfu 30.16%
+iter 690: loss 7.5731, lr 0.00200, time 583.99ms, mfu 30.31%
+step 700: train loss 7.6133, val loss 7.5582
+  MLP Rank Utilization (L0): 68.88% (529/768)
+Attn LoRA    | 4/48            | 8.33%
+  MLP Rank Utilization (L1): 59.77% (459/768)
+Attn LoRA    | 2/48            | 4.17%
+  MLP Rank Utilization (L2): 58.59% (450/768)
+Attn LoRA    | 2/48            | 4.17%
+--- Model Analysis ---
+  Embedding Utilization (L2): 97.53% (749/768)
+  Average Attention Entropy:  4.5427
+----------------------
+Embed LoRA   | 2/48            | 4.17%
+saving checkpoint to out
+merge_lora_weights 7.558201789855957 6.0 1500
+iter 700: loss 7.5612, lr 0.00200, time 6154.12ms, mfu 27.58%
+iter 710: loss 7.4683, lr 0.00200, time 570.55ms, mfu 28.06%
+iter 720: loss 7.5281, lr 0.00200, time 576.62ms, mfu 28.46%
+iter 730: loss 7.5275, lr 0.00200, time 581.21ms, mfu 28.79%
+iter 740: loss 7.4533, lr 0.00200, time 574.86ms, mfu 29.13%
+iter 750: loss 7.5397, lr 0.00200, time 577.58ms, mfu 29.42%
+iter 760: loss 7.5301, lr 0.00200, time 580.35ms, mfu 29.66%
+iter 770: loss 7.4018, lr 0.00200, time 579.56ms, mfu 29.88%
+iter 780: loss 7.4704, lr 0.00200, time 577.90ms, mfu 30.09%
+iter 790: loss 7.5692, lr 0.00200, time 579.09ms, mfu 30.27%
+step 800: train loss 7.4267, val loss 7.4561
+  MLP Rank Utilization (L0): 69.14% (531/768)
+Attn LoRA    | 5/48            | 10.42%
+  MLP Rank Utilization (L1): 58.59% (450/768)
+Attn LoRA    | 2/48            | 4.17%
+  MLP Rank Utilization (L2): 57.29% (440/768)
+Attn LoRA    | 2/48            | 4.17%
+--- Model Analysis ---
+  Embedding Utilization (L2): 97.53% (749/768)
+  Average Attention Entropy:  4.4840
+----------------------
+Embed LoRA   | 3/48            | 6.25%
+saving checkpoint to out
+merge_lora_weights 7.4561357498168945 6.0 1500
+iter 800: loss 7.4538, lr 0.00200, time 6080.36ms, mfu 27.55%
+iter 810: loss 7.3999, lr 0.00200, time 569.58ms, mfu 28.04%
+iter 820: loss 7.4496, lr 0.00200, time 580.77ms, mfu 28.42%
+iter 830: loss 7.3432, lr 0.00200, time 581.12ms, mfu 28.76%
+iter 840: loss 7.4271, lr 0.00200, time 578.70ms, mfu 29.07%
+iter 850: loss 7.3346, lr 0.00200, time 577.29ms, mfu 29.37%
+iter 860: loss 7.3203, lr 0.00200, time 580.04ms, mfu 29.62%
+iter 870: loss 7.3845, lr 0.00200, time 581.55ms, mfu 29.83%
+iter 880: loss 7.5323, lr 0.00200, time 579.14ms, mfu 30.04%
+iter 890: loss 7.5370, lr 0.00200, time 575.64ms, mfu 30.25%
+step 900: train loss 7.3625, val loss 7.3712
+  MLP Rank Utilization (L0): 69.27% (532/768)
+Attn LoRA    | 5/48            | 10.42%
+  MLP Rank Utilization (L1): 57.68% (443/768)
+Attn LoRA    | 2/48            | 4.17%
+  MLP Rank Utilization (L2): 56.38% (433/768)
+Attn LoRA    | 2/48            | 4.17%
+--- Model Analysis ---
+  Embedding Utilization (L2): 97.53% (749/768)
+  Average Attention Entropy:  4.4632
+----------------------
+Embed LoRA   | 3/48            | 6.25%
+saving checkpoint to out
+merge_lora_weights 7.371201992034912 6.0 1500
+iter 900: loss 7.5058, lr 0.00200, time 5733.53ms, mfu 27.54%
+iter 910: loss 7.2868, lr 0.00200, time 576.33ms, mfu 28.00%
+iter 920: loss 7.4247, lr 0.00200, time 577.04ms, mfu 28.40%
+Traceback (most recent call last):
+  File "/teamspace/studios/this_studio/nanoGPT/train.py", line 873, in <module>
+    scaler.scale(loss).backward()
+  File "/home/zeus/miniconda3/envs/cloudspace/lib/python3.10/site-packages/torch/_tensor.py", line 648, in backward
+    torch.autograd.backward(
+  File "/home/zeus/miniconda3/envs/cloudspace/lib/python3.10/site-packages/torch/autograd/__init__.py", line 353, in backward
+    _engine_run_backward(
+  File "/home/zeus/miniconda3/envs/cloudspace/lib/python3.10/site-packages/torch/autograd/graph.py", line 824, in _engine_run_backward
+    return Variable._execution_engine.run_backward(  # Calls into the C++ engine to run the backward pass
+KeyboardInterrupt
+Traceback (most recent call last):
+  File "/teamspace/studios/this_studio/nanoGPT/train.py", line 873, in <module>
+    scaler.scale(loss).backward()
+  File "/home/zeus/miniconda3/envs/cloudspace/lib/python3.10/site-packages/torch/_tensor.py", line 648, in backward
+    torch.autograd.backward(
+  File "/home/zeus/miniconda3/envs/cloudspace/lib/python3.10/site-packages/torch/autograd/__init__.py", line 353, in backward
+    _engine_run_backward(
+  File "/home/zeus/miniconda3/envs/cloudspace/lib/python3.10/site-packages/torch/autograd/graph.py", line 824, in _engine_run_backward
+    return Variable._execution_engine.run_backward(  # Calls into the C++ engine to run the backward pass
+KeyboardInterrupt
+Exception ignored in atexit callback: <function _start_and_connect_service.<locals>.teardown_atexit at 0x76441f36e050>
+Traceback (most recent call last):
+  File "/home/zeus/miniconda3/envs/cloudspace/lib/python3.10/site-packages/wandb/sdk/lib/service/service_connection.py", line 54, in teardown_atexit
+    conn.teardown(hooks.exit_code)
+  File "/home/zeus/miniconda3/envs/cloudspace/lib/python3.10/site-packages/wandb/sdk/lib/service/service_connection.py", line 182, in teardown
+    self._router.join()
+  File "/home/zeus/miniconda3/envs/cloudspace/lib/python3.10/site-packages/wandb/sdk/interface/router.py", line 75, in join
+    self._thread.join()
+  File "/home/zeus/miniconda3/envs/cloudspace/lib/python3.10/threading.py", line 1096, in join
+    self._wait_for_tstate_lock()
+  File "/home/zeus/miniconda3/envs/cloudspace/lib/python3.10/threading.py", line 1116, in _wait_for_tstate_lock
+    if lock.acquire(block, timeout):
+KeyboardInterrupt:
+Exception ignored in atexit callback: <function shutdown_compile_workers at 0x764462b29e10>
+Traceback (most recent call last):
+  File "/home/zeus/miniconda3/envs/cloudspace/lib/python3.10/site-packages/torch/_inductor/async_compile.py", line 113, in shutdown_compile_workers
+    pool.shutdown()
+  File "/home/zeus/miniconda3/envs/cloudspace/lib/python3.10/site-packages/torch/_inductor/compile_worker/subproc_pool.py", line 239, in shutdown
+    self.process.wait(300)
+  File "/home/zeus/miniconda3/envs/cloudspace/lib/python3.10/subprocess.py", line 1209, in wait
+    return self._wait(timeout=timeout)
+  File "/home/zeus/miniconda3/envs/cloudspace/lib/python3.10/subprocess.py", line 1937, in _wait
+    time.sleep(delay)
+KeyboardInterrupt:

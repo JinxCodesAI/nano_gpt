@@ -1,0 +1,1 @@
+{"mfu":32.40084752403363,"_timestamp":1.75300716517587e+09,"_step":108,"lr":0.005024875621890548,"train/loss":8.555719375610352,"iter":105,"_runtime":69,"batch_size":32,"_wandb":{"runtime":69},"effective_it":5,"warmup_iters":200,"gradient_accumulation_steps":2,"val/loss":8.58852767944336,"lr_multiplier":5,"lr_decay_iters":600000}

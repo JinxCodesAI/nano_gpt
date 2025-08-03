@@ -1,0 +1,134 @@
+Calculating target architecture based on schedule...
+
+============================================================
+       TARGET MODEL ARCHITECTURE (at end of schedule)
+============================================================
+  n_layer                | 6
+  n_head                 | 12
+  n_embd                 | 768
+  n_hidden               | 1536
+  block_size             | 1024
+  vocab_size             | 50304
+  dropout                | 0.0
+  bias                   | False
+  embedding_mode         | standard
+  attn_lora_rank         | 0
+  embedding_rank         | 0
+  lora_alpha             | 0.0
+============================================================
+
+
+============================================================
+           INITIAL MODEL ARCHITECTURE (at Iter 0)
+============================================================
+  n_layer                | 3
+  n_head                 | 12
+  n_embd                 | 768
+  n_hidden               | 768
+  block_size             | 1024
+  vocab_size             | 50304
+  dropout                | 0.0
+  bias                   | False
+  embedding_mode         | lora
+  attn_lora_rank         | 48
+  embedding_rank         | 48
+  lora_alpha             | 1.0
+============================================================
+
+
+Detailed parameter count:
+  total                  | Total:   52,149,504 | Trainable:    8,207,616
+  token_embeddings       | Total:    2,451,456 | Trainable:    2,451,456
+  position_embeddings    | Total:            0 | Trainable:            0
+  attention_layers       | Total:    7,520,256 | Trainable:    2,211,840
+  feed_forward_layers    | Total:    3,538,944 | Trainable:    3,538,944
+  layer_norms            | Total:        4,608 | Trainable:        4,608
+  final_layer_norm       | Total:          768 | Trainable:          768
+  language_model_head    | Total:   38,633,472 | Trainable:            0
+------------------------------------------------------------
+eval every:100
+step 1200: train loss 7.1249, val loss 7.0593
+  MLP Rank Utilization (L0): 69.79% (536/768)
+Attn LoRA    | 5/48            | 10.42%
+  MLP Rank Utilization (L1): 58.46% (449/768)
+Attn LoRA    | 3/48            | 6.25%
+  MLP Rank Utilization (L2): 57.16% (439/768)
+Attn LoRA    | 2/48            | 4.17%
+--- Model Analysis ---
+  Embedding Utilization (L2): 97.53% (749/768)
+Embed LoRA   | 3/48            | 6.25%
+  Average Attention Entropy:  4.4816
+----------------------
+Embed LoRA   | 3/48            | 6.25%
+saving checkpoint to out
+merge_lora_weights 7.059342861175537 4.0 10500
+iter 1200: loss 6.9728, lr 0.00050, time 11924.24ms, mfu -100.00%
+iter 1210: loss 7.2258, lr 0.00050, time 2335.93ms, mfu 31.65%
+iter 1220: loss 7.0054, lr 0.00050, time 2341.14ms, mfu 31.64%
+iter 1230: loss 7.0811, lr 0.00050, time 2329.17ms, mfu 31.65%
+iter 1240: loss 6.9640, lr 0.00050, time 2299.86ms, mfu 31.70%
+iter 1250: loss 7.1778, lr 0.00050, time 2303.42ms, mfu 31.74%
+iter 1260: loss 6.9760, lr 0.00050, time 2327.80ms, mfu 31.74%
+iter 1270: loss 7.1152, lr 0.00050, time 2324.53ms, mfu 31.75%
+iter 1280: loss 7.2267, lr 0.00050, time 2316.20ms, mfu 31.76%
+iter 1290: loss 7.1102, lr 0.00050, time 2316.77ms, mfu 31.78%
+step 1300: train loss 7.0210, val loss 6.9994
+  MLP Rank Utilization (L0): 69.79% (536/768)
+Attn LoRA    | 5/48            | 10.42%
+  MLP Rank Utilization (L1): 58.85% (452/768)
+Attn LoRA    | 3/48            | 6.25%
+  MLP Rank Utilization (L2): 57.55% (442/768)
+Attn LoRA    | 2/48            | 4.17%
+--- Model Analysis ---
+  Embedding Utilization (L2): 97.53% (749/768)
+Embed LoRA   | 3/48            | 6.25%
+  Average Attention Entropy:  4.4704
+----------------------
+Embed LoRA   | 3/48            | 6.25%
+saving checkpoint to out
+merge_lora_weights 6.9994215965271 4.0 10500
+iter 1300: loss 7.1713, lr 0.00050, time 6819.44ms, mfu 29.68%
+Traceback (most recent call last):
+  File "/teamspace/studios/this_studio/nanoGPT/train.py", line 879, in <module>
+    scaler.scale(loss).backward()
+  File "/home/zeus/miniconda3/envs/cloudspace/lib/python3.10/site-packages/torch/_tensor.py", line 648, in backward
+    torch.autograd.backward(
+  File "/home/zeus/miniconda3/envs/cloudspace/lib/python3.10/site-packages/torch/autograd/__init__.py", line 353, in backward
+    _engine_run_backward(
+  File "/home/zeus/miniconda3/envs/cloudspace/lib/python3.10/site-packages/torch/autograd/graph.py", line 824, in _engine_run_backward
+    return Variable._execution_engine.run_backward(  # Calls into the C++ engine to run the backward pass
+KeyboardInterrupt
+Traceback (most recent call last):
+  File "/teamspace/studios/this_studio/nanoGPT/train.py", line 879, in <module>
+    scaler.scale(loss).backward()
+  File "/home/zeus/miniconda3/envs/cloudspace/lib/python3.10/site-packages/torch/_tensor.py", line 648, in backward
+    torch.autograd.backward(
+  File "/home/zeus/miniconda3/envs/cloudspace/lib/python3.10/site-packages/torch/autograd/__init__.py", line 353, in backward
+    _engine_run_backward(
+  File "/home/zeus/miniconda3/envs/cloudspace/lib/python3.10/site-packages/torch/autograd/graph.py", line 824, in _engine_run_backward
+    return Variable._execution_engine.run_backward(  # Calls into the C++ engine to run the backward pass
+KeyboardInterrupt
+Exception ignored in atexit callback: <function _start_and_connect_service.<locals>.teardown_atexit at 0x731d98ed20e0>
+Traceback (most recent call last):
+  File "/home/zeus/miniconda3/envs/cloudspace/lib/python3.10/site-packages/wandb/sdk/lib/service/service_connection.py", line 54, in teardown_atexit
+    conn.teardown(hooks.exit_code)
+  File "/home/zeus/miniconda3/envs/cloudspace/lib/python3.10/site-packages/wandb/sdk/lib/service/service_connection.py", line 182, in teardown
+    self._router.join()
+  File "/home/zeus/miniconda3/envs/cloudspace/lib/python3.10/site-packages/wandb/sdk/interface/router.py", line 75, in join
+    self._thread.join()
+  File "/home/zeus/miniconda3/envs/cloudspace/lib/python3.10/threading.py", line 1096, in join
+    self._wait_for_tstate_lock()
+  File "/home/zeus/miniconda3/envs/cloudspace/lib/python3.10/threading.py", line 1116, in _wait_for_tstate_lock
+    if lock.acquire(block, timeout):
+KeyboardInterrupt:
+Exception ignored in atexit callback: <function shutdown_compile_workers at 0x731df41d5ea0>
+Traceback (most recent call last):
+  File "/home/zeus/miniconda3/envs/cloudspace/lib/python3.10/site-packages/torch/_inductor/async_compile.py", line 113, in shutdown_compile_workers
+    pool.shutdown()
+  File "/home/zeus/miniconda3/envs/cloudspace/lib/python3.10/site-packages/torch/_inductor/compile_worker/subproc_pool.py", line 239, in shutdown
+    self.process.wait(300)
+  File "/home/zeus/miniconda3/envs/cloudspace/lib/python3.10/subprocess.py", line 1209, in wait
+    return self._wait(timeout=timeout)
+  File "/home/zeus/miniconda3/envs/cloudspace/lib/python3.10/subprocess.py", line 1937, in _wait
+    time.sleep(delay)
+KeyboardInterrupt:

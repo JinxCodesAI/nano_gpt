@@ -1,0 +1,12 @@
+{"time":"2025-07-20T20:36:08.142204521Z","level":"INFO","msg":"stream: starting","core version":"0.21.0"}
+{"time":"2025-07-20T20:36:08.291545121Z","level":"INFO","msg":"stream: created new stream","id":"dgad58l1"}
+{"time":"2025-07-20T20:36:08.2916612Z","level":"INFO","msg":"stream: started","id":"dgad58l1"}
+{"time":"2025-07-20T20:36:08.291670771Z","level":"INFO","msg":"handler: started","stream_id":"dgad58l1"}
+{"time":"2025-07-20T20:36:08.291708304Z","level":"INFO","msg":"writer: Do: started","stream_id":"dgad58l1"}
+{"time":"2025-07-20T20:36:08.291704973Z","level":"INFO","msg":"sender: started","stream_id":"dgad58l1"}
+{"time":"2025-07-20T20:42:24.784699874Z","level":"INFO","msg":"stream: closing","id":"dgad58l1"}
+{"time":"2025-07-20T20:42:24.977827174Z","level":"INFO","msg":"fileTransfer: Close: file transfer manager closed"}
+{"time":"2025-07-20T20:42:25.039004976Z","level":"INFO","msg":"handler: closed","stream_id":"dgad58l1"}
+{"time":"2025-07-20T20:42:25.039025423Z","level":"INFO","msg":"writer: Close: closed","stream_id":"dgad58l1"}
+{"time":"2025-07-20T20:42:25.039049294Z","level":"INFO","msg":"sender: closed","stream_id":"dgad58l1"}
+{"time":"2025-07-20T20:42:25.039177111Z","level":"INFO","msg":"stream: closed","id":"dgad58l1"}

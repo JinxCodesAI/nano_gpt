@@ -1,0 +1,166 @@
+
+Detailed parameter count:
+  total                  | Total:   51,928,320 | Trainable:    7,986,432
+  token_embeddings       | Total:    2,451,456 | Trainable:    2,451,456
+  position_embeddings    | Total:            0 | Trainable:            0
+  attention_layers       | Total:    7,299,072 | Trainable:    1,990,656
+  feed_forward_layers    | Total:    3,538,944 | Trainable:    3,538,944
+  layer_norms            | Total:        4,608 | Trainable:        4,608
+  final_layer_norm       | Total:          768 | Trainable:          768
+  language_model_head    | Total:   38,633,472 | Trainable:            0
+------------------------------------------------------------
+W0719 22:25:19.063000 148419 /system/conda/miniconda3/envs/cloudspace/lib/python3.10/site-packages/torch/_inductor/utils.py:1250] [0/0] Not enough SMs to use max_autotune_gemm mode
+step 0: train loss 10.9455, val loss 10.9458
+iter 0: loss 10.9308, lr 0.00000, time 33273.82ms, mfu -100.00%
+iter 10: loss 10.1496, lr 0.00003, time 258.09ms, mfu 35.66%
+iter 20: loss 9.6646, lr 0.00006, time 256.67ms, mfu 35.68%
+iter 30: loss 9.6515, lr 0.00009, time 258.86ms, mfu 35.67%
+iter 40: loss 9.5243, lr 0.00012, time 258.52ms, mfu 35.66%
+iter 50: loss 9.4229, lr 0.00015, time 261.74ms, mfu 35.61%
+iter 60: loss 9.2543, lr 0.00018, time 260.31ms, mfu 35.59%
+iter 70: loss 9.2784, lr 0.00021, time 261.36ms, mfu 35.55%
+iter 80: loss 9.1427, lr 0.00024, time 263.40ms, mfu 35.49%
+iter 90: loss 9.1067, lr 0.00027, time 266.11ms, mfu 35.40%
+iter 100: loss 9.1575, lr 0.00030, time 265.49ms, mfu 35.33%
+iter 110: loss 8.9993, lr 0.00033, time 267.18ms, mfu 35.24%
+iter 120: loss 8.9690, lr 0.00036, time 266.90ms, mfu 35.16%
+iter 130: loss 8.9465, lr 0.00039, time 267.52ms, mfu 35.09%
+iter 140: loss 8.8712, lr 0.00042, time 270.82ms, mfu 34.98%
+iter 150: loss 8.7974, lr 0.00045, time 269.61ms, mfu 34.89%
+iter 160: loss 8.8544, lr 0.00048, time 272.21ms, mfu 34.79%
+iter 170: loss 8.8956, lr 0.00051, time 271.40ms, mfu 34.70%
+iter 180: loss 8.7548, lr 0.00054, time 272.01ms, mfu 34.61%
+iter 190: loss 8.8049, lr 0.00057, time 275.05ms, mfu 34.50%
+iter 200: loss 8.7093, lr 0.00060, time 278.93ms, mfu 34.35%
+iter 210: loss 8.9174, lr 0.00060, time 273.79ms, mfu 34.28%
+iter 220: loss 8.7504, lr 0.00060, time 280.19ms, mfu 34.13%
+iter 230: loss 8.5876, lr 0.00060, time 277.78ms, mfu 34.03%
+iter 240: loss 8.7084, lr 0.00060, time 278.40ms, mfu 33.94%
+step 250: train loss 8.6768, val loss 8.7020
+saving checkpoint to out
+iter 250: loss 8.5475, lr 0.00060, time 7532.23ms, mfu 30.66%
+iter 260: loss 8.7344, lr 0.00060, time 286.66ms, mfu 30.81%
+iter 270: loss 8.7179, lr 0.00060, time 286.15ms, mfu 30.94%
+iter 280: loss 8.6577, lr 0.00060, time 282.81ms, mfu 31.10%
+iter 290: loss 8.6508, lr 0.00060, time 282.05ms, mfu 31.26%
+iter 300: loss 8.5135, lr 0.00060, time 280.44ms, mfu 31.41%
+iter 310: loss 8.5811, lr 0.00060, time 280.39ms, mfu 31.56%
+iter 320: loss 8.6757, lr 0.00060, time 280.86ms, mfu 31.68%
+iter 330: loss 8.5108, lr 0.00060, time 280.21ms, mfu 31.79%
+iter 340: loss 8.6495, lr 0.00060, time 279.18ms, mfu 31.91%
+iter 350: loss 8.6813, lr 0.00060, time 280.16ms, mfu 32.01%
+iter 360: loss 8.5309, lr 0.00060, time 280.19ms, mfu 32.09%
+iter 370: loss 8.4265, lr 0.00060, time 279.73ms, mfu 32.17%
+iter 380: loss 8.4133, lr 0.00060, time 280.54ms, mfu 32.24%
+iter 390: loss 8.5308, lr 0.00060, time 280.15ms, mfu 32.30%
+iter 400: loss 8.3763, lr 0.00060, time 279.24ms, mfu 32.36%
+iter 410: loss 8.4614, lr 0.00060, time 280.18ms, mfu 32.41%
+iter 420: loss 8.3551, lr 0.00060, time 281.88ms, mfu 32.44%
+iter 430: loss 8.3097, lr 0.00060, time 280.51ms, mfu 32.47%
+iter 440: loss 8.1920, lr 0.00060, time 280.42ms, mfu 32.51%
+iter 450: loss 8.1649, lr 0.00060, time 279.51ms, mfu 32.55%
+iter 460: loss 8.2812, lr 0.00060, time 282.54ms, mfu 32.55%
+iter 470: loss 8.3063, lr 0.00060, time 278.63ms, mfu 32.60%
+iter 480: loss 8.2038, lr 0.00060, time 279.00ms, mfu 32.64%
+iter 490: loss 8.2348, lr 0.00060, time 281.46ms, mfu 32.65%
+step 500: train loss 8.2218, val loss 8.2329
+saving checkpoint to out
+iter 500: loss 8.3302, lr 0.00060, time 7563.35ms, mfu 29.50%
+iter 510: loss 8.2240, lr 0.00060, time 283.05ms, mfu 29.81%
+iter 520: loss 8.1881, lr 0.00060, time 283.09ms, mfu 30.08%
+iter 530: loss 8.1952, lr 0.00060, time 280.36ms, mfu 30.35%
+iter 540: loss 8.2723, lr 0.00060, time 277.75ms, mfu 30.63%
+iter 550: loss 8.0644, lr 0.00060, time 279.88ms, mfu 30.86%
+iter 560: loss 8.2658, lr 0.00060, time 281.58ms, mfu 31.04%
+iter 570: loss 8.2936, lr 0.00060, time 281.29ms, mfu 31.21%
+iter 580: loss 8.0510, lr 0.00060, time 280.55ms, mfu 31.37%
+iter 590: loss 8.1345, lr 0.00060, time 280.28ms, mfu 31.51%
+iter 600: loss 7.9423, lr 0.00060, time 279.71ms, mfu 31.65%
+iter 610: loss 8.1775, lr 0.00060, time 281.56ms, mfu 31.76%
+iter 620: loss 8.0005, lr 0.00060, time 279.64ms, mfu 31.87%
+iter 630: loss 7.9809, lr 0.00060, time 280.57ms, mfu 31.97%
+iter 640: loss 8.0281, lr 0.00060, time 279.85ms, mfu 32.06%
+iter 650: loss 7.9551, lr 0.00060, time 280.14ms, mfu 32.14%
+iter 660: loss 7.9003, lr 0.00060, time 280.40ms, mfu 32.21%
+iter 670: loss 7.9087, lr 0.00060, time 280.40ms, mfu 32.27%
+iter 680: loss 8.0794, lr 0.00060, time 280.96ms, mfu 32.32%
+iter 690: loss 7.9532, lr 0.00060, time 281.70ms, mfu 32.35%
+iter 700: loss 8.0432, lr 0.00060, time 279.73ms, mfu 32.41%
+iter 710: loss 7.9561, lr 0.00060, time 278.91ms, mfu 32.47%
+iter 720: loss 7.9949, lr 0.00060, time 280.12ms, mfu 32.51%
+iter 730: loss 8.0166, lr 0.00060, time 281.08ms, mfu 32.53%
+iter 740: loss 7.9132, lr 0.00060, time 279.37ms, mfu 32.57%
+step 750: train loss 7.8971, val loss 7.9216
+saving checkpoint to out
+iter 750: loss 7.9539, lr 0.00060, time 7810.44ms, mfu 29.43%
+iter 760: loss 7.9246, lr 0.00060, time 281.30ms, mfu 29.76%
+iter 770: loss 7.6582, lr 0.00060, time 284.07ms, mfu 30.03%
+iter 780: loss 7.9905, lr 0.00060, time 279.80ms, mfu 30.31%
+iter 790: loss 7.7090, lr 0.00060, time 278.10ms, mfu 30.59%
+iter 800: loss 7.9565, lr 0.00060, time 279.87ms, mfu 30.82%
+iter 810: loss 7.9602, lr 0.00060, time 279.67ms, mfu 31.03%
+iter 820: loss 7.6986, lr 0.00060, time 280.52ms, mfu 31.21%
+iter 830: loss 7.7296, lr 0.00060, time 280.06ms, mfu 31.37%
+iter 840: loss 7.8960, lr 0.00060, time 279.80ms, mfu 31.53%
+iter 850: loss 8.0610, lr 0.00060, time 280.59ms, mfu 31.65%
+iter 860: loss 7.9316, lr 0.00060, time 280.26ms, mfu 31.77%
+iter 870: loss 7.7026, lr 0.00060, time 280.57ms, mfu 31.88%
+iter 880: loss 7.7764, lr 0.00060, time 280.02ms, mfu 31.98%
+iter 890: loss 7.8053, lr 0.00060, time 281.24ms, mfu 32.05%
+iter 900: loss 7.8684, lr 0.00060, time 280.13ms, mfu 32.13%
+iter 910: loss 7.5431, lr 0.00060, time 280.86ms, mfu 32.20%
+iter 920: loss 7.6597, lr 0.00060, time 279.05ms, mfu 32.27%
+iter 930: loss 7.8979, lr 0.00060, time 279.57ms, mfu 32.34%
+iter 940: loss 7.8877, lr 0.00060, time 279.76ms, mfu 32.40%
+iter 950: loss 7.8481, lr 0.00060, time 281.11ms, mfu 32.43%
+iter 960: loss 7.6073, lr 0.00060, time 280.53ms, mfu 32.47%
+iter 970: loss 7.8281, lr 0.00060, time 280.23ms, mfu 32.51%
+iter 980: loss 7.7339, lr 0.00060, time 280.00ms, mfu 32.54%
+iter 990: loss 7.6731, lr 0.00060, time 280.74ms, mfu 32.57%
+step 1000: train loss 7.6992, val loss 7.7146
+saving checkpoint to out
+iter 1000: loss 7.7791, lr 0.00060, time 7570.05ms, mfu 29.43%
+iter 1010: loss 7.7858, lr 0.00060, time 283.00ms, mfu 29.74%
+iter 1020: loss 7.8243, lr 0.00060, time 284.92ms, mfu 30.00%
+iter 1030: loss 7.6411, lr 0.00060, time 279.92ms, mfu 30.29%
+iter 1040: loss 7.6784, lr 0.00060, time 277.10ms, mfu 30.58%
+iter 1050: loss 7.5403, lr 0.00060, time 281.01ms, mfu 30.80%
+iter 1060: loss 7.6511, lr 0.00060, time 279.81ms, mfu 31.01%
+iter 1070: loss 7.6844, lr 0.00060, time 281.51ms, mfu 31.18%
+iter 1080: loss 7.7157, lr 0.00060, time 279.98ms, mfu 31.35%
+Traceback (most recent call last):
+  File "/teamspace/studios/this_studio/nanoGPT/train.py", line 631, in <module>
+    with ctx:
+  File "/home/zeus/miniconda3/envs/cloudspace/lib/python3.10/site-packages/torch/amp/autocast_mode.py", line 391, in __exit__
+    def __exit__(self, exc_type: Any, exc_val: Any, exc_tb: Any):  # type: ignore[override]
+KeyboardInterrupt
+Traceback (most recent call last):
+  File "/teamspace/studios/this_studio/nanoGPT/train.py", line 631, in <module>
+    with ctx:
+  File "/home/zeus/miniconda3/envs/cloudspace/lib/python3.10/site-packages/torch/amp/autocast_mode.py", line 391, in __exit__
+    def __exit__(self, exc_type: Any, exc_val: Any, exc_tb: Any):  # type: ignore[override]
+KeyboardInterrupt
+Exception ignored in atexit callback: <function _start_and_connect_service.<locals>.teardown_atexit at 0x707b17430820>
+Traceback (most recent call last):
+  File "/home/zeus/miniconda3/envs/cloudspace/lib/python3.10/site-packages/wandb/sdk/lib/service/service_connection.py", line 54, in teardown_atexit
+    conn.teardown(hooks.exit_code)
+  File "/home/zeus/miniconda3/envs/cloudspace/lib/python3.10/site-packages/wandb/sdk/lib/service/service_connection.py", line 182, in teardown
+    self._router.join()
+  File "/home/zeus/miniconda3/envs/cloudspace/lib/python3.10/site-packages/wandb/sdk/interface/router.py", line 75, in join
+    self._thread.join()
+  File "/home/zeus/miniconda3/envs/cloudspace/lib/python3.10/threading.py", line 1096, in join
+    self._wait_for_tstate_lock()
+  File "/home/zeus/miniconda3/envs/cloudspace/lib/python3.10/threading.py", line 1116, in _wait_for_tstate_lock
+    if lock.acquire(block, timeout):
+KeyboardInterrupt:
+Exception ignored in atexit callback: <function shutdown_compile_workers at 0x707b34060550>
+Traceback (most recent call last):
+  File "/home/zeus/miniconda3/envs/cloudspace/lib/python3.10/site-packages/torch/_inductor/async_compile.py", line 113, in shutdown_compile_workers
+    pool.shutdown()
+  File "/home/zeus/miniconda3/envs/cloudspace/lib/python3.10/site-packages/torch/_inductor/compile_worker/subproc_pool.py", line 239, in shutdown
+    self.process.wait(300)
+  File "/home/zeus/miniconda3/envs/cloudspace/lib/python3.10/subprocess.py", line 1209, in wait
+    return self._wait(timeout=timeout)
+  File "/home/zeus/miniconda3/envs/cloudspace/lib/python3.10/subprocess.py", line 1937, in _wait
+    time.sleep(delay)
+KeyboardInterrupt:

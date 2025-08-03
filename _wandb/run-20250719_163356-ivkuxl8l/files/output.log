@@ -1,0 +1,115 @@
+step 0: train loss 10.9125, val loss 10.9071
+iter 0: loss 10.9509, time 7940.00ms, mfu -100.00%
+iter 10: loss 7.5954, time 1430.37ms, mfu 20.23%
+iter 20: loss 7.4922, time 1451.54ms, mfu 20.20%
+iter 30: loss 7.5983, time 1464.36ms, mfu 20.16%
+step 40: train loss 7.1504, val loss 7.5133
+saving checkpoint to out
+iter 40: loss 7.5144, time 6951.99ms, mfu 18.56%
+iter 50: loss 6.8131, time 1457.54ms, mfu 18.69%
+iter 60: loss 6.8923, time 1456.92ms, mfu 18.80%
+iter 70: loss 7.4066, time 1455.69ms, mfu 18.91%
+step 80: train loss 7.0864, val loss 6.8004
+saving checkpoint to out
+
+=== SCALING OPERATION TRIGGERED (DDP SYNC) ===
+Operation: change_lr
+Trigger reason: Loss threshold
+Current val loss: 6.8004, Trigger loss: 7.2000
+Iterations since last op: 80, Max wait: 200
+Executing operation: change_lr with value: 0.3
+LR multiplier: 10.0000 -> 3.0000
+=== SCALING OPERATION COMPLETE ===
+
+
+=== SCALING OPERATION TRIGGERED (DDP SYNC) ===
+Operation: change_eval_interval
+Trigger reason: Loss threshold
+Current val loss: 6.8004, Trigger loss: 7.1000
+Iterations since last op: 0, Max wait: 500
+Executing operation: change_eval_interval with value: 2.5
+Eval interval multiplier: 0.0400 -> 0.1000
+=== SCALING OPERATION COMPLETE ===
+
+
+=== SCALING OPERATION TRIGGERED (DDP SYNC) ===
+Operation: change_grad_accum
+Trigger reason: Loss threshold
+Current val loss: 6.8004, Trigger loss: 7.0000
+Iterations since last op: 0, Max wait: 500
+Executing operation: change_grad_accum with value: 4
+Grad accum steps: 40 -> 160
+=== SCALING OPERATION COMPLETE ===
+
+
+=== SCALING OPERATION TRIGGERED (DDP SYNC) ===
+Operation: change_eval_iters
+Trigger reason: Loss threshold
+Current val loss: 6.8004, Trigger loss: 6.9000
+Iterations since last op: 0, Max wait: 500
+Executing operation: change_eval_iters with value: 2.5
+Eval iters multiplier: 0.0500 -> 0.1250
+=== SCALING OPERATION COMPLETE ===
+
+iter 80: loss 7.9088, time 11413.22ms, mfu 18.03%
+iter 90: loss 6.6916, time 5781.77ms, mfu 18.23%
+step 100: train loss 6.5462, val loss 6.4440
+saving checkpoint to out
+iter 100: loss 6.6679, time 11785.26ms, mfu 17.39%
+iter 110: loss 6.7259, time 5781.45ms, mfu 17.65%
+iter 120: loss 6.0879, time 5809.98ms, mfu 17.88%
+iter 130: loss 6.7889, time 5784.07ms, mfu 18.09%
+iter 140: loss 6.7077, time 5774.26ms, mfu 18.29%
+iter 150: loss 6.6175, time 5781.02ms, mfu 18.46%
+iter 160: loss 6.3282, time 5785.68ms, mfu 18.62%
+iter 170: loss 6.4406, time 5776.99ms, mfu 18.76%
+iter 180: loss 6.0894, time 5788.72ms, mfu 18.88%
+iter 190: loss 5.9215, time 5779.12ms, mfu 19.00%
+step 200: train loss 6.0401, val loss 6.0263
+saving checkpoint to out
+iter 200: loss 5.4130, time 12572.22ms, mfu 18.02%
+iter 210: loss 5.7598, time 5782.46ms, mfu 18.22%
+Traceback (most recent call last):
+  File "/teamspace/studios/this_studio/nanoGPT/train.py", line 440, in <module>
+    scaler.scale(loss).backward()
+  File "/home/zeus/miniconda3/envs/cloudspace/lib/python3.10/site-packages/torch/_tensor.py", line 648, in backward
+    torch.autograd.backward(
+  File "/home/zeus/miniconda3/envs/cloudspace/lib/python3.10/site-packages/torch/autograd/__init__.py", line 353, in backward
+    _engine_run_backward(
+  File "/home/zeus/miniconda3/envs/cloudspace/lib/python3.10/site-packages/torch/autograd/graph.py", line 824, in _engine_run_backward
+    return Variable._execution_engine.run_backward(  # Calls into the C++ engine to run the backward pass
+KeyboardInterrupt
+Traceback (most recent call last):
+  File "/teamspace/studios/this_studio/nanoGPT/train.py", line 440, in <module>
+    scaler.scale(loss).backward()
+  File "/home/zeus/miniconda3/envs/cloudspace/lib/python3.10/site-packages/torch/_tensor.py", line 648, in backward
+    torch.autograd.backward(
+  File "/home/zeus/miniconda3/envs/cloudspace/lib/python3.10/site-packages/torch/autograd/__init__.py", line 353, in backward
+    _engine_run_backward(
+  File "/home/zeus/miniconda3/envs/cloudspace/lib/python3.10/site-packages/torch/autograd/graph.py", line 824, in _engine_run_backward
+    return Variable._execution_engine.run_backward(  # Calls into the C++ engine to run the backward pass
+KeyboardInterrupt
+Exception ignored in atexit callback: <function _start_and_connect_service.<locals>.teardown_atexit at 0x723e15d63400>
+Traceback (most recent call last):
+  File "/home/zeus/miniconda3/envs/cloudspace/lib/python3.10/site-packages/wandb/sdk/lib/service/service_connection.py", line 54, in teardown_atexit
+    conn.teardown(hooks.exit_code)
+  File "/home/zeus/miniconda3/envs/cloudspace/lib/python3.10/site-packages/wandb/sdk/lib/service/service_connection.py", line 182, in teardown
+    self._router.join()
+  File "/home/zeus/miniconda3/envs/cloudspace/lib/python3.10/site-packages/wandb/sdk/interface/router.py", line 75, in join
+    self._thread.join()
+  File "/home/zeus/miniconda3/envs/cloudspace/lib/python3.10/threading.py", line 1096, in join
+    self._wait_for_tstate_lock()
+  File "/home/zeus/miniconda3/envs/cloudspace/lib/python3.10/threading.py", line 1116, in _wait_for_tstate_lock
+    if lock.acquire(block, timeout):
+KeyboardInterrupt:
+Exception ignored in atexit callback: <function shutdown_compile_workers at 0x723e30a672e0>
+Traceback (most recent call last):
+  File "/home/zeus/miniconda3/envs/cloudspace/lib/python3.10/site-packages/torch/_inductor/async_compile.py", line 113, in shutdown_compile_workers
+    pool.shutdown()
+  File "/home/zeus/miniconda3/envs/cloudspace/lib/python3.10/site-packages/torch/_inductor/compile_worker/subproc_pool.py", line 239, in shutdown
+    self.process.wait(300)
+  File "/home/zeus/miniconda3/envs/cloudspace/lib/python3.10/subprocess.py", line 1209, in wait
+    return self._wait(timeout=timeout)
+  File "/home/zeus/miniconda3/envs/cloudspace/lib/python3.10/subprocess.py", line 1937, in _wait
+    time.sleep(delay)
+KeyboardInterrupt:

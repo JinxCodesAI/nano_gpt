@@ -1,0 +1,182 @@
+step 0: train loss 10.9249, val loss 10.9071
+iter 0: loss 10.8850, time 7960.19ms, mfu -100.00%
+iter 10: loss 7.9035, time 1442.52ms, mfu 20.06%
+iter 20: loss 7.5052, time 1458.04ms, mfu 20.04%
+iter 30: loss 6.7431, time 1460.00ms, mfu 20.02%
+step 40: train loss 7.1486, val loss 7.5220
+saving checkpoint to out
+iter 40: loss 7.0097, time 6836.57ms, mfu 18.44%
+iter 50: loss 7.2548, time 1452.81ms, mfu 18.59%
+iter 60: loss 6.6195, time 1455.86ms, mfu 18.71%
+iter 70: loss 6.6322, time 1455.82ms, mfu 18.83%
+step 80: train loss 6.8941, val loss 6.7674
+saving checkpoint to out
+
+=== SCALING OPERATION TRIGGERED (DDP SYNC) ===
+Operation: change_lr
+Trigger reason: Loss threshold
+Current val loss: 6.7674, Trigger loss: 7.0000
+Iterations since last op: 80, Max wait: 200
+Executing operation: change_lr with value: 0.3
+Learning rate multiplier updated from 10.0000 to 3.0000
+=== SCALING OPERATION COMPLETE ===
+
+iter 80: loss 6.4654, time 6714.69ms, mfu 17.38%
+iter 90: loss 6.4259, time 1456.66ms, mfu 17.63%
+iter 100: loss 6.6770, time 1466.21ms, mfu 17.84%
+iter 110: loss 7.4437, time 1460.31ms, mfu 18.04%
+step 120: train loss 6.4766, val loss 6.6565
+saving checkpoint to out
+
+=== SCALING OPERATION TRIGGERED (DDP SYNC) ===
+Operation: change_eval_interval
+Trigger reason: Loss threshold
+Current val loss: 6.6565, Trigger loss: 7.0000
+Iterations since last op: 40, Max wait: 500
+Executing operation: change_eval_interval with value: 2.5
+Evaluation interval multiplier updated from 0.0400 to 0.1000
+=== SCALING OPERATION COMPLETE ===
+
+iter 120: loss 6.5994, time 7298.90ms, mfu 16.63%
+iter 130: loss 5.8229, time 1453.26ms, mfu 16.96%
+iter 140: loss 6.3143, time 1459.59ms, mfu 17.24%
+iter 150: loss 6.4671, time 1459.22ms, mfu 17.50%
+iter 160: loss 6.4023, time 1459.33ms, mfu 17.73%
+iter 170: loss 6.4198, time 1459.92ms, mfu 17.94%
+iter 180: loss 6.2792, time 1456.47ms, mfu 18.14%
+iter 190: loss 6.3879, time 1455.41ms, mfu 18.31%
+step 200: train loss 6.1100, val loss 6.1773
+saving checkpoint to out
+
+=== SCALING OPERATION TRIGGERED (DDP SYNC) ===
+Operation: change_eval_iters
+Trigger reason: Loss threshold
+Current val loss: 6.1773, Trigger loss: 7.0000
+Iterations since last op: 80, Max wait: 500
+Executing operation: change_eval_iters with value: 2.5
+Evaluation iterations multiplier updated from 0.0500 to 0.1250
+=== SCALING OPERATION COMPLETE ===
+
+iter 200: loss 6.3373, time 7277.56ms, mfu 16.88%
+iter 210: loss 6.1723, time 1459.19ms, mfu 17.17%
+iter 220: loss 5.9766, time 1466.05ms, mfu 17.43%
+iter 230: loss 5.8900, time 1459.14ms, mfu 17.67%
+iter 240: loss 5.9514, time 1453.53ms, mfu 17.89%
+iter 250: loss 5.7923, time 1454.27ms, mfu 18.09%
+iter 260: loss 8.7466, time 1454.81ms, mfu 18.27%
+iter 270: loss 6.6801, time 1456.25ms, mfu 18.43%
+iter 280: loss 6.6746, time 1455.50ms, mfu 18.58%
+iter 290: loss 7.9413, time 1458.48ms, mfu 18.70%
+step 300: train loss 6.0091, val loss 5.9948
+saving checkpoint to out
+
+=== SCALING OPERATION TRIGGERED (DDP SYNC) ===
+Operation: change_lr
+Trigger reason: Loss threshold
+Current val loss: 5.9948, Trigger loss: 6.0000
+Iterations since last op: 100, Max wait: 2500
+Executing operation: change_lr with value: 0.35
+Learning rate multiplier updated from 3.0000 to 1.0500
+=== SCALING OPERATION COMPLETE ===
+
+iter 300: loss 5.7163, time 7099.51ms, mfu 17.24%
+iter 310: loss 5.9763, time 1456.82ms, mfu 17.50%
+iter 320: loss 7.4566, time 1459.69ms, mfu 17.73%
+iter 330: loss 5.8718, time 1457.94ms, mfu 17.95%
+iter 340: loss 5.7232, time 1454.46ms, mfu 18.14%
+iter 350: loss 5.0884, time 1454.51ms, mfu 18.32%
+iter 360: loss 5.6582, time 1454.93ms, mfu 18.47%
+iter 370: loss 5.5918, time 1454.38ms, mfu 18.62%
+iter 380: loss 6.7679, time 1455.23ms, mfu 18.74%
+iter 390: loss 5.9287, time 1455.32ms, mfu 18.86%
+step 400: train loss 5.8379, val loss 5.7918
+saving checkpoint to out
+iter 400: loss 5.8424, time 7577.49ms, mfu 17.35%
+iter 410: loss 5.7292, time 1460.42ms, mfu 17.60%
+iter 420: loss 6.0299, time 1464.93ms, mfu 17.81%
+iter 430: loss 5.8002, time 1459.58ms, mfu 18.01%
+iter 440: loss 5.9987, time 1455.56ms, mfu 18.20%
+iter 450: loss 5.7966, time 1455.80ms, mfu 18.37%
+iter 460: loss 6.0637, time 1457.81ms, mfu 18.52%
+iter 470: loss 5.3948, time 1455.31ms, mfu 18.65%
+iter 480: loss 5.1768, time 1456.31ms, mfu 18.77%
+iter 490: loss 5.0546, time 1455.54ms, mfu 18.89%
+step 500: train loss 5.6147, val loss 5.6800
+saving checkpoint to out
+
+=== SCALING OPERATION TRIGGERED (DDP SYNC) ===
+Operation: change_eval_interval
+Trigger reason: Loss threshold
+Current val loss: 5.6800, Trigger loss: 5.7000
+Iterations since last op: 200, Max wait: 500
+Executing operation: change_eval_interval with value: 5.0
+Evaluation interval multiplier updated from 0.1000 to 0.5000
+=== SCALING OPERATION COMPLETE ===
+
+iter 500: loss 6.0554, time 7126.82ms, mfu 17.40%
+iter 510: loss 5.4324, time 1457.20ms, mfu 17.65%
+iter 520: loss 5.2542, time 1463.90ms, mfu 17.86%
+iter 530: loss 5.4122, time 1458.83ms, mfu 18.06%
+iter 540: loss 6.4183, time 1456.96ms, mfu 18.24%
+iter 550: loss 6.0723, time 1456.60ms, mfu 18.40%
+iter 560: loss 5.8047, time 1455.17ms, mfu 18.55%
+iter 570: loss 5.8664, time 1453.98ms, mfu 18.68%
+iter 580: loss 5.8530, time 1454.54ms, mfu 18.80%
+iter 590: loss 5.9804, time 1455.01ms, mfu 18.91%
+iter 600: loss 5.5422, time 1459.00ms, mfu 19.00%
+iter 610: loss 5.7482, time 1454.86ms, mfu 19.09%
+iter 620: loss 5.5463, time 1456.05ms, mfu 19.17%
+iter 630: loss 5.3846, time 1455.06ms, mfu 19.24%
+iter 640: loss 5.0620, time 1456.54ms, mfu 19.30%
+iter 650: loss 5.1139, time 1456.12ms, mfu 19.36%
+iter 660: loss 5.7252, time 1454.55ms, mfu 19.41%
+iter 670: loss 5.5580, time 1458.56ms, mfu 19.46%
+iter 680: loss 5.5686, time 1457.78ms, mfu 19.50%
+iter 690: loss 5.4662, time 1456.49ms, mfu 19.53%
+iter 700: loss 5.2965, time 1455.24ms, mfu 19.57%
+iter 710: loss 5.7881, time 1452.85ms, mfu 19.60%
+iter 720: loss 5.3343, time 1454.97ms, mfu 19.63%
+Traceback (most recent call last):
+  File "/teamspace/studios/this_studio/nanoGPT/train.py", line 687, in <module>
+    scaler.scale(loss).backward()
+  File "/home/zeus/miniconda3/envs/cloudspace/lib/python3.10/site-packages/torch/_tensor.py", line 648, in backward
+    torch.autograd.backward(
+  File "/home/zeus/miniconda3/envs/cloudspace/lib/python3.10/site-packages/torch/autograd/__init__.py", line 353, in backward
+    _engine_run_backward(
+  File "/home/zeus/miniconda3/envs/cloudspace/lib/python3.10/site-packages/torch/autograd/graph.py", line 824, in _engine_run_backward
+    return Variable._execution_engine.run_backward(  # Calls into the C++ engine to run the backward pass
+KeyboardInterrupt
+Traceback (most recent call last):
+  File "/teamspace/studios/this_studio/nanoGPT/train.py", line 687, in <module>
+    scaler.scale(loss).backward()
+  File "/home/zeus/miniconda3/envs/cloudspace/lib/python3.10/site-packages/torch/_tensor.py", line 648, in backward
+    torch.autograd.backward(
+  File "/home/zeus/miniconda3/envs/cloudspace/lib/python3.10/site-packages/torch/autograd/__init__.py", line 353, in backward
+    _engine_run_backward(
+  File "/home/zeus/miniconda3/envs/cloudspace/lib/python3.10/site-packages/torch/autograd/graph.py", line 824, in _engine_run_backward
+    return Variable._execution_engine.run_backward(  # Calls into the C++ engine to run the backward pass
+KeyboardInterrupt
+Exception ignored in atexit callback: <function _start_and_connect_service.<locals>.teardown_atexit at 0x781994894700>
+Traceback (most recent call last):
+  File "/home/zeus/miniconda3/envs/cloudspace/lib/python3.10/site-packages/wandb/sdk/lib/service/service_connection.py", line 54, in teardown_atexit
+    conn.teardown(hooks.exit_code)
+  File "/home/zeus/miniconda3/envs/cloudspace/lib/python3.10/site-packages/wandb/sdk/lib/service/service_connection.py", line 182, in teardown
+    self._router.join()
+  File "/home/zeus/miniconda3/envs/cloudspace/lib/python3.10/site-packages/wandb/sdk/interface/router.py", line 75, in join
+    self._thread.join()
+  File "/home/zeus/miniconda3/envs/cloudspace/lib/python3.10/threading.py", line 1096, in join
+    self._wait_for_tstate_lock()
+  File "/home/zeus/miniconda3/envs/cloudspace/lib/python3.10/threading.py", line 1116, in _wait_for_tstate_lock
+    if lock.acquire(block, timeout):
+KeyboardInterrupt:
+Exception ignored in atexit callback: <function shutdown_compile_workers at 0x78199e954310>
+Traceback (most recent call last):
+  File "/home/zeus/miniconda3/envs/cloudspace/lib/python3.10/site-packages/torch/_inductor/async_compile.py", line 113, in shutdown_compile_workers
+    pool.shutdown()
+  File "/home/zeus/miniconda3/envs/cloudspace/lib/python3.10/site-packages/torch/_inductor/compile_worker/subproc_pool.py", line 239, in shutdown
+    self.process.wait(300)
+  File "/home/zeus/miniconda3/envs/cloudspace/lib/python3.10/subprocess.py", line 1209, in wait
+    return self._wait(timeout=timeout)
+  File "/home/zeus/miniconda3/envs/cloudspace/lib/python3.10/subprocess.py", line 1937, in _wait
+    time.sleep(delay)
+KeyboardInterrupt:

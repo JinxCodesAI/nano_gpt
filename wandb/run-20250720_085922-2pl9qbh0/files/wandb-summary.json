@@ -1,0 +1,1 @@
+{"lr":0.005024875621890548,"_step":102,"effective_it":100,"lr_decay_iters":600000,"val/loss":8.580008506774902,"mfu":32.48332129324262,"iter":100,"_timestamp":1.7530020296915858e+09,"train/loss":8.559036254882812,"_runtime":98,"warmup_iters":200,"_wandb":{"runtime":98}}

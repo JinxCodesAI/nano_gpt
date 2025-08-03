@@ -1,0 +1,7 @@
+{"time":"2025-07-19T15:55:08.890182556Z","level":"INFO","msg":"main: starting server","port-filename":"/tmp/tmpfd2jszrn/port-9735.txt","pid":9735,"log-level":0,"disable-analytics":false,"shutdown-on-parent-exit":false,"enable-dcgm-profiling":false}
+{"time":"2025-07-19T15:55:08.891185411Z","level":"INFO","msg":"server: will exit if parent process dies","ppid":9735}
+{"time":"2025-07-19T15:55:08.891165012Z","level":"INFO","msg":"server: accepting connections","addr":{"Name":"/tmp/wandb-9735-9963-222561367/socket","Net":"unix"}}
+{"time":"2025-07-19T15:55:09.06505312Z","level":"INFO","msg":"connection: ManageConnectionData: new connection created","id":"1(@)"}
+{"time":"2025-07-19T15:55:09.075551556Z","level":"INFO","msg":"handleInformInit: received","streamId":"iphd7wtt","id":"1(@)"}
+{"time":"2025-07-19T15:55:09.218831737Z","level":"INFO","msg":"handleInformInit: stream started","streamId":"iphd7wtt","id":"1(@)"}
+{"time":"2025-07-19T15:58:12.605180454Z","level":"INFO","msg":"server: parent process exited, terminating service process"}

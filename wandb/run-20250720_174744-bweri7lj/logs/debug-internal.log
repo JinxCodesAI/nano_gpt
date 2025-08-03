@@ -1,0 +1,6 @@
+{"time":"2025-07-20T17:47:44.407798995Z","level":"INFO","msg":"stream: starting","core version":"0.21.0"}
+{"time":"2025-07-20T17:47:44.552351845Z","level":"INFO","msg":"stream: created new stream","id":"bweri7lj"}
+{"time":"2025-07-20T17:47:44.552399299Z","level":"INFO","msg":"stream: started","id":"bweri7lj"}
+{"time":"2025-07-20T17:47:44.552568492Z","level":"INFO","msg":"sender: started","stream_id":"bweri7lj"}
+{"time":"2025-07-20T17:47:44.55255837Z","level":"INFO","msg":"writer: Do: started","stream_id":"bweri7lj"}
+{"time":"2025-07-20T17:47:44.552595532Z","level":"INFO","msg":"handler: started","stream_id":"bweri7lj"}
