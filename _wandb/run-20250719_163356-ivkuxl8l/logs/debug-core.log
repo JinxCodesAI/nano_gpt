@@ -1,7 +1,0 @@
-{"time":"2025-07-19T16:33:56.846055251Z","level":"INFO","msg":"main: starting server","port-filename":"/tmp/tmp0c5kv683/port-42628.txt","pid":42628,"log-level":0,"disable-analytics":false,"shutdown-on-parent-exit":false,"enable-dcgm-profiling":false}
-{"time":"2025-07-19T16:33:56.846931063Z","level":"INFO","msg":"server: will exit if parent process dies","ppid":42628}
-{"time":"2025-07-19T16:33:56.846923011Z","level":"INFO","msg":"server: accepting connections","addr":{"Name":"/tmp/wandb-42628-42850-1805724807/socket","Net":"unix"}}
-{"time":"2025-07-19T16:33:57.025839543Z","level":"INFO","msg":"connection: ManageConnectionData: new connection created","id":"1(@)"}
-{"time":"2025-07-19T16:33:57.034984546Z","level":"INFO","msg":"handleInformInit: received","streamId":"ivkuxl8l","id":"1(@)"}
-{"time":"2025-07-19T16:33:57.177247033Z","level":"INFO","msg":"handleInformInit: stream started","streamId":"ivkuxl8l","id":"1(@)"}
-{"time":"2025-07-19T16:49:52.892065974Z","level":"INFO","msg":"server: parent process exited, terminating service process"}

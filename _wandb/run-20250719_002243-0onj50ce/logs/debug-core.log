@@ -1,7 +1,0 @@
-{"time":"2025-07-19T00:22:43.29632458Z","level":"INFO","msg":"main: starting server","port-filename":"/tmp/tmpge8ymjdm/port-60753.txt","pid":60753,"log-level":0,"disable-analytics":false,"shutdown-on-parent-exit":false,"enable-dcgm-profiling":false}
-{"time":"2025-07-19T00:22:43.297120559Z","level":"INFO","msg":"server: will exit if parent process dies","ppid":60753}
-{"time":"2025-07-19T00:22:43.297082496Z","level":"INFO","msg":"server: accepting connections","addr":{"Name":"/tmp/wandb-60753-60920-2670795247/socket","Net":"unix"}}
-{"time":"2025-07-19T00:22:43.475017284Z","level":"INFO","msg":"connection: ManageConnectionData: new connection created","id":"1(@)"}
-{"time":"2025-07-19T00:22:43.483569266Z","level":"INFO","msg":"handleInformInit: received","streamId":"0onj50ce","id":"1(@)"}
-{"time":"2025-07-19T00:22:43.631002252Z","level":"INFO","msg":"handleInformInit: stream started","streamId":"0onj50ce","id":"1(@)"}
-{"time":"2025-07-19T00:25:09.944463413Z","level":"INFO","msg":"server: parent process exited, terminating service process"}
