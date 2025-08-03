@@ -1,0 +1,235 @@
+
+Enhanced data augmentation initialized with probability 0.1
+⏳ Background generation will start after model compilation...
+/teamspace/studios/this_studio/nanoGPT/train.py:591: FutureWarning: `torch.cuda.amp.GradScaler(args...)` is deprecated. Please use `torch.amp.GradScaler('cuda', args...)` instead.
+  scaler = torch.cuda.amp.GradScaler(enabled=(dtype == 'float16'))
+num decayed parameter tensors: 34, with 25,330,176 parameters
+num non-decayed parameter tensors: 17, with 8,704 parameters
+using fused AdamW: True
+compiling the model... (takes a ~minute)
+🚀 Starting background enhanced sample generation...
+📦 Waiting for full enhanced buffer (512 samples)...
+🔥 Generated 64 enhanced samples → Buffer: 64/512 (12.5%)
+📈 Buffer progress: 64/512 samples (12.5%) - Generated: 64 - Elapsed: 10s
+🔥 Generated 64 enhanced samples → Buffer: 128/512 (25.0%)
+📈 Buffer progress: 128/512 samples (25.0%) - Generated: 128 - Elapsed: 18s
+🔥 Generated 64 enhanced samples → Buffer: 192/512 (37.5%)
+📈 Buffer progress: 192/512 samples (37.5%) - Generated: 192 - Elapsed: 26s
+🔥 Generated 64 enhanced samples → Buffer: 256/512 (50.0%)
+Enhanced data generator: sleep_time=0.100s, buffer_size=256
+📈 Buffer progress: 256/512 samples (50.0%) - Generated: 256 - Elapsed: 36s
+🔥 Generated 64 enhanced samples → Buffer: 320/512 (62.5%)
+📈 Buffer progress: 320/512 samples (62.5%) - Generated: 320 - Elapsed: 44s
+🔥 Generated 64 enhanced samples → Buffer: 384/512 (75.0%)
+📈 Buffer progress: 384/512 samples (75.0%) - Generated: 384 - Elapsed: 52s
+🔥 Generated 64 enhanced samples → Buffer: 448/512 (87.5%)
+📈 Buffer progress: 448/512 samples (87.5%) - Generated: 448 - Elapsed: 60s
+🔥 Generated 64 enhanced samples → Buffer: 512/512 (100.0%)
+Enhanced data generator: sleep_time=0.100s, buffer_size=512
+📈 Buffer progress: 512/512 samples (100.0%) - Generated: 512 - Elapsed: 70s
+✅ Enhanced buffer FULL: 512 samples ready! Generated: 512 - Total time: 70s
+step 0: train loss 4.1889, val loss 4.2383
+🔥 ENHANCED DATA: Total=13056, Enhanced=1363 (10.4%), Generated=512, Buffer=512
+iter 0: loss 4.1991, time 17746.45ms, mfu -100.00%
+iter 10: loss 3.1903, time 428.94ms, mfu 8.02%
+iter 20: loss 2.7873, time 431.47ms, mfu 8.02%
+Enhanced data generator: sleep_time=0.010s, buffer_size=512
+iter 30: loss 2.6095, time 430.87ms, mfu 8.01%
+iter 40: loss 2.5697, time 436.55ms, mfu 8.00%
+iter 50: loss 2.5636, time 439.09ms, mfu 7.99%
+iter 60: loss 2.5191, time 437.81ms, mfu 7.97%
+iter 70: loss 2.5103, time 436.51ms, mfu 7.96%
+iter 80: loss 2.5063, time 438.80ms, mfu 7.95%
+iter 80: loss 2.5063, time 438.80ms, mfu 7.95%
+iter 90: loss 2.5031, time 436.67ms, mfu 7.94%
+Enhanced data generator: sleep_time=0.010s, buffer_size=512
+step 100: train loss 2.4364, val loss 2.4243
+🔥 ENHANCED DATA: Total=51456, Enhanced=5252 (10.2%), Generated=512, Buffer=512
+saving checkpoint to out-shakespeare-char
+Updating inference model with new checkpoint...
+number of parameters: 25.21M
+Inference model updated and buffer cleared
+iter 100: loss 2.4489, time 15120.00ms, mfu 7.17%
+iter 110: loss 2.3955, time 430.35ms, mfu 7.26%
+iter 120: loss 2.3473, time 426.86ms, mfu 7.34%
+Enhanced data generator: sleep_time=0.010s, buffer_size=512
+iter 130: loss 2.2775, time 430.73ms, mfu 7.40%
+iter 140: loss 2.1680, time 429.01ms, mfu 7.46%
+iter 150: loss 2.1165, time 427.24ms, mfu 7.52%
+iter 160: loss 2.0577, time 427.97ms, mfu 7.57%
+iter 170: loss 2.0582, time 435.24ms, mfu 7.61%
+iter 180: loss 1.9582, time 425.94ms, mfu 7.65%
+iter 190: loss 1.9122, time 432.68ms, mfu 7.68%
+Enhanced data generator: sleep_time=0.010s, buffer_size=512
+step 200: train loss 1.8462, val loss 1.9160
+🔥 ENHANCED DATA: Total=89856, Enhanced=9014 (10.0%), Generated=512, Buffer=512
+saving checkpoint to out-shakespeare-char
+Updating inference model with new checkpoint...
+number of parameters: 25.21M
+Inference model updated and buffer cleared
+iter 200: loss 1.8883, time 15126.94ms, mfu 6.94%
+iter 210: loss 1.8851, time 434.28ms, mfu 7.04%
+iter 220: loss 1.8459, time 425.21ms, mfu 7.14%
+iter 230: loss 1.8113, time 435.80ms, mfu 7.22%
+Enhanced data generator: sleep_time=0.010s, buffer_size=512
+iter 240: loss 1.7907, time 433.88ms, mfu 7.29%
+iter 250: loss 1.7476, time 428.85ms, mfu 7.36%
+iter 260: loss 1.7104, time 431.00ms, mfu 7.43%
+iter 270: loss 1.7433, time 436.57ms, mfu 7.47%
+iter 280: loss 1.7294, time 437.34ms, mfu 7.51%
+iter 290: loss 1.6336, time 433.71ms, mfu 7.55%
+Enhanced data generator: sleep_time=0.010s, buffer_size=512
+step 300: train loss 1.5671, val loss 1.6768
+🔥 ENHANCED DATA: Total=128256, Enhanced=12828 (10.0%), Generated=512, Buffer=512
+saving checkpoint to out-shakespeare-char
+Updating inference model with new checkpoint...
+number of parameters: 25.21M
+Inference model updated and buffer cleared
+iter 300: loss 1.6544, time 15032.25ms, mfu 6.82%
+iter 310: loss 1.6248, time 432.14ms, mfu 6.93%
+iter 320: loss 1.5970, time 430.37ms, mfu 7.04%
+iter 330: loss 1.5474, time 428.65ms, mfu 7.14%
+Enhanced data generator: sleep_time=0.010s, buffer_size=512
+iter 340: loss 1.5508, time 436.83ms, mfu 7.21%
+iter 350: loss 1.5537, time 434.22ms, mfu 7.28%
+iter 360: loss 1.5556, time 438.72ms, mfu 7.34%
+iter 370: loss 1.5279, time 439.71ms, mfu 7.39%
+iter 380: loss 1.5090, time 431.36ms, mfu 7.45%
+iter 390: loss 1.4982, time 433.63ms, mfu 7.50%
+Enhanced data generator: sleep_time=0.010s, buffer_size=512
+step 400: train loss 1.4229, val loss 1.5679
+🔥 ENHANCED DATA: Total=166656, Enhanced=16656 (10.0%), Generated=512, Buffer=512
+saving checkpoint to out-shakespeare-char
+Updating inference model with new checkpoint...
+number of parameters: 25.21M
+Inference model updated and buffer cleared
+iter 400: loss 1.4657, time 15072.20ms, mfu 6.77%
+iter 410: loss 1.4719, time 437.01ms, mfu 6.88%
+iter 420: loss 1.4758, time 582.66ms, mfu 6.78%
+iter 430: loss 1.4884, time 427.14ms, mfu 6.91%
+iter 440: loss 1.4224, time 432.00ms, mfu 7.02%
+Enhanced data generator: sleep_time=0.010s, buffer_size=512
+iter 450: loss 1.4191, time 430.31ms, mfu 7.11%
+iter 460: loss 1.4088, time 429.96ms, mfu 7.20%
+iter 470: loss 1.4280, time 432.56ms, mfu 7.28%
+iter 480: loss 1.4084, time 441.93ms, mfu 7.33%
+iter 490: loss 1.4124, time 434.71ms, mfu 7.39%
+Enhanced data generator: sleep_time=0.010s, buffer_size=512
+step 500: train loss 1.3297, val loss 1.5165
+🔥 ENHANCED DATA: Total=205056, Enhanced=20530 (10.0%), Generated=512, Buffer=512
+saving checkpoint to out-shakespeare-char
+Updating inference model with new checkpoint...
+number of parameters: 25.21M
+Inference model updated and buffer cleared
+iter 500: loss 1.3909, time 15092.86ms, mfu 6.67%
+iter 510: loss 1.3744, time 431.11ms, mfu 6.80%
+iter 520: loss 1.3903, time 430.61ms, mfu 6.92%
+iter 530: loss 1.3323, time 435.16ms, mfu 7.02%
+iter 540: loss 1.3610, time 437.79ms, mfu 7.10%
+Enhanced data generator: sleep_time=0.010s, buffer_size=512
+iter 550: loss 1.3216, time 430.23ms, mfu 7.19%
+iter 560: loss 1.3642, time 427.75ms, mfu 7.28%
+iter 570: loss 1.3121, time 432.36ms, mfu 7.35%
+iter 580: loss 1.2855, time 437.22ms, mfu 7.40%
+iter 590: loss 1.3204, time 431.09ms, mfu 7.46%
+Enhanced data generator: sleep_time=0.010s, buffer_size=512
+step 600: train loss 1.2364, val loss 1.5076
+🔥 ENHANCED DATA: Total=243456, Enhanced=24523 (10.1%), Generated=512, Buffer=512
+saving checkpoint to out-shakespeare-char
+Updating inference model with new checkpoint...
+number of parameters: 25.21M
+Inference model updated and buffer cleared
+iter 600: loss 1.3170, time 15087.97ms, mfu 6.73%
+iter 610: loss 1.3521, time 426.95ms, mfu 6.87%
+iter 620: loss 1.3225, time 433.87ms, mfu 6.97%
+iter 630: loss 1.2906, time 433.82ms, mfu 7.07%
+iter 640: loss 1.2687, time 435.65ms, mfu 7.15%
+iter 650: loss 1.2583, time 434.64ms, mfu 7.23%
+Enhanced data generator: sleep_time=0.010s, buffer_size=512
+iter 660: loss 1.2167, time 431.82ms, mfu 7.30%
+iter 670: loss 1.2420, time 433.29ms, mfu 7.37%
+iter 680: loss 1.2440, time 436.42ms, mfu 7.42%
+iter 690: loss 1.1986, time 435.72ms, mfu 7.47%
+Enhanced data generator: sleep_time=0.010s, buffer_size=512
+step 700: train loss 1.1313, val loss 1.5254
+🔥 ENHANCED DATA: Total=281856, Enhanced=28235 (10.0%), Generated=512, Buffer=512
+iter 700: loss 1.2067, time 13769.09ms, mfu 6.75%
+iter 710: loss 1.2369, time 432.74ms, mfu 6.87%
+iter 720: loss 1.2149, time 429.64ms, mfu 6.98%
+iter 730: loss 1.1848, time 435.29ms, mfu 7.07%
+iter 740: loss 1.1949, time 429.58ms, mfu 7.17%
+iter 750: loss 1.1455, time 424.30ms, mfu 7.26%
+iter 760: loss 1.1653, time 431.87ms, mfu 7.33%
+Enhanced data generator: sleep_time=0.010s, buffer_size=512
+iter 770: loss 1.1702, time 427.38ms, mfu 7.40%
+iter 780: loss 1.1168, time 428.10ms, mfu 7.47%
+iter 790: loss 1.1471, time 433.14ms, mfu 7.51%
+step 800: train loss 1.0378, val loss 1.5419
+🔥 ENHANCED DATA: Total=320256, Enhanced=32035 (10.0%), Generated=512, Buffer=512
+Enhanced data generator: sleep_time=0.010s, buffer_size=512
+iter 800: loss 1.1744, time 13928.30ms, mfu 6.79%
+iter 810: loss 1.1406, time 435.98ms, mfu 6.90%
+iter 820: loss 1.1872, time 434.18ms, mfu 7.00%
+iter 830: loss 1.0976, time 434.79ms, mfu 7.09%
+iter 840: loss 1.1101, time 434.68ms, mfu 7.18%
+iter 850: loss 1.1054, time 429.27ms, mfu 7.26%
+iter 860: loss 1.1150, time 439.28ms, mfu 7.32%
+Enhanced data generator: sleep_time=0.010s, buffer_size=512
+iter 870: loss 1.0487, time 435.21ms, mfu 7.38%
+iter 880: loss 1.0759, time 434.62ms, mfu 7.43%
+iter 890: loss 1.0710, time 434.71ms, mfu 7.48%
+step 900: train loss 0.9108, val loss 1.5935
+🔥 ENHANCED DATA: Total=358656, Enhanced=35868 (10.0%), Generated=512, Buffer=512
+iter 900: loss 1.0452, time 13821.40ms, mfu 6.76%
+Enhanced data generator: sleep_time=0.010s, buffer_size=512
+iter 910: loss 1.0551, time 431.56ms, mfu 6.88%
+iter 920: loss 1.0266, time 432.78ms, mfu 6.98%
+iter 930: loss 1.0054, time 434.50ms, mfu 7.08%
+iter 940: loss 1.0452, time 437.70ms, mfu 7.16%
+iter 950: loss 1.0374, time 436.60ms, mfu 7.23%
+iter 960: loss 0.9667, time 427.72ms, mfu 7.31%
+iter 970: loss 0.9732, time 427.95ms, mfu 7.38%
+Enhanced data generator: sleep_time=0.010s, buffer_size=512
+iter 980: loss 0.9588, time 432.25ms, mfu 7.44%
+iter 990: loss 0.9702, time 431.69ms, mfu 7.49%
+step 1000: train loss 0.7858, val loss 1.6535
+🔥 ENHANCED DATA: Total=397056, Enhanced=39748 (10.0%), Generated=512, Buffer=512
+iter 1000: loss 0.9548, time 13798.47ms, mfu 6.77%
+iter 1010: loss 0.9515, time 432.28ms, mfu 6.89%
+Enhanced data generator: sleep_time=0.010s, buffer_size=512
+iter 1020: loss 0.9237, time 433.42ms, mfu 6.99%
+iter 1030: loss 0.9406, time 432.69ms, mfu 7.09%
+iter 1040: loss 0.9219, time 436.10ms, mfu 7.17%
+iter 1050: loss 0.9091, time 429.37ms, mfu 7.25%
+iter 1060: loss 0.9312, time 430.40ms, mfu 7.33%
+iter 1070: loss 0.8787, time 432.13ms, mfu 7.39%
+iter 1080: loss 0.8820, time 430.90ms, mfu 7.45%
+Enhanced data generator: sleep_time=0.010s, buffer_size=512
+iter 1090: loss 0.9065, time 438.35ms, mfu 7.49%
+step 1100: train loss 0.6619, val loss 1.7612
+🔥 ENHANCED DATA: Total=435456, Enhanced=43670 (10.0%), Generated=512, Buffer=512
+iter 1100: loss 0.8714, time 13806.57ms, mfu 6.77%
+iter 1110: loss 0.8499, time 431.39ms, mfu 6.89%
+iter 1120: loss 0.8579, time 435.14ms, mfu 6.99%
+Enhanced data generator: sleep_time=0.010s, buffer_size=512
+iter 1130: loss 0.8427, time 437.59ms, mfu 7.08%
+iter 1140: loss 0.8452, time 431.12ms, mfu 7.17%
+iter 1150: loss 0.8416, time 431.48ms, mfu 7.25%
+iter 1160: loss 0.7943, time 433.97ms, mfu 7.32%
+iter 1170: loss 0.8047, time 430.78ms, mfu 7.38%
+iter 1180: loss 0.7889, time 436.30ms, mfu 7.43%
+iter 1190: loss 0.8071, time 428.74ms, mfu 7.49%
+Enhanced data generator: sleep_time=0.010s, buffer_size=512
+step 1200: train loss 0.5456, val loss 1.8592
+🔥 ENHANCED DATA: Total=473856, Enhanced=47433 (10.0%), Generated=512, Buffer=512
+iter 1200: loss 0.7716, time 13818.72ms, mfu 6.77%
+iter 1210: loss 0.7639, time 439.61ms, mfu 6.88%
+iter 1220: loss 0.7695, time 435.82ms, mfu 6.98%
+Enhanced data generator: sleep_time=0.010s, buffer_size=512
+iter 1230: loss 0.7603, time 430.05ms, mfu 7.08%
+iter 1240: loss 0.7352, time 433.96ms, mfu 7.16%
+iter 1250: loss 0.7099, time 429.74ms, mfu 7.25%
+iter 1260: loss 0.7137, time 431.14ms, mfu 7.32%
+iter 1270: loss 0.7354, time 433.08ms, mfu 7.38%
+iter 1280: loss 0.7033, time 435.73ms, mfu 7.44%
+iter 1290: loss 0.7003, time 435.38ms, mfu 7.48%

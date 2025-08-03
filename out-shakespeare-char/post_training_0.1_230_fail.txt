@@ -1,0 +1,158 @@
+
+
+⚡ feature/enhanced-data-augmentation ~/nanoGPT python train.py config/train_shakespeare_char_continue_4.py
+Overriding config with config/train_shakespeare_char_continue_4.py:
+# train a miniature character-level shakespeare model
+# good for debugging and playing on macbooks and such
+
+init_from = 'resume' # 'scratch' or 'resume' or 'gpt2*'
+out_dir = 'out-shakespeare-char'
+eval_interval = 100 # keep frequent because we'll overfit
+eval_iters = 50
+log_interval = 10 # don't print too too often
+
+# we expect to overfit on this small dataset, so only save when val improves
+always_save_checkpoint = False
+
+wandb_log = False # override via command line if you like
+wandb_project = 'shakespeare-char'
+wandb_run_name = 'mini-gpt'
+
+dataset = 'shakespeare_char'
+gradient_accumulation_steps = 1
+batch_size = 256
+block_size = 256 # context of up to 256 previous characters
+
+# enhanced data augmentation settings
+# uncomment to experiment with enhanced data to reduce overfitting
+enhanced_data_probability = 0.1 # 50% enhanced data
+min_prefix_length = 20 # shorter prefixes for character-level
+max_prefix_length = 230 # shorter prefixes for character-level  
+enhanced_generation_temperature = 0.3 # slightly more creative
+enhanced_buffer_size = 512 # smaller buffer for this small dataset
+enhanced_generation_batch_size =64
+
+
+# baby GPT model :)
+n_layer = 6
+n_head = 6
+n_embd = 384
+dropout = 0.2
+
+learning_rate = 1e-3 # with baby networks can afford to go a bit higher
+max_iters = 5000
+lr_decay_iters = 5000 # make equal to max_iters usually
+min_lr = 1e-4 # learning_rate / 10 usually
+beta2 = 0.99 # make a bit bigger because number of tokens per iter is small
+
+warmup_iters = 100 # not super necessary potentially
+
+# on macbook also add
+# device = 'cpu'  # run on cpu only
+# compile = False # do not torch compile the model
+
+tokens per iteration will be: 65,536
+found vocab_size = 65 (inside data/shakespeare_char/meta.pkl)
+Resuming training from out-shakespeare-char
+number of parameters: 10.65M
+Initializing enhanced data augmentation...
+number of parameters: 10.65M
+Enhanced data augmentation initialized with probability 0.1
+⏳ Background generation will start after model compilation...
+/teamspace/studios/this_studio/nanoGPT/train.py:591: FutureWarning: `torch.cuda.amp.GradScaler(args...)` is deprecated. Please use `torch.amp.GradScaler('cuda', args...)` instead.
+  scaler = torch.cuda.amp.GradScaler(enabled=(dtype == 'float16'))
+num decayed parameter tensors: 26, with 10,740,096 parameters
+num non-decayed parameter tensors: 13, with 4,992 parameters
+using fused AdamW: True
+compiling the model... (takes a ~minute)
+🚀 Starting background enhanced sample generation...
+📦 Waiting for full enhanced buffer (512 samples)...
+🔥 Generated 64 enhanced samples → Buffer: 64/512 (12.5%)
+📈 Buffer progress: 64/512 samples (12.5%) - Generated: 64 - Elapsed: 6s
+🔥 Generated 64 enhanced samples → Buffer: 128/512 (25.0%)
+📈 Buffer progress: 128/512 samples (25.0%) - Generated: 128 - Elapsed: 10s
+🔥 Generated 64 enhanced samples → Buffer: 192/512 (37.5%)
+📈 Buffer progress: 192/512 samples (37.5%) - Generated: 192 - Elapsed: 14s
+🔥 Generated 64 enhanced samples → Buffer: 256/512 (50.0%)
+📈 Buffer progress: 256/512 samples (50.0%) - Generated: 256 - Elapsed: 18s
+🔥 Generated 64 enhanced samples → Buffer: 320/512 (62.5%)
+📈 Buffer progress: 320/512 samples (62.5%) - Generated: 320 - Elapsed: 22s
+🔥 Generated 64 enhanced samples → Buffer: 384/512 (75.0%)
+📈 Buffer progress: 384/512 samples (75.0%) - Generated: 384 - Elapsed: 26s
+🔥 Generated 64 enhanced samples → Buffer: 448/512 (87.5%)
+📈 Buffer progress: 448/512 samples (87.5%) - Generated: 448 - Elapsed: 30s
+🔥 Generated 64 enhanced samples → Buffer: 512/512 (100.0%)
+Enhanced data generator: sleep_time=0.100s, buffer_size=512
+📈 Buffer progress: 512/512 samples (100.0%) - Generated: 512 - Elapsed: 34s
+✅ Enhanced buffer FULL: 512 samples ready! Generated: 512 - Total time: 34s
+step 800: train loss 1.0783, val loss 1.4667
+🔥 ENHANCED DATA: Total=13056, Enhanced=1325 (10.1%), Generated=512, Buffer=512
+iter 800: loss 1.1690, time 11174.68ms, mfu -100.00%
+iter 810: loss 1.1579, time 220.89ms, mfu 6.75%
+iter 820: loss 1.1735, time 220.57ms, mfu 6.75%
+iter 830: loss 1.1324, time 220.51ms, mfu 6.75%
+iter 840: loss 1.1413, time 221.70ms, mfu 6.75%
+iter 850: loss 1.1503, time 222.26ms, mfu 6.74%
+iter 860: loss 1.1524, time 222.14ms, mfu 6.74%
+iter 870: loss 1.1292, time 225.70ms, mfu 6.73%
+Enhanced data generator: sleep_time=0.010s, buffer_size=512
+iter 880: loss 1.1318, time 220.75ms, mfu 6.73%
+iter 890: loss 1.1206, time 224.73ms, mfu 6.72%
+step 900: train loss 1.0273, val loss 1.4720
+🔥 ENHANCED DATA: Total=51456, Enhanced=5202 (10.1%), Generated=512, Buffer=512
+iter 900: loss 1.1228, time 7615.88ms, mfu 6.07%
+iter 910: loss 1.1390, time 227.81ms, mfu 6.11%
+iter 920: loss 1.1221, time 226.05ms, mfu 6.16%
+iter 930: loss 1.1238, time 226.56ms, mfu 6.20%
+iter 940: loss 1.0944, time 229.51ms, mfu 6.23%
+iter 950: loss 1.1100, time 226.24ms, mfu 6.27%
+iter 960: loss 1.0924, time 231.01ms, mfu 6.29%
+iter 970: loss 1.1012, time 230.24ms, mfu 6.31%
+Enhanced data generator: sleep_time=0.010s, buffer_size=512
+iter 980: loss 1.0897, time 228.99ms, mfu 6.33%
+iter 990: loss 1.0834, time 229.97ms, mfu 6.34%
+step 1000: train loss 0.9795, val loss 1.4988
+🔥 ENHANCED DATA: Total=89856, Enhanced=9089 (10.1%), Generated=512, Buffer=512
+iter 1000: loss 1.0853, time 7607.31ms, mfu 5.73%
+iter 1010: loss 1.0721, time 230.02ms, mfu 5.80%
+iter 1020: loss 1.0843, time 226.18ms, mfu 5.88%
+iter 1030: loss 1.0572, time 231.47ms, mfu 5.94%
+iter 1040: loss 1.0883, time 227.79ms, mfu 6.00%
+iter 1050: loss 1.0813, time 229.65ms, mfu 6.05%
+iter 1060: loss 1.0672, time 226.46ms, mfu 6.10%
+iter 1070: loss 1.0381, time 230.97ms, mfu 6.14%
+Enhanced data generator: sleep_time=0.010s, buffer_size=512
+iter 1080: loss 1.0614, time 228.02ms, mfu 6.18%
+iter 1090: loss 1.0669, time 224.95ms, mfu 6.22%
+step 1100: train loss 0.9304, val loss 1.5224
+🔥 ENHANCED DATA: Total=128256, Enhanced=12892 (10.1%), Generated=512, Buffer=512
+iter 1100: loss 1.0383, time 7583.01ms, mfu 5.62%
+iter 1110: loss 1.0440, time 224.61ms, mfu 5.72%
+iter 1120: loss 1.0407, time 223.54ms, mfu 5.81%
+iter 1130: loss 1.0232, time 221.59ms, mfu 5.91%
+iter 1140: loss 1.0160, time 222.52ms, mfu 5.99%
+iter 1150: loss 1.0255, time 220.79ms, mfu 6.06%
+iter 1160: loss 1.0184, time 228.25ms, mfu 6.11%
+iter 1170: loss 1.0278, time 226.25ms, mfu 6.16%
+Enhanced data generator: sleep_time=0.010s, buffer_size=512
+iter 1180: loss 1.0257, time 228.80ms, mfu 6.19%
+iter 1190: loss 1.0094, time 225.20ms, mfu 6.23%
+step 1200: train loss 0.8753, val loss 1.5418
+🔥 ENHANCED DATA: Total=166656, Enhanced=16688 (10.0%), Generated=512, Buffer=512
+iter 1200: loss 1.0056, time 7607.79ms, mfu 5.63%
+iter 1210: loss 0.9855, time 223.65ms, mfu 5.73%
+iter 1220: loss 0.9910, time 229.48ms, mfu 5.81%
+iter 1230: loss 0.9952, time 222.66ms, mfu 5.90%
+iter 1240: loss 1.0101, time 222.59ms, mfu 5.98%
+iter 1250: loss 0.9990, time 227.30ms, mfu 6.04%
+iter 1260: loss 0.9950, time 223.85ms, mfu 6.10%
+iter 1270: loss 0.9941, time 222.10ms, mfu 6.16%
+Enhanced data generator: sleep_time=0.010s, buffer_size=512
+iter 1280: loss 0.9700, time 226.68ms, mfu 6.20%
+iter 1290: loss 0.9637, time 225.30ms, mfu 6.24%
+step 1300: train loss 0.8256, val loss 1.5639
+🔥 ENHANCED DATA: Total=205056, Enhanced=20551 (10.0%), Generated=512, Buffer=512
+iter 1300: loss 0.9559, time 7781.34ms, mfu 5.64%
+iter 1310: loss 0.9598, time 227.08ms, mfu 5.73%
+iter 1320: loss 0.9754, time 225.04ms, mfu 5.82%
+iter 1330: loss 0.9573, time 222.83ms, mfu 5.91%

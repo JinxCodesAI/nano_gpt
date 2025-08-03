@@ -38,7 +38,7 @@ log_interval = 1
 eval_iters = 200
 eval_only = False # if True, script exits right after the first eval
 always_save_checkpoint = True # if True, always save a checkpoint after each eval
-init_from = 'resume' # 'scratch' or 'resume' or 'gpt2*'
+init_from = 'scratch' # 'scratch' or 'resume' or 'gpt2*'
 # wandb logging
 wandb_log = False # disabled by default
 wandb_project = 'owt'
@@ -229,10 +229,10 @@ class EnhancedSampleGenerator:
     def update_model(self, new_inference_model):
         """Update inference model and clear buffer"""
         self.inference_model = new_inference_model
-        self.buffer.clear()
+        # self.buffer.clear()
         # Reset counters when model is updated
-        self.last_generated = 0
-        self.last_consumed = 0
+        # self.last_generated = 0
+        # self.last_consumed = 0
     
     def is_running(self):
         """Check if generator is running"""
@@ -731,7 +731,16 @@ while True:
                     # This ensures consistency with what's in ckpt.pt
                     state_dict = checkpoint['model']
                     
-                    new_inference_model.load_state_dict(state_dict)
+                    # Handle _orig_mod prefix from torch.compile if present
+                    unwanted_prefix = '_orig_mod.'
+                    cleaned_state_dict = {}
+                    for k, v in state_dict.items():
+                        if k.startswith(unwanted_prefix):
+                            cleaned_state_dict[k[len(unwanted_prefix):]] = v
+                        else:
+                            cleaned_state_dict[k] = v
+                    
+                    new_inference_model.load_state_dict(cleaned_state_dict)
                     new_inference_model.eval()
                     new_inference_model.to(device)
                     enhanced_sample_generator.update_model(new_inference_model)

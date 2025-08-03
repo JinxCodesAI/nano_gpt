@@ -7,6 +7,10 @@
 
 This branch contains an experimental enhanced data augmentation feature to prevent overfitting by mixing real training data with model-generated samples. See the [Enhanced Data Augmentation](#enhanced-data-augmentation) section below for details.
 
+Results can be found in out-shakespeare-char. 
+For low contamination 0.1 and bigger model, model reached slightly lower validation loss (7%) before overfitting
+
+
 The simplest, fastest repository for training/finetuning medium-sized GPTs. It is a rewrite of [minGPT](https://github.com/karpathy/minGPT) that prioritizes teeth over education. Still under active development, but currently the file `train.py` reproduces GPT-2 (124M) on OpenWebText, running on a single 8XA100 40GB node in about 4 days of training. The code itself is plain and readable: `train.py` is a ~300-line boilerplate training loop and `model.py` a ~300-line GPT model definition, which can optionally load the GPT-2 weights from OpenAI. That's it.
 
 ![repro124m](assets/gpt2_124M_loss.png)

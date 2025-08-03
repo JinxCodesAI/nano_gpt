@@ -1,6 +1,7 @@
 # train a miniature character-level shakespeare model
 # good for debugging and playing on macbooks and such
 
+init_from = 'resume' # 'scratch' or 'resume' or 'gpt2*'
 out_dir = 'out-shakespeare-char'
 eval_interval = 100 # keep frequent because we'll overfit
 eval_iters = 50
@@ -20,12 +21,12 @@ block_size = 256 # context of up to 256 previous characters
 
 # enhanced data augmentation settings
 # uncomment to experiment with enhanced data to reduce overfitting
-enhanced_data_probability = 0.5 # 50% enhanced data
+enhanced_data_probability = 0.2 # 50% enhanced data
 min_prefix_length = 20 # shorter prefixes for character-level
-max_prefix_length = 230 # shorter prefixes for character-level  
+max_prefix_length = 40 # shorter prefixes for character-level  
 enhanced_generation_temperature = 0.3 # slightly more creative
 enhanced_buffer_size = 512 # smaller buffer for this small dataset
-enhanced_generation_batch_size =256
+enhanced_generation_batch_size =64
 
 
 # baby GPT model :)

@@ -1,0 +1,70 @@
+
+tokens per iteration will be: 65,536
+found vocab_size = 65 (inside data/shakespeare_char/meta.pkl)
+Resuming training from out-shakespeare-char
+number of parameters: 10.65M
+Initializing enhanced data augmentation...
+number of parameters: 10.65M
+Enhanced data augmentation initialized with probability 0.95
+⏳ Background generation will start after model compilation...
+/teamspace/studios/this_studio/nanoGPT/train.py:591: FutureWarning: `torch.cuda.amp.GradScaler(args...)` is deprecated. Please use `torch.amp.GradScaler('cuda', args...)` instead.
+  scaler = torch.cuda.amp.GradScaler(enabled=(dtype == 'float16'))
+num decayed parameter tensors: 26, with 10,740,096 parameters
+num non-decayed parameter tensors: 13, with 4,992 parameters
+using fused AdamW: True
+compiling the model... (takes a ~minute)
+🚀 Starting background enhanced sample generation...
+📦 Waiting for full enhanced buffer (512 samples)...
+🔥 Generated 64 enhanced samples → Buffer: 64/512 (12.5%)
+📈 Buffer progress: 64/512 samples (12.5%) - Generated: 64 - Elapsed: 4s
+🔥 Generated 64 enhanced samples → Buffer: 128/512 (25.0%)
+📈 Buffer progress: 128/512 samples (25.0%) - Generated: 128 - Elapsed: 8s
+🔥 Generated 64 enhanced samples → Buffer: 192/512 (37.5%)
+📈 Buffer progress: 192/512 samples (37.5%) - Generated: 192 - Elapsed: 10s
+🔥 Generated 64 enhanced samples → Buffer: 256/512 (50.0%)
+📈 Buffer progress: 256/512 samples (50.0%) - Generated: 256 - Elapsed: 14s
+🔥 Generated 64 enhanced samples → Buffer: 320/512 (62.5%)
+📈 Buffer progress: 320/512 samples (62.5%) - Generated: 320 - Elapsed: 16s
+🔥 Generated 64 enhanced samples → Buffer: 384/512 (75.0%)
+📈 Buffer progress: 384/512 samples (75.0%) - Generated: 384 - Elapsed: 18s
+🔥 Generated 64 enhanced samples → Buffer: 448/512 (87.5%)
+📈 Buffer progress: 448/512 samples (87.5%) - Generated: 448 - Elapsed: 22s
+🔥 Generated 64 enhanced samples → Buffer: 512/512 (100.0%)
+📈 Buffer progress: 512/512 samples (100.0%) - Generated: 512 - Elapsed: 24s
+✅ Enhanced buffer FULL: 512 samples ready! Generated: 512 - Total time: 24s
+Enhanced data generator: sleep_time=0.010s, buffer_size=512
+step 800: train loss 0.7749, val loss 1.4649
+🔥 ENHANCED DATA: Total=13056, Enhanced=12406 (95.0%), Generated=512, Buffer=512
+iter 800: loss 0.8760, time 10297.40ms, mfu -100.00%
+iter 810: loss 0.6563, time 211.85ms, mfu 7.04%
+iter 820: loss 0.5686, time 220.84ms, mfu 7.01%
+iter 830: loss 0.5490, time 213.86ms, mfu 7.00%
+iter 840: loss 0.4939, time 207.22ms, mfu 7.02%
+iter 850: loss 0.5258, time 210.68ms, mfu 7.03%
+iter 860: loss 0.4351, time 217.52ms, mfu 7.01%
+iter 870: loss 0.4161, time 217.02ms, mfu 7.00%
+iter 880: loss 0.3758, time 216.96ms, mfu 6.98%
+iter 890: loss 0.3224, time 211.81ms, mfu 6.99%
+Enhanced data generator: sleep_time=0.010s, buffer_size=512
+step 900: train loss 0.2124, val loss 1.9678
+🔥 ENHANCED DATA: Total=51456, Enhanced=48970 (95.2%), Generated=512, Buffer=512
+iter 900: loss 0.3223, time 6969.80ms, mfu 6.31%
+iter 910: loss 0.2577, time 215.12ms, mfu 6.37%
+iter 920: loss 0.3314, time 224.18ms, mfu 6.40%
+iter 930: loss 0.2939, time 224.31ms, mfu 6.42%
+iter 940: loss 0.2441, time 222.62ms, mfu 6.45%
+iter 950: loss 0.2288, time 220.77ms, mfu 6.48%
+iter 960: loss 0.2193, time 222.24ms, mfu 6.50%
+iter 970: loss 0.1717, time 224.91ms, mfu 6.52%
+iter 980: loss 0.2050, time 222.51ms, mfu 6.53%
+iter 990: loss 0.2078, time 223.18ms, mfu 6.55%
+Enhanced data generator: sleep_time=0.010s, buffer_size=512
+step 1000: train loss 0.1028, val loss 2.0303
+🔥 ENHANCED DATA: Total=89856, Enhanced=85452 (95.1%), Generated=512, Buffer=512
+iter 1000: loss 0.1576, time 7192.11ms, mfu 5.92%
+iter 1010: loss 0.1808, time 224.08ms, mfu 5.99%
+iter 1020: loss 0.1578, time 225.96ms, mfu 6.05%
+iter 1030: loss 0.1808, time 225.26ms, mfu 6.11%
+iter 1040: loss 0.1434, time 222.66ms, mfu 6.16%
+iter 1050: loss 0.1236, time 225.62ms, mfu 6.21%
+iter 1060: loss 0.1577, time 224.52ms, mfu 6.25%
