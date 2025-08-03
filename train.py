@@ -265,24 +265,32 @@ class EnhancedSampleGenerator:
                 
                 # Only generate if buffer is not full
                 if not self.buffer.is_full():
-                    # Generate a batch of enhanced samples
-                    samples = generate_enhanced_samples_batch(
-                        self.inference_model, 
-                        self.data, 
-                        self.config['enhanced_generation_batch_size'],
-                        self.config['min_prefix_length'],
-                        self.config['max_prefix_length'],
-                        self.config['block_size'],
-                        self.config['enhanced_generation_temperature'],
-                        self.config['enhanced_generation_top_k'],
-                        self.device,
-                        self.ctx
-                    )
-                    
-                    if samples:
-                        self.buffer.add_samples(samples)
-                        # Update global generation count
-                        enhanced_stats['enhanced_samples_generated'] += len(samples)
+                    try:
+                        # Generate a batch of enhanced samples
+                        samples = generate_enhanced_samples_batch(
+                            self.inference_model, 
+                            self.data, 
+                            self.config['enhanced_generation_batch_size'],
+                            self.config['min_prefix_length'],
+                            self.config['max_prefix_length'],
+                            self.config['block_size'],
+                            self.config['enhanced_generation_temperature'],
+                            self.config['enhanced_generation_top_k'],
+                            self.device,
+                            self.ctx
+                        )
+                        
+                        if samples:
+                            self.buffer.add_samples(samples)
+                            # Update global generation count
+                            enhanced_stats['enhanced_samples_generated'] += len(samples)
+                            print(f"Generated {len(samples)} enhanced samples, buffer size now: {self.buffer.size()}")
+                        else:
+                            print("Warning: No enhanced samples generated")
+                    except Exception as gen_error:
+                        print(f"Enhanced sample generation failed: {gen_error}")
+                        import traceback
+                        traceback.print_exc()
                 
                 # Update tracking
                 self.last_generated = current_generated
@@ -313,9 +321,14 @@ def determine_batch_composition(batch_size, probability):
 def generate_enhanced_samples_batch(inference_model, data, batch_size, min_prefix_length, 
                                    max_prefix_length, block_size, temperature, top_k, device, ctx):
     """Generate batch of enhanced samples for buffer"""
-    if inference_model is None or len(data) <= max_prefix_length:
+    if inference_model is None:
+        print("ERROR: inference_model is None")
+        return []
+    if len(data) <= max_prefix_length:
+        print(f"ERROR: data length {len(data)} <= max_prefix_length {max_prefix_length}")
         return []
     
+    print(f"Starting generation: batch_size={batch_size}, data_len={len(data)}, prefix_range={min_prefix_length}-{max_prefix_length}")
     samples = []
     
     try:
@@ -565,6 +578,21 @@ if enhanced_data_probability > 0.0:
     # Start background generation
     enhanced_sample_generator.start()
     print(f"Enhanced data augmentation initialized with probability {enhanced_data_probability}")
+    
+    # Wait for initial buffer filling
+    print("Waiting for initial enhanced sample generation...")
+    import time
+    for i in range(30):  # Wait up to 30 seconds
+        time.sleep(1)
+        buffer_size = enhanced_sample_buffer.size()
+        generated = enhanced_stats['enhanced_samples_generated']
+        print(f"Buffer filling: {buffer_size} samples ready, {generated} generated")
+        if buffer_size >= enhanced_generation_batch_size:  # At least one batch ready
+            break
+    
+    final_buffer_size = enhanced_sample_buffer.size()
+    final_generated = enhanced_stats['enhanced_samples_generated']
+    print(f"✅ Enhanced data ready: {final_buffer_size} samples in buffer, {final_generated} total generated")
 
 # initialize a GradScaler. If enabled=False scaler is a no-op
 scaler = torch.cuda.amp.GradScaler(enabled=(dtype == 'float16'))
@@ -672,7 +700,15 @@ while True:
                 if enhanced_data_probability > 0.0 and enhanced_sample_generator is not None:
                     print("Updating inference model with new checkpoint...")
                     new_inference_model = GPT(GPTConfig(**model_args))
-                    new_inference_model.load_state_dict(raw_model.state_dict())
+                    
+                    # Handle torch.compile model state dict with _orig_mod prefix
+                    state_dict = raw_model.state_dict()
+                    unwanted_prefix = '_orig_mod.'
+                    for k,v in list(state_dict.items()):
+                        if k.startswith(unwanted_prefix):
+                            state_dict[k[len(unwanted_prefix):]] = state_dict.pop(k)
+                    
+                    new_inference_model.load_state_dict(state_dict)
                     new_inference_model.eval()
                     new_inference_model.to(device)
                     enhanced_sample_generator.update_model(new_inference_model)
