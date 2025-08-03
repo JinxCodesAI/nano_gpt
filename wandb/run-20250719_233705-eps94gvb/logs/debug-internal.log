@@ -1,6 +1,0 @@
-{"time":"2025-07-19T23:37:05.271565887Z","level":"INFO","msg":"stream: starting","core version":"0.21.0"}
-{"time":"2025-07-19T23:37:05.424704177Z","level":"INFO","msg":"stream: created new stream","id":"eps94gvb"}
-{"time":"2025-07-19T23:37:05.424758452Z","level":"INFO","msg":"stream: started","id":"eps94gvb"}
-{"time":"2025-07-19T23:37:05.424852845Z","level":"INFO","msg":"sender: started","stream_id":"eps94gvb"}
-{"time":"2025-07-19T23:37:05.424912741Z","level":"INFO","msg":"writer: Do: started","stream_id":"eps94gvb"}
-{"time":"2025-07-19T23:37:05.424878697Z","level":"INFO","msg":"handler: started","stream_id":"eps94gvb"}

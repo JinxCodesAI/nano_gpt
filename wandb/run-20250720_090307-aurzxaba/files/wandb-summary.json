@@ -1,1 +1,0 @@
-{"_timestamp":1.753002253482468e+09,"_wandb":{"runtime":66},"_runtime":66,"warmup_iters":200,"train/loss":8.572092056274414,"iter":100,"_step":102,"lr":0.005024875621890548,"mfu":33.43633031694458,"lr_decay_iters":600000,"val/loss":8.576723098754883,"effective_it":100}
