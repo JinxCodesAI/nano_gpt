@@ -1,8 +1,6 @@
 
 # nanoGPT
 
-![nanoGPT](assets/nanogpt.jpg)
-
 This is a fork of [karpathy/nanoGPT](https://github.com/karpathy/nanoGPT) with modular architecture for training GPT models. The codebase has been refactored into a modular training system with dynamic scaling capabilities and architectural operations.
 
 The original repository focuses on simplicity and readability. This fork extends that foundation by adding:
