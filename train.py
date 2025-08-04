@@ -231,14 +231,28 @@ elif init_from == 'resume':
     ckpt_path = os.path.join(out_dir, 'ckpt.pt')
     checkpoint = torch.load(ckpt_path, map_location=device)
     checkpoint_model_args = checkpoint['model_args']
+
+    # --- FIX START: Correctly load all necessary model arguments ---
     # force these config attributes to be equal otherwise we can't even resume training
     # the rest of the attributes (e.g. dropout) can stay as desired from command line
-    for k in ['n_layer', 'n_head', 'n_embd', 'block_size', 'bias', 'vocab_size', 'model_type', 'mask_token_id']:
-        if k in checkpoint_model_args:
-            model_args[k] = checkpoint_model_args[k]
-    # Set global mask_token_id if resuming diffusion model
-    if model_args.get('model_type') == 'diffusion' and 'mask_token_id' in model_args:
-        mask_token_id = model_args['mask_token_id']
+    keys_to_force = ['n_layer', 'n_head', 'n_embd', 'block_size', 'bias', 'vocab_size']
+    for k in keys_to_force:
+        model_args[k] = checkpoint_model_args[k]
+    
+    # Explicitly check for and load diffusion-specific arguments
+    if 'model_type' in checkpoint_model_args:
+        model_args['model_type'] = checkpoint_model_args['model_type']
+    if 'mask_token_id' in checkpoint_model_args:
+        model_args['mask_token_id'] = checkpoint_model_args['mask_token_id']
+    
+    # After loading, update the global variables that control the script's behavior
+    if model_args.get('model_type') == 'diffusion':
+        print("Resuming in diffusion mode.")
+        model_type = 'diffusion'
+        mask_token_id = model_args.get('mask_token_id')
+        assert mask_token_id is not None, "Resumed a diffusion model but mask_token_id is missing."
+    # --- FIX END ---
+        
     # create the model
     gptconf = GPTConfig(**model_args)
     model = GPT(gptconf)
@@ -295,7 +309,15 @@ def estimate_loss():
         for k in range(eval_iters):
             X, Y = get_batch(split)
             with ctx:
-                logits, loss = model(X, Y)
+                logits, loss_from_model = model(X, Y)
+                
+                # --- FIX START: Use the correct loss function for diffusion mode ---
+                if model_type == 'diffusion':
+                    loss = diffusion_loss_function(logits, Y, X, mask_token_id, penalty_keep_mask, penalty_mask_correct)
+                else:
+                    loss = loss_from_model
+                # --- FIX END ---
+                
             losses[k] = loss.item()
         out[split] = losses.mean()
     model.train()
