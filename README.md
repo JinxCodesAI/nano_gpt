@@ -5,6 +5,8 @@
 
 The simplest, fastest repository for training/finetuning medium-sized GPTs. It is a rewrite of [minGPT](https://github.com/karpathy/minGPT) that prioritizes teeth over education. Still under active development, but currently the file `train.py` reproduces GPT-2 (124M) on OpenWebText, running on a single 8XA100 40GB node in about 4 days of training. The code itself is plain and readable: `train.py` is a ~300-line boilerplate training loop and `model.py` a ~300-line GPT model definition, which can optionally load the GPT-2 weights from OpenAI. That's it.
 
+**NEW**: This repository now also supports **diffusion-based text generation** - a non-autoregressive approach that generates text through iterative refinement, similar to diffusion models in computer vision. See the [Diffusion Models](#diffusion-models) section below for details.
+
 ![repro124m](assets/gpt2_124M_loss.png)
 
 Because the code is so simple, it is very easy to hack to your needs, train new models from scratch, or finetune pretrained checkpoints (e.g. biggest one currently available as a starting point would be the GPT-2 1.3B model from OpenAI).
@@ -194,6 +196,85 @@ python sample.py \
 ```
 
 If you'd like to sample from a model you trained, use the `--out_dir` to point the code appropriately. You can also prompt the model with some text from a file, e.g. ```python sample.py --start=FILE:prompt.txt```.
+
+## diffusion models
+
+This repository now supports training and inference with **diffusion-based text generation models**. Unlike traditional autoregressive GPT models that generate text left-to-right, diffusion models generate entire sequences in parallel through iterative refinement.
+
+### key differences
+
+**Autoregressive GPT (Traditional)**:
+- **Generation**: Left-to-right, one token at a time
+- **Attention**: Causal (tokens can only see previous tokens)
+- **Training**: Predict next token given previous tokens
+- **Inference**: Sequential generation with teacher forcing
+
+**Diffusion GPT (New)**:
+- **Generation**: Parallel, entire sequence refined iteratively
+- **Attention**: Bidirectional (tokens can see all positions)
+- **Training**: Reconstruct corrupted text (masked and randomly replaced tokens)
+- **Inference**: Start with all `[MASK]` tokens, iteratively replace with predictions
+
+### training diffusion models
+
+To train a diffusion model, set `model_type='diffusion'` in your configuration:
+
+**Character-level Shakespeare example:**
+```sh
+python train.py config/train_shakespeare_char.py --model_type=diffusion
+```
+
+**Full GPT-2 reproduction on OpenWebText:**
+```sh
+torchrun --standalone --nproc_per_node=8 train.py config/train_gpt2.py --model_type=diffusion
+```
+
+**Additional diffusion-specific parameters:**
+- `penalty_keep_mask=0.25`: Penalty discount when model correctly keeps `[MASK]` for unknown tokens
+- `penalty_mask_correct=0.5`: Penalty discount when model incorrectly masks a correct token
+- `guaranteed_correct_factor=0.01`: Fraction of tokens guaranteed to remain uncorrupted (0.01 = 1%)
+
+### diffusion inference
+
+Use the dedicated diffusion inference script for trained diffusion models:
+
+```sh
+python generate_diffusion.py --out_dir=out-diffusion --max_steps=25 --temperature=0.8
+```
+
+**Parameters:**
+- `max_steps`: Maximum number of iterative refinement steps (default: 25)
+- `temperature`: Sampling temperature for token selection (default: 0.8)
+- `top_k`: Top-k sampling for token selection (default: 200)
+- `max_new_tokens`: Length of sequence to generate (default: 100)
+
+### how diffusion training works
+
+1. **Data corruption**: Each training sequence is randomly corrupted:
+   - Random percentage (0 to `1-guaranteed_correct_factor`) of tokens replaced with `[MASK]`
+   - Random percentage of remaining tokens replaced with random vocabulary tokens
+   - At least `guaranteed_correct_factor` fraction of tokens remain unchanged (default: 1%)
+
+2. **Target generation**: Training targets are constructed as:
+   - For masked positions → original token
+   - For randomly corrupted positions → `[MASK]` token  
+   - For unchanged positions → original token
+
+3. **Weighted loss**: Custom loss function with different penalties:
+   - Full penalty (1.0) for incorrect word predictions
+   - Reduced penalty (0.25) for "honest uncertainty" (keeping `[MASK]` when unsure)
+   - Reduced penalty (0.5) for "over-cautious masking" (masking correct tokens)
+
+### diffusion generation process
+
+1. **Initialize**: Start with sequence of all `[MASK]` tokens
+2. **Iterate**: For each refinement step:
+   - Forward pass through bidirectional model
+   - Sample new tokens from logits
+   - Update only positions that were `[MASK]` in previous step
+3. **Finalize**: Force any remaining `[MASK]` tokens to actual vocabulary tokens
+
+This approach allows for more flexible text generation patterns and can potentially capture long-range dependencies more effectively than autoregressive models.
 
 ## efficiency notes
 

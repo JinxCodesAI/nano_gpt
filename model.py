@@ -75,6 +75,52 @@ class CausalSelfAttention(nn.Module):
         y = self.resid_dropout(self.c_proj(y))
         return y
 
+class BidirectionalSelfAttention(nn.Module):
+
+    def __init__(self, config):
+        super().__init__()
+        assert config.n_embd % config.n_head == 0
+        # key, query, value projections for all heads, but in a batch
+        self.c_attn = nn.Linear(config.n_embd, 3 * config.n_embd, bias=config.bias)
+        # output projection
+        self.c_proj = nn.Linear(config.n_embd, config.n_embd, bias=config.bias)
+        # regularization
+        self.attn_dropout = nn.Dropout(config.dropout)
+        self.resid_dropout = nn.Dropout(config.dropout)
+        self.n_head = config.n_head
+        self.n_embd = config.n_embd
+        self.dropout = config.dropout
+        # flash attention make GPU go brrrrr but support is only in PyTorch >= 2.0
+        self.flash = hasattr(torch.nn.functional, 'scaled_dot_product_attention')
+        if not self.flash:
+            print("WARNING: using slow attention. Flash Attention requires PyTorch >= 2.0")
+
+    def forward(self, x):
+        B, T, C = x.size() # batch size, sequence length, embedding dimensionality (n_embd)
+
+        # calculate query, key, values for all heads in batch and move head forward to be the batch dim
+        q, k, v  = self.c_attn(x).split(self.n_embd, dim=2)
+        k = k.view(B, T, self.n_head, C // self.n_head).transpose(1, 2) # (B, nh, T, hs)
+        q = q.view(B, T, self.n_head, C // self.n_head).transpose(1, 2) # (B, nh, T, hs)
+        v = v.view(B, T, self.n_head, C // self.n_head).transpose(1, 2) # (B, nh, T, hs)
+
+        # bidirectional self-attention; Self-attend: (B, nh, T, hs) x (B, nh, hs, T) -> (B, nh, T, T)
+        if self.flash:
+            # Key change: is_causal=False for bidirectional attention
+            y = torch.nn.functional.scaled_dot_product_attention(q, k, v, attn_mask=None, dropout_p=self.dropout if self.training else 0, is_causal=False)
+        else:
+            # manual implementation of attention
+            att = (q @ k.transpose(-2, -1)) * (1.0 / math.sqrt(k.size(-1)))
+            # The causal mask fill line is removed
+            att = F.softmax(att, dim=-1)
+            att = self.attn_dropout(att)
+            y = att @ v # (B, nh, T, T) x (B, nh, T, hs) -> (B, nh, T, hs)
+        y = y.transpose(1, 2).contiguous().view(B, T, C) # re-assemble all head outputs side by side
+
+        # output projection
+        y = self.resid_dropout(self.c_proj(y))
+        return y
+
 class MLP(nn.Module):
 
     def __init__(self, config):
@@ -96,7 +142,12 @@ class Block(nn.Module):
     def __init__(self, config):
         super().__init__()
         self.ln_1 = LayerNorm(config.n_embd, bias=config.bias)
-        self.attn = CausalSelfAttention(config)
+        # --- MODIFICATION ---
+        if config.model_type == 'diffusion':
+            self.attn = BidirectionalSelfAttention(config)
+        else:
+            self.attn = CausalSelfAttention(config)
+        # --- END MODIFICATION ---
         self.ln_2 = LayerNorm(config.n_embd, bias=config.bias)
         self.mlp = MLP(config)
 
@@ -114,6 +165,9 @@ class GPTConfig:
     n_embd: int = 768
     dropout: float = 0.0
     bias: bool = True # True: bias in Linears and LayerNorms, like GPT-2. False: a bit better and faster
+    # --- NEW ADDITIONS ---
+    model_type: str = 'gpt2' # Can be 'gpt2' or 'diffusion'
+    mask_token_id: int = None # To be set during model initialization
 
 class GPT(nn.Module):
 
@@ -186,9 +240,13 @@ class GPT(nn.Module):
             logits = self.lm_head(x)
             loss = F.cross_entropy(logits.view(-1, logits.size(-1)), targets.view(-1), ignore_index=-1)
         else:
-            # inference-time mini-optimization: only forward the lm_head on the very last position
-            logits = self.lm_head(x[:, [-1], :]) # note: using list [-1] to preserve the time dim
+            # --- MODIFICATION ---
+            if self.config.model_type == 'diffusion':
+                logits = self.lm_head(x) # Return logits for all positions
+            else:
+                logits = self.lm_head(x[:, [-1], :]) # Original autoregressive behavior
             loss = None
+            # --- END MODIFICATION ---
 
         return logits, loss
 
@@ -327,4 +385,41 @@ class GPT(nn.Module):
             # append sampled index to the running sequence and continue
             idx = torch.cat((idx, idx_next), dim=1)
 
+        return idx
+
+    @torch.no_grad()
+    def generate_diffusion(self, idx, max_steps, temperature=1.0, top_k=None):
+        assert self.config.model_type == 'diffusion', "This generation method is only for diffusion models"
+        assert self.config.mask_token_id is not None, "mask_token_id must be configured."
+        self.eval()
+
+        for _ in range(max_steps):
+            # Check if we are done
+            mask_token_id = self.config.mask_token_id
+            if not (idx == mask_token_id).any():
+                break
+
+            logits, _ = self(idx)
+            logits = logits / temperature
+            if top_k is not None:
+                v, _ = torch.topk(logits, min(top_k, logits.size(-1)))
+                logits[logits < v[:, :, [-1]]] = -float('Inf')
+
+            probs = F.softmax(logits, dim=-1)
+            idx_next = torch.multinomial(probs.view(-1, probs.size(-1)), num_samples=1).view(idx.shape)
+
+            # Only update the tokens that were previously [MASK]
+            mask = (idx == mask_token_id)
+            idx = torch.where(mask, idx_next, idx)
+        
+        # Finalization: force any remaining [MASK] tokens to be something else
+        if (idx == self.config.mask_token_id).any():
+            logits, _ = self(idx)
+            logits[:, :, self.config.mask_token_id] = -float('Inf') # Forbid predicting MASK
+            probs = F.softmax(logits / temperature, dim=-1)
+            idx_next = torch.multinomial(probs.view(-1, probs.size(-1)), num_samples=1).view(idx.shape)
+            mask = (idx == self.config.mask_token_id)
+            idx = torch.where(mask, idx_next, idx)
+
+        self.train()
         return idx

@@ -28,6 +28,30 @@ from torch.nn.parallel import DistributedDataParallel as DDP
 from torch.distributed import init_process_group, destroy_process_group
 
 from model import GPTConfig, GPT
+from torch.nn import functional as F
+
+def diffusion_loss_function(logits, targets, inputs, mask_token_id, penalty_keep_mask, penalty_mask_correct):
+    flat_logits = logits.view(-1, logits.size(-1))
+    flat_targets = targets.view(-1)
+    flat_inputs = inputs.view(-1)
+    flat_predictions = torch.argmax(flat_logits, dim=1)
+
+    per_token_loss = F.cross_entropy(flat_logits, flat_targets, ignore_index=-1, reduction='none')
+    weights = torch.ones_like(per_token_loss)
+
+    # Case 1: Input=[MASK], Target=word, Predicted=[MASK]
+    case1_positions = (flat_inputs == mask_token_id) & \
+                      (flat_targets != mask_token_id) & \
+                      (flat_predictions == mask_token_id)
+    weights[case1_positions] = penalty_keep_mask
+
+    # Case 3a: Input=word, Target=word, Predicted=[MASK]
+    case3a_positions = (flat_inputs == flat_targets) & \
+                       (flat_inputs != mask_token_id) & \
+                       (flat_predictions == mask_token_id)
+    weights[case3a_positions] = penalty_mask_correct
+    
+    return (per_token_loss * weights).mean()
 
 # -----------------------------------------------------------------------------
 # default config values designed to train a gpt2 (124M) on OpenWebText
@@ -54,6 +78,11 @@ n_head = 12
 n_embd = 768
 dropout = 0.0 # for pretraining 0 is good, for finetuning try 0.1+
 bias = False # do we use bias inside LayerNorm and Linear layers?
+model_type = 'gpt2' # 'gpt2' or 'diffusion'
+# Diffusion loss specific penalties
+penalty_keep_mask = 0.25      # Discount for failing to unmask, but keeping [MASK].
+penalty_mask_correct = 0.5    # Discount for wrongly masking a correct token.
+guaranteed_correct_factor = 0.01  # Fraction of tokens guaranteed to remain uncorrupted (0.01 = 1%)
 # adamw optimizer
 learning_rate = 6e-4 # max learning rate
 max_iters = 600000 # total number of training iterations
@@ -113,6 +142,8 @@ ctx = nullcontext() if device_type == 'cpu' else torch.amp.autocast(device_type=
 
 # poor man's data loader
 data_dir = os.path.join('data', dataset)
+mask_token_id = None # Global variable to be set after model init
+
 def get_batch(split):
     # We recreate np.memmap every batch to avoid a memory leak, as per
     # https://stackoverflow.com/questions/45132940/numpy-memmap-memory-usage-want-to-iterate-once/61472122#61472122
@@ -121,8 +152,39 @@ def get_batch(split):
     else:
         data = np.memmap(os.path.join(data_dir, 'val.bin'), dtype=np.uint16, mode='r')
     ix = torch.randint(len(data) - block_size, (batch_size,))
-    x = torch.stack([torch.from_numpy((data[i:i+block_size]).astype(np.int64)) for i in ix])
-    y = torch.stack([torch.from_numpy((data[i+1:i+1+block_size]).astype(np.int64)) for i in ix])
+    x_clean = torch.stack([torch.from_numpy((data[i:i+block_size]).astype(np.int64)) for i in ix])
+    
+    if model_type == 'diffusion':
+        assert mask_token_id is not None, "mask_token_id must be set globally"
+        x_corrupted = x_clean.clone()
+        y_target = x_clean.clone() # Start with the ground truth
+
+        b, t = x_corrupted.shape
+        for i in range(b):
+            max_corruption = 1 - guaranteed_correct_factor
+            rate_mask = torch.rand(1) * max_corruption
+            rate_random = torch.rand(1) * (max_corruption - rate_mask)
+            num_to_mask = int(t * rate_mask)
+            num_to_random = int(t * rate_random)
+            
+            rand_pos = torch.randperm(t)
+            pos_mask = rand_pos[:num_to_mask]
+            pos_random = rand_pos[num_to_mask : num_to_mask + num_to_random]
+
+            # Apply mask corruption and set target
+            x_corrupted[i, pos_mask] = mask_token_id
+            # y_target already has the correct original token here
+
+            # Apply random corruption and set target
+            random_tokens = torch.randint(1, meta_vocab_size, (num_to_random,))
+            x_corrupted[i, pos_random] = (x_clean[i, pos_random] + random_tokens) % meta_vocab_size
+            y_target[i, pos_random] = mask_token_id # Target for these is [MASK]
+
+        x, y = x_corrupted, y_target
+    else:
+        y_autoregressive = torch.stack([torch.from_numpy((data[i+1:i+1+block_size]).astype(np.int64)) for i in ix])
+        x, y = x_clean, y_autoregressive
+
     if device_type == 'cuda':
         # pin arrays x,y, which allows us to move them to GPU asynchronously (non_blocking=True)
         x, y = x.pin_memory().to(device, non_blocking=True), y.pin_memory().to(device, non_blocking=True)
@@ -145,14 +207,22 @@ if os.path.exists(meta_path):
 
 # model init
 model_args = dict(n_layer=n_layer, n_head=n_head, n_embd=n_embd, block_size=block_size,
-                  bias=bias, vocab_size=None, dropout=dropout) # start with model_args from command line
+                  bias=bias, vocab_size=None, dropout=dropout, model_type=model_type) # start with model_args from command line
 if init_from == 'scratch':
     # init a new model from scratch
     print("Initializing a new model from scratch")
     # determine the vocab size we'll use for from-scratch training
     if meta_vocab_size is None:
         print("defaulting to vocab_size of GPT-2 to 50304 (50257 rounded up for efficiency)")
-    model_args['vocab_size'] = meta_vocab_size if meta_vocab_size is not None else 50304
+    # --- MODIFICATION ---
+    if model_type == 'diffusion':
+        vocab_size = meta_vocab_size + 1 if meta_vocab_size is not None else 50305
+        model_args['vocab_size'] = vocab_size
+        model_args['mask_token_id'] = vocab_size - 1
+        mask_token_id = model_args['mask_token_id']
+    else:
+        model_args['vocab_size'] = meta_vocab_size if meta_vocab_size is not None else 50304
+    # --- END MODIFICATION ---
     gptconf = GPTConfig(**model_args)
     model = GPT(gptconf)
 elif init_from == 'resume':
@@ -163,8 +233,12 @@ elif init_from == 'resume':
     checkpoint_model_args = checkpoint['model_args']
     # force these config attributes to be equal otherwise we can't even resume training
     # the rest of the attributes (e.g. dropout) can stay as desired from command line
-    for k in ['n_layer', 'n_head', 'n_embd', 'block_size', 'bias', 'vocab_size']:
-        model_args[k] = checkpoint_model_args[k]
+    for k in ['n_layer', 'n_head', 'n_embd', 'block_size', 'bias', 'vocab_size', 'model_type', 'mask_token_id']:
+        if k in checkpoint_model_args:
+            model_args[k] = checkpoint_model_args[k]
+    # Set global mask_token_id if resuming diffusion model
+    if model_args.get('model_type') == 'diffusion' and 'mask_token_id' in model_args:
+        mask_token_id = model_args['mask_token_id']
     # create the model
     gptconf = GPTConfig(**model_args)
     model = GPT(gptconf)
@@ -297,8 +371,14 @@ while True:
             # looking at the source of that context manager, it just toggles this variable
             model.require_backward_grad_sync = (micro_step == gradient_accumulation_steps - 1)
         with ctx:
-            logits, loss = model(X, Y)
+            logits, loss_from_model = model(X, Y)
+            # --- MODIFICATION ---
+            if model_type == 'diffusion':
+                loss = diffusion_loss_function(logits, Y, X, mask_token_id, penalty_keep_mask, penalty_mask_correct)
+            else:
+                loss = loss_from_model
             loss = loss / gradient_accumulation_steps # scale the loss to account for gradient accumulation
+            # --- END MODIFICATION ---
         # immediately async prefetch next batch while model is doing the forward pass on the GPU
         X, Y = get_batch('train')
         # backward pass, with gradient scaling if training in fp16
