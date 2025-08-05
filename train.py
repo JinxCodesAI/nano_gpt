@@ -30,28 +30,82 @@ from torch.distributed import init_process_group, destroy_process_group
 from model import GPTConfig, GPT
 from torch.nn import functional as F
 
-def diffusion_loss_function(logits, targets, inputs, mask_token_id, penalty_keep_mask, penalty_mask_correct):
-    flat_logits = logits.view(-1, logits.size(-1))
+def advanced_diffusion_loss(logits, targets, inputs, mask_token_id, 
+                            current_penalty_keep_mask, current_penalty_mask_correct,
+                            target_unmask_rate):
+    """
+    A more advanced loss function that implements state-dependent penalties
+    and un-masking confidence control.
+    """
+    B, T, V = logits.shape
+    epsilon = 1e-6
+
+    flat_logits = logits.view(-1, V)
     flat_targets = targets.view(-1)
     flat_inputs = inputs.view(-1)
     flat_predictions = torch.argmax(flat_logits, dim=1)
 
+    # --- Start with a base cross-entropy loss for all tokens ---
     per_token_loss = F.cross_entropy(flat_logits, flat_targets, ignore_index=-1, reduction='none')
+    
+    # --- Initialize weights for each token to 1.0 ---
     weights = torch.ones_like(per_token_loss)
 
-    # Case 1: Input=[MASK], Target=word, Predicted=[MASK]
-    case1_positions = (flat_inputs == mask_token_id) & \
-                      (flat_targets != mask_token_id) & \
-                      (flat_predictions == mask_token_id)
-    weights[case1_positions] = penalty_keep_mask
-
-    # Case 3a: Input=word, Target=word, Predicted=[MASK]
-    case3a_positions = (flat_inputs == flat_targets) & \
-                       (flat_inputs != mask_token_id) & \
-                       (flat_predictions == mask_token_id)
-    weights[case3a_positions] = penalty_mask_correct
+    # --- Identify different scenarios for weighting ---
+    # Case 1: Model keeps a [MASK] where it should have unmasked.
+    case1_positions = (flat_inputs == mask_token_id) & (flat_targets != mask_token_id) & (flat_predictions == mask_token_id)
+    weights[case1_positions] = current_penalty_keep_mask
     
-    return (per_token_loss * weights).mean()
+    # --- Concept 1: State-Dependent Penalty (for wrongly masking a correct token) ---
+    inputs_2d = inputs.view(B, T)
+    targets_2d = targets.view(B, T)
+    predictions_2d = flat_predictions.view(B, T)
+
+    for i in range(B): # Iterate over each sequence in the batch
+        input_words_mask = (inputs_2d[i] != mask_token_id)
+        num_input_words = input_words_mask.sum().item()
+        
+        # Calculate how many of the input words are actually corrupted
+        corrupted_words_mask = (targets_2d[i, input_words_mask] == mask_token_id)
+        num_corrupted_words = corrupted_words_mask.sum().item()
+        
+        corruption_rate = num_corrupted_words / (num_input_words + epsilon)
+        
+        # The penalty for touching correct words is lower if the sentence is already very messy
+        effective_penalty = current_penalty_mask_correct * (1.0 - corruption_rate)
+        
+        seq_case3a_pos = (inputs_2d[i] == targets_2d[i]) & (inputs_2d[i] != mask_token_id) & (predictions_2d[i] == mask_token_id)
+        weights[i * T : (i + 1) * T][seq_case3a_pos] = effective_penalty
+
+    # --- Concept 2: Un-masking Confidence Control ---
+    # Find all positions where the input was [MASK]
+    unmask_attempt_positions = (flat_inputs == mask_token_id)
+    total_masks_in_batch = unmask_attempt_positions.sum().item()
+
+    if total_masks_in_batch > 0:
+        # Find where the model tried to unmask (i.e., predicted a word)
+        predicted_word_at_mask_pos = (unmask_attempt_positions) & (flat_predictions != mask_token_id)
+        
+        # Of those attempts, which were CORRECT?
+        correct_unmasks = (predicted_word_at_mask_pos) & (flat_predictions == flat_targets)
+        weights[correct_unmasks] = 0.0 # Reward correct guesses with zero loss
+
+        # Of those attempts, which were INCORRECT?
+        incorrect_unmasks = (predicted_word_at_mask_pos) & (flat_predictions != flat_targets)
+        num_incorrectly_unmasked = incorrect_unmasks.sum().item()
+
+        # Calculate the dynamic scaling factor
+        actual_incorrect_unmask_rate = num_incorrectly_unmasked / (total_masks_in_batch + epsilon)
+        scaling_factor = actual_incorrect_unmask_rate / (target_unmask_rate + epsilon)
+        
+        # Apply the scaling factor to all incorrect un-masking attempts
+        weights[incorrect_unmasks] *= scaling_factor
+
+    # --- Final Loss Calculation ---
+    # The final loss is the dot product of original losses and dynamic weights, averaged.
+    final_loss = (per_token_loss * weights).mean()
+
+    return final_loss
 
 # -----------------------------------------------------------------------------
 # default config values designed to train a gpt2 (124M) on OpenWebText
@@ -83,6 +137,7 @@ model_type = 'gpt2' # 'gpt2' or 'diffusion'
 penalty_keep_mask = 0.25      # Final discount for failing to unmask, but keeping [MASK].
 penalty_mask_correct = 0.5    # Final discount for wrongly masking a correct token.
 masking_warmup_iters = 1000   # Number of iterations for the penalty curriculum.
+target_unmask_rate = 0.15     # The target fraction of [MASK]s to convert to words in a step.
 guaranteed_correct_factor = 0.01  # Fraction of tokens guaranteed to remain uncorrupted (0.01 = 1%)
 # adamw optimizer
 learning_rate = 6e-4 # max learning rate
@@ -393,7 +448,7 @@ def estimate_loss(current_penalty_keep_mask=penalty_keep_mask, current_penalty_m
                 
                 # --- FIX START: Use the correct loss function for diffusion mode ---
                 if model_type == 'diffusion':
-                    loss = diffusion_loss_function(logits, Y, X, mask_token_id, current_penalty_keep_mask, current_penalty_mask_correct)
+                    loss = advanced_diffusion_loss(logits, Y, X, mask_token_id, current_penalty_keep_mask, current_penalty_mask_correct, target_unmask_rate)
                 else:
                     loss = loss_from_model
                 # --- FIX END ---
@@ -499,7 +554,7 @@ while True:
             logits, loss_from_model = model(X, Y)
             # --- MODIFICATION ---
             if model_type == 'diffusion':
-                loss = diffusion_loss_function(logits, Y, X, mask_token_id, current_penalty_keep_mask, current_penalty_mask_correct)
+                loss = advanced_diffusion_loss(logits, Y, X, mask_token_id, current_penalty_keep_mask, current_penalty_mask_correct, target_unmask_rate)
             else:
                 loss = loss_from_model
             loss = loss / gradient_accumulation_steps # scale the loss to account for gradient accumulation
