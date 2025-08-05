@@ -20,8 +20,8 @@ max_steps = 25 # Number of refinement steps
 exec(open('configurator.py').read()) # overrides from command line or config file
 # -----------------------------------------------------------------------------
 
-torch.manual_seed(seed)
-torch.cuda.manual_seed(seed)
+#torch.manual_seed(seed)
+#torch.cuda.manual_seed(seed)
 torch.backends.cuda.matmul.allow_tf32 = True # allow tf32 on matmul
 torch.backends.cudnn.allow_tf32 = True # allow tf32 on cudnn
 device_type = 'cuda' if 'cuda' in device else 'cpu' # for later use in torch.autocast
