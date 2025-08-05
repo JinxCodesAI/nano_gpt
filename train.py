@@ -400,7 +400,8 @@ if os.path.exists(meta_path):
 
 # model init
 model_args = dict(n_layer=n_layer, n_head=n_head, n_embd=n_embd, block_size=block_size,
-                  bias=bias, vocab_size=None, dropout=dropout, model_type=model_type) # start with model_args from command line
+                  bias=bias, vocab_size=None, dropout=dropout, model_type=model_type,
+                  mask_logit_bias=mask_logit_bias) # start with model_args from command line
 if init_from == 'scratch':
     # init a new model from scratch
     print("Initializing a new model from scratch")
@@ -437,6 +438,10 @@ elif init_from == 'resume':
         model_args['model_type'] = checkpoint_model_args['model_type']
     if 'mask_token_id' in checkpoint_model_args:
         model_args['mask_token_id'] = checkpoint_model_args['mask_token_id']
+    # --- MODIFICATION: Add mask_logit_bias to the list of keys to load ---
+    if 'mask_logit_bias' in checkpoint_model_args:
+        model_args['mask_logit_bias'] = checkpoint_model_args['mask_logit_bias']
+    # --- END MODIFICATION ---
     
     # After loading, update the global variables that control the script's behavior
     if model_args.get('model_type') == 'diffusion':
