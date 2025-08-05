@@ -299,7 +299,8 @@ def get_batch(split):
         for i in range(b):
             max_corruption = 1 - guaranteed_correct_factor
             rate_mask = torch.rand(1) * max_corruption
-            rate_random = torch.rand(1) * (max_corruption - rate_mask)
+            rate_random = torch.rand(1) * rate_mask
+            rate_mask = rate_mask - rate_random
             num_to_mask = int(t * rate_mask)
             num_to_random = int(t * rate_random)
             
@@ -613,7 +614,7 @@ while True:
                 }
                 print(f"saving checkpoint to {out_dir}")
                 torch.save(checkpoint, os.path.join(out_dir, 'ckpt.pt'))
-                torch.save(checkpoint, os.path.join(out_dir, f'ckpt_{iter_num}_g.pt'))
+                torch.save(checkpoint, os.path.join(out_dir, f'ckpt_{iter_num}_h.pt'))
     if iter_num == 0 and eval_only:
         break
 
