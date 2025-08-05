@@ -150,6 +150,11 @@ def get_batch(split):
     if split == 'train':
         data = np.memmap(os.path.join(data_dir, 'train.bin'), dtype=np.uint16, mode='r')
     else:
+        # For diffusion models, validation data is handled by the fixed set
+        # For regular models, we still need to handle val split
+        if model_type == 'diffusion':
+            # This should not be called for val split in diffusion mode
+            raise ValueError("get_batch should not be called with 'val' split for diffusion models")
         data = np.memmap(os.path.join(data_dir, 'val.bin'), dtype=np.uint16, mode='r')
     ix = torch.randint(len(data) - block_size, (batch_size,))
     x_clean = torch.stack([torch.from_numpy((data[i:i+block_size]).astype(np.int64)) for i in ix])
@@ -191,6 +196,63 @@ def get_batch(split):
     else:
         x, y = x.to(device), y.to(device)
     return x, y
+
+def create_fixed_validation_set():
+    """
+    Creates a fixed set of validation tasks with linearly increasing difficulty.
+    This function is run once at the start of training for diffusion models only.
+    """
+    print("Creating fixed validation set...")
+    val_data = np.memmap(os.path.join(data_dir, 'val.bin'), dtype=np.uint16, mode='r')
+    # Use a fixed seed to ensure the same text snippets are chosen every time
+    torch.manual_seed(1337)
+
+    val_batches = []
+    for k in range(eval_iters):
+        ix = torch.randint(len(val_data) - block_size, (batch_size,))
+        x_clean = torch.stack([torch.from_numpy((val_data[i:i+block_size]).astype(np.int64)) for i in ix])
+        
+        # --- Create corrupted X and target Y for this batch ---
+        x_corrupted = x_clean.clone()
+        y_target = x_clean.clone()
+        b, t = x_corrupted.shape
+
+        # Linearly interpolate the total corruption rate
+        # Start with low corruption (high guaranteed_correct_factor)
+        # End with high corruption (low guaranteed_correct_factor)
+        progress = k / (eval_iters - 1) if eval_iters > 1 else 1.0
+        start_corruption = guaranteed_correct_factor
+        end_corruption = 1.0 - guaranteed_correct_factor
+        current_max_corruption = start_corruption + progress * (end_corruption - start_corruption)
+
+        for i in range(b):
+            rate_mask = torch.rand(1) * current_max_corruption
+            rate_random = torch.rand(1) * (current_max_corruption - rate_mask)
+            num_to_mask = int(t * rate_mask)
+            num_to_random = int(t * rate_random)
+            
+            rand_pos = torch.randperm(t)
+            pos_mask = rand_pos[:num_to_mask]
+            pos_random = rand_pos[num_to_mask : num_to_mask + num_to_random]
+
+            x_corrupted[i, pos_mask] = mask_token_id
+            random_tokens = torch.randint(1, meta_vocab_size, (num_to_random,))
+            x_corrupted[i, pos_random] = (x_clean[i, pos_random] + random_tokens) % meta_vocab_size
+            y_target[i, pos_random] = mask_token_id
+
+        # Move to the correct device
+        if device_type == 'cuda':
+            x_corrupted = x_corrupted.pin_memory().to(device, non_blocking=True)
+            y_target = y_target.pin_memory().to(device, non_blocking=True)
+        else:
+            x_corrupted, y_target = x_corrupted.to(device), y_target.to(device)
+        
+        val_batches.append((x_corrupted, y_target))
+    
+    # Reset the seed to not affect subsequent operations
+    torch.manual_seed(1337 + seed_offset)
+    print("Fixed validation set created.")
+    return val_batches
 
 # init these up here, can override if init_from='resume' (i.e. from a checkpoint)
 iter_num = 0
@@ -299,15 +361,32 @@ if compile:
 if ddp:
     model = DDP(model, device_ids=[ddp_local_rank])
 
+# Global variable to store fixed validation batches for diffusion models
+fixed_val_batches = None
+
 # helps estimate an arbitrarily accurate loss over either split using many batches
 @torch.no_grad()
 def estimate_loss():
+    global fixed_val_batches  # Use the global variable
     out = {}
     model.eval()
     for split in ['train', 'val']:
         losses = torch.zeros(eval_iters)
+        if split == 'val' and model_type == 'diffusion':
+            # --- MODIFICATION: Create the fixed set if it doesn't exist ---
+            if fixed_val_batches is None:
+                fixed_val_batches = create_fixed_validation_set()
+            # --- END MODIFICATION ---
+
         for k in range(eval_iters):
-            X, Y = get_batch(split)
+            # --- MODIFICATION: Use the correct data source ---
+            if split == 'val' and model_type == 'diffusion':
+                X, Y = fixed_val_batches[k]
+            else:
+                # For 'train' split or gpt2 mode, get a random batch as before
+                X, Y = get_batch(split)
+            # --- END MODIFICATION ---
+
             with ctx:
                 logits, loss_from_model = model(X, Y)
                 
