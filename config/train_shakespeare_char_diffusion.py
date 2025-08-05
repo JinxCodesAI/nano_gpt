@@ -3,11 +3,22 @@
 
 init_from = 'scratch'
 model_type = 'diffusion'
-penalty_keep_mask = 0.25  # Penalty multiplayer when model correctly keeps `[MASK]` for unknown tokens
-penalty_mask_correct= 0.5
-guaranteed_correct_factor=0.2
-mask_logit_bias = 3.5  
-target_unmask_rate=0.1
+
+initial_mask_logit_bias = 3.5   # The starting value for our dynamic bias.
+bias_update_strength = 0.01   # How quickly the bias adapts.
+target_mask_prob = 0.5        # The desired output probability for [MASK] on un-masking tasks.
+
+# Simple, task-based loss weights
+weight_unmask_task = 1.0        # The base weight for the loss when the model must guess a word.
+weight_remask_task = 1.0        # The base weight for the loss when the model must identify a corrupted word.
+
+# Curriculum settings
+penalty_mask_correct = 0.5    # Final discount for wrongly masking a correct token.
+masking_warmup_iters = 1000   # Iterations for the penalty curriculum.
+proofreading_warmup_iters = 2000 # NEW: Iterations to ramp up the "re-masking" task.
+
+guaranteed_correct_factor = 0.01 
+
 out_dir = 'out-shakespeare-char-diffusion'
 eval_interval = 250 # keep frequent because we'll overfit
 eval_iters = 20
