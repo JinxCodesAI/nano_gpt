@@ -151,15 +151,15 @@ def calculate_diffusion_loss(logits, targets, inputs, mask_token_id,
                              current_penalty_keep_mask, current_penalty_mask_correct,
                              target_unmask_rate, mask_logit_bias, log_diagnostics=False):
     """
-    Orchestrates the calculation of the diffusion loss and calls logging helpers.
+    Orchestrates the calculation of the diffusion loss, APPLIES a dynamic logit bias,
+    and RETURNS the final loss and scaling factor for the feedback loop.
     """
-    # Get model's predictions
+    # Apply the logit bias to create a modified set of logits
     biased_logits = logits.clone()
     biased_logits[:, :, mask_token_id] += mask_logit_bias
-    # --- End of Fix ---
 
-    # Get model's predictions using the biased logits
-    predictions = torch.argmax(biased_logits, dim=-1) # Shape (B, T)
+    # Get model's predictions based on the biased logits
+    predictions = torch.argmax(biased_logits, dim=-1)
     
     # Calculate the dynamic weights and get metrics for logging
     weights, behavior_metrics, scaling_factor = _calculate_loss_weights(
@@ -168,19 +168,22 @@ def calculate_diffusion_loss(logits, targets, inputs, mask_token_id,
         target_unmask_rate
     )
 
-    # Optional Diagnostic Logging (now includes both logit and behavior logs)
+    # Optional Diagnostic Logging
     if log_diagnostics:
-        _calculate_diagnostic_logs(logits, targets, mask_token_id)
+        _calculate_diagnostic_logs(logits, targets, mask_token_id) # Log original logits
         _log_diffusion_behavior(behavior_metrics, scaling_factor)
 
-    # Calculate the base, unweighted loss for every token
-    flat_logits = logits.view(-1, logits.size(-1))
+    # --- CRITICAL FIX: The final loss MUST be calculated on the BIASED logits ---
+    # This ensures that the gradients are influenced by our intervention, allowing the model
+    # to learn in the context of the bias.
+    flat_logits = biased_logits.view(-1, biased_logits.size(-1))
     flat_targets = targets.view(-1)
     per_token_loss = F.cross_entropy(flat_logits, flat_targets, ignore_index=-1, reduction='none')
 
-    # The final loss is the weighted average
     final_loss = (per_token_loss * weights).mean()
-    return final_loss
+    
+    # Return the scaling_factor so the main loop can update the bias
+    return final_loss, scaling_factor
 # -----------------------------------------------------------------------------
 # default config values designed to train a gpt2 (124M) on OpenWebText
 # I/O
@@ -208,12 +211,13 @@ dropout = 0.0 # for pretraining 0 is good, for finetuning try 0.1+
 bias = False # do we use bias inside LayerNorm and Linear layers?
 model_type = 'gpt2' # 'gpt2' or 'diffusion'
 # Diffusion loss specific penalties
+initial_mask_logit_bias = 3.5   # The starting value for our dynamic bias.
+bias_update_strength = 0.01     # How quickly the bias adapts. A small value is crucial for stability.
 penalty_keep_mask = 0.25      # Final discount for failing to unmask, but keeping [MASK].
 penalty_mask_correct = 0.5    # Final discount for wrongly masking a correct token.
 masking_warmup_iters = 1000   # Number of iterations for the penalty curriculum.
 target_unmask_rate = 0.15     # The target fraction of [MASK]s to convert to words in a step.
-guaranteed_correct_factor = 0.01  # Fraction of tokens guaranteed to remain uncorrupted (0.01 = 1%)
-mask_logit_bias = 0 
+guaranteed_correct_factor = 0.01  # Fraction of tokens guaranteed to remain uncorrupted (0.01 = 1%) 
 # adamw optimizer
 learning_rate = 6e-4 # max learning rate
 max_iters = 600000 # total number of training iterations
@@ -401,7 +405,8 @@ if os.path.exists(meta_path):
 
 # model init
 model_args = dict(n_layer=n_layer, n_head=n_head, n_embd=n_embd, block_size=block_size,
-                  bias=bias, vocab_size=None, dropout=dropout, model_type=model_type) # start with model_args from command line
+                  bias=bias, vocab_size=None, dropout=dropout, model_type=model_type,
+                  mask_logit_bias=mask_logit_bias) # start with model_args from command line
 if init_from == 'scratch':
     # init a new model from scratch
     print("Initializing a new model from scratch")
@@ -438,6 +443,10 @@ elif init_from == 'resume':
         model_args['model_type'] = checkpoint_model_args['model_type']
     if 'mask_token_id' in checkpoint_model_args:
         model_args['mask_token_id'] = checkpoint_model_args['mask_token_id']
+    # --- MODIFICATION: Add mask_logit_bias to the list of keys to load ---
+    if 'mask_logit_bias' in checkpoint_model_args:
+        model_args['mask_logit_bias'] = checkpoint_model_args['mask_logit_bias']
+    # --- END MODIFICATION ---
     
     # After loading, update the global variables that control the script's behavior
     if model_args.get('model_type') == 'diffusion':
@@ -493,41 +502,44 @@ if compile:
 if ddp:
     model = DDP(model, device_ids=[ddp_local_rank])
 
+# --- NEW: Initialize the dynamic bias and its moving average ---
+mask_logit_bias = initial_mask_logit_bias
+running_avg_scaling_factor = 1.0 # Use a moving average for stability
+# --- END NEW ---
+
 # Global variable to store fixed validation batches for diffusion models
 fixed_val_batches = None
 
 # helps estimate an arbitrarily accurate loss over either split using many batches
 @torch.no_grad()
-def estimate_loss(current_penalty_keep_mask=penalty_keep_mask, current_penalty_mask_correct=penalty_mask_correct):
-    global fixed_val_batches  # Use the global variable
+def estimate_loss(current_penalty_keep_mask, current_penalty_mask_correct, current_mask_logit_bias):
+    global fixed_val_batches
     out = {}
     model.eval()
     for split in ['train', 'val']:
         losses = torch.zeros(eval_iters)
         if split == 'val' and model_type == 'diffusion':
-            # --- MODIFICATION: Create the fixed set if it doesn't exist ---
             if fixed_val_batches is None:
                 fixed_val_batches = create_fixed_validation_set()
-            # --- END MODIFICATION ---
 
         for k in range(eval_iters):
-            # --- MODIFICATION: Use the correct data source ---
             if split == 'val' and model_type == 'diffusion':
                 X, Y = fixed_val_batches[k]
             else:
-                # For 'train' split or gpt2 mode, get a random batch as before
                 X, Y = get_batch(split)
-            # --- END MODIFICATION ---
 
             with ctx:
                 logits, loss_from_model = model(X, Y)
-                
-                # --- FIX START: Use the correct loss function for diffusion mode ---
                 if model_type == 'diffusion':
-                    loss = calculate_diffusion_loss(logits, Y, X, mask_token_id, current_penalty_keep_mask, current_penalty_mask_correct, target_unmask_rate, mask_logit_bias)
+                    # --- MODIFICATION: Ignore the scaling_factor with _ and pass the current bias ---
+                    loss, _ = calculate_diffusion_loss(
+                        logits, Y, X, mask_token_id, 
+                        current_penalty_keep_mask, current_penalty_mask_correct,
+                        target_unmask_rate, current_mask_logit_bias,
+                        log_diagnostics=False # No detailed logs during eval
+                    )
                 else:
                     loss = loss_from_model
-                # --- FIX END ---
                 
             losses[k] = loss.item()
         out[split] = losses.mean()
@@ -591,7 +603,8 @@ while True:
 
     # evaluate the loss on train/val sets and write checkpoints
     if iter_num % eval_interval == 0 and master_process:
-        losses = estimate_loss(current_penalty_keep_mask, current_penalty_mask_correct)
+        # --- MODIFICATION: Pass the CURRENT dynamic bias to the evaluation function ---
+        losses = estimate_loss(current_penalty_keep_mask, current_penalty_mask_correct, mask_logit_bias)
         print(f"step {iter_num}: train loss {losses['train']:.4f}, val loss {losses['val']:.4f}")
         if wandb_log:
             wandb.log({
@@ -629,13 +642,18 @@ while True:
             model.require_backward_grad_sync = (micro_step == gradient_accumulation_steps - 1)
         with ctx:
             logits, loss_from_model = model(X, Y)
-            # --- MODIFICATION ---
             if model_type == 'diffusion':
-                loss = calculate_diffusion_loss(logits, Y, X, mask_token_id, current_penalty_keep_mask, current_penalty_mask_correct, target_unmask_rate, mask_logit_bias, log_diagnostics=True)
+                # --- MODIFICATION: Get the scaling_factor back from the loss function ---
+                loss, scaling_factor = calculate_diffusion_loss(
+                    logits, Y, X, mask_token_id,
+                    current_penalty_keep_mask, current_penalty_mask_correct,
+                    target_unmask_rate, mask_logit_bias,
+                    log_diagnostics=(micro_step == gradient_accumulation_steps - 1) # Log only on last micro-step
+                )
             else:
                 loss = loss_from_model
-            loss = loss / gradient_accumulation_steps # scale the loss to account for gradient accumulation
-            # --- END MODIFICATION ---
+                scaling_factor = 1.0 # Placeholder for non-diffusion models
+            loss = loss / gradient_accumulation_steps
         # immediately async prefetch next batch while model is doing the forward pass on the GPU
         X, Y = get_batch('train')
         # backward pass, with gradient scaling if training in fp16
@@ -650,6 +668,16 @@ while True:
     # flush the gradients as soon as we can, no need for this memory anymore
     optimizer.zero_grad(set_to_none=True)
 
+    # --- NEW: Update the dynamic logit bias using the feedback loop ---
+    if model_type == 'diffusion':
+        # Use a moving average of the scaling factor to smooth out updates
+        running_avg_scaling_factor = 0.99 * running_avg_scaling_factor + 0.01 * scaling_factor
+        
+        # The control logic: if scaling factor is > 1 (greedy), increase bias. If < 1 (lazy), decrease bias.
+        error_signal = running_avg_scaling_factor - 1.0
+        mask_logit_bias += bias_update_strength * error_signal
+    # --- END NEW ---
+
     # timing and logging
     t1 = time.time()
     dt = t1 - t0
@@ -661,7 +689,13 @@ while True:
         if local_iter_num >= 5: # let the training loop settle a bit
             mfu = raw_model.estimate_mfu(batch_size * gradient_accumulation_steps, dt)
             running_mfu = mfu if running_mfu == -1.0 else 0.9*running_mfu + 0.1*mfu
-        print(f"iter {iter_num}: loss {lossf:.4f}, time {dt*1000:.2f}ms, mfu {running_mfu*100:.2f}%")
+        
+        # --- MODIFICATION: Add the dynamic bias to the log message to monitor it ---
+        if model_type == 'diffusion':
+            print(f"iter {iter_num}: loss {lossf:.4f}, time {dt*1000:.2f}ms, mfu {running_mfu*100:.2f}%, logit_bias {mask_logit_bias:.2f}")
+        else:
+            print(f"iter {iter_num}: loss {lossf:.4f}, time {dt*1000:.2f}ms, mfu {running_mfu*100:.2f}%")
+        # --- END MODIFICATION ---
     iter_num += 1
     local_iter_num += 1
 
