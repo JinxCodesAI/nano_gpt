@@ -31,159 +31,136 @@ from model import GPTConfig, GPT
 from torch.nn import functional as F
 # In train.py
 
-def _calculate_diagnostic_logs(logits, targets, mask_token_id):
+def get_corruption_scheduler(it):
     """
-    Calculates and prints diagnostic logs about the model's raw logits.
-    This function is for debugging and does not affect the gradient computation.
+    Controls the curriculum for both penalties and data generation.
+    Returns the current penalty values and the re-masking task ratio.
     """
-    with torch.no_grad():
-        # 1. Average logit value for the [MASK] token
-        avg_mask_logit = logits[:, :, mask_token_id].mean().item()
+    # --- Penalty Curriculum ---
+    if it >= masking_warmup_iters:
+        current_penalty_mask_correct = penalty_mask_correct
+    else:
+        ratio = it / masking_warmup_iters
+        current_penalty_mask_correct = 0.0 + ratio * (penalty_mask_correct - 0.0)
 
-        # 2. Average logit for the correct target tokens
-        targets_for_gather = targets.clone()
-        valid_targets_mask = targets_for_gather != -1
-        targets_for_gather[~valid_targets_mask] = 0 # Replace -1 with a valid index
+    # --- Data Generation Curriculum ---
+    if it >= proofreading_warmup_iters:
+        remask_ratio = 1.0
+    else:
+        remask_ratio = it / proofreading_warmup_iters
         
-        correct_target_logits = logits.gather(-1, targets_for_gather.unsqueeze(-1)).squeeze(-1)
-        avg_correct_target_logit = correct_target_logits[valid_targets_mask].mean().item()
-
-        # 3. Average of the maximum logit value (the model's top guess)
-        avg_max_logit = logits.max(dim=-1).values.mean().item()
-
-        print(
-            f"[LOGITS] Avg MASK: {avg_mask_logit:7.2f} | "
-            f"Avg CORRECT: {avg_correct_target_logit:7.2f} | "
-            f"Avg MAX: {avg_max_logit:7.2f}"
-        )
-
-def _log_diffusion_behavior(behavior_metrics, scaling_factor):
-    """
-    Calculates and prints a detailed breakdown of the model's behavior for a batch.
-    """
-    epsilon = 1e-6
-    
-    # --- Unpack metrics from the dictionary ---
-    correct_unmasks = behavior_metrics['correct_unmasks']
-    incorrect_unmasks = behavior_metrics['incorrect_unmasks']
-    kept_mask_incorrectly = behavior_metrics['kept_mask_incorrectly']
-    total_unmask_tasks = behavior_metrics['total_unmask_tasks']
-    input_mask_rate = behavior_metrics['input_mask_rate']
-    output_mask_rate = behavior_metrics['output_mask_rate']
-    
-    # --- Calculate high-level stats ---
-    num_unmask_attempts = correct_unmasks + incorrect_unmasks
-    unmask_accuracy = correct_unmasks / (num_unmask_attempts + epsilon)
-    
-    # Skill: How much better is the model than random guessing?
-    # Relies on meta_vocab_size being available in the global scope of the script.
-    skill_vs_random = unmask_accuracy / (1.0 / meta_vocab_size if meta_vocab_size is not None else 1.0)
-    
-    # Preference: Does the model output masks more or less often than it sees them?
-    mask_preference = output_mask_rate / (input_mask_rate + epsilon)
-
-    # --- Print formatted logs ---
-    print(
-        f"[BEHAVIOR] Correct: {correct_unmasks:<4} | "
-        f"Incorrect: {incorrect_unmasks:<4} | "
-        f"Kept Mask: {kept_mask_incorrectly:<4} | "
-        f"Total Unmask Tasks: {total_unmask_tasks:<5}"
-    )
-    print(
-        f"           Unmask Acc: {unmask_accuracy:<5.1%} | "
-        f"Skill vs Random: {skill_vs_random:<5.1f}x | "
-        f"Mask Preference: {mask_preference:<5.2f} | "
-        f"Scaling Factor: {scaling_factor:<6.2f}"
-    )
-
-def _calculate_loss_weights(predictions, targets, inputs, mask_token_id, 
-                            current_penalty_keep_mask, current_penalty_mask_correct,
-                            target_unmask_rate):
-    """
-    Calculates dynamic loss weights and returns them along with behavior metrics for logging.
-    """
-    B, T = inputs.shape
-    epsilon = 1e-6
-    
-    weights = torch.ones_like(targets, dtype=torch.float32)
-    
-    # --- Calculate behavior and apply weights simultaneously ---
-    is_unmask_task = (inputs == mask_token_id)
-    total_unmask_tasks = is_unmask_task.sum().item()
-
-    kept_mask_incorrectly = (is_unmask_task) & (predictions == mask_token_id) & (targets != mask_token_id)
-    weights[kept_mask_incorrectly] = current_penalty_keep_mask
-    
-    attempted_to_unmask = (is_unmask_task) & (predictions != mask_token_id)
-    num_unmask_attempts = attempted_to_unmask.sum().item()
-    
-    correct_unmasks_mask = (attempted_to_unmask) & (predictions == targets)
-    weights[correct_unmasks_mask] = 0.0
-    
-    incorrect_unmasks_mask = (attempted_to_unmask) & (predictions != targets)
-    actual_unmask_rate = num_unmask_attempts / (total_unmask_tasks + epsilon)
-    scaling_factor = actual_unmask_rate / (target_unmask_rate + epsilon)
-    weights[incorrect_unmasks_mask] *= scaling_factor
-
-    for i in range(B):
-        input_words_mask = (inputs[i] != mask_token_id)
-        num_input_words = input_words_mask.sum().item()
-        corrupted_words_mask = (targets[i, input_words_mask] == mask_token_id)
-        num_corrupted_words = corrupted_words_mask.sum().item()
-        corruption_rate = num_corrupted_words / (num_input_words + epsilon)
-        effective_penalty = current_penalty_mask_correct * (1.0 - corruption_rate)
-        seq_case3a_pos = (inputs[i] == targets[i]) & (inputs[i] != mask_token_id) & (predictions[i] == mask_token_id)
-        weights[i][seq_case3a_pos] = effective_penalty
-        
-    # --- Package metrics for logging ---
-    behavior_metrics = {
-        'correct_unmasks': correct_unmasks_mask.sum().item(),
-        'incorrect_unmasks': incorrect_unmasks_mask.sum().item(),
-        'kept_mask_incorrectly': kept_mask_incorrectly.sum().item(),
-        'total_unmask_tasks': total_unmask_tasks,
-        'input_mask_rate': is_unmask_task.float().mean().item(),
-        'output_mask_rate': (predictions == mask_token_id).float().mean().item(),
-    }
-        
-    return weights.view(-1), behavior_metrics, scaling_factor
+    return current_penalty_mask_correct, remask_ratio
 
 def calculate_diffusion_loss(logits, targets, inputs, mask_token_id, 
-                             current_penalty_keep_mask, current_penalty_mask_correct,
-                             target_unmask_rate, mask_logit_bias, log_diagnostics=False):
+                             current_penalty_mask_correct, weight_unmask_task, 
+                             weight_remask_task, mask_logit_bias, log_diagnostics=False):
     """
-    Orchestrates the calculation of the diffusion loss, APPLIES a dynamic logit bias,
-    and RETURNS the final loss and scaling factor for the feedback loop.
+    A simplified and robust loss function that does not use argmax for weighting.
+    It applies weights based only on the task type (the Input-Target pair).
     """
-    # Apply the logit bias to create a modified set of logits
+    # --- Step 1: Apply the dynamic logit bias ---
     biased_logits = logits.clone()
-    biased_logits[:, :, mask_token_id] += mask_logit_bias
+    if mask_logit_bias != 0.0:
+        biased_logits[:, :, mask_token_id] += mask_logit_bias
 
-    # Get model's predictions based on the biased logits
-    predictions = torch.argmax(biased_logits, dim=-1)
-    
-    # Calculate the dynamic weights and get metrics for logging
-    weights, behavior_metrics, scaling_factor = _calculate_loss_weights(
-        predictions, targets, inputs, mask_token_id,
-        current_penalty_keep_mask, current_penalty_mask_correct,
-        target_unmask_rate
-    )
-
-    # Optional Diagnostic Logging
-    if log_diagnostics:
-        _calculate_diagnostic_logs(logits, targets, mask_token_id) # Log original logits
-        _log_diffusion_behavior(behavior_metrics, scaling_factor)
-
-    # --- CRITICAL FIX: The final loss MUST be calculated on the BIASED logits ---
-    # This ensures that the gradients are influenced by our intervention, allowing the model
-    # to learn in the context of the bias.
+    # --- Step 2: Calculate the base cross-entropy loss ---
     flat_logits = biased_logits.view(-1, biased_logits.size(-1))
     flat_targets = targets.view(-1)
     per_token_loss = F.cross_entropy(flat_logits, flat_targets, ignore_index=-1, reduction='none')
 
-    final_loss = (per_token_loss * weights).mean()
+    # --- Step 3: Apply weights based on the TASK TYPE only ---
+    weights = torch.ones_like(per_token_loss)
+    flat_inputs = inputs.view(-1)
     
-    # Return the scaling_factor so the main loop can update the bias
-    return final_loss, scaling_factor
+    # Task 1: Un-masking (Input was [MASK], Target is a word)
+    unmask_task_positions = (flat_inputs == mask_token_id) & (flat_targets != mask_token_id)
+    weights[unmask_task_positions] = weight_unmask_task
+    
+    # Task 2: Re-masking (Input was a word, Target is [MASK])
+    remask_task_positions = (flat_inputs != mask_token_id) & (flat_targets == mask_token_id)
+    weights[remask_task_positions] = weight_remask_task
+    
+    # Task 3: State-Dependent Penalty for Destructive Edits
+    with torch.no_grad():
+        B, T = inputs.shape
+        predictions_2d = torch.argmax(biased_logits, dim=-1)
+        for i in range(B):
+            epsilon = 1e-6
+            input_words_mask = (inputs[i] != mask_token_id)
+            num_input_words = input_words_mask.sum().item()
+            corrupted_words_mask = (targets[i, input_words_mask] == mask_token_id)
+            num_corrupted_words = corrupted_words_mask.sum().item()
+            corruption_rate = num_corrupted_words / (num_input_words + epsilon)
+            effective_penalty = current_penalty_mask_correct * (1.0 - corruption_rate)
+            
+            destructive_mask = (inputs[i] == targets[i]) & (inputs[i] != mask_token_id) & (predictions_2d[i] == mask_token_id)
+            
+            weights_2d = weights.view(B, T)
+            weights_2d[i, destructive_mask] = effective_penalty
+            
+    # The final loss is the weighted average
+    final_loss = (per_token_loss * weights).mean()
+
+    # --- Step 4: Calculate the NEW Feedback Signal (argmax-free) ---
+    avg_mask_prob = 0.0
+    if unmask_task_positions.any():
+        unmask_logits = biased_logits.view(-1, biased_logits.size(-1))[unmask_task_positions]
+        unmask_probs = F.softmax(unmask_logits, dim=-1)
+        avg_mask_prob = unmask_probs[:, mask_token_id].mean().item()
+
+    # --- PRESERVED DIAGNOSTIC LOGGING ---
+    if log_diagnostics:
+        with torch.no_grad():
+            # [LOGITS] logging - preserved from _calculate_diagnostic_logs
+            avg_mask_logit = logits[:, :, mask_token_id].mean().item()
+            targets_for_gather = targets.clone()
+            valid_targets_mask = targets_for_gather != -1
+            targets_for_gather[~valid_targets_mask] = 0
+            correct_target_logits = logits.gather(-1, targets_for_gather.unsqueeze(-1)).squeeze(-1)
+            avg_correct_target_logit = correct_target_logits[valid_targets_mask].mean().item()
+            avg_max_logit = logits.max(dim=-1).values.mean().item()
+            
+            print(
+                f"[LOGITS] Avg MASK: {avg_mask_logit:7.2f} | "
+                f"Avg CORRECT: {avg_correct_target_logit:7.2f} | "
+                f"Avg MAX: {avg_max_logit:7.2f}"
+            )
+            
+            # [BEHAVIOR] logging - adapted for new system
+            epsilon = 1e-6
+            predictions_flat = torch.argmax(biased_logits, dim=-1).view(-1)
+            
+            # Calculate behavior metrics compatible with new system
+            is_unmask_task = unmask_task_positions
+            total_unmask_tasks = is_unmask_task.sum().item()
+            
+            attempted_to_unmask = is_unmask_task & (predictions_flat != mask_token_id)
+            correct_unmasks = (attempted_to_unmask & (predictions_flat == flat_targets)).sum().item()
+            incorrect_unmasks = (attempted_to_unmask & (predictions_flat != flat_targets)).sum().item()
+            kept_mask_incorrectly = (is_unmask_task & (predictions_flat == mask_token_id) & (flat_targets != mask_token_id)).sum().item()
+            
+            num_unmask_attempts = correct_unmasks + incorrect_unmasks
+            unmask_accuracy = correct_unmasks / (num_unmask_attempts + epsilon)
+            skill_vs_random = unmask_accuracy / (1.0 / meta_vocab_size if meta_vocab_size is not None else 1.0)
+            
+            input_mask_rate = is_unmask_task.float().mean().item()
+            output_mask_rate = (predictions_flat == mask_token_id).float().mean().item()
+            mask_preference = output_mask_rate / (input_mask_rate + epsilon)
+            
+            print(
+                f"[BEHAVIOR] Correct: {correct_unmasks:<4} | "
+                f"Incorrect: {incorrect_unmasks:<4} | "
+                f"Kept Mask: {kept_mask_incorrectly:<4} | "
+                f"Total Unmask Tasks: {total_unmask_tasks:<5}"
+            )
+            print(
+                f"           Unmask Acc: {unmask_accuracy:<5.1%} | "
+                f"Skill vs Random: {skill_vs_random:<5.1f}x | "
+                f"Mask Preference: {mask_preference:<5.2f} | "
+                f"Avg MASK Prob: {avg_mask_prob:.2%}"
+            )
+
+    return final_loss, avg_mask_prob
 # -----------------------------------------------------------------------------
 # default config values designed to train a gpt2 (124M) on OpenWebText
 # I/O
@@ -210,14 +187,21 @@ n_embd = 768
 dropout = 0.0 # for pretraining 0 is good, for finetuning try 0.1+
 bias = False # do we use bias inside LayerNorm and Linear layers?
 model_type = 'gpt2' # 'gpt2' or 'diffusion'
-# Diffusion loss specific penalties
+# --- NEW SIMPLIFIED LOSS CONFIG ---
 initial_mask_logit_bias = 3.5   # The starting value for our dynamic bias.
-bias_update_strength = 0.01     # How quickly the bias adapts. A small value is crucial for stability.
-penalty_keep_mask = 0.25      # Final discount for failing to unmask, but keeping [MASK].
+bias_update_strength = 0.01   # How quickly the bias adapts.
+target_mask_prob = 0.5        # The desired output probability for [MASK] on un-masking tasks.
+
+# Simple, task-based loss weights
+weight_unmask_task = 1.0        # The base weight for the loss when the model must guess a word.
+weight_remask_task = 1.0        # The base weight for the loss when the model must identify a corrupted word.
+
+# Curriculum settings
 penalty_mask_correct = 0.5    # Final discount for wrongly masking a correct token.
-masking_warmup_iters = 1000   # Number of iterations for the penalty curriculum.
-target_unmask_rate = 0.15     # The target fraction of [MASK]s to convert to words in a step.
-guaranteed_correct_factor = 0.01  # Fraction of tokens guaranteed to remain uncorrupted (0.01 = 1%) 
+masking_warmup_iters = 1000   # Iterations for the penalty curriculum.
+proofreading_warmup_iters = 2000 # NEW: Iterations to ramp up the "re-masking" task.
+
+guaranteed_correct_factor = 0.01 
 # adamw optimizer
 learning_rate = 6e-4 # max learning rate
 max_iters = 600000 # total number of training iterations
@@ -297,13 +281,21 @@ def get_batch(split):
     if model_type == 'diffusion':
         assert mask_token_id is not None, "mask_token_id must be set globally"
         x_corrupted = x_clean.clone()
-        y_target = x_clean.clone() # Start with the ground truth
+        y_target = x_clean.clone()
+
+        # Get the current re-masking task ratio from the curriculum scheduler
+        _, remask_ratio = get_corruption_scheduler(iter_num)
 
         b, t = x_corrupted.shape
         for i in range(b):
             max_corruption = 1 - guaranteed_correct_factor
+            
             rate_mask = torch.rand(1) * max_corruption
-            rate_random = torch.rand(1) * (max_corruption - rate_mask)
+            # The rate of re-masking tasks is now controlled by the curriculum
+            rate_random = torch.rand(1) * rate_mask * remask_ratio
+            # The final un-masking rate is what's left over
+            rate_mask = rate_mask - rate_random
+
             num_to_mask = int(t * rate_mask)
             num_to_random = int(t * rate_random)
             
@@ -311,14 +303,10 @@ def get_batch(split):
             pos_mask = rand_pos[:num_to_mask]
             pos_random = rand_pos[num_to_mask : num_to_mask + num_to_random]
 
-            # Apply mask corruption and set target
             x_corrupted[i, pos_mask] = mask_token_id
-            # y_target already has the correct original token here
-
-            # Apply random corruption and set target
             random_tokens = torch.randint(1, meta_vocab_size, (num_to_random,))
             x_corrupted[i, pos_random] = (x_clean[i, pos_random] + random_tokens) % meta_vocab_size
-            y_target[i, pos_random] = mask_token_id # Target for these is [MASK]
+            y_target[i, pos_random] = mask_token_id
 
         x, y = x_corrupted, y_target
     else:
@@ -332,7 +320,7 @@ def get_batch(split):
         x, y = x.to(device), y.to(device)
     return x, y
 
-def create_fixed_validation_set():
+def create_fixed_validation_set(remask_ratio):
     """
     Creates a fixed set of validation tasks with linearly increasing difficulty.
     This function is run once at the start of training for diffusion models only.
@@ -362,7 +350,11 @@ def create_fixed_validation_set():
 
         for i in range(b):
             rate_mask = torch.rand(1) * current_max_corruption
-            rate_random = torch.rand(1) * (current_max_corruption - rate_mask)
+            # Use the passed-in remask_ratio for validation set
+            rate_random = torch.rand(1) * rate_mask * remask_ratio
+            # The final un-masking rate is what's left over
+            rate_mask = rate_mask - rate_random
+            
             num_to_mask = int(t * rate_mask)
             num_to_random = int(t * rate_random)
             
@@ -501,9 +493,9 @@ if compile:
 if ddp:
     model = DDP(model, device_ids=[ddp_local_rank])
 
-# --- NEW: Initialize the dynamic bias and its moving average ---
+# --- NEW: Initialize the dynamic bias and its feedback signal ---
 mask_logit_bias = initial_mask_logit_bias
-running_avg_scaling_factor = 1.0 # Use a moving average for stability
+running_avg_mask_prob = target_mask_prob # Use a moving average for stability
 # --- END NEW ---
 
 # Global variable to store fixed validation batches for diffusion models
@@ -511,7 +503,7 @@ fixed_val_batches = None
 
 # helps estimate an arbitrarily accurate loss over either split using many batches
 @torch.no_grad()
-def estimate_loss(current_penalty_keep_mask, current_penalty_mask_correct, current_mask_logit_bias):
+def estimate_loss(current_penalty_mask_correct, current_mask_logit_bias):
     global fixed_val_batches
     out = {}
     model.eval()
@@ -519,7 +511,9 @@ def estimate_loss(current_penalty_keep_mask, current_penalty_mask_correct, curre
         losses = torch.zeros(eval_iters)
         if split == 'val' and model_type == 'diffusion':
             if fixed_val_batches is None:
-                fixed_val_batches = create_fixed_validation_set()
+                # Note: The fixed val set uses the FINAL curriculum values, not the current ones
+                _, final_remask_ratio = get_corruption_scheduler(proofreading_warmup_iters)
+                fixed_val_batches = create_fixed_validation_set(final_remask_ratio) # Pass ratio here
 
         for k in range(eval_iters):
             if split == 'val' and model_type == 'diffusion':
@@ -530,12 +524,14 @@ def estimate_loss(current_penalty_keep_mask, current_penalty_mask_correct, curre
             with ctx:
                 logits, loss_from_model = model(X, Y)
                 if model_type == 'diffusion':
-                    # --- MODIFICATION: Ignore the scaling_factor with _ and pass the current bias ---
+                    # Get final penalty value for eval
+                    final_penalty_mask_correct, _ = get_corruption_scheduler(masking_warmup_iters)
                     loss, _ = calculate_diffusion_loss(
                         logits, Y, X, mask_token_id, 
-                        current_penalty_keep_mask, current_penalty_mask_correct,
-                        target_unmask_rate, current_mask_logit_bias,
-                        log_diagnostics=False # No detailed logs during eval
+                        final_penalty_mask_correct,
+                        weight_unmask_task, weight_remask_task,
+                        current_mask_logit_bias,
+                        log_diagnostics=False
                     )
                 else:
                     loss = loss_from_model
@@ -559,27 +555,6 @@ def get_lr(it):
     coeff = 0.5 * (1.0 + math.cos(math.pi * decay_ratio)) # coeff ranges 0..1
     return min_lr + coeff * (learning_rate - min_lr)
 
-def get_masking_penalties(it):
-    """
-    Calculates the dynamic penalties for the diffusion loss based on the training iteration.
-    Implements a linear curriculum over `masking_warmup_iters`.
-    """
-    # If we are past the warmup, return the final configured values
-    if it >= masking_warmup_iters:
-        return penalty_keep_mask, penalty_mask_correct
-
-    # Calculate the progress ratio (from 0.0 to 1.0) through the warmup
-    ratio = it / masking_warmup_iters
-
-    # Linearly decrease penalty_keep_mask from 1.0 down to its final value
-    # Formula: start + ratio * (end - start)
-    current_penalty_keep_mask = 1.0 + ratio * (penalty_keep_mask - 1.0)
-
-    # Linearly increase penalty_mask_correct from 0.0 up to its final value
-    # Formula: start + ratio * (end - start)
-    current_penalty_mask_correct = 0.0 + ratio * (penalty_mask_correct - 0.0)
-
-    return current_penalty_keep_mask, current_penalty_mask_correct
 
 # logging
 if wandb_log and master_process:
@@ -594,16 +569,16 @@ raw_model = model.module if ddp else model # unwrap DDP container if needed
 running_mfu = -1.0
 while True:
 
-    # determine and set the learning rate and masking penalties for this iteration
+    # --- MODIFICATION: Use the new scheduler ---
     lr = get_lr(iter_num) if decay_lr else learning_rate
-    current_penalty_keep_mask, current_penalty_mask_correct = get_masking_penalties(iter_num)
+    current_penalty_mask_correct, _ = get_corruption_scheduler(iter_num)
+    # --- END MODIFICATION ---
     for param_group in optimizer.param_groups:
         param_group['lr'] = lr
 
     # evaluate the loss on train/val sets and write checkpoints
     if iter_num % eval_interval == 0 and master_process:
-        # --- MODIFICATION: Pass the CURRENT dynamic bias to the evaluation function ---
-        losses = estimate_loss(current_penalty_keep_mask, current_penalty_mask_correct, mask_logit_bias)
+        losses = estimate_loss(current_penalty_mask_correct, mask_logit_bias)
         print(f"step {iter_num}: train loss {losses['train']:.4f}, val loss {losses['val']:.4f}")
         if wandb_log:
             wandb.log({
@@ -642,16 +617,17 @@ while True:
         with ctx:
             logits, loss_from_model = model(X, Y)
             if model_type == 'diffusion':
-                # --- MODIFICATION: Get the scaling_factor back from the loss function ---
-                loss, scaling_factor = calculate_diffusion_loss(
+                # --- MODIFICATION: Use the new loss function and feedback signal ---
+                loss, avg_mask_prob = calculate_diffusion_loss(
                     logits, Y, X, mask_token_id,
-                    current_penalty_keep_mask, current_penalty_mask_correct,
-                    target_unmask_rate, mask_logit_bias,
-                    log_diagnostics=(micro_step == gradient_accumulation_steps - 1) # Log only on last micro-step
+                    current_penalty_mask_correct,
+                    weight_unmask_task, weight_remask_task,
+                    mask_logit_bias,
+                    log_diagnostics=(micro_step == gradient_accumulation_steps - 1)
                 )
             else:
                 loss = loss_from_model
-                scaling_factor = 1.0 # Placeholder for non-diffusion models
+                avg_mask_prob = target_mask_prob # Placeholder
             loss = loss / gradient_accumulation_steps
         # immediately async prefetch next batch while model is doing the forward pass on the GPU
         X, Y = get_batch('train')
@@ -667,15 +643,12 @@ while True:
     # flush the gradients as soon as we can, no need for this memory anymore
     optimizer.zero_grad(set_to_none=True)
 
-    # --- NEW: Update the dynamic logit bias using the feedback loop ---
+    # --- MODIFICATION: The new feedback loop ---
     if model_type == 'diffusion':
-        # Use a moving average of the scaling factor to smooth out updates
-        running_avg_scaling_factor = 0.99 * running_avg_scaling_factor + 0.01 * scaling_factor
-        
-        # The control logic: if scaling factor is > 1 (greedy), increase bias. If < 1 (lazy), decrease bias.
-        error_signal = running_avg_scaling_factor - 1.0
+        running_avg_mask_prob = 0.99 * running_avg_mask_prob + 0.01 * avg_mask_prob
+        error_signal = target_mask_prob - running_avg_mask_prob
         mask_logit_bias += bias_update_strength * error_signal
-    # --- END NEW ---
+    # --- END MODIFICATION ---
 
     # timing and logging
     t1 = time.time()
