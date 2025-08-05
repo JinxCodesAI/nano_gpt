@@ -60,6 +60,7 @@ def advanced_diffusion_loss(logits, targets, inputs, mask_token_id,
     inputs_2d = inputs.view(B, T)
     targets_2d = targets.view(B, T)
     predictions_2d = flat_predictions.view(B, T)
+    effective_penalty = 0
 
     for i in range(B): # Iterate over each sequence in the batch
         input_words_mask = (inputs_2d[i] != mask_token_id)
@@ -88,6 +89,7 @@ def advanced_diffusion_loss(logits, targets, inputs, mask_token_id,
         
         # Of those attempts, which were CORRECT?
         correct_unmasks = (predicted_word_at_mask_pos) & (flat_predictions == flat_targets)
+        num_correctly_unmasked = correct_unmasks.sum().item()
         weights[correct_unmasks] = 0.0 # Reward correct guesses with zero loss
 
         # Of those attempts, which were INCORRECT?
@@ -97,10 +99,13 @@ def advanced_diffusion_loss(logits, targets, inputs, mask_token_id,
         # Calculate the dynamic scaling factor
         actual_incorrect_unmask_rate = num_incorrectly_unmasked / (total_masks_in_batch + epsilon)
         scaling_factor = actual_incorrect_unmask_rate / (target_unmask_rate + epsilon)
+        print(f'actual_incorrect_unmask_rate = {actual_incorrect_unmask_rate} , scaling_factor = {scaling_factor}')
         
         # Apply the scaling factor to all incorrect un-masking attempts
-        weights[incorrect_unmasks] *= scaling_factor
+        weights[incorrect_unmasks] = scaling_factor
 
+    print(f'unmask_correctness={num_correctly_unmasked/(num_correctly_unmasked+num_incorrectly_unmasked)} effective_penalty={effective_penalty} scaling_factor = {scaling_factor}, current_penalty_keep_mask = {current_penalty_keep_mask}, current_penalty_mask_correct = {current_penalty_mask_correct}')
+    
     # --- Final Loss Calculation ---
     # The final loss is the dot product of original losses and dynamic weights, averaged.
     final_loss = (per_token_loss * weights).mean()
@@ -538,6 +543,7 @@ while True:
                 }
                 print(f"saving checkpoint to {out_dir}")
                 torch.save(checkpoint, os.path.join(out_dir, 'ckpt.pt'))
+                torch.save(checkpoint, os.path.join(out_dir, f'ckpt_{iter_num}_e.pt'))
     if iter_num == 0 and eval_only:
         break
 
