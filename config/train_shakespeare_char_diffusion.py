@@ -6,6 +6,7 @@ model_type = 'diffusion'
 penalty_keep_mask = 0.25  # Penalty multiplayer when model correctly keeps `[MASK]` for unknown tokens
 penalty_mask_correct= 0.5
 guaranteed_correct_factor=0.2
+mask_logit_bias = 3.5  
 target_unmask_rate=0.1
 out_dir = 'out-shakespeare-char-diffusion'
 eval_interval = 250 # keep frequent because we'll overfit
