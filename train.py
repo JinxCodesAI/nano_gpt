@@ -80,8 +80,9 @@ dropout = 0.0 # for pretraining 0 is good, for finetuning try 0.1+
 bias = False # do we use bias inside LayerNorm and Linear layers?
 model_type = 'gpt2' # 'gpt2' or 'diffusion'
 # Diffusion loss specific penalties
-penalty_keep_mask = 0.25      # Discount for failing to unmask, but keeping [MASK].
-penalty_mask_correct = 0.5    # Discount for wrongly masking a correct token.
+penalty_keep_mask = 0.25      # Final discount for failing to unmask, but keeping [MASK].
+penalty_mask_correct = 0.5    # Final discount for wrongly masking a correct token.
+masking_warmup_iters = 1000   # Number of iterations for the penalty curriculum.
 guaranteed_correct_factor = 0.01  # Fraction of tokens guaranteed to remain uncorrupted (0.01 = 1%)
 # adamw optimizer
 learning_rate = 6e-4 # max learning rate
@@ -366,7 +367,7 @@ fixed_val_batches = None
 
 # helps estimate an arbitrarily accurate loss over either split using many batches
 @torch.no_grad()
-def estimate_loss():
+def estimate_loss(current_penalty_keep_mask=penalty_keep_mask, current_penalty_mask_correct=penalty_mask_correct):
     global fixed_val_batches  # Use the global variable
     out = {}
     model.eval()
@@ -392,7 +393,7 @@ def estimate_loss():
                 
                 # --- FIX START: Use the correct loss function for diffusion mode ---
                 if model_type == 'diffusion':
-                    loss = diffusion_loss_function(logits, Y, X, mask_token_id, penalty_keep_mask, penalty_mask_correct)
+                    loss = diffusion_loss_function(logits, Y, X, mask_token_id, current_penalty_keep_mask, current_penalty_mask_correct)
                 else:
                     loss = loss_from_model
                 # --- FIX END ---
@@ -416,6 +417,28 @@ def get_lr(it):
     coeff = 0.5 * (1.0 + math.cos(math.pi * decay_ratio)) # coeff ranges 0..1
     return min_lr + coeff * (learning_rate - min_lr)
 
+def get_masking_penalties(it):
+    """
+    Calculates the dynamic penalties for the diffusion loss based on the training iteration.
+    Implements a linear curriculum over `masking_warmup_iters`.
+    """
+    # If we are past the warmup, return the final configured values
+    if it >= masking_warmup_iters:
+        return penalty_keep_mask, penalty_mask_correct
+
+    # Calculate the progress ratio (from 0.0 to 1.0) through the warmup
+    ratio = it / masking_warmup_iters
+
+    # Linearly decrease penalty_keep_mask from 1.0 down to its final value
+    # Formula: start + ratio * (end - start)
+    current_penalty_keep_mask = 1.0 + ratio * (penalty_keep_mask - 1.0)
+
+    # Linearly increase penalty_mask_correct from 0.0 up to its final value
+    # Formula: start + ratio * (end - start)
+    current_penalty_mask_correct = 0.0 + ratio * (penalty_mask_correct - 0.0)
+
+    return current_penalty_keep_mask, current_penalty_mask_correct
+
 # logging
 if wandb_log and master_process:
     import wandb
@@ -429,14 +452,15 @@ raw_model = model.module if ddp else model # unwrap DDP container if needed
 running_mfu = -1.0
 while True:
 
-    # determine and set the learning rate for this iteration
+    # determine and set the learning rate and masking penalties for this iteration
     lr = get_lr(iter_num) if decay_lr else learning_rate
+    current_penalty_keep_mask, current_penalty_mask_correct = get_masking_penalties(iter_num)
     for param_group in optimizer.param_groups:
         param_group['lr'] = lr
 
     # evaluate the loss on train/val sets and write checkpoints
     if iter_num % eval_interval == 0 and master_process:
-        losses = estimate_loss()
+        losses = estimate_loss(current_penalty_keep_mask, current_penalty_mask_correct)
         print(f"step {iter_num}: train loss {losses['train']:.4f}, val loss {losses['val']:.4f}")
         if wandb_log:
             wandb.log({
@@ -475,7 +499,7 @@ while True:
             logits, loss_from_model = model(X, Y)
             # --- MODIFICATION ---
             if model_type == 'diffusion':
-                loss = diffusion_loss_function(logits, Y, X, mask_token_id, penalty_keep_mask, penalty_mask_correct)
+                loss = diffusion_loss_function(logits, Y, X, mask_token_id, current_penalty_keep_mask, current_penalty_mask_correct)
             else:
                 loss = loss_from_model
             loss = loss / gradient_accumulation_steps # scale the loss to account for gradient accumulation
