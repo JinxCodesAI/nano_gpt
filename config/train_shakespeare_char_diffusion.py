@@ -3,8 +3,8 @@
 
 init_from = 'scratch'
 model_type = 'diffusion'
-penalty_keep_mask = 1  # Penalty multiplayer when model correctly keeps `[MASK]` for unknown tokens
-penalty_mask_correct=1
+penalty_keep_mask = 0.25  # Penalty multiplayer when model correctly keeps `[MASK]` for unknown tokens
+penalty_mask_correct= 0.1
 guaranteed_correct_factor=0.01
 out_dir = 'out-shakespeare-char-diffusion'
 eval_interval = 250 # keep frequent because we'll overfit
@@ -12,7 +12,7 @@ eval_iters = 200
 log_interval = 10 # don't print too too often
 
 # we expect to overfit on this small dataset, so only save when val improves
-always_save_checkpoint = False
+always_save_checkpoint = True
 
 wandb_log = False # override via command line if you like
 wandb_project = 'shakespeare-char'
@@ -36,6 +36,7 @@ min_lr = 1e-4 # learning_rate / 10 usually
 beta2 = 0.99 # make a bit bigger because number of tokens per iter is small
 
 warmup_iters = 100 # not super necessary potentially
+masking_warmup_iters = 1000
 
 # on macbook also add
 # device = 'cpu'  # run on cpu only

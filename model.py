@@ -389,16 +389,26 @@ class GPT(nn.Module):
 
     @torch.no_grad()
     def generate_diffusion(self, idx, max_steps, temperature=1.0, top_k=None):
+        """
+        Iteratively refine a sequence using diffusion-style generation.
+        This version includes detailed logging of the model's behavior at each step.
+        """
         assert self.config.model_type == 'diffusion', "This generation method is only for diffusion models"
         assert self.config.mask_token_id is not None, "mask_token_id must be configured."
         self.eval()
 
-        for _ in range(max_steps):
-            # Check if we are done
-            mask_token_id = self.config.mask_token_id
-            if not (idx == mask_token_id).any():
+        mask_token_id = self.config.mask_token_id
+
+        for step in range(max_steps):
+            # --- Get state at the beginning of the step ---
+            num_masks_start_step = (idx == mask_token_id).sum().item()
+            
+            # Early exit condition
+            if num_masks_start_step == 0:
+                print("Generation converged: no masks remaining.")
                 break
 
+            # Forward pass to get the model's prediction for the next state
             logits, _ = self(idx)
             logits = logits / temperature
             if top_k is not None:
@@ -407,19 +417,58 @@ class GPT(nn.Module):
 
             probs = F.softmax(logits, dim=-1)
             idx_next = torch.multinomial(probs.view(-1, probs.size(-1)), num_samples=1).view(idx.shape)
+            
+            # --- LOGGING METRIC CALCULATIONS ---
+            # 1) Model predicts [MASK] where there was NOT [MASK] before (Re-masking action)
+            remasked_positions = (idx != mask_token_id) & (idx_next == mask_token_id)
+            remasked_count = remasked_positions.sum().item()
 
-            # Only update the tokens that were previously [MASK]
-            mask = (idx == mask_token_id)
-            idx = torch.where(mask, idx_next, idx)
+            # 2) Model predicts [NOT_MASK] where there WAS [MASK] before (Un-masking action)
+            unmasked_positions = (idx == mask_token_id) & (idx_next != mask_token_id)
+            unmasked_count = unmasked_positions.sum().item()
+
+            # 3) Confidence Ratio Calculation (handle division by zero with a small epsilon)
+            epsilon = 1e-6
+            pred_masks = (idx_next == mask_token_id).sum().item()
+            pred_words = (idx_next != mask_token_id).sum().item()
+            num_words_start_step = idx.numel() - num_masks_start_step
+            
+            prediction_ratio = pred_words / (pred_masks + epsilon)
+            input_ratio = num_words_start_step / (num_masks_start_step + epsilon)
+            confidence_ratio = prediction_ratio / (input_ratio + epsilon)
+
+            # --- CORRECTED UPDATE LOGIC ---
+            # Update the sequence for the next iteration
+            new_idx = idx.clone()
+            new_idx[unmasked_positions] = idx_next[unmasked_positions] # Action 1: Un-mask
+            new_idx[remasked_positions] = mask_token_id               # Action 2: Re-mask
+            idx = new_idx
+            
+            # --- LOGGING METRIC CALCULATIONS (continued) ---
+            # 4) NUM_MASK left at the END of the step
+            num_masks_end_step = (idx == mask_token_id).sum().item()
+
+            # --- PRINT LOGS ---
+            log_str = (
+                f"Step {step+1:>2}/{max_steps} | "
+                f"Re-masked: {remasked_count:<4} | "
+                f"Un-masked: {unmasked_count:<4} | "
+                f"Conf. Ratio: {confidence_ratio:<6.2f} | "
+                f"Masks Left: {num_masks_end_step:<4}"
+            )
+            print(log_str)
+            # --- END OF LOGGING ---
         
         # Finalization: force any remaining [MASK] tokens to be something else
-        if (idx == self.config.mask_token_id).any():
+        if (idx == mask_token_id).any():
+            print("Finalizing generation: removing any remaining masks...")
             logits, _ = self(idx)
-            logits[:, :, self.config.mask_token_id] = -float('Inf') # Forbid predicting MASK
+            logits[:, :, mask_token_id] = -float('Inf') # Forbid predicting MASK
             probs = F.softmax(logits / temperature, dim=-1)
             idx_next = torch.multinomial(probs.view(-1, probs.size(-1)), num_samples=1).view(idx.shape)
-            mask = (idx == self.config.mask_token_id)
+            mask = (idx == mask_token_id)
             idx = torch.where(mask, idx_next, idx)
 
+        # Restore model to training mode and return the final sequence
         self.train()
         return idx
