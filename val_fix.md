@@ -1,200 +1,153 @@
-# Making the Validation Set Fixed and Reproducible
+# Implementing a Curriculum for Masking Penalties
 
 ## 1. The Goal
 
-The objective is to modify the validation process to be deterministic. Instead of generating a new, random set of validation tasks every time `estimate_loss()` is called, we will pre-generate a single, fixed set of validation tasks at the start of the training script. This ensures that the validation loss is always computed on the exact same data, making results from different experiments directly comparable.
+The objective is to change the `penalty_keep_mask` and `penalty_mask_correct` from fixed values into dynamic values that are scheduled over an initial "warmup" period. This creates a curriculum for the model with two distinct phases:
 
-To ensure this fixed set is comprehensive, it will contain `eval_iters` batches with a linearly increasing level of difficulty, from very low corruption to very high corruption.
+1.  **Initial Phase (Exploration):** At the beginning of training, the model is strongly encouraged to make guesses and is not heavily penalized for being wrong.
+    *   `penalty_keep_mask` starts at `1.0` (high penalty for not guessing).
+    *   `penalty_mask_correct` starts at `0.0` (no penalty for incorrectly masking a correct word).
 
-## 2. The Plan
+2.  **Final Phase (Refinement):** After the warmup period, the penalties settle at their final configured values, encouraging the model to be more precise and cautious.
+    *   `penalty_keep_mask` decreases to its configured value (e.g., `0.25`), allowing the model to say "I don't know" more freely.
+    *   `penalty_mask_correct` increases to its configured value (e.g., `0.5`), penalizing the model more for altering work that was already correct.
 
-1.  **Create a New Function (`create_fixed_validation_set`)**: This function will run only once. It will read from `val.bin`, generate `eval_iters` batches of data (`X` and `Y`), and apply the new linearly increasing corruption scheme.
-2.  **Store the Fixed Set**: The generated batches will be stored in a list in memory.
-3.  **Update `estimate_loss()`**: The validation part of this function will be changed to iterate over the pre-generated list of batches instead of calling `get_batch('val')`.
-4.  **Simplify `get_batch()`**: The logic for handling the `'val'` split inside `get_batch()` is now redundant and will be removed.
+This transition will happen linearly over a configurable number of iterations (`masking_warmup_iters`).
 
-## 3. Step-by-Step Implementation
+## 2. Step-by-Step Implementation
 
 Follow these instructions to modify your `train.py` file.
 
-### Step 1: Create the Pre-generation Function
+### Step 1: Add the New Configuration Parameter
 
-First, we need the function that builds our fixed validation set.
+First, we need to add the `masking_warmup_iters` parameter to the configuration section of the script.
 
-**Action:** Add the following new function to your `train.py` script. A good place is right after the `get_batch` function definition.
+**Action:** In `train.py`, add the new parameter alongside the other diffusion-specific penalties.
 
 ```python
 # In train.py
 
-def create_fixed_validation_set():
-    """
-    Creates a fixed set of validation tasks with linearly increasing difficulty.
-    This function is run once at the start of training.
-    """
-    print("Creating fixed validation set...")
-    val_data = np.memmap(os.path.join(data_dir, 'val.bin'), dtype=np.uint16, mode='r')
-    # Use a fixed seed to ensure the same text snippets are chosen every time
-    torch.manual_seed(1337)
-
-    val_batches = []
-    for k in range(eval_iters):
-        ix = torch.randint(len(val_data) - block_size, (batch_size,))
-        x_clean = torch.stack([torch.from_numpy((val_data[i:i+block_size]).astype(np.int64)) for i in ix])
-        
-        # --- Create corrupted X and target Y for this batch ---
-        x_corrupted = x_clean.clone()
-        y_target = x_clean.clone()
-        b, t = x_corrupted.shape
-
-        # Linearly interpolate the total corruption rate
-        # Start with low corruption (high guaranteed_correct_factor)
-        # End with high corruption (low guaranteed_correct_factor)
-        progress = k / (eval_iters - 1) if eval_iters > 1 else 1.0
-        start_corruption = guaranteed_correct_factor
-        end_corruption = 1.0 - guaranteed_correct_factor
-        current_max_corruption = start_corruption + progress * (end_corruption - start_corruption)
-
-        for i in range(b):
-            rate_mask = torch.rand(1) * current_max_corruption
-            rate_random = torch.rand(1) * (current_max_corruption - rate_mask)
-            num_to_mask = int(t * rate_mask)
-            num_to_random = int(t * rate_random)
-            
-            rand_pos = torch.randperm(t)
-            pos_mask = rand_pos[:num_to_mask]
-            pos_random = rand_pos[num_to_mask : num_to_mask + num_to_random]
-
-            x_corrupted[i, pos_mask] = mask_token_id
-            random_tokens = torch.randint(1, meta_vocab_size, (num_to_random,))
-            x_corrupted[i, pos_random] = (x_clean[i, pos_random] + random_tokens) % meta_vocab_size
-            y_target[i, pos_random] = mask_token_id
-
-        # Move to the correct device
-        if device_type == 'cuda':
-            x_corrupted = x_corrupted.pin_memory().to(device, non_blocking=True)
-            y_target = y_target.pin_memory().to(device, non_blocking=True)
-        else:
-            x_corrupted, y_target = x_corrupted.to(device), y_target.to(device)
-        
-        val_batches.append((x_corrupted, y_target))
-    
-    # Reset the seed to not affect subsequent operations
-    torch.manual_seed(1337 + seed_offset)
-    print("Fixed validation set created.")
-    return val_batches
+# ... (inside the configuration block) ...
+# Diffusion loss specific penalties
+penalty_keep_mask = 0.25      # Final discount for failing to unmask, but keeping [MASK].
+penalty_mask_correct = 0.5    # Final discount for wrongly masking a correct token.
+masking_warmup_iters = 1000   # NEW: Number of iterations for the penalty curriculum.
+guaranteed_correct_factor = 0.01
+# ...
 ```
 
-### Step 2: Update `get_batch()`
+### Step 2: Create the Penalty Scheduler Function
 
-Since the validation data is now pre-generated, we can remove the logic for the `'val'` split from the `get_batch()` function. This makes it simpler and solely responsible for generating training data.
+This new function will calculate the dynamic penalty values based on the current training iteration, similar to how `get_lr` works.
 
-**Action:** Replace your current `get_batch` function with this simplified version.
+**Action:** Add the following function definition in `train.py`, ideally right after the `get_lr` function.
 
 ```python
 # In train.py
 
-def get_batch(split):
-    # We only ever call this for the 'train' split now.
-    # The 'val' split is handled by the pre-generated fixed set.
-    data = np.memmap(os.path.join(data_dir, 'train.bin'), dtype=np.uint16, mode='r')
-    ix = torch.randint(len(data) - block_size, (batch_size,))
-    x_clean = torch.stack([torch.from_numpy((data[i:i+block_size]).astype(np.int64)) for i in ix])
-    
-    if model_type == 'diffusion':
-        # ... (The existing diffusion corruption logic for training data remains unchanged) ...
-        assert mask_token_id is not None, "mask_token_id must be set globally"
-        x_corrupted = x_clean.clone()
-        y_target = x_clean.clone()
+# ... (after get_lr function)
 
-        b, t = x_corrupted.shape
-        for i in range(b):
-            max_corruption = 1 - guaranteed_correct_factor
-            rate_mask = torch.rand(1) * max_corruption
-            rate_random = torch.rand(1) * (max_corruption - rate_mask)
-            num_to_mask = int(t * rate_mask)
-            num_to_random = int(t * rate_random)
-            
-            rand_pos = torch.randperm(t)
-            pos_mask = rand_pos[:num_to_mask]
-            pos_random = rand_pos[num_to_mask : num_to_mask + num_to_random]
+def get_masking_penalties(it):
+    """
+    Calculates the dynamic penalties for the diffusion loss based on the training iteration.
+    Implements a linear curriculum over `masking_warmup_iters`.
+    """
+    # If we are past the warmup, return the final configured values
+    if it >= masking_warmup_iters:
+        return penalty_keep_mask, penalty_mask_correct
 
-            x_corrupted[i, pos_mask] = mask_token_id
-            random_tokens = torch.randint(1, meta_vocab_size, (num_to_random,))
-            x_corrupted[i, pos_random] = (x_clean[i, pos_random] + random_tokens) % meta_vocab_size
-            y_target[i, pos_random] = mask_token_id
+    # Calculate the progress ratio (from 0.0 to 1.0) through the warmup
+    ratio = it / masking_warmup_iters
 
-        x, y = x_corrupted, y_target
-    else:
-        y_autoregressive = torch.stack([torch.from_numpy((data[i+1:i+1+block_size]).astype(np.int64)) for i in ix])
-        x, y = x_clean, y_autoregressive
+    # Linearly decrease penalty_keep_mask from 1.0 down to its final value
+    # Formula: start + ratio * (end - start)
+    current_penalty_keep_mask = 1.0 + ratio * (penalty_keep_mask - 1.0)
 
-    if device_type == 'cuda':
-        x, y = x.pin_memory().to(device, non_blocking=True), y.pin_memory().to(device, non_blocking=True)
-    else:
-        x, y = x.to(device), y.to(device)
-    return x, y
+    # Linearly increase penalty_mask_correct from 0.0 up to its final value
+    # Formula: start + ratio * (end - start)
+    current_penalty_mask_correct = 0.0 + ratio * (penalty_mask_correct - 0.0)
+
+    return current_penalty_keep_mask, current_penalty_mask_correct
 ```
 
-### Step 3: Generate the Fixed Set and Update `estimate_loss()`
+### Step 3: Integrate the Scheduler into the Training Loop
 
-Now we will call our new function once and change `estimate_loss` to use the result.
+Now, you must call this new function every iteration to get the current penalty values and pass them to your loss functions.
 
-**Action:**
-1.  **Add a global variable** `fixed_val_batches = None` near the top of the script.
-2.  **Call the creation function** right before the main training loop begins.
-3.  **Modify `estimate_loss`** to use this fixed data.
+**Action:** Modify the main training loop (`while True:`) and the `estimate_loss` function.
 
-```python
-# In train.py
+1.  **Modify the main `while True:` loop:**
 
-# ... (after model initialization and DDP wrapping) ...
-
-# THIS IS THE NEW GLOBAL VARIABLE
-fixed_val_batches = None
-
-# helps estimate an arbitrarily accurate loss over either split using many batches
-@torch.no_grad()
-def estimate_loss():
-    global fixed_val_batches # Use the global variable
-    out = {}
-    model.eval()
-    for split in ['train', 'val']:
-        losses = torch.zeros(eval_iters)
-        if split == 'val' and model_type == 'diffusion':
-            # --- MODIFICATION: Create the fixed set if it doesn't exist ---
-            if fixed_val_batches is None:
-                fixed_val_batches = create_fixed_validation_set()
-            # --- END MODIFICATION ---
-
-        for k in range(eval_iters):
-            # --- MODIFICATION: Use the correct data source ---
-            if split == 'val' and model_type == 'diffusion':
-                X, Y = fixed_val_batches[k]
-            else:
-                # For 'train' split or gpt2 mode, get a random batch as before
-                X, Y = get_batch(split)
-            # --- END MODIFICATION ---
-
+    ```python
+    # In train.py
+    
+    # training loop
+    X, Y = get_batch('train') # fetch the very first batch
+    t0 = time.time()
+    local_iter_num = 0
+    raw_model = model.module if ddp else model
+    running_mfu = -1.0
+    while True:
+    
+        # --- MODIFICATION START ---
+        # Determine and set the learning rate and masking penalties for this iteration
+        lr = get_lr(iter_num) if decay_lr else learning_rate
+        current_penalty_keep_mask, current_penalty_mask_correct = get_masking_penalties(iter_num)
+        # --- MODIFICATION END ---
+    
+        for param_group in optimizer.param_groups:
+            param_group['lr'] = lr
+    
+        # evaluate the loss on train/val sets and write checkpoints
+        if iter_num % eval_interval == 0 and master_process:
+            # --- MODIFICATION: Pass current penalties to estimate_loss ---
+            losses = estimate_loss(current_penalty_keep_mask, current_penalty_mask_correct)
+            # ...
+        
+        # ... (rest of the eval block) ...
+    
+        # forward backward update...
+        for micro_step in range(gradient_accumulation_steps):
+            # ...
             with ctx:
                 logits, loss_from_model = model(X, Y)
                 if model_type == 'diffusion':
-                    loss = diffusion_loss_function(logits, Y, X, mask_token_id, penalty_keep_mask, penalty_mask_correct)
+                    # --- MODIFICATION: Use dynamic penalties in the loss calculation ---
+                    loss = diffusion_loss_function(logits, Y, X, mask_token_id, current_penalty_keep_mask, current_penalty_mask_correct)
                 else:
                     loss = loss_from_model
-            losses[k] = loss.item()
-        out[split] = losses.mean()
-    model.train()
-    return out
+                loss = loss / gradient_accumulation_steps
+            # ... (rest of the forward/backward block) ...
+    
+        # ... (rest of the loop) ...
+    ```
 
-# ... (just before the `while True:` training loop starts) ...
-# training loop
-X, Y = get_batch('train') # fetch the very first batch
-t0 = time.time()
-local_iter_num = 0 # number of iterations in the lifetime of this process
-raw_model = model.module if ddp else model # unwrap DDP container if needed
-running_mfu = -1.0
-while True:
-# ... (rest of the script)
-```
+2.  **Modify the `estimate_loss` function signature and its call to the loss function:**
 
-With these changes, your script will now produce a comparable and robust validation loss metric for your diffusion model experiments.
+    ```python
+    # In train.py
+
+    # helps estimate an arbitrarily accurate loss over either split using many batches
+    @torch.no_grad()
+    # --- MODIFICATION: Add penalties as arguments ---
+    def estimate_loss(current_penalty_keep_mask=penalty_keep_mask, current_penalty_mask_correct=penalty_mask_correct):
+        global fixed_val_batches
+        out = {}
+        model.eval()
+        for split in ['train', 'val']:
+            # ... (logic to get/create batches) ...
+            for k in range(eval_iters):
+                # ... (get X, Y) ...
+                with ctx:
+                    logits, loss_from_model = model(X, Y)
+                    if model_type == 'diffusion':
+                        # --- MODIFICATION: Use penalty arguments in the loss calculation ---
+                        loss = diffusion_loss_function(logits, Y, X, mask_token_id, current_penalty_keep_mask, current_penalty_mask_correct)
+                    else:
+                        loss = loss_from_model
+                losses[k] = loss.item()
+            out[split] = losses.mean()
+        model.train()
+        return out
+    ```
+ 
