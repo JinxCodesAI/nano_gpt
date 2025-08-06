@@ -1,0 +1,11 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(python test_logging.py:*)",
+      "Bash(python test_composable_loss.py:*)",
+      "Bash(python test_loss_simple.py:*)",
+      "Bash(python test:*)"
+    ],
+    "deny": []
+  }
+}

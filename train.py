@@ -30,10 +30,14 @@ from torch.distributed import init_process_group, destroy_process_group
 from model import GPTConfig, GPT
 from torch.nn import functional as F
 
+# Composable loss system imports
+from loss import DiffusionLoss
+from modifiers import TaskWeightingModifier, HardNegativeMiningModifier, StateDependentPenaltyModifier
+
 def get_corruption_scheduler(it):
     """
-    Controls the curriculum for both penalties and data generation.
-    Returns the current penalty values and the re-masking task ratio.
+    Controls the curriculum for both penalties, data generation, and dynamic task weights.
+    Returns the current penalty values, re-masking task ratio, and dynamic task weights.
     """
     # --- Penalty Curriculum for "destructive editing" ---
     if it >= masking_warmup_iters:
@@ -47,8 +51,23 @@ def get_corruption_scheduler(it):
         remask_ratio = 1.0
     else:
         remask_ratio = it / proofreading_warmup_iters
+    
+    # --- Dynamic Task Weight Scheduling ---
+    # Unmask task weight: Linear interpolation from min to max over masking_warmup_iters
+    if it >= masking_warmup_iters:
+        current_weight_unmask = weight_unmask_task_max
+    else:
+        ratio = it / masking_warmup_iters
+        current_weight_unmask = weight_unmask_task_min + ratio * (weight_unmask_task_max - weight_unmask_task_min)
+    
+    # Remask task weight: Linear interpolation from min to max over proofreading_warmup_iters  
+    if it >= proofreading_warmup_iters:
+        current_weight_remask = weight_remask_task_max
+    else:
+        ratio = it / proofreading_warmup_iters
+        current_weight_remask = weight_remask_task_min + ratio * (weight_remask_task_max - weight_remask_task_min)
         
-    return current_penalty_mask_correct, remask_ratio
+    return current_penalty_mask_correct, remask_ratio, current_weight_unmask, current_weight_remask
 
 def calculate_diffusion_loss(logits, targets, inputs, mask_token_id, wrong_token_id,
                              current_penalty_mask_correct, weight_unmask_task, 
@@ -65,6 +84,12 @@ def calculate_diffusion_loss(logits, targets, inputs, mask_token_id, wrong_token
     # --- Step 2: Apply weights based on the TASK TYPE only ---
     weights = torch.ones_like(per_token_loss)
     flat_inputs = inputs.view(-1)
+
+    weight_identity_task = 3
+
+    # identity task, punish guessing random things where target equals input 
+    identity_task_positions = (flat_inputs == flat_targets) & (flat_inputs != mask_token_id) & (flat_targets != wrong_token_id)
+    weights[identity_task_positions] = weight_identity_task
     
     # Task 1: Un-masking (Input was [MASK], Target is a word)
     unmask_task_positions = (flat_inputs == mask_token_id) & (flat_targets != wrong_token_id)
@@ -174,9 +199,19 @@ def log_diffusion_diagnostics(logits, targets, inputs, mask_token_id, wrong_toke
         remask_task_mask = (flat_inputs != mask_token_id) & (flat_targets == wrong_token_id)
         total_remask_tasks = remask_task_mask.sum().item()
         
-        # How many times did the model correctly predict [WRONG]?
-        correct_remasks_count = (remask_task_mask & (flat_predictions == wrong_token_id)).sum().item()
-        remask_accuracy = correct_remasks_count / (total_remask_tasks + epsilon)
+        # True positives: correctly predicted [WRONG] where it should be
+        true_positives = (remask_task_mask & (flat_predictions == wrong_token_id)).sum().item()
+        remask_accuracy = true_positives / (total_remask_tasks + epsilon)
+
+        # False positives: predicted [WRONG] where it shouldn't be (wrong positives)
+        should_not_be_wrong_mask = flat_targets != wrong_token_id
+        false_positives = (should_not_be_wrong_mask & (flat_predictions == wrong_token_id)).sum().item()
+        
+        # False negatives: didn't predict [WRONG] where it should be (wrong negatives)
+        false_negatives = (remask_task_mask & (flat_predictions != wrong_token_id)).sum().item()
+        
+        # Total correct predictions (all non-[WRONG] predictions)
+        total_correct_predictions = (flat_predictions == flat_targets).sum().item()
 
         # How often does the model output [WRONG] compared to how often it should have?
         output_wrong_rate = (flat_predictions == wrong_token_id).float().mean().item()
@@ -186,17 +221,18 @@ def log_diffusion_diagnostics(logits, targets, inputs, mask_token_id, wrong_toke
         print(
             f"[REMASK] Accuracy: {remask_accuracy:<6.2%} | "
             f"WRONG Pref.: {wrong_preference:<5.2f} | "
-            f"Tasks: {total_remask_tasks}"
+            f"FP: {false_positives} | FN: {false_negatives} | "
+            f"Correct: {total_correct_predictions} | Tasks: {total_remask_tasks}"
         )
         
         # --- 4. Task Summary ---
         print(
             f"[TASKS] Unmask: {correct_unmasks_count}✓/{incorrect_unmasks_count}✗ | "
-            f"Remask: {correct_remasks_count}✓/{total_remask_tasks - correct_remasks_count}✗"
+            f"Remask: {true_positives}✓/{total_remask_tasks - true_positives}✗"
         )
         
         # --- 5. Curriculum Status ---
-        current_penalty, remask_ratio = get_corruption_scheduler(iter_num)
+        current_penalty, remask_ratio, _, _ = get_corruption_scheduler(iter_num)
         print(
             f"[CURRICULUM] Penalty: {current_penalty:.3f} | "
             f"Remask Ratio: {remask_ratio:.3f}"
@@ -256,9 +292,11 @@ dropout = 0.0 # for pretraining 0 is good, for finetuning try 0.1+
 bias = False # do we use bias inside LayerNorm and Linear layers?
 model_type = 'gpt2' # 'gpt2' or 'diffusion'
 # --- NEW SIMPLIFIED LOSS CONFIG ---
-# Task-based loss weights
-weight_unmask_task = 1.0        # Weight for the "fill-in-the-blank" task.
-weight_remask_task = 1.0        # Weight for the "proofreading" task.
+# Dynamic task-based loss weights (linearly interpolated)
+weight_unmask_task_min = 1.5    # Initial weight for the "fill-in-the-blank" task
+weight_unmask_task_max = 1.0    # Final weight for the "fill-in-the-blank" task
+weight_remask_task_min = 0.5    # Initial weight for the "proofreading" task  
+weight_remask_task_max = 1.0    # Final weight for the "proofreading" task
 
 # Curriculum settings
 penalty_mask_correct = 0.5    # Final discount for wrongly masking a correct token.
@@ -266,6 +304,15 @@ masking_warmup_iters = 1000   # Iterations to ramp up the penalty_mask_correct.
 proofreading_warmup_iters = 2000 # Iterations to ramp up the "re-masking" task.
 
 guaranteed_correct_factor = 0.01
+
+# --- COMPOSABLE LOSS MODIFIERS CONFIG ---
+# Enable/disable individual loss modifiers (easy to toggle on/off)
+use_task_weighting = True           # Apply different weights to unmask/remask tasks
+use_hard_negative_mining = True     # Apply higher weights to identity positions
+use_state_dependent_penalty = True  # Apply dynamic penalties for destructive edits
+
+# Hard negative mining settings
+weight_identity_task = 3.0  # Weight for identity task positions
 
 # Diagnostic logging settings
 log_diagnostics_interval = 100  # Log detailed diagnostics every N iterations
@@ -353,7 +400,7 @@ def get_batch(split):
         y_target = x_clean.clone()
 
         # Get the current re-masking task ratio from the curriculum scheduler
-        _, remask_ratio = get_corruption_scheduler(iter_num)
+        _, remask_ratio, _, _ = get_corruption_scheduler(iter_num)
 
         b, t = x_corrupted.shape
         for i in range(b):
@@ -478,6 +525,36 @@ if init_from == 'resume':
     optimizer.load_state_dict(checkpoint['optimizer'])
 checkpoint = None # free up memory
 
+# Initialize composable loss system for diffusion model
+loss_fn = None
+if model_type == 'diffusion':
+    print("Initializing composable diffusion loss system...")
+    
+    # Create the base loss function
+    loss_fn = DiffusionLoss(mask_token_id, wrong_token_id)
+    
+    # Add modifiers based on configuration
+    if use_task_weighting:
+        print("  - Adding task weighting modifier")
+        loss_fn.add_modifier(TaskWeightingModifier(
+            weight_unmask=weight_unmask_task_max,  # Will be updated dynamically
+            weight_remask=weight_remask_task_max   # Will be updated dynamically
+        ))
+    
+    if use_hard_negative_mining:
+        print("  - Adding hard negative mining modifier")
+        loss_fn.add_modifier(HardNegativeMiningModifier(
+            weight_identity=weight_identity_task
+        ))
+    
+    if use_state_dependent_penalty:
+        print("  - Adding state-dependent penalty modifier")
+        loss_fn.add_modifier(StateDependentPenaltyModifier(
+            penalty_strength=penalty_mask_correct  # Will be updated dynamically
+        ))
+    
+    print(f"  - Loss system initialized with {len(loss_fn.modifiers)} modifiers")
+
 # compile the model
 if compile:
     print("compiling the model... (takes a ~minute)")
@@ -533,7 +610,18 @@ while True:
 
     # determine and set the learning rate for this iteration
     lr = get_lr(iter_num) if decay_lr else learning_rate
-    current_penalty_mask_correct, _ = get_corruption_scheduler(iter_num)
+    current_penalty_mask_correct, _, weight_unmask_task, weight_remask_task = get_corruption_scheduler(iter_num)
+    
+    # Update dynamic weights in composable loss system
+    if model_type == 'diffusion' and loss_fn is not None:
+        # Update task weighting modifier weights
+        for modifier in loss_fn.modifiers:
+            if isinstance(modifier, TaskWeightingModifier):
+                modifier.weight_unmask = weight_unmask_task
+                modifier.weight_remask = weight_remask_task
+            elif isinstance(modifier, StateDependentPenaltyModifier):
+                modifier.penalty_strength = current_penalty_mask_correct
+    
     for param_group in optimizer.param_groups:
         param_group['lr'] = lr
 
@@ -561,7 +649,7 @@ while True:
                     'config': config,
                 }
                 print(f"saving checkpoint to {out_dir}")
-                torch.save(checkpoint, os.path.join(out_dir, 'ckpt.pt'))
+                torch.save(checkpoint, os.path.join(out_dir, f'ckpt_{str(t0)}_{iter_num}.pt'))
     if iter_num == 0 and eval_only:
         break
 
@@ -583,12 +671,8 @@ while True:
                                         iter_num % log_diagnostics_interval == 0 and 
                                         micro_step == 0)  # Only log on first micro-step
                 
-                loss = calculate_diffusion_loss(
-                    logits, Y, X, mask_token_id, wrong_token_id,
-                    current_penalty_mask_correct,
-                    weight_unmask_task, weight_remask_task,
-                    meta_vocab_size, should_log_diagnostics
-                )
+                # Use the new composable loss system
+                loss = loss_fn(logits, Y, X, log_diagnostics=should_log_diagnostics)
             else:
                 loss = loss_from_model
             loss = loss / gradient_accumulation_steps # scale the loss to account for gradient accumulation
