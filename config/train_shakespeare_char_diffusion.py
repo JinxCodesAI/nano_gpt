@@ -43,9 +43,11 @@ weight_remask_task_max = 1    # Final weight for the "proofreading" task (emphas
 penalty_mask_correct = 0.5      # Final discount for wrongly masking a correct token
 masking_warmup_iters = 3000     # Iterations to ramp up the penalty_mask_correct
 proofreading_warmup_iters = 1000  # Iterations to ramp up the "re-masking" task
+entropy_penalty = 0.1
 
 # Data corruption settings
 guaranteed_correct_factor = 0.01  # Fraction of tokens guaranteed to remain uncorrupted (1%)
+soft_label_warmup_iters = 3000
 
 # Diagnostic logging settings
 log_diagnostics_interval = 100  # Log detailed diagnostics every N iterations

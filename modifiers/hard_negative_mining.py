@@ -19,13 +19,32 @@ class HardNegativeMiningModifier:
         flat_targets = context['flat_targets']
         mask_token_id = context['mask_token_id']
         wrong_token_id = context['wrong_token_id']
+        is_soft_labels = context['is_soft_labels']
         
-        # Identity task: punish guessing random things where target equals input
-        identity_task = (
-            (flat_inputs == flat_targets) & 
-            (flat_inputs != mask_token_id) & 
-            (flat_targets != wrong_token_id)
-        )
+        if is_soft_labels:
+            # For soft labels, identity task is where input is not [MASK] and 
+            # the target distribution has high probability for the input token
+            input_not_mask = (flat_inputs != mask_token_id)
+            
+            # Get probability of the input token in the target distribution
+            batch_indices = torch.arange(flat_targets.size(0))
+            input_token_probs = flat_targets[batch_indices, flat_inputs]
+            
+            # Identity task: high probability on the input token and input != [WRONG]
+            identity_task = (
+                input_not_mask & 
+                (input_token_probs > 0.5) &
+                (flat_inputs != wrong_token_id)
+            )
+        else:
+            # For hard labels, use the original logic
+            # Identity task: punish guessing random things where target equals input
+            identity_task = (
+                (flat_inputs == flat_targets) & 
+                (flat_inputs != mask_token_id) & 
+                (flat_targets != wrong_token_id)
+            )
+            
         weights[identity_task] = self.weight_identity
         
         # Store metrics in context for logging

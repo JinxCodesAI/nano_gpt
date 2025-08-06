@@ -21,6 +21,7 @@ class StateDependentPenaltyModifier:
         targets = context['targets']
         mask_token_id = context['mask_token_id']
         wrong_token_id = context['wrong_token_id']
+        is_soft_labels = context['is_soft_labels']
         
         with torch.no_grad():
             B, T = inputs.shape
@@ -37,19 +38,36 @@ class StateDependentPenaltyModifier:
                 num_input_words = input_words_mask.sum().item()
                 
                 if num_input_words > 0:
-                    corrupted_words_mask = (targets[i, input_words_mask] == wrong_token_id)
-                    num_corrupted_words = corrupted_words_mask.sum().item()
+                    if is_soft_labels:
+                        # For soft labels, count positions where WRONG token has high probability
+                        wrong_token_probs = targets[i, input_words_mask, wrong_token_id]
+                        num_corrupted_words = (wrong_token_probs > 0.5).sum().item()
+                    else:
+                        # For hard labels, count positions with WRONG token
+                        corrupted_words_mask = (targets[i, input_words_mask] == wrong_token_id)
+                        num_corrupted_words = corrupted_words_mask.sum().item()
+                    
                     corruption_rate = num_corrupted_words / (num_input_words + epsilon)
                     
                     # Effective penalty: lower when corruption rate is high
                     effective_penalty = self.penalty_strength * (1.0 - corruption_rate)
                     
                     # Find positions where a correct word was wrongly changed to [WRONG]
-                    destructive_mask = (
-                        (inputs[i] == targets[i]) & 
-                        (inputs[i] != mask_token_id) & 
-                        (predictions_2d[i] == wrong_token_id)
-                    )
+                    if is_soft_labels:
+                        # For soft labels, check if target has high prob on input and prediction is WRONG
+                        input_token_probs = targets[i, torch.arange(T), inputs[i]]
+                        destructive_mask = (
+                            (input_token_probs > 0.5) &
+                            (inputs[i] != mask_token_id) &
+                            (predictions_2d[i] == wrong_token_id)
+                        )
+                    else:
+                        # For hard labels, use original logic
+                        destructive_mask = (
+                            (inputs[i] == targets[i]) & 
+                            (inputs[i] != mask_token_id) & 
+                            (predictions_2d[i] == wrong_token_id)
+                        )
                     
                     # Apply penalty to weights
                     weights_2d = weights.view(B, T)

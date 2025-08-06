@@ -12,7 +12,7 @@ class EntropyPenaltyModifier:
     This version implements the "override and recalculate" strategy to be fully
     argmax-free and to correctly handle "good confidence".
     """
-    def __init__(self, penalty_strength=0.1, vocab_size=None):
+    def __init__(self, penalty_strength, vocab_size):
         if vocab_size is None:
             raise ValueError("EntropyPenaltyModifier requires vocab_size for max entropy calculation.")
         

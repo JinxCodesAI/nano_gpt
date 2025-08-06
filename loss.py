@@ -24,9 +24,17 @@ class DiffusionLoss:
     def __call__(self, logits, targets, inputs, log_diagnostics=False):
         # Calculate the base, unweighted loss for every token
         flat_logits = logits.view(-1, logits.size(-1))
-        flat_targets = targets.view(-1)
         
-        per_token_loss = F.cross_entropy(flat_logits, flat_targets, ignore_index=-1, reduction='none')
+        # Check if we have soft labels (3D tensor) or hard labels (2D tensor)
+        if targets.dim() == 3:  # Soft labels: [batch, seq, vocab_size]
+            # Use KL divergence for soft labels
+            flat_targets = targets.view(-1, targets.size(-1))  # [batch*seq, vocab_size]
+            log_probs = F.log_softmax(flat_logits, dim=-1)
+            per_token_loss = F.kl_div(log_probs, flat_targets, reduction='none').sum(dim=-1)
+        else:  # Hard labels: [batch, seq]
+            # Use cross-entropy for hard labels
+            flat_targets = targets.view(-1)
+            per_token_loss = F.cross_entropy(flat_logits, flat_targets, ignore_index=-1, reduction='none')
 
         # Initialize base weights
         weights = torch.ones_like(per_token_loss)
@@ -42,6 +50,7 @@ class DiffusionLoss:
             'per_token_loss': per_token_loss,
             'mask_token_id': self.mask_token_id,
             'wrong_token_id': self.wrong_token_id,
+            'is_soft_labels': targets.dim() == 3,
         }
 
         # Apply each modifier in the chain

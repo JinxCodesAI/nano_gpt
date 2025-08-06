@@ -32,12 +32,12 @@ from torch.nn import functional as F
 
 # Composable loss system imports
 from loss import DiffusionLoss
-from modifiers import TaskWeightingModifier, HardNegativeMiningModifier, StateDependentPenaltyModifier
+from modifiers import TaskWeightingModifier, HardNegativeMiningModifier, StateDependentPenaltyModifier, EntropyPenaltyModifier
 
-def get_corruption_scheduler(it):
+def get_curriculum_schedulers(it):
     """
-    Controls the curriculum for both penalties, data generation, and dynamic task weights.
-    Returns the current penalty values, re-masking task ratio, and dynamic task weights.
+    Controls the curriculum for penalties, data generation, dynamic task weights, and soft labels.
+    Returns the current penalty values, re-masking task ratio, dynamic task weights, and soft label alpha.
     """
     # --- Penalty Curriculum for "destructive editing" ---
     if it >= masking_warmup_iters:
@@ -66,8 +66,16 @@ def get_corruption_scheduler(it):
     else:
         ratio = it / proofreading_warmup_iters
         current_weight_remask = weight_remask_task_min + ratio * (weight_remask_task_max - weight_remask_task_min)
+    
+    # --- Soft Label Curriculum (NEW) ---
+    # This alpha controls the interpolation between a uniform distribution and a one-hot target.
+    # It starts at 0.0 (fully uniform) and ramps to 1.0 (fully one-hot).
+    if it >= soft_label_warmup_iters:
+        soft_label_alpha = 1.0
+    else:
+        soft_label_alpha = it / soft_label_warmup_iters
         
-    return current_penalty_mask_correct, remask_ratio, current_weight_unmask, current_weight_remask
+    return current_penalty_mask_correct, remask_ratio, current_weight_unmask, current_weight_remask, soft_label_alpha
 
 def calculate_diffusion_loss(logits, targets, inputs, mask_token_id, wrong_token_id,
                              current_penalty_mask_correct, weight_unmask_task, 
@@ -232,7 +240,7 @@ def log_diffusion_diagnostics(logits, targets, inputs, mask_token_id, wrong_toke
         )
         
         # --- 5. Curriculum Status ---
-        current_penalty, remask_ratio, _, _ = get_corruption_scheduler(iter_num)
+        current_penalty, remask_ratio, _, _, _ = get_curriculum_schedulers(iter_num)
         print(
             f"[CURRICULUM] Penalty: {current_penalty:.3f} | "
             f"Remask Ratio: {remask_ratio:.3f}"
@@ -302,6 +310,7 @@ weight_remask_task_max = 1.0    # Final weight for the "proofreading" task
 penalty_mask_correct = 0.5    # Final discount for wrongly masking a correct token.
 masking_warmup_iters = 1000   # Iterations to ramp up the penalty_mask_correct.
 proofreading_warmup_iters = 2000 # Iterations to ramp up the "re-masking" task.
+soft_label_warmup_iters = 5000 # NEW: Iterations to transition from soft to hard labels.
 
 guaranteed_correct_factor = 0.01
 
@@ -310,6 +319,7 @@ guaranteed_correct_factor = 0.01
 use_task_weighting = True           # Apply different weights to unmask/remask tasks
 use_hard_negative_mining = True     # Apply higher weights to identity positions
 use_state_dependent_penalty = True  # Apply dynamic penalties for destructive edits
+entropy_penalty = 0.0
 
 # Hard negative mining settings
 weight_identity_task = 3.0  # Weight for identity task positions
@@ -396,12 +406,14 @@ def get_batch(split):
     
     if model_type == 'diffusion':
         assert mask_token_id is not None and wrong_token_id is not None, "Special tokens not initialized"
+        
+        # --- Get Current Curriculum State ---
+        _, remask_ratio, _, _, soft_label_alpha = get_curriculum_schedulers(iter_num)
+
+        # --- Data Corruption (Unchanged) ---
         x_corrupted = x_clean.clone()
-        y_target = x_clean.clone()
-
-        # Get the current re-masking task ratio from the curriculum scheduler
-        _, remask_ratio, _, _ = get_corruption_scheduler(iter_num)
-
+        y_hard_targets = x_clean.clone()  # The hard integer targets
+        
         b, t = x_corrupted.shape
         for i in range(b):
             max_corruption = 1 - guaranteed_correct_factor
@@ -420,9 +432,33 @@ def get_batch(split):
             random_tokens = torch.randint(1, meta_vocab_size, (num_to_random,))
             x_corrupted[i, pos_random] = (x_clean[i, pos_random] + random_tokens) % meta_vocab_size
             # --- MODIFICATION: The target for corrupted tokens is now [WRONG] ---
-            y_target[i, pos_random] = wrong_token_id
+            y_hard_targets[i, pos_random] = wrong_token_id
 
-        x, y = x_corrupted, y_target
+        # --- NEW: Soft Label Generation ---
+        # If alpha is 1.0, we are in the final "hard label" phase.
+        if soft_label_alpha == 1.0:
+            y_final_targets = y_hard_targets
+        else:
+            # 1. Create the base one-hot and uniform distributions
+            vocab_size = meta_vocab_size + 2  # Ensure this includes special tokens
+            y_one_hot = F.one_hot(y_hard_targets, num_classes=vocab_size).float()
+            uniform_dist = torch.full_like(y_one_hot, 1.0 / vocab_size)
+            
+            # 2. Start with the interpolated distribution for all tokens
+            y_soft_targets = (1.0 - soft_label_alpha) * uniform_dist + soft_label_alpha * y_one_hot
+            
+            # 3. Find the un-masking tasks based on the INPUTS
+            unmask_task_mask = (x_corrupted == mask_token_id)
+            
+            # 4. Override: For un-masking tasks, the target is ALWAYS the pure uniform distribution during warmup.
+            # We use torch.where to select the correct distribution for each token.
+            y_final_targets = torch.where(
+                unmask_task_mask.unsqueeze(-1),  # Condition, needs to be broadcastable
+                uniform_dist,                    # Value if True (it's an un-masking task)
+                y_soft_targets                   # Value if False (it's any other task)
+            )
+
+        x, y = x_corrupted, y_final_targets
     else:
         y_autoregressive = torch.stack([torch.from_numpy((data[i+1:i+1+block_size]).astype(np.int64)) for i in ix])
         x, y = x_clean, y_autoregressive
@@ -537,7 +573,7 @@ if model_type == 'diffusion':
     if use_task_weighting:
         print("  - Adding task weighting modifier")
         # Get initial weights from scheduler
-        _, _, initial_weight_unmask, initial_weight_remask = get_corruption_scheduler(iter_num)
+        _, _, initial_weight_unmask, initial_weight_remask, _ = get_curriculum_schedulers(iter_num)
         loss_fn.add_modifier(TaskWeightingModifier(
             weight_unmask=initial_weight_unmask,  # Will be updated dynamically
             weight_remask=initial_weight_remask   # Will be updated dynamically
@@ -554,6 +590,16 @@ if model_type == 'diffusion':
         loss_fn.add_modifier(StateDependentPenaltyModifier(
             penalty_strength=penalty_mask_correct  # Will be updated dynamically
         ))
+
+    if entropy_penalty>0:
+        print("  - Adding entropy modifier")
+        loss_fn.add_modifier(EntropyPenaltyModifier(
+            penalty_strength=entropy_penalty,
+            vocab_size=vocab_size
+            
+        ))
+
+    
     
     print(f"  - Loss system initialized with {len(loss_fn.modifiers)} modifiers")
 
@@ -612,7 +658,7 @@ while True:
 
     # determine and set the learning rate for this iteration
     lr = get_lr(iter_num) if decay_lr else learning_rate
-    current_penalty_mask_correct, _, weight_unmask_task, weight_remask_task = get_corruption_scheduler(iter_num)
+    current_penalty_mask_correct, _, weight_unmask_task, weight_remask_task, _ = get_curriculum_schedulers(iter_num)
     
     # Update dynamic weights in composable loss system
     if model_type == 'diffusion' and loss_fn is not None:
