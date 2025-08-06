@@ -536,9 +536,11 @@ if model_type == 'diffusion':
     # Add modifiers based on configuration
     if use_task_weighting:
         print("  - Adding task weighting modifier")
+        # Get initial weights from scheduler
+        _, _, initial_weight_unmask, initial_weight_remask = get_corruption_scheduler(iter_num)
         loss_fn.add_modifier(TaskWeightingModifier(
-            weight_unmask=weight_unmask_task_max,  # Will be updated dynamically
-            weight_remask=weight_remask_task_max   # Will be updated dynamically
+            weight_unmask=initial_weight_unmask,  # Will be updated dynamically
+            weight_remask=initial_weight_remask   # Will be updated dynamically
         ))
     
     if use_hard_negative_mining:

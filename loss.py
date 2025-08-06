@@ -25,6 +25,7 @@ class DiffusionLoss:
         # Calculate the base, unweighted loss for every token
         flat_logits = logits.view(-1, logits.size(-1))
         flat_targets = targets.view(-1)
+        
         per_token_loss = F.cross_entropy(flat_logits, flat_targets, ignore_index=-1, reduction='none')
 
         # Initialize base weights
