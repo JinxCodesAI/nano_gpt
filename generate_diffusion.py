@@ -31,7 +31,8 @@ model.eval()
 
 # --- Prepare Initial Sequence ---
 mask_token_id = gptconf.mask_token_id
-assert mask_token_id is not None, "Mask token not found in model config"
+wrong_token_id = gptconf.wrong_token_id
+assert mask_token_id is not None and wrong_token_id is not None, "Special tokens not found in model config"
 start_ids = torch.full((num_samples, max_new_tokens), mask_token_id, dtype=torch.long, device=device)
 
 # --- Generate ---

@@ -167,7 +167,8 @@ class GPTConfig:
     bias: bool = True # True: bias in Linears and LayerNorms, like GPT-2. False: a bit better and faster
     # --- NEW ADDITIONS ---
     model_type: str = 'gpt2' # Can be 'gpt2' or 'diffusion'
-    mask_token_id: int = None # To be set during model initialization
+    mask_token_id: int = None # The "unknown" token
+    wrong_token_id: int = None # The "incorrect" token
 
 class GPT(nn.Module):
 
@@ -389,15 +390,18 @@ class GPT(nn.Module):
 
     @torch.no_grad()
     def generate_diffusion(self, idx, max_steps, temperature=1.0, top_k=None):
-        assert self.config.model_type == 'diffusion', "This generation method is only for diffusion models"
-        assert self.config.mask_token_id is not None, "mask_token_id must be configured."
+        """
+        Iteratively refines a sequence using the [MASK] / [WRONG] token system.
+        """
+        assert self.config.model_type == 'diffusion', "This is for diffusion models"
+        mask_token_id = self.config.mask_token_id
+        wrong_token_id = self.config.wrong_token_id
+        assert mask_token_id is not None and wrong_token_id is not None, "Special tokens not configured."
         self.eval()
 
         for _ in range(max_steps):
-            # Check if we are done
-            mask_token_id = self.config.mask_token_id
             if not (idx == mask_token_id).any():
-                break
+                break # Converged
 
             logits, _ = self(idx)
             logits = logits / temperature
@@ -408,17 +412,30 @@ class GPT(nn.Module):
             probs = F.softmax(logits, dim=-1)
             idx_next = torch.multinomial(probs.view(-1, probs.size(-1)), num_samples=1).view(idx.shape)
 
-            # Only update the tokens that were previously [MASK]
-            mask = (idx == mask_token_id)
-            idx = torch.where(mask, idx_next, idx)
+            # --- NEW STATE UPDATE LOGIC ---
+            # Start with a copy of the current state
+            new_idx = idx.clone()
+            
+            # 1. Update positions that were [MASK] with the model's new prediction.
+            unmask_positions = (idx == mask_token_id)
+            new_idx[unmask_positions] = idx_next[unmask_positions]
+            
+            # 2. Find where the model flagged an error and turn it into a [MASK] for the next round.
+            remask_positions = (idx != mask_token_id) & (idx_next == wrong_token_id)
+            new_idx[remask_positions] = mask_token_id
+            
+            idx = new_idx
+            # --- END NEW LOGIC ---
         
         # Finalization: force any remaining [MASK] tokens to be something else
-        if (idx == self.config.mask_token_id).any():
+        if (idx == mask_token_id).any():
             logits, _ = self(idx)
-            logits[:, :, self.config.mask_token_id] = -float('Inf') # Forbid predicting MASK
+            # Forbid both special tokens as a final answer
+            logits[:, :, mask_token_id] = -float('Inf')
+            logits[:, :, wrong_token_id] = -float('Inf')
             probs = F.softmax(logits / temperature, dim=-1)
             idx_next = torch.multinomial(probs.view(-1, probs.size(-1)), num_samples=1).view(idx.shape)
-            mask = (idx == self.config.mask_token_id)
+            mask = (idx == mask_token_id)
             idx = torch.where(mask, idx_next, idx)
 
         self.train()

@@ -30,28 +30,73 @@ from torch.distributed import init_process_group, destroy_process_group
 from model import GPTConfig, GPT
 from torch.nn import functional as F
 
-def diffusion_loss_function(logits, targets, inputs, mask_token_id, penalty_keep_mask, penalty_mask_correct):
+def get_corruption_scheduler(it):
+    """
+    Controls the curriculum for both penalties and data generation.
+    Returns the current penalty values and the re-masking task ratio.
+    """
+    # --- Penalty Curriculum for "destructive editing" ---
+    if it >= masking_warmup_iters:
+        current_penalty_mask_correct = penalty_mask_correct
+    else:
+        ratio = it / masking_warmup_iters
+        current_penalty_mask_correct = 0.0 + ratio * (penalty_mask_correct - 0.0)
+
+    # --- Data Generation Curriculum ---
+    if it >= proofreading_warmup_iters:
+        remask_ratio = 1.0
+    else:
+        remask_ratio = it / proofreading_warmup_iters
+        
+    return current_penalty_mask_correct, remask_ratio
+
+def calculate_diffusion_loss(logits, targets, inputs, mask_token_id, wrong_token_id,
+                             current_penalty_mask_correct, weight_unmask_task, 
+                             weight_remask_task, log_diagnostics=False):
+    """
+    A simplified and robust loss function for the two-token system.
+    It applies weights based only on the task type (the Input-Target pair).
+    """
+    # --- Step 1: Calculate the base cross-entropy loss ---
     flat_logits = logits.view(-1, logits.size(-1))
     flat_targets = targets.view(-1)
-    flat_inputs = inputs.view(-1)
-    flat_predictions = torch.argmax(flat_logits, dim=1)
-
     per_token_loss = F.cross_entropy(flat_logits, flat_targets, ignore_index=-1, reduction='none')
+
+    # --- Step 2: Apply weights based on the TASK TYPE only ---
     weights = torch.ones_like(per_token_loss)
-
-    # Case 1: Input=[MASK], Target=word, Predicted=[MASK]
-    case1_positions = (flat_inputs == mask_token_id) & \
-                      (flat_targets != mask_token_id) & \
-                      (flat_predictions == mask_token_id)
-    weights[case1_positions] = penalty_keep_mask
-
-    # Case 3a: Input=word, Target=word, Predicted=[MASK]
-    case3a_positions = (flat_inputs == flat_targets) & \
-                       (flat_inputs != mask_token_id) & \
-                       (flat_predictions == mask_token_id)
-    weights[case3a_positions] = penalty_mask_correct
+    flat_inputs = inputs.view(-1)
     
-    return (per_token_loss * weights).mean()
+    # Task 1: Un-masking (Input was [MASK], Target is a word)
+    unmask_task_positions = (flat_inputs == mask_token_id) & (flat_targets != wrong_token_id)
+    weights[unmask_task_positions] = weight_unmask_task
+    
+    # Task 2: Re-masking (Input was a word, Target is [WRONG])
+    remask_task_positions = (flat_inputs != mask_token_id) & (flat_targets == wrong_token_id)
+    weights[remask_task_positions] = weight_remask_task
+    
+    # Task 3: State-Dependent Penalty for Destructive Edits
+    with torch.no_grad():
+        B, T = inputs.shape
+        predictions_2d = torch.argmax(logits, dim=-1)
+        for i in range(B):
+            epsilon = 1e-6
+            input_words_mask = (inputs[i] != mask_token_id)
+            num_input_words = input_words_mask.sum().item()
+            corrupted_words_mask = (targets[i, input_words_mask] == wrong_token_id)
+            num_corrupted_words = corrupted_words_mask.sum().item()
+            corruption_rate = num_corrupted_words / (num_input_words + epsilon)
+            effective_penalty = current_penalty_mask_correct * (1.0 - corruption_rate)
+            
+            # Find positions where a correct word was wrongly changed to [WRONG]
+            destructive_mask = (inputs[i] == targets[i]) & (inputs[i] != mask_token_id) & (predictions_2d[i] == wrong_token_id)
+            
+            weights_2d = weights.view(B, T)
+            weights_2d[i, destructive_mask] = effective_penalty
+            
+    # The final loss is the weighted average
+    final_loss = (per_token_loss * weights).mean()
+
+    return final_loss
 
 # -----------------------------------------------------------------------------
 # default config values designed to train a gpt2 (124M) on OpenWebText
@@ -79,10 +124,17 @@ n_embd = 768
 dropout = 0.0 # for pretraining 0 is good, for finetuning try 0.1+
 bias = False # do we use bias inside LayerNorm and Linear layers?
 model_type = 'gpt2' # 'gpt2' or 'diffusion'
-# Diffusion loss specific penalties
-penalty_keep_mask = 0.25      # Discount for failing to unmask, but keeping [MASK].
-penalty_mask_correct = 0.5    # Discount for wrongly masking a correct token.
-guaranteed_correct_factor = 0.01  # Fraction of tokens guaranteed to remain uncorrupted (0.01 = 1%)
+# --- NEW SIMPLIFIED LOSS CONFIG ---
+# Task-based loss weights
+weight_unmask_task = 1.0        # Weight for the "fill-in-the-blank" task.
+weight_remask_task = 1.0        # Weight for the "proofreading" task.
+
+# Curriculum settings
+penalty_mask_correct = 0.5    # Final discount for wrongly masking a correct token.
+masking_warmup_iters = 1000   # Iterations to ramp up the penalty_mask_correct.
+proofreading_warmup_iters = 2000 # Iterations to ramp up the "re-masking" task.
+
+guaranteed_correct_factor = 0.01
 # adamw optimizer
 learning_rate = 6e-4 # max learning rate
 max_iters = 600000 # total number of training iterations
@@ -143,6 +195,7 @@ ctx = nullcontext() if device_type == 'cpu' else torch.amp.autocast(device_type=
 # poor man's data loader
 data_dir = os.path.join('data', dataset)
 mask_token_id = None # Global variable to be set after model init
+wrong_token_id = None # Global variable to be set after model init
 
 def get_batch(split):
     # We recreate np.memmap every batch to avoid a memory leak, as per
@@ -155,15 +208,20 @@ def get_batch(split):
     x_clean = torch.stack([torch.from_numpy((data[i:i+block_size]).astype(np.int64)) for i in ix])
     
     if model_type == 'diffusion':
-        assert mask_token_id is not None, "mask_token_id must be set globally"
+        assert mask_token_id is not None and wrong_token_id is not None, "Special tokens not initialized"
         x_corrupted = x_clean.clone()
-        y_target = x_clean.clone() # Start with the ground truth
+        y_target = x_clean.clone()
+
+        # Get the current re-masking task ratio from the curriculum scheduler
+        _, remask_ratio = get_corruption_scheduler(iter_num)
 
         b, t = x_corrupted.shape
         for i in range(b):
             max_corruption = 1 - guaranteed_correct_factor
             rate_mask = torch.rand(1) * max_corruption
-            rate_random = torch.rand(1) * (max_corruption - rate_mask)
+            rate_random = torch.rand(1) * rate_mask * remask_ratio
+            rate_mask = rate_mask - rate_random
+
             num_to_mask = int(t * rate_mask)
             num_to_random = int(t * rate_random)
             
@@ -171,14 +229,11 @@ def get_batch(split):
             pos_mask = rand_pos[:num_to_mask]
             pos_random = rand_pos[num_to_mask : num_to_mask + num_to_random]
 
-            # Apply mask corruption and set target
             x_corrupted[i, pos_mask] = mask_token_id
-            # y_target already has the correct original token here
-
-            # Apply random corruption and set target
             random_tokens = torch.randint(1, meta_vocab_size, (num_to_random,))
             x_corrupted[i, pos_random] = (x_clean[i, pos_random] + random_tokens) % meta_vocab_size
-            y_target[i, pos_random] = mask_token_id # Target for these is [MASK]
+            # --- MODIFICATION: The target for corrupted tokens is now [WRONG] ---
+            y_target[i, pos_random] = wrong_token_id
 
         x, y = x_corrupted, y_target
     else:
@@ -216,10 +271,15 @@ if init_from == 'scratch':
         print("defaulting to vocab_size of GPT-2 to 50304 (50257 rounded up for efficiency)")
     # --- MODIFICATION ---
     if model_type == 'diffusion':
-        vocab_size = meta_vocab_size + 1 if meta_vocab_size is not None else 50305
+        # Vocab size is now +2 for [MASK] and [WRONG]
+        vocab_size = meta_vocab_size + 2 if meta_vocab_size is not None else 50306
         model_args['vocab_size'] = vocab_size
-        model_args['mask_token_id'] = vocab_size - 1
+        # Assign the last two token IDs
+        model_args['mask_token_id'] = vocab_size - 2
+        model_args['wrong_token_id'] = vocab_size - 1
+        # Make them globally available to get_batch
         mask_token_id = model_args['mask_token_id']
+        wrong_token_id = model_args['wrong_token_id']
     else:
         model_args['vocab_size'] = meta_vocab_size if meta_vocab_size is not None else 50304
     # --- END MODIFICATION ---
@@ -233,12 +293,15 @@ elif init_from == 'resume':
     checkpoint_model_args = checkpoint['model_args']
     # force these config attributes to be equal otherwise we can't even resume training
     # the rest of the attributes (e.g. dropout) can stay as desired from command line
-    for k in ['n_layer', 'n_head', 'n_embd', 'block_size', 'bias', 'vocab_size', 'model_type', 'mask_token_id']:
+    for k in ['n_layer', 'n_head', 'n_embd', 'block_size', 'bias', 'vocab_size', 'model_type', 'mask_token_id', 'wrong_token_id']:
         if k in checkpoint_model_args:
             model_args[k] = checkpoint_model_args[k]
-    # Set global mask_token_id if resuming diffusion model
-    if model_args.get('model_type') == 'diffusion' and 'mask_token_id' in model_args:
-        mask_token_id = model_args['mask_token_id']
+    # Set global tokens if resuming diffusion model
+    if model_args.get('model_type') == 'diffusion':
+        if 'mask_token_id' in model_args:
+            mask_token_id = model_args['mask_token_id']
+        if 'wrong_token_id' in model_args:
+            wrong_token_id = model_args['wrong_token_id']
     # create the model
     gptconf = GPTConfig(**model_args)
     model = GPT(gptconf)
@@ -330,6 +393,7 @@ while True:
 
     # determine and set the learning rate for this iteration
     lr = get_lr(iter_num) if decay_lr else learning_rate
+    current_penalty_mask_correct, _ = get_corruption_scheduler(iter_num)
     for param_group in optimizer.param_groups:
         param_group['lr'] = lr
 
@@ -374,7 +438,11 @@ while True:
             logits, loss_from_model = model(X, Y)
             # --- MODIFICATION ---
             if model_type == 'diffusion':
-                loss = diffusion_loss_function(logits, Y, X, mask_token_id, penalty_keep_mask, penalty_mask_correct)
+                loss = calculate_diffusion_loss(
+                    logits, Y, X, mask_token_id, wrong_token_id,
+                    current_penalty_mask_correct,
+                    weight_unmask_task, weight_remask_task
+                )
             else:
                 loss = loss_from_model
             loss = loss / gradient_accumulation_steps # scale the loss to account for gradient accumulation
