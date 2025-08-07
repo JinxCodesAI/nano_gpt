@@ -58,10 +58,10 @@ adaptive_task_weights = False   # Enable dynamic task weight adjustment
 adaptive_weight_factor = 0.2    # How much to adjust weights
 
 # Optimizer settings
-learning_rate = 1e-4  # with baby networks can afford to go a bit higher
+learning_rate = 1e-3  # with baby networks can afford to go a bit higher
 max_iters = 5000
-lr_decay_iters = 5000  # make equal to max_iters usually
-min_lr = 1e-5  # learning_rate / 10 usually
+lr_decay_iters = 2000  # make equal to max_iters usually
+min_lr = 3e-4  # learning_rate / 10 usually
 beta1 = 0.9
 beta2 = 0.99  # make a bit bigger because number of tokens per iter is small
 weight_decay = 1e-1
@@ -69,9 +69,9 @@ grad_clip = 1.0
 
 # Learning rate schedule
 decay_lr = True
-warmup_iters = 500  # shorter warmup for small dataset
+warmup_iters = 50  # shorter warmup for small dataset
 
 # Device settings (uncomment for specific devices)
-# device = 'cpu'      # run on cpu only
+device = 'cpu'      # run on cpu only
 # compile = False     # do not torch compile the model
 # dtype = 'float32'   # use float32 for better stability on some devices

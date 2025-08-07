@@ -1,4 +1,5 @@
 """
+loss.py
 Composable loss function for the diffusion model.
 Provides a modular architecture where loss modifications can be easily enabled/disabled.
 """

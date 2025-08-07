@@ -1,4 +1,5 @@
 """
+state_dependent_penalty.py
 State-dependent penalty modifier for the diffusion loss.
 Applies dynamic penalties for destructive edits based on corruption rate.
 """

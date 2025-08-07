@@ -1,4 +1,5 @@
 """
+task_weighting.py
 Task-based weighting modifier for the diffusion loss.
 Applies different weights to unmask and remask tasks.
 """

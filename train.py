@@ -1,4 +1,5 @@
 """
+train.py
 This training script can be run both on a single gpu in debug mode,
 and also in a larger training run with distributed data parallel (ddp).
 
@@ -77,75 +78,14 @@ def get_curriculum_schedulers(it):
         
     return current_penalty_mask_correct, remask_ratio, current_weight_unmask, current_weight_remask, soft_label_alpha
 
-def calculate_diffusion_loss(logits, targets, inputs, mask_token_id, wrong_token_id,
-                             current_penalty_mask_correct, weight_unmask_task, 
-                             weight_remask_task, meta_vocab_size=None, log_diagnostics=False):
-    """
-    A simplified and robust loss function for the two-token system.
-    It applies weights based only on the task type (the Input-Target pair).
-    """
-    # --- Step 1: Calculate the base cross-entropy loss ---
-    flat_logits = logits.view(-1, logits.size(-1))
-    flat_targets = targets.view(-1)
-    per_token_loss = F.cross_entropy(flat_logits, flat_targets, ignore_index=-1, reduction='none')
-
-    # --- Step 2: Apply weights based on the TASK TYPE only ---
-    weights = torch.ones_like(per_token_loss)
-    flat_inputs = inputs.view(-1)
-
-    weight_identity_task = 3
-
-    # identity task, punish guessing random things where target equals input 
-    identity_task_positions = (flat_inputs == flat_targets) & (flat_inputs != mask_token_id) & (flat_targets != wrong_token_id)
-    weights[identity_task_positions] = weight_identity_task
-    
-    # Task 1: Un-masking (Input was [MASK], Target is a word)
-    unmask_task_positions = (flat_inputs == mask_token_id) & (flat_targets != wrong_token_id)
-    weights[unmask_task_positions] = weight_unmask_task
-    
-    # Task 2: Re-masking (Input was a word, Target is [WRONG])
-    remask_task_positions = (flat_inputs != mask_token_id) & (flat_targets == wrong_token_id)
-    weights[remask_task_positions] = weight_remask_task
-    
-    # Task 3: State-Dependent Penalty for Destructive Edits
-    with torch.no_grad():
-        B, T = inputs.shape
-        predictions_2d = torch.argmax(logits, dim=-1)
-        for i in range(B):
-            epsilon = 1e-6
-            input_words_mask = (inputs[i] != mask_token_id)
-            num_input_words = input_words_mask.sum().item()
-            corrupted_words_mask = (targets[i, input_words_mask] == wrong_token_id)
-            num_corrupted_words = corrupted_words_mask.sum().item()
-            corruption_rate = num_corrupted_words / (num_input_words + epsilon)
-            effective_penalty = current_penalty_mask_correct * (1.0 - corruption_rate)
-            
-            # Find positions where a correct word was wrongly changed to [WRONG]
-            destructive_mask = (inputs[i] == targets[i]) & (inputs[i] != mask_token_id) & (predictions_2d[i] == wrong_token_id)
-            
-            weights_2d = weights.view(B, T)
-            weights_2d[i, destructive_mask] = effective_penalty
-            
-    # The final loss is the weighted average
-    final_loss = (per_token_loss * weights).mean()
-
-    # Optional diagnostic logging
-    if log_diagnostics:
-        print(f"\n=== DIFFUSION DIAGNOSTICS (iter {iter_num}) ===")
-        log_diffusion_diagnostics(logits, targets, inputs, mask_token_id, wrong_token_id, meta_vocab_size, 
-                                 weight_unmask_task, weight_remask_task, wandb_log)
-        print("=" * 45)
-
-    return final_loss
-
 def log_diffusion_diagnostics(logits, targets, inputs, mask_token_id, wrong_token_id, meta_vocab_size, 
-                               weight_unmask_task, weight_remask_task, wandb_log=False):
+                              iter_num, wandb_log=False):
     """
-    A unified function to calculate and print all key diagnostic metrics
-    for the two-token diffusion model.
+    A unified function to calculate and print key diagnostic metrics.
+    This version includes Precision and Recall for the re-masking task.
     """
     with torch.no_grad():
-        # --- 1. Logit Sanity Check ---
+        # --- 1. Logit Sanity Check (Unchanged) ---
         avg_mask_logit = logits[:, :, mask_token_id].mean().item()
         avg_wrong_logit = logits[:, :, wrong_token_id].mean().item()
         avg_max_logit, predictions = logits.max(dim=-1)
@@ -160,41 +100,36 @@ def log_diffusion_diagnostics(logits, targets, inputs, mask_token_id, wrong_toke
         # --- Setup for Behavioral Analysis ---
         epsilon = 1e-6
         flat_inputs = inputs.view(-1)
-        flat_targets = targets.view(-1)
         flat_predictions = predictions.view(-1)
         
-        # --- 2. Un-masking Confidence and Accuracy ---
-        unmask_task_mask = (flat_inputs == mask_token_id) & (flat_targets != wrong_token_id)
+        # Convert targets to hard labels for metrics if they are soft
+        if targets.dtype == torch.long:
+            hard_targets = targets
+        else:
+            hard_targets = torch.argmax(targets, dim=-1)
+        flat_hard_targets = hard_targets.view(-1)
+        
+        # --- 2. Un-masking Confidence and Accuracy (Unchanged) ---
+        unmask_task_mask = (flat_inputs == mask_token_id) & (flat_hard_targets != wrong_token_id)
         total_unmask_tasks = unmask_task_mask.sum().item()
         
         if total_unmask_tasks > 0:
-            # Get the model's predictions ONLY on the tokens that were part of an un-masking task
             unmask_predictions = flat_predictions[unmask_task_mask]
-            unmask_targets = flat_targets[unmask_task_mask]
-            
-            # Accuracy Metrics
+            unmask_targets = flat_hard_targets[unmask_task_mask]
             correct_unmasks_mask = (unmask_predictions == unmask_targets)
             correct_unmasks_count = correct_unmasks_mask.sum().item()
-            incorrect_unmasks_count = total_unmask_tasks - correct_unmasks_count
-            
-            unmask_accuracy = correct_unmasks_count / (total_unmask_tasks + epsilon)
+            unmask_accuracy = correct_unmasks_count / total_unmask_tasks
             skill_vs_random = unmask_accuracy / (1.0 / meta_vocab_size if meta_vocab_size is not None else 1.0)
-
-            # Confidence of WRONG Guesses
             incorrect_unmask_positions = unmask_task_mask.nonzero(as_tuple=True)[0][~correct_unmasks_mask]
             if len(incorrect_unmask_positions) > 0:
-                # Get the probabilities for the model's (wrong) top guess at these positions
                 incorrect_logits = logits.view(-1, logits.size(-1))[incorrect_unmask_positions]
                 incorrect_probs = F.softmax(incorrect_logits, dim=-1)
                 confidence_in_wrong_guess = incorrect_probs.max(dim=-1).values.mean().item()
             else:
                 confidence_in_wrong_guess = 0.0
-                
-            # Count of "Kept Mask" behavior
             kept_mask_count = (unmask_predictions == mask_token_id).sum().item()
         else:
-            unmask_accuracy, skill_vs_random, confidence_in_wrong_guess = 0.0, 0.0, 0.0
-            correct_unmasks_count, incorrect_unmasks_count, kept_mask_count = 0, 0, 0
+            unmask_accuracy, skill_vs_random, confidence_in_wrong_guess, kept_mask_count = 0.0, 0.0, 0.0, 0
 
         print(
             f"[UNMASK] Accuracy: {unmask_accuracy:<6.2%} | "
@@ -203,56 +138,47 @@ def log_diffusion_diagnostics(logits, targets, inputs, mask_token_id, wrong_toke
             f"Kept Mask: {kept_mask_count}"
         )
         
-        # --- 3. Task Behavior and Token Preference ---
-        remask_task_mask = (flat_inputs != mask_token_id) & (flat_targets == wrong_token_id)
+        # --- 3. Re-masking Precision, Recall, and Error Analysis (NEW) ---
+        remask_task_mask = (flat_inputs != mask_token_id) & (flat_hard_targets == wrong_token_id)
         total_remask_tasks = remask_task_mask.sum().item()
         
-        # True positives: correctly predicted [WRONG] where it should be
-        true_positives = (remask_task_mask & (flat_predictions == wrong_token_id)).sum().item()
-        remask_accuracy = true_positives / (total_remask_tasks + epsilon)
-
-        # False positives: predicted [WRONG] where it shouldn't be (wrong positives)
-        should_not_be_wrong_mask = flat_targets != wrong_token_id
-        false_positives = (should_not_be_wrong_mask & (flat_predictions == wrong_token_id)).sum().item()
-        
-        # False negatives: didn't predict [WRONG] where it should be (wrong negatives)
-        false_negatives = (remask_task_mask & (flat_predictions != wrong_token_id)).sum().item()
-        
-        # Total correct predictions (all non-[WRONG] predictions)
-        total_correct_predictions = (flat_predictions == flat_targets).sum().item()
-
-        # How often does the model output [WRONG] compared to how often it should have?
-        output_wrong_rate = (flat_predictions == wrong_token_id).float().mean().item()
-        target_wrong_rate = (flat_targets == wrong_token_id).float().mean().item()
-        wrong_preference = output_wrong_rate / (target_wrong_rate + epsilon)
+        if total_remask_tasks > 0:
+            # True Positives (TP): Correctly predicted [WRONG] where it should be.
+            true_positives = (remask_task_mask & (flat_predictions == wrong_token_id)).sum().item()
+            
+            # False Negatives (FN): Failed to predict [WRONG] where it should be.
+            false_negatives = total_remask_tasks - true_positives
+            
+            # Recall = TP / (TP + FN) = TP / (Total Actual Positives)
+            recall = true_positives / total_remask_tasks
+            
+            # False Positives (FP): Predicted [WRONG] where it shouldn't be.
+            should_not_be_wrong_mask = (flat_hard_targets != wrong_token_id)
+            false_positives = (should_not_be_wrong_mask & (flat_predictions == wrong_token_id)).sum().item()
+            
+            # Precision = TP / (TP + FP) = TP / (Total Predicted Positives)
+            total_predicted_positives = true_positives + false_positives
+            precision = true_positives / (total_predicted_positives + epsilon)
+        else:
+            recall, precision, false_positives, false_negatives = 0.0, 0.0, 0, 0
 
         print(
-            f"[REMASK] Accuracy: {remask_accuracy:<6.2%} | "
-            f"WRONG Pref.: {wrong_preference:<5.2f} | "
-            f"FP: {false_positives} | FN: {false_negatives} | "
-            f"Correct: {total_correct_predictions} | Tasks: {total_remask_tasks}"
+            f"[REMASK] Recall: {recall:<6.2%} | "
+            f"Precision: {precision:<6.2%} | "
+            f"FP: {false_positives:<5} | "
+            f"FN: {false_negatives:<5} | "
+            f"Tasks: {total_remask_tasks}"
         )
         
-        # --- 4. Task Summary ---
-        print(
-            f"[TASKS] Unmask: {correct_unmasks_count}✓/{incorrect_unmasks_count}✗ | "
-            f"Remask: {true_positives}✓/{total_remask_tasks - true_positives}✗"
-        )
-        
-        # --- 5. Curriculum Status ---
-        current_penalty, remask_ratio, _, _, _ = get_curriculum_schedulers(iter_num)
+        # --- 4. Curriculum Status (Unchanged) ---
+        current_penalty, remask_ratio, soft_label_alpha = get_curriculum_schedulers(iter_num)
         print(
             f"[CURRICULUM] Penalty: {current_penalty:.3f} | "
-            f"Remask Ratio: {remask_ratio:.3f}"
+            f"Remask Ratio: {remask_ratio:.3f} | "
+            f"Soft Label Alpha: {soft_label_alpha:.3f}"
         )
         
-        # --- 6. Task Weights ---
-        print(
-            f"[WEIGHTS] Unmask Task: {weight_unmask_task:.3f} | "
-            f"Remask Task: {weight_remask_task:.3f}"
-        )
-        
-        # --- 7. Optional WandB Logging ---
+        # --- 5. Optional WandB Logging (Updated) ---
         if wandb_log:
             import wandb
             wandb.log({
@@ -260,19 +186,17 @@ def log_diffusion_diagnostics(logits, targets, inputs, mask_token_id, wrong_toke
                 "diffusion/avg_wrong_logit": avg_wrong_logit,
                 "diffusion/avg_max_logit": avg_max_logit,
                 "diffusion/unmask_accuracy": unmask_accuracy,
-                "diffusion/remask_accuracy": remask_accuracy,
+                "diffusion/remask_recall": recall, # Updated metric
+                "diffusion/remask_precision": precision, # New metric
+                "diffusion/remask_false_positives": false_positives, # New metric
+                "diffusion/remask_false_negatives": false_negatives, # New metric
                 "diffusion/skill_vs_random": skill_vs_random,
                 "diffusion/confidence_wrong_guess": confidence_in_wrong_guess,
-                "diffusion/wrong_preference": wrong_preference,
                 "diffusion/kept_mask_count": kept_mask_count,
-                "diffusion/unmask_tasks": total_unmask_tasks,
-                "diffusion/remask_tasks": total_remask_tasks,
-                "curriculum/penalty": current_penalty,
+                "curriculum/penalty_mask_correct": current_penalty,
                 "curriculum/remask_ratio": remask_ratio,
-                "weights/unmask_task": weight_unmask_task,
-                "weights/remask_task": weight_remask_task,
+                "curriculum/soft_label_alpha": soft_label_alpha,
             }, step=iter_num)
-
 # -----------------------------------------------------------------------------
 # default config values designed to train a gpt2 (124M) on OpenWebText
 # I/O
@@ -327,10 +251,6 @@ weight_identity_task = 3.0  # Weight for identity task positions
 # Diagnostic logging settings
 log_diagnostics_interval = 100  # Log detailed diagnostics every N iterations
 enable_diagnostics = True       # Master toggle for diagnostic logging
-
-# Adaptive task weighting (optional feature for advanced users)
-adaptive_task_weights = False   # Enable dynamic task weight adjustment based on performance
-adaptive_weight_factor = 0.2    # How much to adjust weights (0.2 = 20% adjustment)
 
 # adamw optimizer
 learning_rate = 6e-4 # max learning rate
@@ -721,6 +641,8 @@ while True:
                 
                 # Use the new composable loss system
                 loss = loss_fn(logits, Y, X, log_diagnostics=should_log_diagnostics)
+                if iter_num % log_diagnostics_interval == 0:
+                    log_diffusion_diagnostics(logits, Y, X, mask_token_id, wrong_token_id, vocab_size, weight_unmask_task, weight_remask_task, iter_num)
             else:
                 loss = loss_from_model
             loss = loss / gradient_accumulation_steps # scale the loss to account for gradient accumulation

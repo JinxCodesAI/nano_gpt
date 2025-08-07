@@ -1,4 +1,5 @@
 """
+model.py
 Full definition of a GPT Language Model, all of it in this single file.
 References:
 1) the official GPT-2 TensorFlow implementation released by OpenAI:
@@ -236,10 +237,18 @@ class GPT(nn.Module):
             x = block(x)
         x = self.transformer.ln_f(x)
 
+
+
+
         if targets is not None:
             # if we are given some desired targets also calculate the loss
             logits = self.lm_head(x)
-            loss = F.cross_entropy(logits.view(-1, logits.size(-1)), targets.view(-1), ignore_index=-1)
+            if targets.ndim == logits.ndim:
+                # Soft labels: target shape is (B, T, C), same as logits
+                loss = F.cross_entropy(logits.view(-1, logits.size(-1)), targets.view(-1, targets.size(-1)), ignore_index=-1)
+            else:
+                # Hard labels: target shape is (B, T)
+                loss = F.cross_entropy(logits.view(-1, logits.size(-1)), targets.view(-1), ignore_index=-1)
         else:
             # --- MODIFICATION ---
             if self.config.model_type == 'diffusion':
@@ -389,9 +398,11 @@ class GPT(nn.Module):
         return idx
 
     @torch.no_grad()
-    def generate_diffusion(self, idx, max_steps, temperature=1.0, top_k=None):
+    def generate_diffusion(self, idx, max_steps, temperature=1.0, top_k=None,
+                           remask_schedule='cosine', initial_remask_rate=0.95):
         """
-        Iteratively refines a sequence using the [MASK] / [WRONG] token system.
+        Generates text using a progressive denoising schedule.
+        It alternates between un-masking (proposing text) and re-masking (editing).
         """
         assert self.config.model_type == 'diffusion', "This is for diffusion models"
         mask_token_id = self.config.mask_token_id
@@ -399,44 +410,77 @@ class GPT(nn.Module):
         assert mask_token_id is not None and wrong_token_id is not None, "Special tokens not configured."
         self.eval()
 
-        for _ in range(max_steps):
-            if not (idx == mask_token_id).any():
-                break # Converged
+        B, T = idx.shape
 
+        # --- Step 1: Initial Burst ---
+        # Perform a single un-masking step to generate a noisy first draft.
+        print("Step 0: Generating initial noisy draft...")
+        logits, _ = self(idx)
+        # We don't need temperature or top_k here, we want the raw best guesses.
+        probs = F.softmax(logits, dim=-1)
+        idx = torch.multinomial(probs.view(-1, probs.size(-1)), num_samples=1).view(B, T)
+        print("Initial draft generated.")
+        print("-" * 100)
+
+        # --- Steps 2-5: Iterative Refinement Loop ---
+        for step in range(max_steps):
+            # --- Part A: The "Proofreading" Step ---
+            # Get the model's opinion on the current draft. We care about the [WRONG] logits.
             logits, _ = self(idx)
+            wrong_logits = logits[:, :, wrong_token_id]
+
+            # --- Calculate the re-masking schedule for this step ---
+            if remask_schedule == 'cosine':
+                # Cosine schedule smoothly decreases the re-mask rate from initial to 0
+                progress = step / (max_steps - 1) if max_steps > 1 else 1.0
+                remask_rate = initial_remask_rate * (0.5 * (1.0 + math.cos(math.pi * progress)))
+            elif remask_schedule == 'linear':
+                remask_rate = initial_remask_rate * (1.0 - (step / (max_steps - 1) if max_steps > 1 else 1.0))
+            else: # constant
+                remask_rate = initial_remask_rate
+            
+            num_to_remask = int(T * remask_rate)
+            
+            # Find the tokens the model is MOST confident are wrong.
+            # We use topk on the `wrong_logits` to find the indices of these tokens.
+            _, indices_to_remask = torch.topk(wrong_logits, num_to_remask, dim=-1)
+            
+            # Create a mask for these positions.
+            remask_mask = torch.zeros_like(idx, dtype=torch.bool)
+            remask_mask.scatter_(-1, indices_to_remask, True)
+
+            # Apply the re-masking: turn the "most bad" tokens back into [MASK].
+            idx[remask_mask] = mask_token_id
+
+            # --- Part B: The "Generative" Step ---
+            # Now, generate new tokens to fill the blanks we just created.
+            logits, _ = self(idx)
+            # Apply temperature and top_k for sampling diversity
             logits = logits / temperature
             if top_k is not None:
                 v, _ = torch.topk(logits, min(top_k, logits.size(-1)))
                 logits[logits < v[:, :, [-1]]] = -float('Inf')
-
+            
             probs = F.softmax(logits, dim=-1)
-            idx_next = torch.multinomial(probs.view(-1, probs.size(-1)), num_samples=1).view(idx.shape)
+            idx_next = torch.multinomial(probs.view(-1, probs.size(-1)), num_samples=1).view(B, T)
 
-            # --- NEW STATE UPDATE LOGIC ---
-            # Start with a copy of the current state
-            new_idx = idx.clone()
+            # Only fill in the blanks. The tokens that survived the edit are kept.
+            idx = torch.where(remask_mask, idx_next, idx)
             
-            # 1. Update positions that were [MASK] with the model's new prediction.
-            unmask_positions = (idx == mask_token_id)
-            new_idx[unmask_positions] = idx_next[unmask_positions]
-            
-            # 2. Find where the model flagged an error and turn it into a [MASK] for the next round.
-            remask_positions = (idx != mask_token_id) & (idx_next == wrong_token_id)
-            new_idx[remask_positions] = mask_token_id
-            
-            idx = new_idx
-            # --- END NEW LOGIC ---
-        
-        # Finalization: force any remaining [MASK] tokens to be something else
+            # --- Logging ---
+            print(f"Step {step + 1}/{max_steps}: Re-mask rate: {remask_rate:.2%}, Tokens re-masked: {num_to_remask}")
+
+        # Finalization (optional, but good practice)
+        # A final pass to clean up any remaining [MASK] tokens without re-masking again.
         if (idx == mask_token_id).any():
+            print("Finalizing generation...")
+            final_mask = (idx == mask_token_id)
             logits, _ = self(idx)
-            # Forbid both special tokens as a final answer
             logits[:, :, mask_token_id] = -float('Inf')
             logits[:, :, wrong_token_id] = -float('Inf')
             probs = F.softmax(logits / temperature, dim=-1)
-            idx_next = torch.multinomial(probs.view(-1, probs.size(-1)), num_samples=1).view(idx.shape)
-            mask = (idx == mask_token_id)
-            idx = torch.where(mask, idx_next, idx)
+            idx_next = torch.multinomial(probs.view(-1, probs.size(-1)), num_samples=1).view(B, T)
+            idx = torch.where(final_mask, idx_next, idx)
 
         self.train()
         return idx

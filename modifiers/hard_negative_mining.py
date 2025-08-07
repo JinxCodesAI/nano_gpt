@@ -1,4 +1,5 @@
 """
+hard_negative_mining.py
 Hard negative mining modifier for the diffusion loss.
 Applies higher weights to identity positions where input == target.
 """

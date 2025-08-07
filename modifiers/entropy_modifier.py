@@ -1,5 +1,4 @@
-# In a new file: entropy_penalty_modifier.py
-# Or at the bottom of loss.py
+# entropy_penalty_modifier.py
 
 import torch
 import torch.nn.functional as F
@@ -32,32 +31,45 @@ class EntropyPenaltyModifier:
         wrong_token_id = context['wrong_token_id']
         
         # --- Step 2: Identify the positions where the penalty should apply ---
-        unmask_task_mask = (inputs == mask_token_id) & (targets != wrong_token_id)
+        # The penalty should only apply to the un-masking task.
+        # Note: When targets are soft, they are FloatTensors.
+        is_hard_label = targets.dtype == torch.long
+        if is_hard_label:
+            unmask_task_mask = (inputs == mask_token_id) & (targets != wrong_token_id)
+        else:
+            # For soft labels, an un-masking task is where the input is a mask.
+            # We assume all mask inputs are un-masking tasks.
+            unmask_task_mask = (inputs == mask_token_id)
+
         if not unmask_task_mask.any():
             return weights, context
 
         # --- Step 3: Calculate entropy of the *incorrect* part of the distribution ---
-        # 1. Create a temporary copy of the logits for manipulation
-        temp_logits = logits.clone()
+        
+        # 1. Get the model's output probability distribution
+        probs = F.softmax(logits, dim=-1)
+        
+        # 2. Get the target probability distribution
+        if is_hard_label:
+            target_probs = F.one_hot(targets, num_classes=self.vocab_size).float()
+        else:
+            target_probs = targets # Targets are already a probability distribution
 
-        # 2. For every position, find the logit of the correct target token
-        # We need to handle the ignore_index (-1) for targets
-        valid_targets = targets.clone()
-        valid_mask = valid_targets != -1
-        valid_targets[~valid_mask] = 0 # Use a dummy index for invalid targets
+        # 3. Calculate the "incorrect" probability distribution
+        # This is the part of the model's confidence that is NOT on the target.
+        # We use ReLU to zero out any negative values that might occur if P_model < P_target.
+        incorrect_distribution = F.relu(probs - target_probs)
         
-        correct_logits = temp_logits.gather(-1, valid_targets.unsqueeze(-1)).squeeze(-1)
+        # 4. Re-normalize this distribution so it sums to 1, making it a valid input for entropy.
+        # Add a small epsilon to prevent division by zero if the distributions are identical.
+        epsilon = 1e-9
+        incorrect_distribution = incorrect_distribution / (incorrect_distribution.sum(dim=-1, keepdim=True) + epsilon)
         
-        # 3. Override the correct logit with a neutral value (e.g., negative infinity to zero it out in softmax)
-        # This effectively removes the "correct" answer from the probability distribution.
-        temp_logits.scatter_(-1, valid_targets.unsqueeze(-1), -float('inf'))
+        # 5. Calculate the entropy of this "incorrect" distribution.
+        # This entropy measures the "peakiness" of the model's mistakes.
+        entropy_of_incorrect = torch.distributions.Categorical(probs=incorrect_distribution).entropy()
         
-        # 4. Calculate the softmax and entropy on this modified distribution
-        # This entropy now measures the "peakiness" of only the incorrect tokens.
-        incorrect_probs = F.softmax(temp_logits, dim=-1)
-        entropy_of_incorrect = torch.distributions.Categorical(probs=incorrect_probs).entropy()
-        
-        # 5. Normalize the penalty
+        # 6. Normalize the penalty
         normalized_entropy_penalty = (self.max_entropy.to(entropy_of_incorrect.device) - entropy_of_incorrect) / self.max_entropy
         
         # --- Step 4: Apply the penalty to the weights tensor (Multiplicative) ---
@@ -66,7 +78,6 @@ class EntropyPenaltyModifier:
         penalty_map[unmask_task_mask] = normalized_entropy_penalty[unmask_task_mask]
         
         # The new weight is scaled up based on how overconfident the incorrect portion of the distribution was.
-        # Using the multiplicative approach you suggested.
         new_weights = weights * (1 + self.penalty_strength * penalty_map.view(-1))
         
         # --- Step 5: Log diagnostics ---
