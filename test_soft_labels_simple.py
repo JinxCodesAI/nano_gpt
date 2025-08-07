@@ -90,11 +90,11 @@ def test_soft_label_generation():
     batch_size, seq_len = 2, 4
     vocab_size = 1002  # meta_vocab_size + 2
     mask_token_id = 1000
-    wrong_token_id = 1001
+    replace_token_id = 1001
     
     # Test hard targets
-    y_hard = torch.tensor([[5, 10, mask_token_id, wrong_token_id],
-                          [15, 20, 25, wrong_token_id]])
+    y_hard = torch.tensor([[5, 10, mask_token_id, replace_token_id],
+                          [15, 20, 25, replace_token_id]])
     
     # Test soft label creation logic (extracted from get_batch)
     soft_label_alpha = 0.5  # Example alpha
@@ -111,8 +111,8 @@ def test_soft_label_generation():
     assert torch.allclose(y_soft.sum(dim=-1), torch.ones_like(y_soft.sum(dim=-1))), "Probabilities should sum to 1"
     
     # Test unmask task override logic
-    x_corrupted = torch.tensor([[mask_token_id, 10, mask_token_id, wrong_token_id],
-                               [15, mask_token_id, 25, wrong_token_id]]) 
+    x_corrupted = torch.tensor([[mask_token_id, 10, mask_token_id, replace_token_id],
+                               [15, mask_token_id, 25, replace_token_id]]) 
     
     unmask_task_mask = (x_corrupted == mask_token_id)
     y_final_targets = torch.where(

@@ -21,7 +21,7 @@ class StateDependentPenaltyModifier:
         inputs = context['inputs']
         targets = context['targets']
         mask_token_id = context['mask_token_id']
-        wrong_token_id = context['wrong_token_id']
+        replace_token_id = context['replace_token_id']
         is_soft_labels = context['is_soft_labels']
         
         with torch.no_grad():
@@ -41,11 +41,11 @@ class StateDependentPenaltyModifier:
                 if num_input_words > 0:
                     if is_soft_labels:
                         # For soft labels, count positions where WRONG token has high probability
-                        wrong_token_probs = targets[i, input_words_mask, wrong_token_id]
+                        wrong_token_probs = targets[i, input_words_mask, replace_token_id]
                         num_corrupted_words = (wrong_token_probs > 0.5).sum().item()
                     else:
                         # For hard labels, count positions with WRONG token
-                        corrupted_words_mask = (targets[i, input_words_mask] == wrong_token_id)
+                        corrupted_words_mask = (targets[i, input_words_mask] == replace_token_id)
                         num_corrupted_words = corrupted_words_mask.sum().item()
                     
                     corruption_rate = num_corrupted_words / (num_input_words + epsilon)
@@ -60,14 +60,14 @@ class StateDependentPenaltyModifier:
                         destructive_mask = (
                             (input_token_probs > 0.5) &
                             (inputs[i] != mask_token_id) &
-                            (predictions_2d[i] == wrong_token_id)
+                            (predictions_2d[i] == replace_token_id)
                         )
                     else:
                         # For hard labels, use original logic
                         destructive_mask = (
                             (inputs[i] == targets[i]) & 
                             (inputs[i] != mask_token_id) & 
-                            (predictions_2d[i] == wrong_token_id)
+                            (predictions_2d[i] == replace_token_id)
                         )
                     
                     # Apply penalty to weights

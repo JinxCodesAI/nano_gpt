@@ -28,14 +28,14 @@ class EntropyPenaltyModifier:
         targets = context['targets']
         inputs = context['inputs']
         mask_token_id = context['mask_token_id']
-        wrong_token_id = context['wrong_token_id']
+        replace_token_id = context['replace_token_id']
         
         # --- Step 2: Identify the positions where the penalty should apply ---
         # The penalty should only apply to the un-masking task.
         # Note: When targets are soft, they are FloatTensors.
         is_hard_label = targets.dtype == torch.long
         if is_hard_label:
-            unmask_task_mask = (inputs == mask_token_id) & (targets != wrong_token_id)
+            unmask_task_mask = (inputs == mask_token_id) & (targets != replace_token_id)
         else:
             # For soft labels, an un-masking task is where the input is a mask.
             # We assume all mask inputs are un-masking tasks.

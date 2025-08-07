@@ -47,8 +47,8 @@ model.eval()
 model.to(device)
 
 mask_token_id = gptconf.mask_token_id
-wrong_token_id = gptconf.wrong_token_id
-assert mask_token_id is not None and wrong_token_id is not None, "Special tokens not found"
+replace_token_id = gptconf.replace_token_id or gptconf.wrong_token_id
+assert mask_token_id is not None and replace_token_id is not None, "Special tokens not found"
 
 itos = {}
 meta_path = os.path.join('data', checkpoint['config']['dataset'], 'meta.pkl')
@@ -66,7 +66,7 @@ def robust_decode(tokens, itos_map, special_tokens):
             chars.append(itos_map.get(token_id, f'[UNK:{token_id}]'))
     return "".join(chars)
 
-special_token_map = { mask_token_id: "░", wrong_token_id: "[WRONG]" }
+special_token_map = { mask_token_id: "░", replace_token_id: "[WRONG]" }
 
 # -----------------------------------------------------------------------------
 # Scoring Function (Integrated into the script)
@@ -76,7 +76,7 @@ def score_sequence(sequence_ids, model_to_score_with):
     with torch.no_grad():
         logits, _ = model_to_score_with.forward(sequence_ids)
         probs = F.softmax(logits, dim=-1)
-        prob_wrong = probs[:, :, wrong_token_id]
+        prob_wrong = probs[:, :, replace_token_id]
         prob_not_wrong = 1.0 - prob_wrong
         epsilon = 1e-9
         log_total_correctness = -torch.sum(torch.log(prob_not_wrong)).item()
@@ -117,7 +117,7 @@ with torch.no_grad():
             
             # --- Part A: The "Proofreading" Step ---
             logits, _ = model.forward(idx)
-            wrong_logits = logits[:, :, wrong_token_id]
+            wrong_logits = logits[:, :, replace_token_id]
             
             remask_rate = manual_remask_schedule[step]
             num_to_remask = int(max_new_tokens * remask_rate)

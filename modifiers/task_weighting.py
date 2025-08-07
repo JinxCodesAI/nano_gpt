@@ -21,7 +21,7 @@ class TaskWeightingModifier:
         flat_inputs = context['flat_inputs']
         flat_targets = context['flat_targets']
         mask_token_id = context['mask_token_id']
-        wrong_token_id = context['wrong_token_id']
+        replace_token_id = context['replace_token_id']
         is_soft_labels = context['is_soft_labels']
         
         if is_soft_labels:
@@ -31,15 +31,15 @@ class TaskWeightingModifier:
             
             # Remask task: input is not [MASK] and target has high probability for [WRONG]
             # We check if the target distribution has >0.5 probability on [WRONG] token
-            wrong_token_probs = flat_targets[:, wrong_token_id]
+            wrong_token_probs = flat_targets[:, replace_token_id]
             remask_task = (flat_inputs != mask_token_id) & (wrong_token_probs > 0.5)
         else:
             # For hard labels, use the original logic
             # Task 1: Un-masking (Input was [MASK], Target is a word)
-            unmask_task = (flat_inputs == mask_token_id) & (flat_targets != wrong_token_id)
+            unmask_task = (flat_inputs == mask_token_id) & (flat_targets != replace_token_id)
             
             # Task 2: Re-masking (Input was a word, Target is [WRONG])
-            remask_task = (flat_inputs != mask_token_id) & (flat_targets == wrong_token_id)
+            remask_task = (flat_inputs != mask_token_id) & (flat_targets == replace_token_id)
         
         weights[unmask_task] = self.weight_unmask
         weights[remask_task] = self.weight_remask

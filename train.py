@@ -40,6 +40,11 @@ def get_curriculum_schedulers(it):
     Controls the curriculum for penalties, data generation, dynamic task weights, and soft labels.
     Returns the current penalty values, re-masking task ratio, dynamic task weights, and soft label alpha.
     """
+
+    corruption_distribution['replace'] = base_corruption_distribution['replace']+base_corruption_distribution['insert']*(it/proofreading_warmup_iters)+base_corruption_distribution['delete']*(it/proofreading_warmup_iters)
+    corruption_distribution['insert'] = base_corruption_distribution['insert']-base_corruption_distribution['insert']*(it/proofreading_warmup_iters)
+    corruption_distribution['delete'] = base_corruption_distribution['delete']-base_corruption_distribution['delete']*(it/proofreading_warmup_iters)
+
     # --- Penalty Curriculum for "destructive editing" ---
     if it >= masking_warmup_iters:
         current_penalty_mask_correct = penalty_mask_correct
@@ -78,7 +83,7 @@ def get_curriculum_schedulers(it):
         
     return current_penalty_mask_correct, remask_ratio, current_weight_unmask, current_weight_remask, soft_label_alpha
 
-def log_diffusion_diagnostics(logits, targets, inputs, mask_token_id, wrong_token_id, meta_vocab_size, 
+def log_diffusion_diagnostics(logits, targets, inputs, mask_token_id, replace_token_id, meta_vocab_size, 
                               iter_num, wandb_log=False):
     """
     A unified function to calculate and print key diagnostic metrics.
@@ -87,7 +92,7 @@ def log_diffusion_diagnostics(logits, targets, inputs, mask_token_id, wrong_toke
     with torch.no_grad():
         # --- 1. Logit Sanity Check (Unchanged) ---
         avg_mask_logit = logits[:, :, mask_token_id].mean().item()
-        avg_wrong_logit = logits[:, :, wrong_token_id].mean().item()
+        avg_wrong_logit = logits[:, :, replace_token_id].mean().item()
         avg_max_logit, predictions = logits.max(dim=-1)
         avg_max_logit = avg_max_logit.mean().item()
 
@@ -110,7 +115,7 @@ def log_diffusion_diagnostics(logits, targets, inputs, mask_token_id, wrong_toke
         flat_hard_targets = hard_targets.view(-1)
         
         # --- 2. Un-masking Confidence and Accuracy (Unchanged) ---
-        unmask_task_mask = (flat_inputs == mask_token_id) & (flat_hard_targets != wrong_token_id)
+        unmask_task_mask = (flat_inputs == mask_token_id) & (flat_hard_targets != replace_token_id)
         total_unmask_tasks = unmask_task_mask.sum().item()
         
         if total_unmask_tasks > 0:
@@ -139,12 +144,12 @@ def log_diffusion_diagnostics(logits, targets, inputs, mask_token_id, wrong_toke
         )
         
         # --- 3. Re-masking Precision, Recall, and Error Analysis (NEW) ---
-        remask_task_mask = (flat_inputs != mask_token_id) & (flat_hard_targets == wrong_token_id)
+        remask_task_mask = (flat_inputs != mask_token_id) & (flat_hard_targets == replace_token_id)
         total_remask_tasks = remask_task_mask.sum().item()
         
         if total_remask_tasks > 0:
             # True Positives (TP): Correctly predicted [WRONG] where it should be.
-            true_positives = (remask_task_mask & (flat_predictions == wrong_token_id)).sum().item()
+            true_positives = (remask_task_mask & (flat_predictions == replace_token_id)).sum().item()
             
             # False Negatives (FN): Failed to predict [WRONG] where it should be.
             false_negatives = total_remask_tasks - true_positives
@@ -153,8 +158,8 @@ def log_diffusion_diagnostics(logits, targets, inputs, mask_token_id, wrong_toke
             recall = true_positives / total_remask_tasks
             
             # False Positives (FP): Predicted [WRONG] where it shouldn't be.
-            should_not_be_wrong_mask = (flat_hard_targets != wrong_token_id)
-            false_positives = (should_not_be_wrong_mask & (flat_predictions == wrong_token_id)).sum().item()
+            should_not_be_wrong_mask = (flat_hard_targets != replace_token_id)
+            false_positives = (should_not_be_wrong_mask & (flat_predictions == replace_token_id)).sum().item()
             
             # Precision = TP / (TP + FP) = TP / (Total Predicted Positives)
             total_predicted_positives = true_positives + false_positives
@@ -236,6 +241,21 @@ masking_warmup_iters = 1000   # Iterations to ramp up the penalty_mask_correct.
 proofreading_warmup_iters = 2000 # Iterations to ramp up the "re-masking" task.
 soft_label_warmup_iters = 5000 # NEW: Iterations to transition from soft to hard labels.
 
+base_corruption_distribution = {
+    'replace': 0.5,  # 50% of corruptions will be replacements
+    'insert': 0.25,   # 25% will be insertions
+    'delete': 0.25    # 25% will be deletions
+}
+
+corruption_distribution = {
+    'replace': 0.5,  # 50% of corruptions will be replacements
+    'insert': 0.25,   # 25% will be insertions
+    'delete': 0.25    # 25% will be deletions
+}
+
+# Ensure they sum to 1 for safety
+assert sum(corruption_distribution.values()) == 1.0, "Corruption distribution must sum to 1.0"
+
 guaranteed_correct_factor = 0.01
 
 # --- COMPOSABLE LOSS MODIFIERS CONFIG ---
@@ -270,6 +290,10 @@ backend = 'nccl' # 'nccl', 'gloo', etc.
 device = 'cuda' # examples: 'cpu', 'cuda', 'cuda:0', 'cuda:1' etc., or try 'mps' on macbooks
 dtype = 'bfloat16' if torch.cuda.is_available() and torch.cuda.is_bf16_supported() else 'float16' # 'float32', 'bfloat16', or 'float16', the latter will auto implement a GradScaler
 compile = True # use PyTorch 2.0 to compile the model to be faster
+dry_run = False 
+_DRY_RUN_SOURCES = []
+itos = None
+
 # -----------------------------------------------------------------------------
 config_keys = [k for k,v in globals().items() if not k.startswith('_') and isinstance(v, (int, float, bool, str))]
 exec(open('configurator.py').read()) # overrides from command line or config file
@@ -312,83 +336,217 @@ ctx = nullcontext() if device_type == 'cpu' else torch.amp.autocast(device_type=
 # poor man's data loader
 data_dir = os.path.join('data', dataset)
 mask_token_id = None # Global variable to be set after model init
-wrong_token_id = None # Global variable to be set after model init
+replace_token_id = None # Global variable to be set after model init
+insert_token_id = None # Global variable to be set after model init
+delete_token_id = None # Global variable to be set after model init
+
+def get_safe_indices(x, y, special_token_ids):
+    """
+    Returns a tensor of indices that are safe to corrupt.
+    A position is "safe" if neither it nor its left neighbor is a special token.
+    """
+    safe_mask = torch.ones(len(x), dtype=torch.bool)
+    for token_id in special_token_ids:
+        safe_mask &= (x != token_id)
+    
+    # Shift the mask right to check the left neighbor
+    safe_mask_shifted = F.pad(safe_mask[:-1], (1, 0), 'constant', True)
+    
+    # A position is safe if both it AND its left neighbor are not special tokens
+    final_safe_mask = safe_mask & safe_mask_shifted
+    
+    return torch.where(final_safe_mask)[0]
+
+def apply_replacements(x, y, num_to_replace, special_token_ids):
+    """Applies substitution corruption to safe indices."""
+    if num_to_replace == 0: return x, y
+    
+    safe_indices = get_safe_indices(x, y, special_token_ids)
+    if len(safe_indices) < num_to_replace: return x, y # Not enough safe places
+    
+    indices_to_replace = safe_indices[torch.randperm(len(safe_indices))[:num_to_replace]]
+    
+    random_tokens = torch.randint(1, meta_vocab_size, (num_to_replace,))
+    x[indices_to_replace] = (x[indices_to_replace] + random_tokens) % meta_vocab_size
+    y[indices_to_replace] = replace_token_id
+    
+    return x, y
+
+def apply_insertions(x, y, num_to_insert, special_token_ids):
+    """Applies insertion corruption at safe indices."""
+    if num_to_insert == 0: return x, y
+    
+    safe_indices = get_safe_indices(x, y, special_token_ids)
+    if len(safe_indices) < num_to_insert: return x, y
+    
+    indices_to_delete = safe_indices[torch.randperm(len(safe_indices))[:num_to_insert]]
+    
+    # The target for the token *before* the deletion is [INSERT]
+    insert_target_indices = indices_to_delete - 1
+    y[insert_target_indices] = insert_token_id
+    
+    keep_mask = torch.ones_like(x, dtype=torch.bool)
+    keep_mask[indices_to_delete] = False
+    
+    return x[keep_mask], y[keep_mask]
+
+def apply_deletions(x, y, num_to_delete, special_token_ids):
+    """Applies deletion corruption at safe indices."""
+    if num_to_delete == 0: return x, y
+    
+    safe_indices = get_safe_indices(x, y, special_token_ids)
+    if len(safe_indices) < num_to_delete: return x, y
+        
+    indices_to_insert = safe_indices[torch.randperm(len(safe_indices))[:num_to_delete]]
+    indices_to_insert, _ = torch.sort(indices_to_insert)
+    
+    random_tokens = torch.randint(1, meta_vocab_size, (num_to_delete,))
+    
+    for i in reversed(range(num_to_delete)):
+        idx = indices_to_insert[i]
+        x = torch.cat([x[:idx], random_tokens[i].unsqueeze(0), x[idx:]])
+        y = torch.cat([y[:idx], torch.tensor([delete_token_id]), y[idx:]])
+        
+    return x, y
 
 def get_batch(split):
-    # We recreate np.memmap every batch to avoid a memory leak, as per
-    # https://stackoverflow.com/questions/45132940/numpy-memmap-memory-usage-want-to-iterate-once/61472122#61472122
-    if split == 'train':
-        data = np.memmap(os.path.join(data_dir, 'train.bin'), dtype=np.uint16, mode='r')
-    else:
-        data = np.memmap(os.path.join(data_dir, 'val.bin'), dtype=np.uint16, mode='r')
-    ix = torch.randint(len(data) - block_size, (batch_size,))
-    x_clean = torch.stack([torch.from_numpy((data[i:i+block_size]).astype(np.int64)) for i in ix])
+    data = np.memmap(os.path.join(data_dir, f'{split}.bin'), dtype=np.uint16, mode='r')
     
     if model_type == 'diffusion':
-        assert mask_token_id is not None and wrong_token_id is not None, "Special tokens not initialized"
+        special_token_ids = [mask_token_id, replace_token_id, insert_token_id, delete_token_id]
+        assert all(id is not None for id in special_token_ids), "Special tokens not initialized"
         
-        # --- Get Current Curriculum State ---
+        # Get curriculum ratios for this iteration
         _, remask_ratio, _, _, soft_label_alpha = get_curriculum_schedulers(iter_num)
 
-        # --- Data Corruption (Unchanged) ---
-        x_corrupted = x_clean.clone()
-        y_hard_targets = x_clean.clone()  # The hard integer targets
-        
-        b, t = x_corrupted.shape
-        for i in range(b):
+        batch_x, batch_y = [], []
+        for _ in range(batch_size):
+            # --- Step 1: Determine total corruption and its distribution ---
             max_corruption = 1 - guaranteed_correct_factor
-            rate_mask = torch.rand(1) * max_corruption
-            rate_random = torch.rand(1) * rate_mask * remask_ratio
-            rate_mask = rate_mask - rate_random
-
-            num_to_mask = int(t * rate_mask)
-            num_to_random = int(t * rate_random)
+            # The total number of corruptions is scaled by the remask_ratio curriculum
+            total_corruption_rate = torch.rand(1) * max_corruption * remask_ratio
+            total_corruptions = int(total_corruption_rate * block_size)
             
-            rand_pos = torch.randperm(t)
-            pos_mask = rand_pos[:num_to_mask]
-            pos_random = rand_pos[num_to_mask : num_to_mask + num_to_random]
+            # Distribute the total corruptions according to our defined proportions
+            num_to_replace = int(total_corruptions * corruption_distribution['replace'])
+            num_to_insert = int(total_corruptions * corruption_distribution['insert'])
+            num_to_delete = int(total_corruptions * corruption_distribution['delete'])
 
-            x_corrupted[i, pos_mask] = mask_token_id
-            random_tokens = torch.randint(1, meta_vocab_size, (num_to_random,))
-            x_corrupted[i, pos_random] = (x_clean[i, pos_random] + random_tokens) % meta_vocab_size
-            # --- MODIFICATION: The target for corrupted tokens is now [WRONG] ---
-            y_hard_targets[i, pos_random] = wrong_token_id
+            # --- Step 2: Determine source length and read data ---
+            source_len = block_size + num_to_insert - num_to_delete
+            if source_len <= 0: continue # Skip if corruptions are too extreme
+            
+            start_idx = torch.randint(len(data) - source_len, (1,)).item()
+            x_clean = torch.from_numpy(data[start_idx : start_idx + source_len].astype(np.int64))
+            y_clean = x_clean.clone()
 
-        # --- NEW: Soft Label Generation ---
-        # If alpha is 1.0, we are in the final "hard label" phase.
-        if soft_label_alpha == 1.0:
-            y_final_targets = y_hard_targets
-        else:
-            # 1. Create the base one-hot and uniform distributions
-            vocab_size = meta_vocab_size + 2  # Ensure this includes special tokens
-            y_one_hot = F.one_hot(y_hard_targets, num_classes=vocab_size).float()
-            uniform_dist = torch.full_like(y_one_hot, 1.0 / vocab_size)
-            
-            # 2. Start with the interpolated distribution for all tokens
-            y_soft_targets = (1.0 - soft_label_alpha) * uniform_dist + soft_label_alpha * y_one_hot
-            
-            # 3. Find the un-masking tasks based on the INPUTS
-            unmask_task_mask = (x_corrupted == mask_token_id)
-            
-            # 4. Override: For un-masking tasks, the target is ALWAYS the pure uniform distribution during warmup.
-            # We use torch.where to select the correct distribution for each token.
-            y_final_targets = torch.where(
-                unmask_task_mask.unsqueeze(-1),  # Condition, needs to be broadcastable
-                uniform_dist,                    # Value if True (it's an un-masking task)
-                y_soft_targets                   # Value if False (it's any other task)
-            )
+            if dry_run:
+                _DRY_RUN_SOURCES.append(x_clean.clone())
 
-        x, y = x_corrupted, y_final_targets
-    else:
-        y_autoregressive = torch.stack([torch.from_numpy((data[i+1:i+1+block_size]).astype(np.int64)) for i in ix])
-        x, y = x_clean, y_autoregressive
+            # --- Step 3: Apply corruptions (order can matter, let's be consistent) ---
+            # Deletions -> Insertions -> Replacements
+            x_corrupted, y_targets = apply_deletions(x_clean, y_clean, num_to_delete, special_token_ids)
+            x_corrupted, y_targets = apply_insertions(x_corrupted, y_targets, num_to_insert, special_token_ids)
+            x_corrupted, y_targets = apply_replacements(x_corrupted, y_targets, num_to_replace, special_token_ids)
+            
+            # --- Step 4: Pad/truncate to final block_size ---
+            if len(x_corrupted) > block_size:
+                x_corrupted = x_corrupted[:block_size]
+                y_targets = y_targets[:block_size]
+            elif len(x_corrupted) < block_size:
+                padding_len = block_size - len(x_corrupted)
+                x_corrupted = F.pad(x_corrupted, (0, padding_len), 'constant', mask_token_id)
+                y_targets = F.pad(y_targets, (0, padding_len), 'constant', -1)
+            
+            batch_x.append(x_corrupted)
+            batch_y.append(y_targets)
+
+        if not batch_x: return get_batch(split) # Retry if all samples were skipped
+
+        x = torch.stack(batch_x)
+        y_hard_targets = torch.stack(batch_y)
+
+        # Apply soft labels if needed (your existing logic)
+        y = y_hard_targets # Sticking to hard labels for now
+
+    else: # Autoregressive path
+        ix = torch.randint(len(data) - block_size, (batch_size,))
+        x = torch.stack([torch.from_numpy(data[i:i+block_size].astype(np.int64)) for i in ix])
+        y = torch.stack([torch.from_numpy(data[i+1:i+1+block_size].astype(np.int64)) for i in ix])
 
     if device_type == 'cuda':
-        # pin arrays x,y, which allows us to move them to GPU asynchronously (non_blocking=True)
         x, y = x.pin_memory().to(device, non_blocking=True), y.pin_memory().to(device, non_blocking=True)
     else:
         x, y = x.to(device), y.to(device)
     return x, y
+
+def run_diagnostic_dry_run():
+    """
+    Generates one batch of data and prints a detailed, human-readable
+    visualization for debugging the corruption pipeline, then exits.
+    """
+    print("\n" + "="*80)
+    print("--- RUNNING DIAGNOSTIC DRY RUN ---")
+    print("="*80)
+
+    # --- Set curriculum to final state for a worst-case test ---
+    global iter_num
+    iter_num = proofreading_warmup_iters 
+    print(f"\nFetching one batch with curriculum schedulers set for iter_num = {iter_num}...")
+
+    # --- Generate one batch using the exact, unmodified training function ---
+    X, Y = get_batch('train')
+    
+    # The _DRY_RUN_SOURCES global variable has now been populated by the hook.
+    
+    if X is None or not _DRY_RUN_SOURCES:
+        print("\nERROR: Failed to generate a batch. Check configurations.")
+        return
+
+    print(f"Successfully generated a batch of size {X.shape[0]}. Visualizing samples...")
+
+    # --- Define a decoder for visualization ---
+    if 'itos' not in globals():
+        print("\nERROR: 'itos' mapping not found. Cannot decode tokens.")
+        return
+        
+    special_token_map = {
+        mask_token_id: "░",
+        replace_token_id: "[R]",
+        insert_token_id: "[I]",
+        delete_token_id: "[D]",
+        -1: "Ø" # For ignored padding in targets
+    }
+    def test_decode(tokens):
+        return "".join([itos.get(t, special_token_map.get(t, f'<{t}>')) for t in tokens])
+
+    # --- Print each sample ---
+    num_samples_to_show = min(5, batch_size)
+    for i in range(num_samples_to_show):
+        print("\n" + "="*80)
+        print(f"--- SAMPLE {i+1} ---")
+        print("="*80)
+        
+        source_text = test_decode(_DRY_RUN_SOURCES[i].tolist())
+        input_text = test_decode(X[i].tolist())
+        target_text = test_decode(Y[i].tolist())
+        
+        print(f"\n[SOURCE] (Length: {len(_DRY_RUN_SOURCES[i])})\n{source_text}")
+        print(f"\n[INPUT X] (Length: {len(X[i])})\n{input_text}")
+        print(f"\n[TARGET Y] (Length: {len(Y[i])})\n{target_text}")
+
+        counts = {
+            'replace': (Y[i] == replace_token_id).sum().item(),
+            'insert': (Y[i] == insert_token_id).sum().item(),
+            'delete': (Y[i] == delete_token_id).sum().item(),
+        }
+        print(f"\n[STATS] Replacements: {counts['replace']} | Insertions: {counts['insert']} | Deletions: {counts['delete']}")
+        print("="*80, flush=True)
+
+    print("\n--- DRY RUN COMPLETE ---")
+# =============================================================================
+
+# =============================================================================
 
 # init these up here, can override if init_from='resume' (i.e. from a checkpoint)
 iter_num = 0
@@ -401,6 +559,7 @@ if os.path.exists(meta_path):
     with open(meta_path, 'rb') as f:
         meta = pickle.load(f)
     meta_vocab_size = meta['vocab_size']
+    itos = meta['itos']
     print(f"found vocab_size = {meta_vocab_size} (inside {meta_path})")
 
 # model init
@@ -414,15 +573,19 @@ if init_from == 'scratch':
         print("defaulting to vocab_size of GPT-2 to 50304 (50257 rounded up for efficiency)")
     # --- MODIFICATION ---
     if model_type == 'diffusion':
-        # Vocab size is now +2 for [MASK] and [WRONG]
-        vocab_size = meta_vocab_size + 2 if meta_vocab_size is not None else 50306
+        # Vocab size is now +2 for [MASK] and [REPLACE] [INSERT] [DELETE]
+        vocab_size = meta_vocab_size + 4 if meta_vocab_size is not None else 50306
         model_args['vocab_size'] = vocab_size
         # Assign the last two token IDs
+        model_args['delete_token_id'] = vocab_size - 4
+        model_args['insert_token_id'] = vocab_size - 3
         model_args['mask_token_id'] = vocab_size - 2
-        model_args['wrong_token_id'] = vocab_size - 1
+        model_args['replace_token_id'] = vocab_size - 1
         # Make them globally available to get_batch
         mask_token_id = model_args['mask_token_id']
-        wrong_token_id = model_args['wrong_token_id']
+        replace_token_id = model_args['replace_token_id']
+        delete_token_id = model_args['delete_token_id']
+        insert_token_id = model_args['insert_token_id']
     else:
         model_args['vocab_size'] = meta_vocab_size if meta_vocab_size is not None else 50304
     # --- END MODIFICATION ---
@@ -436,15 +599,15 @@ elif init_from == 'resume':
     checkpoint_model_args = checkpoint['model_args']
     # force these config attributes to be equal otherwise we can't even resume training
     # the rest of the attributes (e.g. dropout) can stay as desired from command line
-    for k in ['n_layer', 'n_head', 'n_embd', 'block_size', 'bias', 'vocab_size', 'model_type', 'mask_token_id', 'wrong_token_id']:
+    for k in ['n_layer', 'n_head', 'n_embd', 'block_size', 'bias', 'vocab_size', 'model_type', 'mask_token_id', 'replace_token_id']:
         if k in checkpoint_model_args:
             model_args[k] = checkpoint_model_args[k]
     # Set global tokens if resuming diffusion model
     if model_args.get('model_type') == 'diffusion':
         if 'mask_token_id' in model_args:
             mask_token_id = model_args['mask_token_id']
-        if 'wrong_token_id' in model_args:
-            wrong_token_id = model_args['wrong_token_id']
+        if 'replace_token_id' in model_args:
+            replace_token_id = model_args['replace_token_id']
     # create the model
     gptconf = GPTConfig(**model_args)
     model = GPT(gptconf)
@@ -470,7 +633,20 @@ elif init_from.startswith('gpt2'):
 if block_size < model.config.block_size:
     model.crop_block_size(block_size)
     model_args['block_size'] = block_size # so that the checkpoint will have the right value
+
 model.to(device)
+
+
+if dry_run:
+    # Override config for a modest dry run if not specified otherwise
+    guaranteed_correct_factor = 0.70
+    corruption_distribution['replace'] = 0.333
+    corruption_distribution['insert'] = 0.333
+    corruption_distribution['delete'] = 0.333
+    
+    run_diagnostic_dry_run()
+    exit() # Exit the script after the dry run is complete
+
 
 # initialize a GradScaler. If enabled=False scaler is a no-op
 scaler = torch.cuda.amp.GradScaler(enabled=(dtype == 'float16'))
@@ -487,7 +663,7 @@ if model_type == 'diffusion':
     print("Initializing composable diffusion loss system...")
     
     # Create the base loss function
-    loss_fn = DiffusionLoss(mask_token_id, wrong_token_id)
+    loss_fn = DiffusionLoss(mask_token_id, replace_token_id)
     
     # Add modifiers based on configuration
     if use_task_weighting:
@@ -642,7 +818,7 @@ while True:
                 # Use the new composable loss system
                 loss = loss_fn(logits, Y, X, log_diagnostics=should_log_diagnostics)
                 if iter_num % log_diagnostics_interval == 0:
-                    log_diffusion_diagnostics(logits, Y, X, mask_token_id, wrong_token_id, vocab_size, weight_unmask_task, weight_remask_task, iter_num)
+                    log_diffusion_diagnostics(logits, Y, X, mask_token_id, replace_token_id, vocab_size, weight_unmask_task, weight_remask_task, iter_num)
             else:
                 loss = loss_from_model
             loss = loss / gradient_accumulation_steps # scale the loss to account for gradient accumulation

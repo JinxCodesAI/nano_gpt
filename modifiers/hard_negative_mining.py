@@ -19,7 +19,7 @@ class HardNegativeMiningModifier:
         flat_inputs = context['flat_inputs']
         flat_targets = context['flat_targets']
         mask_token_id = context['mask_token_id']
-        wrong_token_id = context['wrong_token_id']
+        replace_token_id = context['replace_token_id']
         is_soft_labels = context['is_soft_labels']
         
         if is_soft_labels:
@@ -35,7 +35,7 @@ class HardNegativeMiningModifier:
             identity_task = (
                 input_not_mask & 
                 (input_token_probs > 0.5) &
-                (flat_inputs != wrong_token_id)
+                (flat_inputs != replace_token_id)
             )
         else:
             # For hard labels, use the original logic
@@ -43,7 +43,7 @@ class HardNegativeMiningModifier:
             identity_task = (
                 (flat_inputs == flat_targets) & 
                 (flat_inputs != mask_token_id) & 
-                (flat_targets != wrong_token_id)
+                (flat_targets != replace_token_id)
             )
             
         weights[identity_task] = self.weight_identity

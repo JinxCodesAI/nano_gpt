@@ -170,6 +170,9 @@ class GPTConfig:
     model_type: str = 'gpt2' # Can be 'gpt2' or 'diffusion'
     mask_token_id: int = None # The "unknown" token
     wrong_token_id: int = None # The "incorrect" token
+    replace_token_id: int = None # The "incorrect" token
+    insert_token_id: int = None     # The "insert here" signal
+    delete_token_id: int = None     # The "delete this" signal
 
 class GPT(nn.Module):
 
@@ -406,8 +409,8 @@ class GPT(nn.Module):
         """
         assert self.config.model_type == 'diffusion', "This is for diffusion models"
         mask_token_id = self.config.mask_token_id
-        wrong_token_id = self.config.wrong_token_id
-        assert mask_token_id is not None and wrong_token_id is not None, "Special tokens not configured."
+        replace_token_id = self.config.replace_token_id
+        assert mask_token_id is not None and replace_token_id is not None, "Special tokens not configured."
         self.eval()
 
         B, T = idx.shape
@@ -427,7 +430,7 @@ class GPT(nn.Module):
             # --- Part A: The "Proofreading" Step ---
             # Get the model's opinion on the current draft. We care about the [WRONG] logits.
             logits, _ = self(idx)
-            wrong_logits = logits[:, :, wrong_token_id]
+            wrong_logits = logits[:, :, replace_token_id]
 
             # --- Calculate the re-masking schedule for this step ---
             if remask_schedule == 'cosine':
@@ -477,7 +480,7 @@ class GPT(nn.Module):
             final_mask = (idx == mask_token_id)
             logits, _ = self(idx)
             logits[:, :, mask_token_id] = -float('Inf')
-            logits[:, :, wrong_token_id] = -float('Inf')
+            logits[:, :, replace_token_id] = -float('Inf')
             probs = F.softmax(logits / temperature, dim=-1)
             idx_next = torch.multinomial(probs.view(-1, probs.size(-1)), num_samples=1).view(B, T)
             idx = torch.where(final_mask, idx_next, idx)

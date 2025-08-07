@@ -51,8 +51,8 @@ decode = lambda l: ''.join([itos[i] for i in l])
 # -----------------------------------------------------------------------------
 # Scoring Logic
 # -----------------------------------------------------------------------------
-wrong_token_id = gptconf.wrong_token_id
-assert wrong_token_id is not None, "Wrong token not found in model config"
+replace_token_id = gptconf.replace_token_id
+assert replace_token_id is not None, "Wrong token not found in model config"
 
 def score_sequence(sequence_ids, model_to_score_with):
     """Calculates the 'self-doubt' score for a given sequence of token IDs."""
@@ -62,7 +62,7 @@ def score_sequence(sequence_ids, model_to_score_with):
             probs = F.softmax(logits, dim=-1)
             
             # Get the probability the model assigns to the [WRONG] token at each position
-            prob_wrong = probs[:, :, wrong_token_id]
+            prob_wrong = probs[:, :, replace_token_id]
             
             # The "correctness" probability is 1 minus the "wrongness" probability
             prob_not_wrong = 1.0 - prob_wrong

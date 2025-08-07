@@ -77,8 +77,8 @@ else:
 
 # --- Generation ---
 mask_token_id = gptconf.mask_token_id
-wrong_token_id = gptconf.wrong_token_id
-assert mask_token_id is not None and wrong_token_id is not None, "Special tokens not found in model config"
+replace_token_id = gptconf.replace_token_id or gptconf.wrong_token_id
+assert mask_token_id is not None and replace_token_id is not None, "Special tokens not found in model config"
 
 # Create a batch of starting sequences
 start_ids = torch.full((num_samples, max_new_tokens), mask_token_id, dtype=torch.long, device=device)

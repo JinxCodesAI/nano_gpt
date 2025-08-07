@@ -13,9 +13,9 @@ class DiffusionLoss:
     A composable loss function for the diffusion model.
     Applies a chain of modifier objects to dynamically calculate loss weights.
     """
-    def __init__(self, mask_token_id, wrong_token_id):
+    def __init__(self, mask_token_id, replace_token_id):
         self.mask_token_id = mask_token_id
-        self.wrong_token_id = wrong_token_id
+        self.replace_token_id = replace_token_id
         self.modifiers = []
 
     def add_modifier(self, modifier):
@@ -50,7 +50,7 @@ class DiffusionLoss:
             'flat_inputs': inputs.view(-1),
             'per_token_loss': per_token_loss,
             'mask_token_id': self.mask_token_id,
-            'wrong_token_id': self.wrong_token_id,
+            'replace_token_id': self.replace_token_id,
             'is_soft_labels': targets.dim() == 3,
         }
 
