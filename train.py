@@ -40,11 +40,12 @@ def get_curriculum_schedulers(it):
     Controls the curriculum for penalties, data generation, dynamic task weights, and soft labels.
     Returns the current penalty values, re-masking task ratio, dynamic task weights, and soft label alpha.
     """
+    corruption_distribution['replace'] = base_corruption_distribution['replace']+base_corruption_distribution['insert']*((proofreading_warmup_iters-it)/proofreading_warmup_iters)+base_corruption_distribution['delete']*(it/proofreading_warmup_iters)
+    corruption_distribution['insert'] = base_corruption_distribution['insert']-base_corruption_distribution['insert']*((proofreading_warmup_iters-it)/proofreading_warmup_iters)
+    corruption_distribution['delete'] = base_corruption_distribution['delete']-base_corruption_distribution['delete']*((proofreading_warmup_iters-it)/proofreading_warmup_iters)
 
-    corruption_distribution['replace'] = base_corruption_distribution['replace']+base_corruption_distribution['insert']*(it/proofreading_warmup_iters)+base_corruption_distribution['delete']*(it/proofreading_warmup_iters)
-    corruption_distribution['insert'] = base_corruption_distribution['insert']-base_corruption_distribution['insert']*(it/proofreading_warmup_iters)
-    corruption_distribution['delete'] = base_corruption_distribution['delete']-base_corruption_distribution['delete']*(it/proofreading_warmup_iters)
-
+    if it % 100 == 1:
+        print(corruption_distribution)
     # --- Penalty Curriculum for "destructive editing" ---
     if it >= masking_warmup_iters:
         current_penalty_mask_correct = penalty_mask_correct
@@ -174,9 +175,9 @@ def log_diffusion_diagnostics(logits, targets, inputs, mask_token_id, replace_to
             f"FN: {false_negatives:<5} | "
             f"Tasks: {total_remask_tasks}"
         )
-        
+
         # --- 4. Curriculum Status (Unchanged) ---
-        current_penalty, remask_ratio, soft_label_alpha = get_curriculum_schedulers(iter_num)
+        current_penalty, remask_ratio, _, _, soft_label_alpha = get_curriculum_schedulers(iter_num)
         print(
             f"[CURRICULUM] Penalty: {current_penalty:.3f} | "
             f"Remask Ratio: {remask_ratio:.3f} | "
@@ -818,7 +819,7 @@ while True:
                 # Use the new composable loss system
                 loss = loss_fn(logits, Y, X, log_diagnostics=should_log_diagnostics)
                 if iter_num % log_diagnostics_interval == 0:
-                    log_diffusion_diagnostics(logits, Y, X, mask_token_id, replace_token_id, vocab_size, weight_unmask_task, weight_remask_task, iter_num)
+                    log_diffusion_diagnostics(logits, Y, X, mask_token_id, replace_token_id, vocab_size, iter_num)
             else:
                 loss = loss_from_model
             loss = loss / gradient_accumulation_steps # scale the loss to account for gradient accumulation

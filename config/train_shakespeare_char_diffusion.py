@@ -72,6 +72,6 @@ decay_lr = True
 warmup_iters = 50  # shorter warmup for small dataset
 
 # Device settings (uncomment for specific devices)
-device = 'cpu'      # run on cpu only
+# device = 'cpu'      # run on cpu only
 # compile = False     # do not torch compile the model
 # dtype = 'float32'   # use float32 for better stability on some devices
