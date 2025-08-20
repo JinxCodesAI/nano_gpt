@@ -198,27 +198,27 @@ def estimate_loss():
 
 ---
 
-## Milestone 2: Basic Demasking Inference
-**Duration**: 1-2 days  
+## Milestone 2: Basic Demasking Inference ✅ COMPLETED
+**Duration**: 1-2 days
 **Goal**: Implement simple iterative demasking in sample.py for training quality verification
 
 **Note**: This works with existing model.py without changes. The model's forward method `model(X, None)` returns logits without computing loss, which is exactly what we need for inference.
 
 ### Detailed Tasks:
 
-#### 2.1 Convert sample.py from Autoregressive to Demasking
-**Current behavior**: Autoregressively generate tokens one by one  
+#### 2.1 Convert sample.py from Autoregressive to Demasking ✅
+**Current behavior**: Autoregressively generate tokens one by one
 **New behavior**: Start with all masks, iteratively unmask tokens using existing model architecture
 
-#### 2.2 Add Demasking Configuration
+#### 2.2 Add Demasking Configuration ✅
 ```python
 # Add to sample.py config defaults
-demasking_iterations = 10        # Number of demasking rounds
-demasking_algorithm = 'linear'   # 'linear', 'exponential', 'confidence'
-initial_mask_ratio = 1.0         # Start with 100% tokens masked
+diffusion_iterations = 10        # Number of demasking rounds
+remasking_schedule = 'linear'    # 'linear' or 'exponential'
+sequence_length = 1024           # Total length of generated sequence
 ```
 
-#### 2.3 Implement Remasking Algorithms
+#### 2.3 Implement Remasking Algorithms ✅
 **Correct inference process**: Start with all masks → unmask all → re-mask X% → repeat I times
 
 ```python
@@ -242,26 +242,23 @@ def exponential_remasking_schedule(total_iterations, current_iteration):
     exp_progress = (math.exp(decay_factor * progress) - 1) / (math.exp(decay_factor) - 1)
     return start_ratio - exp_progress * (start_ratio - end_ratio)
 
-def generate_with_remasking(model, start_tokens, max_new_tokens, iterations, algorithm='linear'):
+def diffusion_generate(model, total_length, iterations, schedule='linear', mask_token_id=None, decode_fn=None, decode_mask_fn=None, verbose=True):
     """
-    Generate text using iterative demasking with remasking
-    
+    Generate text using diffusion-based iterative demasking
+
     Args:
         model: Trained diffusion model
-        start_tokens: Initial context (can be empty)
-        max_new_tokens: Length of sequence to generate
+        total_length: Total length of sequence to generate
         iterations: Number of demasking/remasking iterations
-        algorithm: Remasking schedule algorithm
+        schedule: Remasking schedule ('linear' or 'exponential')
+        mask_token_id: ID of the mask token
+        decode_fn: Function to decode tokens to text (handles mask tokens)
+        decode_mask_fn: Function to decode tokens with mask character
+        verbose: Whether to print iteration results
     """
-    sequence_length = len(start_tokens) + max_new_tokens
-    
-    # Start with all masks
-    x = torch.full((1, sequence_length), mask_token_id, dtype=torch.long, device=device)
-    
-    # Set context tokens (if any) - these should never be remasked
-    context_length = len(start_tokens)
-    if context_length > 0:
-        x[0, :context_length] = torch.tensor(start_tokens, dtype=torch.long, device=device)
+
+    # Start with ALL positions masked (pure diffusion approach)
+    tokens = torch.full((1, total_length), mask_token_id, dtype=torch.long, device=device)
     
     for iteration in range(iterations):
         # Step 1: Unmask ALL tokens (predict for all masked positions)
@@ -302,33 +299,49 @@ def generate_with_remasking(model, start_tokens, max_new_tokens, iterations, alg
     return x[0]
 ```
 
-#### 2.4 Replace Autoregressive Generation
+#### 2.4 Replace Autoregressive Generation ✅
 Replace the autoregressive generation loop in sample.py with demasking generation:
 
 ```python
-# Replace:
-# for k in range(num_samples):
-#     y = model.generate(x, max_new_tokens, temperature=temperature, top_k=top_k)
-#     print(decode(y[0].tolist()))
-
-# With:
+# Replace autoregressive generation with pure diffusion generation:
 for k in range(num_samples):
-    y = generate_with_remasking(model, start_ids, max_new_tokens, demasking_iterations, demasking_algorithm)
-    print(decode(y.tolist()))
-    print('---------------')
+    generated_tokens = diffusion_generate(
+        model,
+        sequence_length,
+        diffusion_iterations,
+        remasking_schedule,
+        mask_token_id,
+        decode,
+        decode_with_mask_char,
+        verbose=True
+    )
+    print(f"\nFINAL RESULT:")
+    print(decode(generated_tokens.tolist()))
 ```
 
 ### Deliverables:
-- Modified sample.py with demasking-only inference
-- Linear demasking algorithm implementation
-- Configurable demasking parameters
-- Working text generation for training verification
+- Modified sample.py with demasking-only inference ✅
+- Linear and exponential remasking algorithm implementation ✅
+- Configurable demasking parameters ✅
+- Working text generation for training verification ✅
+- Enhanced logging with iteration-by-iteration output ✅
+- Proper mask token handling in decode functions ✅
 
 ### Validation:
-- Generates coherent text sequences
-- Demasking progresses from all masks to complete text
-- Can verify training quality immediately after Milestone 1
-- Generated text quality improves as training progresses
+- Generates coherent text sequences ✅
+- Demasking progresses from all masks to complete text ✅
+- Can verify training quality immediately after Milestone 1 ✅
+- Generated text quality improves as training progresses ✅
+
+### Implementation Notes:
+- **Pure Diffusion Approach**: Implemented true diffusion generation starting with ALL tokens masked (no prompt/context)
+- **Iterative Demasking**: Successfully implemented the core diffusion process: unmask all → re-mask X% → repeat
+- **Remasking Schedules**: Both linear and exponential schedules working correctly
+- **Model Integration**: Fixed inference issue by passing dummy targets to get full sequence logits
+- **Enhanced Logging**: Added detailed iteration-by-iteration logging showing masked/unmasked states
+- **Mask Character Display**: Uses '#' character to visualize masked positions during generation
+- **Vocabulary Handling**: Properly handles mask tokens (ID=65) in decode functions
+- **Working Generation**: Successfully generates coherent Shakespeare-style text from trained checkpoint
 
 ---
 
@@ -1028,10 +1041,10 @@ demasking_iterations = 10       # Number of demasking/remasking iterations
 
 ### Success Metrics
 - [ ] Bidirectional attention: Model can attend to all sequence positions
-- [ ] Multi-phase training: Identity → gradual → standard phases work smoothly  
-- [ ] Masking strategies: Both independent and sticky masking implemented
-- [ ] Demasking inference: Multiple algorithms generate coherent text
-- [ ] Performance: Training/inference speed reasonable for experimentation
+- [ ] Multi-phase training: Identity → gradual → standard phases work smoothly
+- [x] **Masking strategies: Basic independent masking implemented and working**
+- [x] **Demasking inference: Multiple algorithms generate coherent text**
+- [x] **Performance: Training/inference speed reasonable for experimentation**
 
 ## Risk Mitigation
 - **Start small**: Begin with simplest versions of each feature
@@ -1040,11 +1053,26 @@ demasking_iterations = 10       # Number of demasking/remasking iterations
 - **Performance monitoring**: Profile memory/speed impact continuously
 
 ## Next Steps
-1. **Begin Milestone 1**: Convert train.py to masking + diffusion training
-2. **Test immediately**: Verify masking and basic training works
-3. **Move to Milestone 2**: Get demasking inference working for quality verification  
+1. ~~**Begin Milestone 1**: Convert train.py to masking + diffusion training~~ ✅ **COMPLETED**
+2. ~~**Test immediately**: Verify masking and basic training works~~ ✅ **COMPLETED**
+3. ~~**Move to Milestone 2**: Get demasking inference working for quality verification~~ ✅ **COMPLETED**
 4. **Add Milestone 3**: Basic logging to track performance
-5. **Commit frequently**: Small, focused commits for each feature
-6. **Document changes**: Add comments explaining new diffusion features
+5. **Move to Milestone 4**: Convert to bidirectional attention
+6. **Commit frequently**: Small, focused commits for each feature
+7. **Document changes**: Add comments explaining new diffusion features
+
+## Current Status Summary
+**Milestones Completed**: 2/8
+- ✅ **Milestone 1**: Basic masking data generation with identity task training
+- ✅ **Milestone 2**: Pure diffusion inference with iterative demasking/remasking
+
+**Key Achievements**:
+- Successfully converted from autoregressive to masked language modeling
+- Implemented working diffusion-based text generation
+- Model generates coherent Shakespeare-style text using iterative demasking
+- Enhanced logging shows detailed generation process
+- Proper vocabulary handling with mask tokens
+
+**Ready for Next Phase**: The foundation is solid for implementing bidirectional attention and advanced masking strategies.
 
 This incremental approach transforms nanoGPT into a diffusion-based LLM through small, focused changes while maintaining the clean, readable structure of the original codebase.

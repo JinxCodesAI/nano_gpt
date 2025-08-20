@@ -28,14 +28,15 @@ from torch.nn.parallel import DistributedDataParallel as DDP
 from torch.distributed import init_process_group, destroy_process_group
 
 from model import GPTConfig, GPT
+torch._dynamo.config.suppress_errors = True
 
 # -----------------------------------------------------------------------------
 # default config values designed to train a gpt2 (124M) on OpenWebText
 # I/O
 out_dir = 'out'
-eval_interval = 2000
+eval_interval = 100
 log_interval = 1
-eval_iters = 200
+eval_iters = 20
 eval_only = False # if True, script exits right after the first eval
 always_save_checkpoint = True # if True, always save a checkpoint after each eval
 init_from = 'scratch' # 'scratch' or 'resume' or 'gpt2*'
@@ -45,11 +46,11 @@ wandb_project = 'owt'
 wandb_run_name = 'gpt2' # 'run' + str(time.time())
 # data
 dataset = 'shakespeare_char'
-gradient_accumulation_steps = 5 * 8 # used to simulate larger batch sizes
-batch_size = 12 # if gradient_accumulation_steps > 1, this is the micro-batch size
+gradient_accumulation_steps = 1 # used to simulate larger batch sizes
+batch_size = 16 # if gradient_accumulation_steps > 1, this is the micro-batch size
 block_size = 1024
 # diffusion training config
-guaranteed_unmasked = 0.15       # Guaranteed fraction of tokens to keep unmasked
+guaranteed_unmasked = 0.05       # Guaranteed fraction of tokens to keep unmasked
 # model
 n_layer = 6
 n_head = 6
@@ -75,8 +76,9 @@ min_lr = 6e-5 # minimum learning rate, should be ~= learning_rate/10 per Chinchi
 # DDP settings
 backend = 'nccl' # 'nccl', 'gloo', etc.
 # system
-device = 'cpu' # examples: 'cpu', 'cuda', 'cuda:0', 'cuda:1' etc., or try 'mps' on macbooks
-dtype = 'bfloat16' if torch.cuda.is_available() and torch.cuda.is_bf16_supported() else 'float16' # 'float32', 'bfloat16', or 'float16', the latter will auto implement a GradScaler
+device = 'cuda' # examples: 'cpu', 'cuda', 'cuda:0', 'cuda:1' etc., or try 'mps' on macbooks
+dtype = 'float32'
+#dtype = 'bfloat16' if torch.cuda.is_available() and torch.cuda.is_bf16_supported() else 'float16' # 'float32', 'bfloat16', or 'float16', the latter will auto implement a GradScaler
 compile = True # use PyTorch 2.0 to compile the model to be faster
 # -----------------------------------------------------------------------------
 config_keys = [k for k,v in globals().items() if not k.startswith('_') and isinstance(v, (int, float, bool, str))]
@@ -119,30 +121,55 @@ ctx = nullcontext() if device_type == 'cpu' else torch.amp.autocast(device_type=
 
 # poor man's data loader
 data_dir = os.path.join('data', dataset)
+
+# Cache for consistent validation batches
+_val_batch_cache = None
+
 def get_batch(split):
+    global _val_batch_cache
+
+    # For validation, use cached batch to ensure consistency
+    if split == 'val' and _val_batch_cache is not None:
+        return _val_batch_cache
+
     # We recreate np.memmap every batch to avoid a memory leak, as per
     # https://stackoverflow.com/questions/45132940/numpy-memmap-memory-usage-want-to-iterate-once/61472122#61472122
     if split == 'train':
         data = np.memmap(os.path.join(data_dir, 'train.bin'), dtype=np.uint16, mode='r')
     else:
         data = np.memmap(os.path.join(data_dir, 'val.bin'), dtype=np.uint16, mode='r')
-    
-    ix = torch.randint(len(data) - block_size, (batch_size,))
+
+    if split == 'val':
+        # For validation, use fixed seed to ensure reproducible indices
+        torch.manual_seed(42)
+        ix = torch.randint(len(data) - block_size, (batch_size,))
+        # Reset to original seed
+        torch.manual_seed(1337 + seed_offset)
+    else:
+        # For training, use random indices as before
+        ix = torch.randint(len(data) - block_size, (batch_size,))
+
     x = torch.stack([torch.from_numpy((data[i:i+block_size]).astype(np.int64)) for i in ix])
-    
-    # Dynamically sample masking probability each batch
-    masking_prob = torch.rand(1).item() * (1.0 - guaranteed_unmasked)
-    
-    # Create masks: 1 where we mask, 0 where we keep original
-    mask = torch.rand(x.shape) < masking_prob
-    
+
+    if split == 'val':
+        # For validation, use fixed masking probability and seed
+        torch.manual_seed(42)
+        masking_prob = 0.5 * (1.0 - guaranteed_unmasked)  # Fixed at middle of range
+        mask = torch.rand(x.shape) < masking_prob
+        # Reset to original seed
+        torch.manual_seed(1337 + seed_offset)
+    else:
+        # For training, dynamically sample masking probability each batch
+        masking_prob = torch.rand(1).item() * (1.0 - guaranteed_unmasked)
+        mask = torch.rand(x.shape) < masking_prob
+
     # Create input with masked tokens
     masked_x = x.clone()
     masked_x[mask] = mask_token_id
-    
+
     # Target is original x, loss computed only on masked positions
     y = x.clone()
-    
+
     # Move to device
     if device_type == 'cuda':
         masked_x = masked_x.pin_memory().to(device, non_blocking=True)
@@ -150,7 +177,11 @@ def get_batch(split):
         mask = mask.pin_memory().to(device, non_blocking=True)
     else:
         masked_x, y, mask = masked_x.to(device), y.to(device), mask.to(device)
-    
+
+    # Cache validation batch for consistency
+    if split == 'val':
+        _val_batch_cache = (masked_x, y, mask)
+
     return masked_x, y, mask
 
 # init these up here, can override if init_from='resume' (i.e. from a checkpoint)
@@ -190,7 +221,27 @@ if init_from == 'scratch':
 elif init_from == 'resume':
     print(f"Resuming training from {out_dir}")
     # resume training from a checkpoint.
-    ckpt_path = os.path.join(out_dir, 'ckpt.pt')
+    # Find the latest checkpoint file
+    import glob
+    ckpt_pattern = os.path.join(out_dir, 'ckpt_*.pt')
+    ckpt_files = glob.glob(ckpt_pattern)
+
+    if not ckpt_files:
+        # Fallback to old naming convention
+        ckpt_path = os.path.join(out_dir, 'ckpt.pt')
+        if not os.path.exists(ckpt_path):
+            raise FileNotFoundError(f"No checkpoint files found in {out_dir}")
+    else:
+        # Extract iteration numbers and find the latest
+        def extract_iter_num(filename):
+            basename = os.path.basename(filename)
+            # Extract number from ckpt_XXX.pt
+            return int(basename.split('_')[1].split('.')[0])
+
+        latest_ckpt = max(ckpt_files, key=extract_iter_num)
+        ckpt_path = latest_ckpt
+        print(f"Loading latest checkpoint: {os.path.basename(ckpt_path)}")
+
     checkpoint = torch.load(ckpt_path, map_location=device)
     checkpoint_model_args = checkpoint['model_args']
     # force these config attributes to be equal otherwise we can't even resume training
@@ -250,6 +301,11 @@ def estimate_loss():
     model.eval()
     for split in ['train', 'val']:
         losses = torch.zeros(eval_iters)
+        if split == 'val':
+            # For validation, also track model vs random performance
+            model_probs = []
+            random_prob = 1.0 / extended_vocab_size  # Random chance probability
+
         for k in range(eval_iters):
             X, Y, mask = get_batch(split)  # Updated to return mask
             with ctx:
@@ -259,8 +315,33 @@ def estimate_loss():
                 logits_flat = logits.view(-1, logits.size(-1))
                 targets_flat = Y.view(-1)
                 loss = torch.nn.functional.cross_entropy(logits_flat, targets_flat)
+
+                # For validation, compute model vs random statistics on masked tokens only
+                if split == 'val':
+                    # Get probabilities from logits
+                    probs = torch.nn.functional.softmax(logits, dim=-1)  # (batch_size, seq_len, vocab_size)
+
+                    # Flatten mask to match targets
+                    mask_flat = mask.view(-1)  # (batch_size * seq_len,)
+
+                    # Get probabilities for correct tokens at masked positions only
+                    masked_positions = mask_flat.bool()
+                    if masked_positions.sum() > 0:  # Only if there are masked tokens
+                        probs_flat = probs.view(-1, probs.size(-1))  # (batch_size * seq_len, vocab_size)
+                        correct_token_probs = probs_flat[masked_positions, targets_flat[masked_positions]]
+                        model_probs.extend(correct_token_probs.cpu().tolist())
+
             losses[k] = loss.item()
+
         out[split] = losses.mean()
+
+        # Add model vs random comparison for validation
+        if split == 'val' and model_probs:
+            avg_model_prob = sum(model_probs) / len(model_probs)
+            prob_ratio = avg_model_prob / random_prob
+            out[f'{split}_model_vs_random'] = prob_ratio
+            out[f'{split}_avg_correct_prob'] = avg_model_prob
+
     model.train()
     return out
 
@@ -289,6 +370,7 @@ t0 = time.time()
 local_iter_num = 0 # number of iterations in the lifetime of this process
 raw_model = model.module if ddp else model # unwrap DDP container if needed
 running_mfu = -1.0
+print("Starting training loop...")
 while True:
 
     # determine and set the learning rate for this iteration
@@ -299,15 +381,31 @@ while True:
     # evaluate the loss on train/val sets and write checkpoints
     if iter_num % eval_interval == 0 and master_process:
         losses = estimate_loss()
+
+        # Print basic losses
         print(f"step {iter_num}: train loss {losses['train']:.4f}, val loss {losses['val']:.4f}")
+
+        # Print model vs random statistics if available
+        if 'val_model_vs_random' in losses:
+            print(f"  val model vs random: {losses['val_model_vs_random']:.2f}x better")
+            print(f"  val avg correct prob: {losses['val_avg_correct_prob']:.4f} (random: {1.0/extended_vocab_size:.4f})")
+
         if wandb_log:
-            wandb.log({
+            log_dict = {
                 "iter": iter_num,
                 "train/loss": losses['train'],
                 "val/loss": losses['val'],
                 "lr": lr,
                 "mfu": running_mfu*100, # convert to percentage
-            })
+            }
+
+            # Add model vs random statistics to wandb if available
+            if 'val_model_vs_random' in losses:
+                log_dict["val/model_vs_random_ratio"] = losses['val_model_vs_random']
+                log_dict["val/avg_correct_prob"] = losses['val_avg_correct_prob']
+                log_dict["val/random_prob"] = 1.0 / extended_vocab_size
+
+            wandb.log(log_dict)
         if losses['val'] < best_val_loss or always_save_checkpoint:
             best_val_loss = losses['val']
             if iter_num > 0:
@@ -319,8 +417,9 @@ while True:
                     'best_val_loss': best_val_loss,
                     'config': config,
                 }
-                print(f"saving checkpoint to {out_dir}")
-                torch.save(checkpoint, os.path.join(out_dir, 'ckpt.pt'))
+                ckpt_filename = f'ckpt_{iter_num}.pt'
+                print(f"saving checkpoint to {out_dir}/{ckpt_filename}")
+                torch.save(checkpoint, os.path.join(out_dir, ckpt_filename))
     if iter_num == 0 and eval_only:
         break
 
