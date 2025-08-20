@@ -21,6 +21,7 @@ import time
 import math
 import pickle
 from contextlib import nullcontext
+from collections import defaultdict
 
 import numpy as np
 import torch
@@ -29,6 +30,70 @@ from torch.distributed import init_process_group, destroy_process_group
 
 from model import GPTConfig, GPT
 torch._dynamo.config.suppress_errors = True
+
+# -----------------------------------------------------------------------------
+# Timer Infrastructure for Performance Monitoring
+class Timer:
+    def __init__(self):
+        self.times = defaultdict(list)
+
+    def time_function(self, name):
+        """Context manager for timing function calls"""
+        class TimerContext:
+            def __init__(self, timer, name):
+                self.timer = timer
+                self.name = name
+                self.start_time = None
+
+            def __enter__(self):
+                self.start_time = time.time()
+                return self
+
+            def __exit__(self, *args):
+                elapsed = time.time() - self.start_time
+                self.timer.times[self.name].append(elapsed)
+
+        return TimerContext(self, name)
+
+    def get_average(self, name, last_n=100):
+        """Get average time for last N calls"""
+        if name not in self.times or not self.times[name]:
+            return 0.0
+        return sum(self.times[name][-last_n:]) / min(len(self.times[name]), last_n)
+
+# Global timer instance
+timer = Timer()
+
+# -----------------------------------------------------------------------------
+# Masking Statistics Functions
+def log_masking_stats(mask, iter_num):
+    """Log statistics about masking patterns"""
+    mask_ratio = mask.float().mean().item()
+    batch_size, seq_len = mask.shape
+
+    # Count consecutive masked regions
+    mask_np = mask.cpu().numpy()
+    consecutive_regions = []
+    for batch_idx in range(batch_size):
+        regions = []
+        current_length = 0
+        for pos in range(seq_len):
+            if mask_np[batch_idx, pos]:
+                current_length += 1
+            else:
+                if current_length > 0:
+                    regions.append(current_length)
+                    current_length = 0
+        if current_length > 0:
+            regions.append(current_length)
+        consecutive_regions.extend(regions)
+
+    avg_region_length = sum(consecutive_regions) / len(consecutive_regions) if consecutive_regions else 0
+
+    if iter_num % (log_interval * 10) == 0:  # Less frequent detailed stats
+        print(f"Masking stats: {mask_ratio:.3f} ratio, {avg_region_length:.1f} avg region length")
+
+# -----------------------------------------------------------------------------
 
 # -----------------------------------------------------------------------------
 # default config values designed to train a gpt2 (124M) on OpenWebText
@@ -307,14 +372,17 @@ def estimate_loss():
             random_prob = 1.0 / extended_vocab_size  # Random chance probability
 
         for k in range(eval_iters):
-            X, Y, mask = get_batch(split)  # Updated to return mask
+            with timer.time_function('validation_data_generation'):
+                X, Y, mask = get_batch(split)  # Updated to return mask
             with ctx:
-                # Pass dummy targets to force full sequence logits, ignore returned loss
-                logits, _ = model(X, torch.zeros_like(Y))
-                # Compute loss on all positions (identity task for unmasked tokens)
-                logits_flat = logits.view(-1, logits.size(-1))
-                targets_flat = Y.view(-1)
-                loss = torch.nn.functional.cross_entropy(logits_flat, targets_flat)
+                with timer.time_function('validation_forward_pass'):
+                    # Pass dummy targets to force full sequence logits, ignore returned loss
+                    logits, _ = model(X, torch.zeros_like(Y))
+                with timer.time_function('validation_loss_computation'):
+                    # Compute loss on all positions (identity task for unmasked tokens)
+                    logits_flat = logits.view(-1, logits.size(-1))
+                    targets_flat = Y.view(-1)
+                    loss = torch.nn.functional.cross_entropy(logits_flat, targets_flat)
 
                 # For validation, compute model vs random statistics on masked tokens only
                 if split == 'val':
@@ -380,7 +448,8 @@ while True:
 
     # evaluate the loss on train/val sets and write checkpoints
     if iter_num % eval_interval == 0 and master_process:
-        losses = estimate_loss()
+        with timer.time_function('validation'):
+            losses = estimate_loss()
 
         # Print basic losses
         print(f"step {iter_num}: train loss {losses['train']:.4f}, val loss {losses['val']:.4f}")
@@ -433,17 +502,21 @@ while True:
             # looking at the source of that context manager, it just toggles this variable
             model.require_backward_grad_sync = (micro_step == gradient_accumulation_steps - 1)
         with ctx:
-            # Pass dummy targets to force full sequence logits, ignore returned loss
-            logits, _ = model(X, torch.zeros_like(Y))
-            # Compute loss on all positions (identity task for unmasked tokens)
-            logits_flat = logits.view(-1, logits.size(-1))  # (batch_size * seq_len, vocab_size)
-            targets_flat = Y.view(-1)  # (batch_size * seq_len,)
-            loss = torch.nn.functional.cross_entropy(logits_flat, targets_flat)
-            loss = loss / gradient_accumulation_steps # scale the loss to account for gradient accumulation
+            with timer.time_function('forward_pass'):
+                # Pass dummy targets to force full sequence logits, ignore returned loss
+                logits, _ = model(X, torch.zeros_like(Y))
+            with timer.time_function('loss_computation'):
+                # Compute loss on all positions (identity task for unmasked tokens)
+                logits_flat = logits.view(-1, logits.size(-1))  # (batch_size * seq_len, vocab_size)
+                targets_flat = Y.view(-1)  # (batch_size * seq_len,)
+                loss = torch.nn.functional.cross_entropy(logits_flat, targets_flat)
+                loss = loss / gradient_accumulation_steps # scale the loss to account for gradient accumulation
         # immediately async prefetch next batch while model is doing the forward pass on the GPU
-        X, Y, mask = get_batch('train')
+        with timer.time_function('data_generation'):
+            X, Y, mask = get_batch('train')
         # backward pass, with gradient scaling if training in fp16
-        scaler.scale(loss).backward()
+        with timer.time_function('backward_pass'):
+            scaler.scale(loss).backward()
     # clip the gradient
     if grad_clip != 0.0:
         scaler.unscale_(optimizer)
@@ -465,7 +538,26 @@ while True:
         if local_iter_num >= 5: # let the training loop settle a bit
             mfu = raw_model.estimate_mfu(batch_size * gradient_accumulation_steps, dt)
             running_mfu = mfu if running_mfu == -1.0 else 0.9*running_mfu + 0.1*mfu
+
+        # Enhanced logging with detailed timing
+        data_time = timer.get_average('data_generation') * 1000
+        forward_time = timer.get_average('forward_pass') * 1000
+        loss_time = timer.get_average('loss_computation') * 1000
+        backward_time = timer.get_average('backward_pass') * 1000
+
         print(f"iter {iter_num}: loss {lossf:.4f}, time {dt*1000:.2f}ms, mfu {running_mfu*100:.2f}%")
+        print(f"  data: {data_time:.2f}ms, forward: {forward_time:.2f}ms, loss: {loss_time:.2f}ms, backward: {backward_time:.2f}ms")
+
+        # Validation timing (when applicable)
+        if iter_num % eval_interval == 0:
+            val_time = timer.get_average('validation') * 1000
+            val_data_time = timer.get_average('validation_data_generation') * 1000
+            val_forward_time = timer.get_average('validation_forward_pass') * 1000
+            val_loss_time = timer.get_average('validation_loss_computation') * 1000
+            print(f"  validation: {val_time:.2f}ms (data: {val_data_time:.2f}ms, forward: {val_forward_time:.2f}ms, loss: {val_loss_time:.2f}ms)")
+
+        # Add masking statistics logging
+        log_masking_stats(mask, iter_num)
     iter_num += 1
     local_iter_num += 1
 
