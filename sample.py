@@ -12,7 +12,7 @@ from model import GPTConfig, GPT
 # Configuration
 init_from = 'resume'
 out_dir = 'out'
-checkpoint_name = 'ckpt_450.pt'  # Specific checkpoint to load
+checkpoint_name = '10_ckpt_500.pt'  # Specific checkpoint to load
 num_samples = 1  # Number of samples to generate
 sequence_length = 1024  # Total length of generated sequence
 start_ratio = 1.0  # Start with all tokens masked
@@ -23,7 +23,7 @@ dtype = 'float32'
 compile = False
 
 # Diffusion generation parameters
-diffusion_iterations = 10        # Number of demasking/remasking rounds
+diffusion_iterations = 100        # Number of demasking/remasking rounds
 remasking_schedule = 'linear'    # 'linear' or 'exponential'
 exec(open('configurator.py').read()) # overrides from command line or config file
 # -----------------------------------------------------------------------------
