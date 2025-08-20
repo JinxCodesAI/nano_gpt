@@ -169,18 +169,18 @@ def get_batch(split):
         torch.manual_seed(42)
 
         # Apply mixed masking strategy with fixed 0.5 sticky ratio
-        batch_size = x.shape[0]
-        num_sticky_batches = int(batch_size * 0.5)  # Fixed 50% sticky ratio
+        current_batch_size = x.shape[0]
+        num_sticky_batches = int(current_batch_size * 0.5)  # Fixed 50% sticky ratio
 
         masked_x = x.clone()
         mask = torch.zeros_like(x, dtype=torch.bool)
 
         # Apply independent masking to first part of batch
-        if num_sticky_batches < batch_size:
+        if num_sticky_batches < current_batch_size:
             masking_prob = 0.5 * (1.0 - guaranteed_unmasked)  # Fixed at middle of range
-            indep_mask = torch.rand(x[:batch_size-num_sticky_batches].shape) < masking_prob
-            masked_x[:batch_size-num_sticky_batches][indep_mask] = mask_token_id
-            mask[:batch_size-num_sticky_batches] = indep_mask
+            indep_mask = torch.rand(x[:current_batch_size-num_sticky_batches].shape) < masking_prob
+            masked_x[:current_batch_size-num_sticky_batches][indep_mask] = mask_token_id
+            mask[:current_batch_size-num_sticky_batches] = indep_mask
 
         # Apply sticky masking to remaining part of batch
         if num_sticky_batches > 0:
