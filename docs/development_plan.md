@@ -345,8 +345,8 @@ for k in range(num_samples):
 
 ---
 
-## Milestone 3: Basic Logging and Performance Monitoring
-**Duration**: 1 day  
+## Milestone 3: Basic Logging and Performance Monitoring ✅ COMPLETED
+**Duration**: 1 day
 **Goal**: Add essential timing and performance tracking before advanced features
 
 ### Detailed Tasks:
@@ -480,10 +480,33 @@ if iter_num % log_interval == 0:
 - Performance baseline before advanced features
 
 ### Validation:
-- Clear timing breakdown of training bottlenecks
-- Masking statistics match expected patterns
-- Easy identification of performance issues
-- Baseline metrics for optimization
+- Clear timing breakdown of training bottlenecks ✅
+- Masking statistics match expected patterns ✅
+- Easy identification of performance issues ✅
+- Baseline metrics for optimization ✅
+
+### Implementation Notes:
+- **Modular Design**: Timer class and masking statistics moved to `utils.py` for clean separation
+- **Context Manager**: Timer uses context manager pattern for easy instrumentation with `timer.time_function(name)`
+- **Averaging**: Timer averages over last 100 calls for stable metrics, avoiding noise from individual outliers
+- **Comprehensive Timing**: All critical sections instrumented:
+  - Data generation: ~2-3ms (efficient)
+  - Forward pass: ~5900ms (main bottleneck on CPU)
+  - Loss computation: ~2ms (efficient)
+  - Backward pass: ~7500ms (second largest bottleneck)
+  - Validation: ~100s total (includes 20 eval iterations)
+- **Masking Analysis**: Tracks mask ratio (~63.5%) and consecutive region length (~2.7 tokens average)
+- **Performance Baseline**: Established timing baseline for future optimization work
+- **Enhanced Logging**: Detailed component-level timing breakdown with millisecond precision
+- **Validation Timing**: Separate timing for validation data generation, forward pass, and loss computation
+- **CPU Performance**: Baseline established on CPU (forward: ~6s, backward: ~7.5s per iteration)
+
+**Key Insights from Implementation**:
+- Forward and backward passes dominate training time (>99% of iteration time)
+- Data generation is very efficient (~2-3ms), no bottleneck
+- Loss computation is minimal overhead (~2ms)
+- Masking creates reasonable clustering patterns (2.7 token average regions)
+- Validation timing shows consistent performance across eval iterations
 
 ---
 
@@ -1030,13 +1053,13 @@ demasking_iterations = 10       # Number of demasking/remasking iterations
 5. **Performance monitoring**: Track speed/memory impact of each addition
 
 ### File Modification Strategy
-- **Milestone 1**: Only modify train.py (convert to masking + diffusion training)
-- **Milestone 2**: Only modify model.py (convert to bidirectional attention)
-- **Milestone 3**: Continue with train.py (add sticky masking strategies)  
-- **Milestone 4**: Continue with train.py (add multi-phase training)
-- **Milestone 5**: Continue with train.py (add async data generation)
-- **Milestone 6**: Continue with train.py (add comprehensive logging)
-- **Milestone 7**: Only modify sample.py (convert to demasking inference)
+- **Milestone 1**: Only modify train.py (convert to masking + diffusion training) ✅
+- **Milestone 2**: Only modify sample.py (convert to demasking inference) ✅
+- **Milestone 3**: Modify train.py + add utils.py (add performance monitoring) ✅
+- **Milestone 4**: Continue with model.py (convert to bidirectional attention)
+- **Milestone 5**: Continue with train.py (add sticky masking strategies)
+- **Milestone 6**: Continue with train.py (add multi-phase training)
+- **Milestone 7**: Continue with train.py (add async data generation)
 - **Milestone 8**: Polish existing files, add docs/tests
 
 ### Success Metrics
@@ -1056,15 +1079,16 @@ demasking_iterations = 10       # Number of demasking/remasking iterations
 1. ~~**Begin Milestone 1**: Convert train.py to masking + diffusion training~~ ✅ **COMPLETED**
 2. ~~**Test immediately**: Verify masking and basic training works~~ ✅ **COMPLETED**
 3. ~~**Move to Milestone 2**: Get demasking inference working for quality verification~~ ✅ **COMPLETED**
-4. **Add Milestone 3**: Basic logging to track performance
+4. ~~**Add Milestone 3**: Basic logging to track performance~~ ✅ **COMPLETED**
 5. **Move to Milestone 4**: Convert to bidirectional attention
 6. **Commit frequently**: Small, focused commits for each feature
 7. **Document changes**: Add comments explaining new diffusion features
 
 ## Current Status Summary
-**Milestones Completed**: 2/8
+**Milestones Completed**: 3/8
 - ✅ **Milestone 1**: Basic masking data generation with identity task training
 - ✅ **Milestone 2**: Pure diffusion inference with iterative demasking/remasking
+- ✅ **Milestone 3**: Basic logging and performance monitoring infrastructure
 
 **Key Achievements**:
 - Successfully converted from autoregressive to masked language modeling
@@ -1072,7 +1096,10 @@ demasking_iterations = 10       # Number of demasking/remasking iterations
 - Model generates coherent Shakespeare-style text using iterative demasking
 - Enhanced logging shows detailed generation process
 - Proper vocabulary handling with mask tokens
+- Comprehensive performance monitoring with detailed timing breakdown
+- Modular utils.py for clean code organization
+- Performance baseline established for optimization work
 
-**Ready for Next Phase**: The foundation is solid for implementing bidirectional attention and advanced masking strategies.
+**Ready for Next Phase**: The foundation is solid with performance monitoring in place for implementing bidirectional attention and advanced masking strategies.
 
 This incremental approach transforms nanoGPT into a diffusion-based LLM through small, focused changes while maintaining the clean, readable structure of the original codebase.
