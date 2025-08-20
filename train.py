@@ -28,7 +28,7 @@ from torch.nn.parallel import DistributedDataParallel as DDP
 from torch.distributed import init_process_group, destroy_process_group
 
 from model import GPTConfig, GPT
-from utils import Timer, log_masking_stats
+from utils import Timer, log_masking_stats, apply_sticky_masking
 torch._dynamo.config.suppress_errors = True
 
 # Global timer instance
@@ -57,6 +57,12 @@ batch_size = 16 # if gradient_accumulation_steps > 1, this is the micro-batch si
 block_size = 1024
 # diffusion training config
 guaranteed_unmasked = 0.05       # Guaranteed fraction of tokens to keep unmasked
+
+# sticky masking configuration - gradual transition from independent to sticky
+sticky_transition_start = 1000   # When to start introducing sticky masking
+sticky_transition_end = 3000     # When to reach full sticky masking
+sticky_rounds = 3                # Number of sticky masking rounds
+sticky_p1_p2_multiplier = 3.0    # Multiplier for sticky_p2 = sticky_p1 * multiplier
 # model
 n_layer = 6
 n_head = 6
@@ -133,7 +139,7 @@ data_dir = os.path.join('data', dataset)
 _val_batch_cache = None
 
 def get_batch(split):
-    global _val_batch_cache
+    global _val_batch_cache, iter_num
 
     # For validation, use cached batch to ensure consistency
     if split == 'val' and _val_batch_cache is not None:
@@ -159,20 +165,62 @@ def get_batch(split):
     x = torch.stack([torch.from_numpy((data[i:i+block_size]).astype(np.int64)) for i in ix])
 
     if split == 'val':
-        # For validation, use fixed masking probability and seed
+        # For validation, use fixed masking probability and seed (independent masking only)
         torch.manual_seed(42)
         masking_prob = 0.5 * (1.0 - guaranteed_unmasked)  # Fixed at middle of range
         mask = torch.rand(x.shape) < masking_prob
+        masked_x = x.clone()
+        masked_x[mask] = mask_token_id
         # Reset to original seed
         torch.manual_seed(1337 + seed_offset)
     else:
-        # For training, dynamically sample masking probability each batch
-        masking_prob = torch.rand(1).item() * (1.0 - guaranteed_unmasked)
-        mask = torch.rand(x.shape) < masking_prob
+        # For training, apply mixed masking strategy based on current iteration
+        # Calculate sticky masking ratio based on current training iteration
+        if iter_num < sticky_transition_start:
+            # Pure independent masking
+            sticky_ratio = 0.0
+        elif iter_num >= sticky_transition_end:
+            # Pure sticky masking
+            sticky_ratio = 1.0
+        else:
+            # Gradual transition from independent to sticky
+            progress = (iter_num - sticky_transition_start) / (sticky_transition_end - sticky_transition_start)
+            sticky_ratio = progress
 
-    # Create input with masked tokens
-    masked_x = x.clone()
-    masked_x[mask] = mask_token_id
+        # Apply mixed masking strategy
+        if sticky_ratio == 0.0:
+            # Pure independent masking
+            masking_prob = torch.rand(1).item() * (1.0 - guaranteed_unmasked)
+            mask = torch.rand(x.shape) < masking_prob
+            masked_x = x.clone()
+            masked_x[mask] = mask_token_id
+
+        elif sticky_ratio == 1.0:
+            # Pure sticky masking
+            masked_x, mask = apply_sticky_masking(x, sticky_rounds, mask_token_id, sticky_p1_p2_multiplier)
+
+        else:
+            # Mixed strategy: some batches independent, some sticky
+            current_batch_size = x.shape[0]
+            num_sticky_batches = int(current_batch_size * sticky_ratio)
+
+            masked_x = x.clone()
+            mask = torch.zeros_like(x, dtype=torch.bool)
+
+            # Apply independent masking to first part of batch
+            if num_sticky_batches < current_batch_size:
+                masking_prob = torch.rand(1).item() * (1.0 - guaranteed_unmasked)
+                indep_mask = torch.rand(x[:current_batch_size-num_sticky_batches].shape) < masking_prob
+                masked_x[:current_batch_size-num_sticky_batches][indep_mask] = mask_token_id
+                mask[:current_batch_size-num_sticky_batches] = indep_mask
+
+            # Apply sticky masking to remaining part of batch
+            if num_sticky_batches > 0:
+                sticky_masked_x, sticky_mask = apply_sticky_masking(
+                    x[-num_sticky_batches:], sticky_rounds, mask_token_id, sticky_p1_p2_multiplier
+                )
+                masked_x[-num_sticky_batches:] = sticky_masked_x
+                mask[-num_sticky_batches:] = sticky_mask
 
     # Target is original x, loss computed only on masked positions
     y = x.clone()
@@ -498,8 +546,8 @@ while True:
             val_loss_time = timer.get_average('validation_loss_computation') * 1000
             print(f"  validation: {val_time:.2f}ms (data: {val_data_time:.2f}ms, forward: {val_forward_time:.2f}ms, loss: {val_loss_time:.2f}ms)")
 
-        # Add masking statistics logging
-        log_masking_stats(mask, iter_num, log_interval)
+        # Add masking statistics logging with transition tracking
+        log_masking_stats(mask, iter_num, log_interval, sticky_transition_start, sticky_transition_end)
     iter_num += 1
     local_iter_num += 1
 
