@@ -627,27 +627,68 @@ test_bidirectional_attention()
 ```
 
 ### Deliverables:
-- Converted model.py with bidirectional-only attention ✅
+- Unified attention system supporting both causal and bidirectional modes ✅
+- Configurable attention type parameter in model and training scripts ✅
 - Extended vocabulary handling for mask token ✅ (Already implemented in Milestone 1)
-- Working bidirectional training ✅
-- Attention pattern verification ✅
+- Working bidirectional training with easy switching to causal ✅
+- Attention pattern verification for both types ✅
+- Backward compatibility with existing checkpoints ✅
 
 ### Validation:
-- Model can attend to all sequence positions (no causal masking) ✅
-- Bidirectional attention improves masked token prediction accuracy ✅
-- Training converges better than causal version ✅
-- Attention patterns show full bidirectional connectivity ✅
+- Both causal and bidirectional attention modes work correctly ✅
+- Configurable attention type properly saved and loaded from checkpoints ✅
+- Bidirectional attention enables full sequence context for masked language modeling ✅
+- Causal attention maintains autoregressive behavior for traditional language modeling ✅
+- Backward compatibility preserved for existing checkpoints without attention_type ✅
+- Training and inference behavior adapts correctly based on attention type ✅
 
 ### Implementation Notes:
-- **Class Rename**: Successfully converted `CausalSelfAttention` to `BidirectionalSelfAttention`
-- **Causal Mask Removal**: Removed causal mask buffer registration and masking logic
-- **Flash Attention Update**: Changed `is_causal=False` for bidirectional attention in Flash Attention
-- **Manual Attention**: Removed `masked_fill` operation that applied causal masking
-- **Block Update**: Updated `Block` class to use `BidirectionalSelfAttention`
-- **Forward Pass**: Modified GPT forward pass to compute logits for all positions (not just last position)
-- **Backward Compatibility**: Maintained compatibility with existing training and inference code
-- **Testing**: Verified bidirectional functionality with comprehensive tests
-- **Model Architecture**: Successfully maintains all other GPT architecture components unchanged
+- **Unified Attention Class**: Created `SelfAttention` class supporting both causal and bidirectional attention
+- **Configurable Attention Type**: Added `attention_type` parameter to `GPTConfig` ('causal' or 'bidirectional')
+- **Dynamic Behavior**: Flash Attention uses `is_causal` parameter based on attention type
+- **Conditional Masking**: Manual attention applies causal masking only when `attention_type='causal'`
+- **Smart Inference**: Causal attention returns last position only, bidirectional returns all positions
+- **Training Configuration**: Made attention type configurable in `train.py` (defaults to 'bidirectional')
+- **Checkpoint Integration**: Attention type is saved in model checkpoints and loaded by `sample.py`
+- **Backward Compatibility**: Defaults to 'causal' when attention_type missing from old checkpoints
+- **Validation**: Added parameter validation and comprehensive error handling
+- **Best of Both Worlds**: Can easily switch between autoregressive and diffusion-style generation
+
+### Attention Type Configuration:
+
+#### In Training (train.py):
+```python
+# For diffusion-based training (recommended)
+attention_type = 'bidirectional'
+
+# For traditional autoregressive training
+attention_type = 'causal'
+```
+
+#### In Model Configuration:
+```python
+# GPTConfig defaults to 'causal' for backward compatibility
+config = GPTConfig(
+    # ... other parameters ...
+    attention_type='bidirectional'  # or 'causal'
+)
+```
+
+#### Automatic Loading in Inference:
+- `sample.py` automatically reads attention_type from saved checkpoints
+- No manual configuration needed for inference
+- Backward compatible with old checkpoints (defaults to 'causal')
+
+#### Behavior Differences:
+- **Causal Attention**:
+  - Training: Returns logits for all positions
+  - Inference: Returns logits for last position only (autoregressive optimization)
+  - Use case: Traditional language modeling, next-token prediction
+
+- **Bidirectional Attention**:
+  - Training: Returns logits for all positions
+  - Inference: Returns logits for all positions (needed for diffusion)
+  - Use case: Masked language modeling, diffusion-based generation
 
 ---
 
@@ -1019,9 +1060,12 @@ def in_entropy_penalty_phase(iter_num):
 
 ### Diffusion Training Configuration
 ```python
-# Add to train.py config defaults  
+# Add to train.py config defaults
 dataset = 'shakespeare_char'     # Use character-level dataset
 guaranteed_unmasked = 0.15       # Guaranteed fraction of tokens to keep unmasked
+
+# Attention configuration
+attention_type = 'bidirectional' # 'causal' or 'bidirectional' - bidirectional recommended for diffusion
 
 # Masking configuration - gradual transition from independent to sticky
 sticky_transition_start = 20000  # When to start introducing sticky masking
@@ -1111,10 +1155,12 @@ demasking_iterations = 10       # Number of demasking/remasking iterations
 - Comprehensive performance monitoring with detailed timing breakdown
 - Modular utils.py for clean code organization
 - Performance baseline established for optimization work
-- **Bidirectional attention conversion**: Successfully converted from causal to bidirectional attention
-- **Full sequence attention**: Model can now attend to all positions without causal masking
-- **Improved masked language modeling**: Architecture optimized for diffusion-based training
+- **Configurable attention system**: Unified architecture supporting both causal and bidirectional attention
+- **Flexible attention types**: Easy switching between autoregressive and diffusion-style generation
+- **Backward compatibility**: Seamless support for existing checkpoints without attention_type parameter
+- **Smart inference behavior**: Attention-aware output optimization (last position vs full sequence)
+- **Enhanced model architecture**: Best of both worlds - traditional GPT and modern diffusion capabilities
 
-**Ready for Next Phase**: The foundation is solid with bidirectional attention in place for implementing advanced masking strategies and multi-phase training.
+**Ready for Next Phase**: The foundation is solid with configurable attention types in place. The system can now seamlessly switch between traditional autoregressive training and diffusion-based training, ready for implementing advanced masking strategies and multi-phase training.
 
 This incremental approach transforms nanoGPT into a diffusion-based LLM through small, focused changes while maintaining the clean, readable structure of the original codebase.
