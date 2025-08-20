@@ -763,7 +763,6 @@ def apply_sticky_masking(tokens, rounds, mask_token_id, sticky_p1_p2_multiplier)
 #### 5.2 Add Sticky Masking Configuration
 ```python
 # Add to train.py config defaults
-masking_strategy = 'independent'  # 'independent' or 'sticky'
 sticky_p1 = 0.1                  # Probability if neighbors not masked  
 sticky_p2 = 0.3                  # Probability if neighbors masked
 sticky_rounds = 3                # Number of sticky masking rounds

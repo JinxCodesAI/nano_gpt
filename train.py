@@ -63,7 +63,7 @@ n_head = 6
 n_embd = 384
 dropout = 0.2 # for pretraining 0 is good, for finetuning try 0.1+
 bias = False # do we use bias inside LayerNorm and Linear layers?
-attention_type = 'bidirectional' # 'causal' or 'bidirectional' - type of attention to use (bidirectional recommended for diffusion)
+attention_type = 'causal' # 'causal' or 'bidirectional' - type of attention to use (bidirectional recommended for diffusion)
 # adamw optimizer
 
 learning_rate = 1e-3 # with baby networks can afford to go a bit higher

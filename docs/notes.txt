@@ -1,0 +1,1 @@
+bidirectional attention had val model vs random than causal. this needs investigation
