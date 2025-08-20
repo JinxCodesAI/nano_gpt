@@ -61,8 +61,8 @@ guaranteed_unmasked = 0.05       # Guaranteed fraction of tokens to keep unmaske
 # sticky masking configuration - gradual transition from independent to sticky
 sticky_transition_start = 1000   # When to start introducing sticky masking
 sticky_transition_end = 3000     # When to reach full sticky masking
-sticky_rounds = 3                # Number of sticky masking rounds
-sticky_p1_p2_multiplier = 3.0    # Multiplier for sticky_p2 = sticky_p1 * multiplier
+sticky_rounds = 10                # Number of sticky masking rounds
+sticky_p1_p2_multiplier = 10.0    # Multiplier for sticky_p2 = sticky_p1 * multiplier
 # model
 n_layer = 6
 n_head = 6
@@ -165,12 +165,31 @@ def get_batch(split):
     x = torch.stack([torch.from_numpy((data[i:i+block_size]).astype(np.int64)) for i in ix])
 
     if split == 'val':
-        # For validation, use fixed masking probability and seed (independent masking only)
+        # For validation, use fixed sticky masking with 0.5 ratio for consistency
         torch.manual_seed(42)
-        masking_prob = 0.5 * (1.0 - guaranteed_unmasked)  # Fixed at middle of range
-        mask = torch.rand(x.shape) < masking_prob
+
+        # Apply mixed masking strategy with fixed 0.5 sticky ratio
+        batch_size = x.shape[0]
+        num_sticky_batches = int(batch_size * 0.5)  # Fixed 50% sticky ratio
+
         masked_x = x.clone()
-        masked_x[mask] = mask_token_id
+        mask = torch.zeros_like(x, dtype=torch.bool)
+
+        # Apply independent masking to first part of batch
+        if num_sticky_batches < batch_size:
+            masking_prob = 0.5 * (1.0 - guaranteed_unmasked)  # Fixed at middle of range
+            indep_mask = torch.rand(x[:batch_size-num_sticky_batches].shape) < masking_prob
+            masked_x[:batch_size-num_sticky_batches][indep_mask] = mask_token_id
+            mask[:batch_size-num_sticky_batches] = indep_mask
+
+        # Apply sticky masking to remaining part of batch
+        if num_sticky_batches > 0:
+            sticky_masked_x, sticky_mask = apply_sticky_masking(
+                x[-num_sticky_batches:], sticky_rounds, mask_token_id, sticky_p1_p2_multiplier
+            )
+            masked_x[-num_sticky_batches:] = sticky_masked_x
+            mask[-num_sticky_batches:] = sticky_mask
+
         # Reset to original seed
         torch.manual_seed(1337 + seed_offset)
     else:
