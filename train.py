@@ -393,7 +393,7 @@ while True:
             losses = estimate_loss()
 
         # Print basic losses
-        print(f"step {iter_num}: train loss {losses['train']:.4f}, val loss {losses['val']:.4f}")
+        print(f"step {iter_num}: train loss {losses['train']:.4f}, val loss {losses['val']:.4f}, lr {lr:.6f}")
 
         # Print model vs random statistics if available
         if 'val_model_vs_random' in losses:
