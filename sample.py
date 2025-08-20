@@ -146,7 +146,15 @@ ctx = nullcontext() if device_type == 'cpu' else torch.amp.autocast(device_type=
 print(f"Loading model from {checkpoint_name}...")
 ckpt_path = os.path.join(out_dir, checkpoint_name)
 checkpoint = torch.load(ckpt_path, map_location=device)
-model_config = GPTConfig(**checkpoint['model_args'])
+
+# Handle backward compatibility for attention_type
+model_args = checkpoint['model_args']
+if 'attention_type' not in model_args:
+    print("Warning: attention_type not found in checkpoint, defaulting to 'causal' for backward compatibility")
+    model_args['attention_type'] = 'causal'
+
+model_config = GPTConfig(**model_args)
+print(f"Model uses {model_config.attention_type} attention")
 model = GPT(model_config)
 
 # Load model weights

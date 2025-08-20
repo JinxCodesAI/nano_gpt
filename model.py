@@ -26,7 +26,8 @@ class LayerNorm(nn.Module):
     def forward(self, input):
         return F.layer_norm(input, self.weight.shape, self.weight, self.bias, 1e-5)
 
-class BidirectionalSelfAttention(nn.Module):
+class SelfAttention(nn.Module):
+    """Unified self-attention module supporting both causal and bidirectional attention"""
 
     def __init__(self, config):
         super().__init__()
@@ -41,11 +42,24 @@ class BidirectionalSelfAttention(nn.Module):
         self.n_head = config.n_head
         self.n_embd = config.n_embd
         self.dropout = config.dropout
+
+        # Attention type configuration - default to causal for backward compatibility
+        self.attention_type = getattr(config, 'attention_type', 'causal')
+
         # flash attention make GPU go brrrrr but support is only in PyTorch >= 2.0
         self.flash = hasattr(torch.nn.functional, 'scaled_dot_product_attention')
         if not self.flash:
             print("WARNING: using slow attention. Flash Attention requires PyTorch >= 2.0")
-            # NO CAUSAL MASK REGISTRATION - this is the key change for bidirectional attention
+            if self.attention_type == 'causal':
+                # causal mask to ensure that attention is only applied to the left in the input sequence
+                self.register_buffer("bias", torch.tril(torch.ones(config.block_size, config.block_size))
+                                            .view(1, 1, config.block_size, config.block_size))
+
+        print(f"Using {self.attention_type} attention")
+
+        # Validate attention type
+        if self.attention_type not in ['causal', 'bidirectional']:
+            raise ValueError(f"attention_type must be 'causal' or 'bidirectional', got '{self.attention_type}'")
 
     def forward(self, x):
         B, T, C = x.size() # batch size, sequence length, embedding dimensionality (n_embd)
@@ -56,15 +70,20 @@ class BidirectionalSelfAttention(nn.Module):
         q = q.view(B, T, self.n_head, C // self.n_head).transpose(1, 2) # (B, nh, T, hs)
         v = v.view(B, T, self.n_head, C // self.n_head).transpose(1, 2) # (B, nh, T, hs)
 
-        # bidirectional self-attention; Self-attend: (B, nh, T, hs) x (B, nh, hs, T) -> (B, nh, T, T)
+        # self-attention; Self-attend: (B, nh, T, hs) x (B, nh, hs, T) -> (B, nh, T, T)
         if self.flash:
             # efficient attention using Flash Attention CUDA kernels
-            # KEY CHANGE: is_causal=False for bidirectional attention
-            y = torch.nn.functional.scaled_dot_product_attention(q, k, v, attn_mask=None, dropout_p=self.dropout if self.training else 0, is_causal=False)
+            is_causal = (self.attention_type == 'causal')
+            y = torch.nn.functional.scaled_dot_product_attention(q, k, v, attn_mask=None, dropout_p=self.dropout if self.training else 0, is_causal=is_causal)
         else:
             # manual implementation of attention
             att = (q @ k.transpose(-2, -1)) * (1.0 / math.sqrt(k.size(-1)))
-            # KEY CHANGE: NO causal masking applied
+
+            if self.attention_type == 'causal':
+                # Apply causal masking
+                att = att.masked_fill(self.bias[:,:,:T,:T] == 0, float('-inf'))
+            # For bidirectional attention, no masking is applied
+
             att = F.softmax(att, dim=-1)
             att = self.attn_dropout(att)
             y = att @ v # (B, nh, T, T) x (B, nh, T, hs) -> (B, nh, T, hs)
@@ -95,7 +114,7 @@ class Block(nn.Module):
     def __init__(self, config):
         super().__init__()
         self.ln_1 = LayerNorm(config.n_embd, bias=config.bias)
-        self.attn = BidirectionalSelfAttention(config)  # Changed from CausalSelfAttention
+        self.attn = SelfAttention(config)  # Unified attention supporting both causal and bidirectional
         self.ln_2 = LayerNorm(config.n_embd, bias=config.bias)
         self.mlp = MLP(config)
 
@@ -113,6 +132,7 @@ class GPTConfig:
     n_embd: int = 768
     dropout: float = 0.0
     bias: bool = True # True: bias in Linears and LayerNorms, like GPT-2. False: a bit better and faster
+    attention_type: str = 'causal' # 'causal' or 'bidirectional' - type of attention to use
 
 class GPT(nn.Module):
 
@@ -185,9 +205,13 @@ class GPT(nn.Module):
             logits = self.lm_head(x)
             loss = F.cross_entropy(logits.view(-1, logits.size(-1)), targets.view(-1), ignore_index=-1)
         else:
-            # For bidirectional attention and diffusion inference, we need logits for all positions
-            # The old autoregressive optimization of only computing the last position doesn't apply
-            logits = self.lm_head(x)  # Compute logits for all positions
+            # Inference behavior depends on attention type
+            if self.config.attention_type == 'causal':
+                # For causal attention (autoregressive), optimize by only computing last position
+                logits = self.lm_head(x[:, [-1], :]) # note: using list [-1] to preserve the time dim
+            else:
+                # For bidirectional attention (diffusion), we need logits for all positions
+                logits = self.lm_head(x)  # Compute logits for all positions
             loss = None
 
         return logits, loss
