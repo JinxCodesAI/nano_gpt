@@ -44,22 +44,28 @@ wandb_log = False # disabled by default
 wandb_project = 'owt'
 wandb_run_name = 'gpt2' # 'run' + str(time.time())
 # data
-dataset = 'openwebtext'
+dataset = 'shakespeare_char'
 gradient_accumulation_steps = 5 * 8 # used to simulate larger batch sizes
 batch_size = 12 # if gradient_accumulation_steps > 1, this is the micro-batch size
 block_size = 1024
+# diffusion training config
+guaranteed_unmasked = 0.15       # Guaranteed fraction of tokens to keep unmasked
 # model
-n_layer = 12
-n_head = 12
-n_embd = 768
-dropout = 0.0 # for pretraining 0 is good, for finetuning try 0.1+
+n_layer = 6
+n_head = 6
+n_embd = 384
+dropout = 0.2 # for pretraining 0 is good, for finetuning try 0.1+
 bias = False # do we use bias inside LayerNorm and Linear layers?
 # adamw optimizer
-learning_rate = 6e-4 # max learning rate
-max_iters = 600000 # total number of training iterations
-weight_decay = 1e-1
+
+learning_rate = 1e-3 # with baby networks can afford to go a bit higher
+max_iters = 5000
+lr_decay_iters = 5000 # make equal to max_iters usually
+min_lr = 1e-4 # learning_rate / 10 usually
 beta1 = 0.9
-beta2 = 0.95
+beta2 = 0.99 # make a bit bigger because number of tokens per iter is small
+weight_decay=1e-1
+
 grad_clip = 1.0 # clip gradients at this value, or disable if == 0.0
 # learning rate decay settings
 decay_lr = True # whether to decay the learning rate
@@ -69,7 +75,7 @@ min_lr = 6e-5 # minimum learning rate, should be ~= learning_rate/10 per Chinchi
 # DDP settings
 backend = 'nccl' # 'nccl', 'gloo', etc.
 # system
-device = 'cuda' # examples: 'cpu', 'cuda', 'cuda:0', 'cuda:1' etc., or try 'mps' on macbooks
+device = 'cpu' # examples: 'cpu', 'cuda', 'cuda:0', 'cuda:1' etc., or try 'mps' on macbooks
 dtype = 'bfloat16' if torch.cuda.is_available() and torch.cuda.is_bf16_supported() else 'float16' # 'float32', 'bfloat16', or 'float16', the latter will auto implement a GradScaler
 compile = True # use PyTorch 2.0 to compile the model to be faster
 # -----------------------------------------------------------------------------
@@ -120,15 +126,32 @@ def get_batch(split):
         data = np.memmap(os.path.join(data_dir, 'train.bin'), dtype=np.uint16, mode='r')
     else:
         data = np.memmap(os.path.join(data_dir, 'val.bin'), dtype=np.uint16, mode='r')
+    
     ix = torch.randint(len(data) - block_size, (batch_size,))
     x = torch.stack([torch.from_numpy((data[i:i+block_size]).astype(np.int64)) for i in ix])
-    y = torch.stack([torch.from_numpy((data[i+1:i+1+block_size]).astype(np.int64)) for i in ix])
+    
+    # Dynamically sample masking probability each batch
+    masking_prob = torch.rand(1).item() * (1.0 - guaranteed_unmasked)
+    
+    # Create masks: 1 where we mask, 0 where we keep original
+    mask = torch.rand(x.shape) < masking_prob
+    
+    # Create input with masked tokens
+    masked_x = x.clone()
+    masked_x[mask] = mask_token_id
+    
+    # Target is original x, loss computed only on masked positions
+    y = x.clone()
+    
+    # Move to device
     if device_type == 'cuda':
-        # pin arrays x,y, which allows us to move them to GPU asynchronously (non_blocking=True)
-        x, y = x.pin_memory().to(device, non_blocking=True), y.pin_memory().to(device, non_blocking=True)
+        masked_x = masked_x.pin_memory().to(device, non_blocking=True)
+        y = y.pin_memory().to(device, non_blocking=True)
+        mask = mask.pin_memory().to(device, non_blocking=True)
     else:
-        x, y = x.to(device), y.to(device)
-    return x, y
+        masked_x, y, mask = masked_x.to(device), y.to(device), mask.to(device)
+    
+    return masked_x, y, mask
 
 # init these up here, can override if init_from='resume' (i.e. from a checkpoint)
 iter_num = 0
@@ -142,6 +165,15 @@ if os.path.exists(meta_path):
         meta = pickle.load(f)
     meta_vocab_size = meta['vocab_size']
     print(f"found vocab_size = {meta_vocab_size} (inside {meta_path})")
+    
+    # Set mask_token_id to be vocab_size (next available ID)
+    mask_token_id = meta_vocab_size
+    extended_vocab_size = meta_vocab_size + 1  # Add 1 for mask token
+    print(f"mask_token_id = {mask_token_id}, extended_vocab_size = {extended_vocab_size}")
+else:
+    print("No meta.pkl found, using default GPT-2 vocab")
+    mask_token_id = 50304
+    extended_vocab_size = 50305
 
 # model init
 model_args = dict(n_layer=n_layer, n_head=n_head, n_embd=n_embd, block_size=block_size,
@@ -152,7 +184,7 @@ if init_from == 'scratch':
     # determine the vocab size we'll use for from-scratch training
     if meta_vocab_size is None:
         print("defaulting to vocab_size of GPT-2 to 50304 (50257 rounded up for efficiency)")
-    model_args['vocab_size'] = meta_vocab_size if meta_vocab_size is not None else 50304
+    model_args['vocab_size'] = extended_vocab_size if meta_vocab_size is not None else 50305
     gptconf = GPTConfig(**model_args)
     model = GPT(gptconf)
 elif init_from == 'resume':
@@ -219,9 +251,14 @@ def estimate_loss():
     for split in ['train', 'val']:
         losses = torch.zeros(eval_iters)
         for k in range(eval_iters):
-            X, Y = get_batch(split)
+            X, Y, mask = get_batch(split)  # Updated to return mask
             with ctx:
-                logits, loss = model(X, Y)
+                # Pass dummy targets to force full sequence logits, ignore returned loss
+                logits, _ = model(X, torch.zeros_like(Y))
+                # Compute loss on all positions (identity task for unmasked tokens)
+                logits_flat = logits.view(-1, logits.size(-1))
+                targets_flat = Y.view(-1)
+                loss = torch.nn.functional.cross_entropy(logits_flat, targets_flat)
             losses[k] = loss.item()
         out[split] = losses.mean()
     model.train()
@@ -247,7 +284,7 @@ if wandb_log and master_process:
     wandb.init(project=wandb_project, name=wandb_run_name, config=config)
 
 # training loop
-X, Y = get_batch('train') # fetch the very first batch
+X, Y, mask = get_batch('train') # fetch the very first batch
 t0 = time.time()
 local_iter_num = 0 # number of iterations in the lifetime of this process
 raw_model = model.module if ddp else model # unwrap DDP container if needed
@@ -297,10 +334,15 @@ while True:
             # looking at the source of that context manager, it just toggles this variable
             model.require_backward_grad_sync = (micro_step == gradient_accumulation_steps - 1)
         with ctx:
-            logits, loss = model(X, Y)
+            # Pass dummy targets to force full sequence logits, ignore returned loss
+            logits, _ = model(X, torch.zeros_like(Y))
+            # Compute loss on all positions (identity task for unmasked tokens)
+            logits_flat = logits.view(-1, logits.size(-1))  # (batch_size * seq_len, vocab_size)
+            targets_flat = Y.view(-1)  # (batch_size * seq_len,)
+            loss = torch.nn.functional.cross_entropy(logits_flat, targets_flat)
             loss = loss / gradient_accumulation_steps # scale the loss to account for gradient accumulation
         # immediately async prefetch next batch while model is doing the forward pass on the GPU
-        X, Y = get_batch('train')
+        X, Y, mask = get_batch('train')
         # backward pass, with gradient scaling if training in fp16
         scaler.scale(loss).backward()
     # clip the gradient

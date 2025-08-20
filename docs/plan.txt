@@ -1,0 +1,38 @@
+High Level Goal description
+
+I want to build diffusion based LLM,
+difference from stardard LLM:
+1) Instead of next token prediction diffusion llm is trained on nu-masking tasks
+2) Attention is bidirectional instead of causal
+
+Data generation
+I want to introduce multiple strategies to generate training data
+
+1) independent masking of each token with probability of p where 1>p>0
+2) "Sticky masking" over k rounds mask token with probability p1 if neibhour tokens are not mask and p2 > p1 if one of neibhour tokens is mask
+
+I want data generation to be asynchronous to training and happen on cpu in a background, I want to know speed at which training data are generated and compare this to speed at which they are consumed
+
+
+During training I want to implement labels smoothing and entropy penalty
+
+1) Initialize weights randomly
+2) Train network on identity task - network should predict same token for unmasked tokens and uniform probability among all tokens (other than mask) for masked token, for N1 iterations
+3) For Masked tokens we gradually increase probability of correct token for N2 iterations after N2+N1 iterations correct Target token has probability of 1 and all other probabilities are 0
+4) We continue training for N3 iterations
+
+Validation loss should be computed in traditional way during whole training to compare speed of training reliably
+Validation set should be generated once for entire run
+
+in parallel to stage 3) and 4) we introduce entropy multiplayer fo loss. we measure entropy of incorrect answers if it is maximum then entropy multiplayer is 1 if probability of incorrect answers concentrate on one token 
+we set multiplayer to MAX we decrease MAX from MAX0 to 1 over N4 iterations where N4 <= N2+N3
+
+N1+N2+N3 = total number of iterations
+
+I want to be able to easily pick different proportions of N1,N2,N3 and N4 and compare efficiency of training
+
+Inference
+
+Inference should work this way that we start from input of ALL MASKS then run demasking, then mask back X % of tokens where X changes with every iteration we end after predefined I iterations.
+solution should support multiple algorithms of picing X dependind on number of iterations and index of current iteration
+
