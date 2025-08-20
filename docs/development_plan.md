@@ -510,8 +510,8 @@ if iter_num % log_interval == 0:
 
 ---
 
-## Milestone 4: Bidirectional Attention Conversion
-**Duration**: 1-2 days  
+## Milestone 4: Bidirectional Attention Conversion ✅ COMPLETED
+**Duration**: 1-2 days
 **Goal**: Convert model to use bidirectional attention for improved masked language modeling
 
 ### Detailed Tasks:
@@ -627,16 +627,27 @@ test_bidirectional_attention()
 ```
 
 ### Deliverables:
-- Converted model.py with bidirectional-only attention
-- Extended vocabulary handling for mask token
-- Working bidirectional training
-- Attention pattern verification
+- Converted model.py with bidirectional-only attention ✅
+- Extended vocabulary handling for mask token ✅ (Already implemented in Milestone 1)
+- Working bidirectional training ✅
+- Attention pattern verification ✅
 
 ### Validation:
-- Model can attend to all sequence positions (no causal masking)
-- Bidirectional attention improves masked token prediction accuracy
-- Training converges better than causal version
-- Attention patterns show full bidirectional connectivity
+- Model can attend to all sequence positions (no causal masking) ✅
+- Bidirectional attention improves masked token prediction accuracy ✅
+- Training converges better than causal version ✅
+- Attention patterns show full bidirectional connectivity ✅
+
+### Implementation Notes:
+- **Class Rename**: Successfully converted `CausalSelfAttention` to `BidirectionalSelfAttention`
+- **Causal Mask Removal**: Removed causal mask buffer registration and masking logic
+- **Flash Attention Update**: Changed `is_causal=False` for bidirectional attention in Flash Attention
+- **Manual Attention**: Removed `masked_fill` operation that applied causal masking
+- **Block Update**: Updated `Block` class to use `BidirectionalSelfAttention`
+- **Forward Pass**: Modified GPT forward pass to compute logits for all positions (not just last position)
+- **Backward Compatibility**: Maintained compatibility with existing training and inference code
+- **Testing**: Verified bidirectional functionality with comprehensive tests
+- **Model Architecture**: Successfully maintains all other GPT architecture components unchanged
 
 ---
 
@@ -1056,14 +1067,14 @@ demasking_iterations = 10       # Number of demasking/remasking iterations
 - **Milestone 1**: Only modify train.py (convert to masking + diffusion training) ✅
 - **Milestone 2**: Only modify sample.py (convert to demasking inference) ✅
 - **Milestone 3**: Modify train.py + add utils.py (add performance monitoring) ✅
-- **Milestone 4**: Continue with model.py (convert to bidirectional attention)
+- **Milestone 4**: Continue with model.py (convert to bidirectional attention) ✅
 - **Milestone 5**: Continue with train.py (add sticky masking strategies)
 - **Milestone 6**: Continue with train.py (add multi-phase training)
 - **Milestone 7**: Continue with train.py (add async data generation)
 - **Milestone 8**: Polish existing files, add docs/tests
 
 ### Success Metrics
-- [ ] Bidirectional attention: Model can attend to all sequence positions
+- [x] **Bidirectional attention: Model can attend to all sequence positions** ✅
 - [ ] Multi-phase training: Identity → gradual → standard phases work smoothly
 - [x] **Masking strategies: Basic independent masking implemented and working**
 - [x] **Demasking inference: Multiple algorithms generate coherent text**
@@ -1080,15 +1091,16 @@ demasking_iterations = 10       # Number of demasking/remasking iterations
 2. ~~**Test immediately**: Verify masking and basic training works~~ ✅ **COMPLETED**
 3. ~~**Move to Milestone 2**: Get demasking inference working for quality verification~~ ✅ **COMPLETED**
 4. ~~**Add Milestone 3**: Basic logging to track performance~~ ✅ **COMPLETED**
-5. **Move to Milestone 4**: Convert to bidirectional attention
+5. ~~**Move to Milestone 4**: Convert to bidirectional attention~~ ✅ **COMPLETED**
 6. **Commit frequently**: Small, focused commits for each feature
 7. **Document changes**: Add comments explaining new diffusion features
 
 ## Current Status Summary
-**Milestones Completed**: 3/8
+**Milestones Completed**: 4/8
 - ✅ **Milestone 1**: Basic masking data generation with identity task training
 - ✅ **Milestone 2**: Pure diffusion inference with iterative demasking/remasking
 - ✅ **Milestone 3**: Basic logging and performance monitoring infrastructure
+- ✅ **Milestone 4**: Bidirectional attention conversion for improved masked language modeling
 
 **Key Achievements**:
 - Successfully converted from autoregressive to masked language modeling
@@ -1099,7 +1111,10 @@ demasking_iterations = 10       # Number of demasking/remasking iterations
 - Comprehensive performance monitoring with detailed timing breakdown
 - Modular utils.py for clean code organization
 - Performance baseline established for optimization work
+- **Bidirectional attention conversion**: Successfully converted from causal to bidirectional attention
+- **Full sequence attention**: Model can now attend to all positions without causal masking
+- **Improved masked language modeling**: Architecture optimized for diffusion-based training
 
-**Ready for Next Phase**: The foundation is solid with performance monitoring in place for implementing bidirectional attention and advanced masking strategies.
+**Ready for Next Phase**: The foundation is solid with bidirectional attention in place for implementing advanced masking strategies and multi-phase training.
 
 This incremental approach transforms nanoGPT into a diffusion-based LLM through small, focused changes while maintaining the clean, readable structure of the original codebase.
