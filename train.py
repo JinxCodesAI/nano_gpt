@@ -56,11 +56,11 @@ gradient_accumulation_steps = 1 # used to simulate larger batch sizes
 batch_size = 16 # if gradient_accumulation_steps > 1, this is the micro-batch size
 block_size = 1024
 # diffusion training config
-guaranteed_unmasked = 0.05       # Guaranteed fraction of tokens to keep unmasked
+guaranteed_unmasked = 0.0       # Guaranteed fraction of tokens to keep unmasked
 
 # sticky masking configuration - gradual transition from independent to sticky
-sticky_transition_start = 1000   # When to start introducing sticky masking
-sticky_transition_end = 7000     # When to reach full sticky masking
+sticky_transition_start = 500   # When to start introducing sticky masking
+sticky_transition_end = 12000     # When to reach full sticky masking
 sticky_rounds = 10                # Number of sticky masking rounds
 sticky_p1_p2_multiplier = 10.0    # Multiplier for sticky_p2 = sticky_p1 * multiplier
 # model
@@ -75,7 +75,7 @@ attention_type = 'bidirectional' # 'causal' or 'bidirectional' - type of attenti
 learning_rate = 1e-3 # with baby networks can afford to go a bit higher
 max_iters = 10000
 warmup_iters = 2000 # how many steps to warm up for
-lr_decay_iters = 6000 # make equal to max_iters usually
+lr_decay_iters = 10000 # make equal to max_iters usually
 min_lr = 1e-4 # learning_rate / 10 usually
 beta1 = 0.9
 beta2 = 0.99 # make a bit bigger because number of tokens per iter is small
@@ -383,13 +383,30 @@ def estimate_loss():
                 X, Y, mask = get_batch(split)  # Updated to return mask
             with ctx:
                 with timer.time_function('validation_forward_pass'):
-                    # Pass dummy targets to force full sequence logits, ignore returned loss
-                    logits, _ = model(X, torch.zeros_like(Y))
+                    # This is handled in validation_loss_computation section
+                    pass
                 with timer.time_function('validation_loss_computation'):
-                    # Compute loss on all positions (identity task for unmasked tokens)
+                    # For diffusion training, compute loss only on masked positions
+                    logits, _ = model(X, None)  # Get logits without internal loss computation
+                    
+                    # Ensure we have full sequence logits for both attention types
+                    if logits.size(1) == 1:  # Only last position (causal inference mode)
+                        # Force full sequence by passing targets
+                        logits, _ = model(X, Y)
+                    
+                    # Compute loss only on masked positions
                     logits_flat = logits.view(-1, logits.size(-1))
                     targets_flat = Y.view(-1)
-                    loss = torch.nn.functional.cross_entropy(logits_flat, targets_flat)
+                    mask_flat = mask.view(-1)
+                    
+                    # Only compute loss where mask is True (masked tokens)
+                    if mask_flat.sum() > 0:
+                        masked_logits = logits_flat[mask_flat]
+                        masked_targets = targets_flat[mask_flat]
+                        loss = torch.nn.functional.cross_entropy(masked_logits, masked_targets)
+                    else:
+                        # Fallback if no masked tokens (shouldn't happen)
+                        loss = torch.nn.functional.cross_entropy(logits_flat, targets_flat)
 
                 # For validation, compute model vs random statistics on masked tokens only
                 if split == 'val':
@@ -505,13 +522,31 @@ while True:
             model.require_backward_grad_sync = (micro_step == gradient_accumulation_steps - 1)
         with ctx:
             with timer.time_function('forward_pass'):
-                # Pass dummy targets to force full sequence logits, ignore returned loss
-                logits, _ = model(X, torch.zeros_like(Y))
+                # This is handled in loss_computation section
+                pass
             with timer.time_function('loss_computation'):
-                # Compute loss on all positions (identity task for unmasked tokens)
+                # For diffusion training, compute loss only on masked positions
+                logits, _ = model(X, None)  # Get logits without internal loss computation
+                
+                # Ensure we have full sequence logits for both attention types
+                if logits.size(1) == 1:  # Only last position (causal inference mode)
+                    # Force full sequence by passing targets
+                    logits, _ = model(X, Y)
+                
+                # Compute loss only on masked positions
                 logits_flat = logits.view(-1, logits.size(-1))  # (batch_size * seq_len, vocab_size)
                 targets_flat = Y.view(-1)  # (batch_size * seq_len,)
-                loss = torch.nn.functional.cross_entropy(logits_flat, targets_flat)
+                mask_flat = mask.view(-1)  # (batch_size * seq_len,)
+                
+                # Only compute loss where mask is True (masked tokens)
+                if mask_flat.sum() > 0:
+                    masked_logits = logits_flat[mask_flat]
+                    masked_targets = targets_flat[mask_flat]
+                    loss = torch.nn.functional.cross_entropy(masked_logits, masked_targets)
+                else:
+                    # Fallback if no masked tokens (shouldn't happen)
+                    loss = torch.nn.functional.cross_entropy(logits_flat, targets_flat)
+                    
                 loss = loss / gradient_accumulation_steps # scale the loss to account for gradient accumulation
         # immediately async prefetch next batch while model is doing the forward pass on the GPU
         with timer.time_function('data_generation'):
