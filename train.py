@@ -34,6 +34,9 @@ torch._dynamo.config.suppress_errors = True
 # Global timer instance
 timer = Timer()
 
+# Global synthetic model for remasking
+synthetic_model = None
+
 # -----------------------------------------------------------------------------
 
 # -----------------------------------------------------------------------------
@@ -56,11 +59,12 @@ gradient_accumulation_steps = 1 # used to simulate larger batch sizes
 batch_size = 16 # if gradient_accumulation_steps > 1, this is the micro-batch size
 block_size = 1024
 # diffusion training config
-training_type = 'unmasking'  # 'unmasking' or 'remasking' - type of training
-remasking_corruption_strategy = 'mixed'  # 'random', 'sticky', 'fragment', 'mixed' - corruption strategy for remasking
+training_type = 'remasking'  # 'unmasking', 'remasking', or 'remasking_binary' - type of training
+remasking_corruption_strategy = 'synthetic'  # 'random', 'sticky', 'fragment', 'mixed', 'synthetic' - corruption strategy for remasking
 remasking_strategy_weights = [0.2, 0.3, 0.5]  # weights for [random, sticky, fragment] when using 'mixed'
+synthetic_checkpoint_name = '14.6_unmasking_no_noise.pt'  # Path to unmasking model checkpoint for synthetic data generation (only for 'synthetic' strategy)
 guaranteed_unmasked = 0.0       # Guaranteed fraction of tokens to keep unmasked
-noise_max_ratio = 0.0            # Maximum ratio of unmasked tokens to corrupt with random noise (0.0 to 1.0) - only for unmasking training
+noise_max_ratio = 0.05            # Maximum ratio of unmasked tokens to corrupt with random noise (0.0 to 1.0) - only for unmasking training
 
 # sticky masking configuration - gradual transition from independent to sticky
 sticky_transition_start = 500   # When to start introducing sticky masking
@@ -103,6 +107,8 @@ exec(open('configurator.py').read()) # overrides from command line or config fil
 # Update wandb run name after configuration is loaded
 if training_type == 'remasking':
     wandb_run_name = f'{wandb_run_name}_remasking'
+elif training_type == 'remasking_binary':
+    wandb_run_name = f'{wandb_run_name}_remasking_binary'
 
 config = {k: globals()[k] for k in config_keys} # will be useful for logging
 # -----------------------------------------------------------------------------
@@ -149,6 +155,8 @@ _val_batch_cache = None
 def get_batch(split):
     if training_type == 'remasking':
         return get_batch_remasking(split)
+    elif training_type == 'remasking_binary':
+        return get_batch_remasking_binary(split)
     
     # Original unmasking implementation
     global _val_batch_cache, iter_num
@@ -286,16 +294,21 @@ if os.path.exists(meta_path):
     meta_vocab_size = meta['vocab_size']
     print(f"found vocab_size = {meta_vocab_size} (inside {meta_path})")
     
-    # Set mask_token_id and wrong_token_id for both training types
+    # Set special token IDs for different training types
     mask_token_id = meta_vocab_size
-    wrong_token_id = meta_vocab_size + 1
-    extended_vocab_size = meta_vocab_size + 2  # Add 2 for mask and wrong tokens
-    print(f"mask_token_id = {mask_token_id}, wrong_token_id = {wrong_token_id}, extended_vocab_size = {extended_vocab_size}")
+    wrong_token_id = meta_vocab_size + 1  # For remasking: corrupted positions
+    remask_good_id = meta_vocab_size + 2  # For remasking_binary: uncorrupted positions  
+    remask_wrong_id = meta_vocab_size + 3  # For remasking_binary: corrupted positions
+    extended_vocab_size = meta_vocab_size + 4  # Add 4 special tokens
+    print(f"mask_token_id = {mask_token_id}, wrong_token_id = {wrong_token_id}")
+    print(f"remask_good_id = {remask_good_id}, remask_wrong_id = {remask_wrong_id}, extended_vocab_size = {extended_vocab_size}")
 else:
     print("No meta.pkl found, using default GPT-2 vocab")
     mask_token_id = 50304
     wrong_token_id = 50305
-    extended_vocab_size = 50306
+    remask_good_id = 50306
+    remask_wrong_id = 50307
+    extended_vocab_size = 50308
 
 def apply_random_corruption(x, corruption_prob, guaranteed_unmasked, meta_vocab_size):
     """Strategy 1: Random token corruption (original method)"""
@@ -377,6 +390,94 @@ def apply_random_noise_to_unmasked(x, mask, noise_max_ratio, meta_vocab_size):
     
     return noisy_x
 
+def load_synthetic_model(checkpoint_path, device, extended_vocab_size):
+    """Load the synthetic model for generating fake data in remasking training"""
+    global synthetic_model
+    
+    if not checkpoint_path or synthetic_model is not None:
+        return
+    
+    try:
+        print(f"Loading synthetic model from {checkpoint_path}")
+        checkpoint = torch.load(checkpoint_path, map_location=device)
+        
+        # Extract model arguments from checkpoint
+        checkpoint_model_args = checkpoint['model_args']
+        
+        # Create synthetic model with same architecture as checkpoint
+        synthetic_gptconf = GPTConfig(**checkpoint_model_args)
+        synthetic_model = GPT(synthetic_gptconf)
+        
+        # Load state dict
+        state_dict = checkpoint['model']
+        # Fix keys if needed (same as main model loading)
+        unwanted_prefix = '_orig_mod.'
+        for k,v in list(state_dict.items()):
+            if k.startswith(unwanted_prefix):
+                state_dict[k[len(unwanted_prefix):]] = state_dict.pop(k)
+        
+        synthetic_model.load_state_dict(state_dict)
+        synthetic_model.to(device)
+        synthetic_model.eval()  # Always in eval mode
+        
+        print(f"Synthetic model loaded successfully (vocab_size: {synthetic_model.config.vocab_size})")
+        
+    except Exception as e:
+        print(f"Warning: Could not load synthetic model from {checkpoint_path}: {e}")
+        synthetic_model = None
+
+def apply_synthetic_corruption(x, sticky_rounds, sticky_p1_p2_multiplier, mask_token_id, meta_vocab_size):
+    """Strategy 4: Synthetic corruption using loaded unmasking model"""
+    global synthetic_model
+    
+    if synthetic_model is None:
+        print("Warning: Synthetic model not loaded, falling back to sticky corruption")
+        return apply_sticky_corruption(x, sticky_rounds, sticky_p1_p2_multiplier, mask_token_id, meta_vocab_size)
+    
+    # Use sticky masking to get corruption patterns
+    _, mask = apply_sticky_masking(x, sticky_rounds, mask_token_id, sticky_p1_p2_multiplier)
+    
+    # Create input for synthetic model: replace masked positions with mask tokens
+    synthetic_input = x.clone()
+    synthetic_input[mask] = mask_token_id
+    
+    # Generate synthetic data using the loaded model
+    with torch.no_grad():
+        # Move to device if needed
+        if synthetic_input.device != next(synthetic_model.parameters()).device:
+            synthetic_input = synthetic_input.to(next(synthetic_model.parameters()).device)
+        
+        # Get logits from synthetic model
+        logits, _ = synthetic_model(synthetic_input, None)
+        
+        # Sample from the model's distribution
+        # Use temperature sampling for more realistic synthetic data
+        temperature = 0.8
+        probs = torch.nn.functional.softmax(logits / temperature, dim=-1)
+        
+        # Sample tokens for masked positions - vectorized approach
+        corrupted_x = x.clone()
+        
+        # Create a sampling mask and sample all at once
+        if mask.any():
+            # Get flattened indices where mask is True
+            mask_flat = mask.view(-1)
+            probs_flat = probs.view(-1, probs.size(-1))  # (batch_size * seq_len, vocab_size)
+            
+            # Sample for all masked positions at once
+            masked_probs = probs_flat[mask_flat]  # (num_masked_total, vocab_size)
+            sampled_tokens = torch.multinomial(masked_probs, num_samples=1).squeeze(-1)
+            
+            # Move sampled tokens to same device as corrupted_x
+            sampled_tokens = sampled_tokens.to(corrupted_x.device)
+            
+            # Place sampled tokens back
+            corrupted_x_flat = corrupted_x.view(-1)
+            corrupted_x_flat[mask_flat] = sampled_tokens
+            corrupted_x = corrupted_x_flat.view_as(x)
+    
+    return corrupted_x, mask
+
 def get_batch_remasking(split):
     global _val_batch_cache, iter_num
 
@@ -409,6 +510,8 @@ def get_batch_remasking(split):
         corrupted_x, mask = apply_sticky_corruption(x, sticky_rounds, sticky_p1_p2_multiplier, mask_token_id, meta_vocab_size)
     elif remasking_corruption_strategy == 'fragment':
         corrupted_x, mask = apply_fragment_corruption(x, data, block_size, sticky_rounds, sticky_p1_p2_multiplier, mask_token_id)
+    elif remasking_corruption_strategy == 'synthetic':
+        corrupted_x, mask = apply_synthetic_corruption(x, sticky_rounds, sticky_p1_p2_multiplier, mask_token_id, meta_vocab_size)
     elif remasking_corruption_strategy == 'mixed':
         # Select strategy based on weights
         strategy_choice = np.random.choice(['random', 'sticky', 'fragment'], p=remasking_strategy_weights)
@@ -426,6 +529,73 @@ def get_batch_remasking(split):
     # Target: original tokens at correct positions, wrong_token_id at corrupted positions
     y = x.clone()
     y[mask] = wrong_token_id
+
+    # Move to device
+    if device_type == 'cuda':
+        corrupted_x = corrupted_x.pin_memory().to(device, non_blocking=True)
+        y = y.pin_memory().to(device, non_blocking=True)
+        mask = mask.pin_memory().to(device, non_blocking=True)
+    else:
+        corrupted_x, y, mask = corrupted_x.to(device), y.to(device), mask.to(device)
+
+    # Cache validation batch for consistency
+    if split == 'val':
+        _val_batch_cache = (corrupted_x, y, mask)
+
+    return corrupted_x, y, mask
+
+def get_batch_remasking_binary(split):
+    """Remasking binary training: symmetric task with remask_good_id and remask_wrong_id targets"""
+    global _val_batch_cache, iter_num
+
+    # For validation, use cached batch to ensure consistency
+    if split == 'val' and _val_batch_cache is not None:
+        return _val_batch_cache
+
+    # Load data same as other training types
+    if split == 'train':
+        data = np.memmap(os.path.join(data_dir, 'train.bin'), dtype=np.uint16, mode='r')
+    else:
+        data = np.memmap(os.path.join(data_dir, 'val.bin'), dtype=np.uint16, mode='r')
+
+    if split == 'val':
+        # For validation, use fixed seed to ensure reproducible indices
+        torch.manual_seed(42)
+        ix = torch.randint(len(data) - block_size, (batch_size,))
+        # Reset to original seed
+        torch.manual_seed(1337 + seed_offset)
+    else:
+        # For training, use random indices as before
+        ix = torch.randint(len(data) - block_size, (batch_size,))
+
+    x = torch.stack([torch.from_numpy((data[i:i+block_size]).astype(np.int64)) for i in ix])
+
+    # Select corruption strategy based on configuration (same as remasking)
+    if remasking_corruption_strategy == 'random':
+        corrupted_x, mask = apply_random_corruption(x, 0.5, guaranteed_unmasked, meta_vocab_size)
+    elif remasking_corruption_strategy == 'sticky':
+        corrupted_x, mask = apply_sticky_corruption(x, sticky_rounds, sticky_p1_p2_multiplier, mask_token_id, meta_vocab_size)
+    elif remasking_corruption_strategy == 'fragment':
+        corrupted_x, mask = apply_fragment_corruption(x, data, block_size, sticky_rounds, sticky_p1_p2_multiplier, mask_token_id)
+    elif remasking_corruption_strategy == 'synthetic':
+        corrupted_x, mask = apply_synthetic_corruption(x, sticky_rounds, sticky_p1_p2_multiplier, mask_token_id, meta_vocab_size)
+    elif remasking_corruption_strategy == 'mixed':
+        # Select strategy based on weights
+        strategy_choice = np.random.choice(['random', 'sticky', 'fragment'], p=remasking_strategy_weights)
+        
+        if strategy_choice == 'random':
+            corrupted_x, mask = apply_random_corruption(x, 0.5, guaranteed_unmasked, meta_vocab_size)
+        elif strategy_choice == 'sticky':
+            corrupted_x, mask = apply_sticky_corruption(x, sticky_rounds, sticky_p1_p2_multiplier, mask_token_id, meta_vocab_size)
+        else:  # fragment
+            corrupted_x, mask = apply_fragment_corruption(x, data, block_size, sticky_rounds, sticky_p1_p2_multiplier, mask_token_id)
+    else:
+        # Default fallback to random
+        corrupted_x, mask = apply_random_corruption(x, 0.5, guaranteed_unmasked, meta_vocab_size)
+
+    # Binary targets: remask_good_id for uncorrupted, remask_wrong_id for corrupted
+    y = torch.full_like(x, remask_good_id)  # Initialize all positions as "good"
+    y[mask] = remask_wrong_id  # Mark corrupted positions as "wrong"
 
     # Move to device
     if device_type == 'cuda':
@@ -510,6 +680,10 @@ if block_size < model.config.block_size:
     model_args['block_size'] = block_size # so that the checkpoint will have the right value
 model.to(device)
 
+# Load synthetic model if needed for remasking or remasking_binary training
+if training_type in ['remasking', 'remasking_binary'] and remasking_corruption_strategy == 'synthetic' and synthetic_checkpoint_name:
+    load_synthetic_model(os.path.join(out_dir, synthetic_checkpoint_name), device, extended_vocab_size)
+
 # initialize a GradScaler. If enabled=False scaler is a no-op
 scaler = torch.cuda.amp.GradScaler(enabled=(dtype == 'float16'))
 
@@ -574,6 +748,11 @@ def estimate_loss():
                             
                     elif training_type == 'remasking':
                         # Compute loss on all positions (always for remasking)
+                        loss = torch.nn.functional.cross_entropy(logits_flat, targets_flat)
+                        
+                    elif training_type == 'remasking_binary':
+                        # Binary classification: compute loss on all positions
+                        # Symmetric task: predict remask_good_id or remask_wrong_id
                         loss = torch.nn.functional.cross_entropy(logits_flat, targets_flat)
 
                 # For validation, compute model vs random statistics on masked tokens only
@@ -675,6 +854,8 @@ while True:
                 }
                 if training_type == 'remasking':
                     ckpt_filename = f'ckpt_remasking_{iter_num}.pt'
+                elif training_type == 'remasking_binary':
+                    ckpt_filename = f'ckpt_remasking_binary_{iter_num}.pt'
                 else:
                     ckpt_filename = f'ckpt_unmasking_{iter_num}.pt'
                     
@@ -722,6 +903,11 @@ while True:
                         
                 elif training_type == 'remasking':
                     # Compute loss on all positions (always for remasking)
+                    loss = torch.nn.functional.cross_entropy(logits_flat, targets_flat)
+                    
+                elif training_type == 'remasking_binary':
+                    # Binary classification: compute loss on all positions
+                    # Symmetric task: predict remask_good_id or remask_wrong_id
                     loss = torch.nn.functional.cross_entropy(logits_flat, targets_flat)
                         
                 loss = loss / gradient_accumulation_steps # scale the loss to account for gradient accumulation

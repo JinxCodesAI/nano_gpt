@@ -12,7 +12,7 @@ from model import GPTConfig, GPT
 # Configuration
 init_from = 'resume'
 out_dir = 'out'
-checkpoint_name = 'BI2_10000.pt'  # Specific checkpoint to load
+checkpoint_name = '14.6_unmasking_no_noise.pt'  # Specific checkpoint to load
 remasking_checkpoint_name = 'BI_mixed_remasking_10000.pt'  # Optional: checkpoint for remasking model, if None uses random remasking
 use_intelligent_remasking = True  # Set to True to use remasking model instead of random
 num_samples = 1  # Number of samples to generate
@@ -28,7 +28,7 @@ remasking_confidence_threshold = 0.01
 remasking_schedule = 'linear'
 diffusion_iterations = 100
 start_ratio = 0.8
-end_ratio = 0.3
+end_ratio = 0.05
 
 exec(open('configurator.py').read()) # overrides from command line or config file
 # -----------------------------------------------------------------------------
