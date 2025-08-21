@@ -12,7 +12,7 @@ from model import GPTConfig, GPT
 # Configuration
 init_from = 'resume'
 out_dir = 'out'
-checkpoint_name = 'bi_ckpt_5000.pt'  # Specific checkpoint to load
+checkpoint_name = 'smooth_ckpt_5000.pt'  # Specific checkpoint to load
 num_samples = 1  # Number of samples to generate
 sequence_length = 1024  # Total length of generated sequence
 start_ratio = 1.0  # Start with all tokens masked

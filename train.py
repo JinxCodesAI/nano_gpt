@@ -28,7 +28,9 @@ from torch.nn.parallel import DistributedDataParallel as DDP
 from torch.distributed import init_process_group, destroy_process_group
 
 from model import GPTConfig, GPT
-from utils import Timer, log_masking_stats, apply_sticky_masking
+from utils import (Timer, log_masking_stats, apply_sticky_masking,
+                   get_phase_info, create_soft_targets, compute_loss_with_soft_targets,
+                   EntropyPenaltyModifier)
 torch._dynamo.config.suppress_errors = True
 
 # Global timer instance
@@ -63,6 +65,15 @@ sticky_transition_start = 1000   # When to start introducing sticky masking
 sticky_transition_end = 3000     # When to reach full sticky masking
 sticky_rounds = 10                # Number of sticky masking rounds
 sticky_p1_p2_multiplier = 10.0    # Multiplier for sticky_p2 = sticky_p1 * multiplier
+
+# multi-phase training configuration
+n1_iterations = 500     # Phase 1: Identity task
+n2_iterations = 500    # Phase 2: Gradual target increase
+n3_iterations = 7500    # Phase 3: Standard training
+n4_iterations = 7500   # Phase 4: Entropy penalty (overlaps 2-3, N4 < N2 + N3)
+
+entropy_multiplier_max = 0.0    # Maximum entropy penalty multiplier
+entropy_multiplier_min = 0.0    # Minimum entropy penalty multiplier
 # model
 n_layer = 6
 n_head = 6
@@ -73,7 +84,7 @@ attention_type = 'causal' # 'causal' or 'bidirectional' - type of attention to u
 # adamw optimizer
 
 learning_rate = 1e-3 # with baby networks can afford to go a bit higher
-max_iters = 5000
+max_iters = 8000
 lr_decay_iters = 5000 # make equal to max_iters usually
 min_lr = 1e-4 # learning_rate / 10 usually
 beta1 = 0.9
@@ -92,7 +103,7 @@ backend = 'nccl' # 'nccl', 'gloo', etc.
 device = 'cuda' # examples: 'cpu', 'cuda', 'cuda:0', 'cuda:1' etc., or try 'mps' on macbooks
 dtype = 'float16'
 #dtype = 'bfloat16' if torch.cuda.is_available() and torch.cuda.is_bf16_supported() else 'float16' # 'float32', 'bfloat16', or 'float16', the latter will auto implement a GradScaler
-compile = True # use PyTorch 2.0 to compile the model to be faster
+compile = False # use PyTorch 2.0 to compile the model to be faster
 # -----------------------------------------------------------------------------
 config_keys = [k for k,v in globals().items() if not k.startswith('_') and isinstance(v, (int, float, bool, str))]
 exec(open('configurator.py').read()) # overrides from command line or config file
@@ -349,6 +360,12 @@ if block_size < model.config.block_size:
     model_args['block_size'] = block_size # so that the checkpoint will have the right value
 model.to(device)
 
+# initialize entropy penalty modifier
+entropy_penalty_modifier = EntropyPenaltyModifier(
+    penalty_strength=entropy_multiplier_max,  # Will be updated dynamically
+    vocab_size=extended_vocab_size
+)
+
 # initialize a GradScaler. If enabled=False scaler is a no-op
 scaler = torch.cuda.amp.GradScaler(enabled=(dtype == 'float16'))
 
@@ -388,10 +405,26 @@ def estimate_loss():
                     # Pass dummy targets to force full sequence logits, ignore returned loss
                     logits, _ = model(X, torch.zeros_like(Y))
                 with timer.time_function('validation_loss_computation'):
-                    # Compute loss on all positions (identity task for unmasked tokens)
-                    logits_flat = logits.view(-1, logits.size(-1))
-                    targets_flat = Y.view(-1)
-                    loss = torch.nn.functional.cross_entropy(logits_flat, targets_flat)
+                    # Use same multi-phase loss computation as training
+                    val_phase_info = get_phase_info(iter_num, n1_iterations, n2_iterations, n3_iterations,
+                                                   n4_iterations, entropy_multiplier_max, entropy_multiplier_min)
+
+                    # Create soft targets based on current phase
+                    val_soft_targets, val_is_soft = create_soft_targets(
+                        Y, extended_vocab_size, mask, mask_token_id,
+                        val_phase_info['phase'], iter_num, n1_iterations, n2_iterations
+                    )
+
+                    # Compute base loss with soft/hard targets
+                    if val_phase_info['phase'] == 1:
+                        # Phase 1: Loss on all positions (identity task for unmasked, uniform for masked)
+                        loss = compute_loss_with_soft_targets(logits, val_soft_targets, val_is_soft)
+                    elif val_phase_info['phase'] == 2:
+                        # Phase 2: Loss on all positions (identity for unmasked, gradual for masked)
+                        loss = compute_loss_with_soft_targets(logits, val_soft_targets, val_is_soft)
+                    else:
+                        # Phase 3: Standard masked language modeling loss
+                        loss = compute_loss_with_soft_targets(logits, Y, False, mask)
 
                 # For validation, compute model vs random statistics on masked tokens only
                 if split == 'val':
@@ -405,6 +438,7 @@ def estimate_loss():
                     masked_positions = mask_flat.bool()
                     if masked_positions.sum() > 0:  # Only if there are masked tokens
                         probs_flat = probs.view(-1, probs.size(-1))  # (batch_size * seq_len, vocab_size)
+                        targets_flat = Y.view(-1)  # (batch_size * seq_len,)
                         correct_token_probs = probs_flat[masked_positions, targets_flat[masked_positions]]
                         model_probs.extend(correct_token_probs.cpu().tolist())
 
@@ -501,6 +535,11 @@ while True:
     if iter_num == 0 and eval_only:
         break
 
+    # Get current phase information (outside the micro-step loop for logging)
+    phase_info = get_phase_info(iter_num, n1_iterations, n2_iterations, n3_iterations,
+                              n4_iterations, entropy_multiplier_max, entropy_multiplier_min)
+    penalty_diagnostics = {}
+
     # forward backward update, with optional gradient accumulation to simulate larger batch size
     # and using the GradScaler if data type is float16
     for micro_step in range(gradient_accumulation_steps):
@@ -515,10 +554,33 @@ while True:
                 # Pass dummy targets to force full sequence logits, ignore returned loss
                 logits, _ = model(X, torch.zeros_like(Y))
             with timer.time_function('loss_computation'):
-                # Compute loss on all positions (identity task for unmasked tokens)
-                logits_flat = logits.view(-1, logits.size(-1))  # (batch_size * seq_len, vocab_size)
-                targets_flat = Y.view(-1)  # (batch_size * seq_len,)
-                loss = torch.nn.functional.cross_entropy(logits_flat, targets_flat)
+                # Create soft targets based on current phase
+                soft_targets, is_soft = create_soft_targets(
+                    Y, extended_vocab_size, mask, mask_token_id,
+                    phase_info['phase'], iter_num, n1_iterations, n2_iterations
+                )
+
+                # Compute base loss with soft/hard targets
+                if phase_info['phase'] == 1:
+                    # Phase 1: Loss on all positions (identity task for unmasked, uniform for masked)
+                    loss = compute_loss_with_soft_targets(logits, soft_targets, is_soft)
+                elif phase_info['phase'] == 2:
+                    # Phase 2: Loss on all positions (identity for unmasked, gradual for masked)
+                    loss = compute_loss_with_soft_targets(logits, soft_targets, is_soft)
+                else:
+                    # Phase 3: Standard masked language modeling loss
+                    loss = compute_loss_with_soft_targets(logits, Y, False, mask)
+
+                # Apply entropy penalty if in penalty phase
+                if phase_info['has_entropy_penalty']:
+                    # Update entropy penalty strength
+                    entropy_penalty_modifier.penalty_strength = phase_info['entropy_strength']
+
+                    # Apply entropy penalty
+                    loss, penalty_diagnostics = entropy_penalty_modifier.apply_penalty(
+                        loss, logits, soft_targets if is_soft else Y, X, mask_token_id, is_soft
+                    )
+
                 loss = loss / gradient_accumulation_steps # scale the loss to account for gradient accumulation
         # immediately async prefetch next batch while model is doing the forward pass on the GPU
         with timer.time_function('data_generation'):
@@ -567,6 +629,15 @@ while True:
 
         # Add masking statistics logging with transition tracking
         log_masking_stats(mask, iter_num, log_interval, sticky_transition_start, sticky_transition_end)
+
+        # Add phase monitoring
+        print(f"  {phase_info['phase_name']}")
+
+        # Add entropy penalty diagnostics if available
+        if penalty_diagnostics and 'avg_entropy_penalty_factor' in penalty_diagnostics:
+            print(f"  entropy penalty: {penalty_diagnostics['avg_entropy_penalty_factor']:.4f} avg factor, "
+                  f"strength {penalty_diagnostics['penalty_entropy_strength']:.2f}, "
+                  f"multiplier {penalty_diagnostics.get('penalty_multiplier', 1.0):.3f}x")
     iter_num += 1
     local_iter_num += 1
 
