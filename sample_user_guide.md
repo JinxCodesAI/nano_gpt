@@ -85,6 +85,7 @@ diffusion_iterations = 30              # Fixed number of iterations
 ### Model Configuration
 - `checkpoint_name`: Main diffusion model (unmasking model)
 - `remasking_checkpoint_name`: Remasking model checkpoint (optional)
+- `remasking_model_type`: Model type detection ('auto', 'remasking', 'remasking_binary')
 - `device`: 'cpu', 'cuda', 'cuda:0', etc.
 - `compile`: Use PyTorch 2.0 compilation for speed
 
@@ -106,29 +107,31 @@ diffusion_iterations = 30              # Fixed number of iterations
 
 ## Configuration Examples
 
-### Example 1: High-Quality Adaptive Generation (Threshold-Based)
+### Example 1: High-Quality Adaptive Generation (Threshold-Based with Binary Model)
 ```python
 use_intelligent_remasking = True
 use_mixed_remasking = False
-remasking_checkpoint_name = 'ckpt_remasking_naive_4400.pt'
+remasking_checkpoint_name = 'ckpt_remasking_binary_8000.pt'  # Binary remasking model
+remasking_model_type = 'auto'  # Auto-detect model type
 remasking_confidence_threshold = 0.005  # Conservative threshold
 diffusion_iterations = 100  # Safety limit
 sequence_length = 1024
 ```
-**Expected behavior:** Generates high-quality text, stops when model is confident about all tokens, typically converges in 20-50 iterations.
+**Expected behavior:** Generates high-quality text, stops when model is confident about all tokens, typically converges in 20-50 iterations. More stable than traditional remasking models.
 
 ### Example 2: Controlled Mixed Generation (Recommended)
 ```python
 use_intelligent_remasking = True
 use_mixed_remasking = True
-remasking_checkpoint_name = 'ckpt_remasking_naive_4400.pt'
+remasking_checkpoint_name = 'ckpt_remasking_binary_4400.pt'  # Binary model preferred
+remasking_model_type = 'auto'  # Auto-detect model type  
 remasking_confidence_threshold = 0.01   # Moderate threshold for candidates
 remasking_schedule = 'linear'
 diffusion_iterations = 30   # Fixed iterations
 start_ratio = 1.0
 end_ratio = 0.1
 ```
-**Expected behavior:** Combines intelligent token selection with predictable generation length, runs exactly 30 iterations with decreasing remask count.
+**Expected behavior:** Combines intelligent token selection with predictable generation length, runs exactly 30 iterations with decreasing remask count. Binary models provide more stable intelligent candidate selection.
 
 ### Example 3: Fast Mixed Generation
 ```python
@@ -157,11 +160,14 @@ end_ratio = 0.1
 You can override any parameter via command line:
 
 ```bash
-# High-quality adaptive generation (threshold-based)
-python sample.py --use_intelligent_remasking=True --remasking_confidence_threshold=0.005
+# High-quality adaptive generation (threshold-based with binary model)
+python sample.py --use_intelligent_remasking=True --remasking_checkpoint_name=ckpt_remasking_binary_8000.pt --remasking_confidence_threshold=0.005
 
-# Mixed random+intelligent generation
-python sample.py --use_intelligent_remasking=True --use_mixed_remasking=True --remasking_confidence_threshold=0.01
+# Mixed random+intelligent generation with auto-detection
+python sample.py --use_intelligent_remasking=True --use_mixed_remasking=True --remasking_model_type=auto --remasking_confidence_threshold=0.01
+
+# Specify model type explicitly  
+python sample.py --remasking_model_type=remasking_binary --remasking_checkpoint_name=my_binary_model.pt
 
 # Fast generation with exponential schedule
 python sample.py --use_mixed_remasking=True --remasking_schedule=exponential --diffusion_iterations=20
@@ -184,8 +190,9 @@ The system provides detailed logging when `verbose=True`:
 
 ### Key Metrics to Watch:
 - **Convergence iteration**: When generation stops naturally
-- **[WRONG] probability ranges**: Should decrease over time
+- **Target probability ranges**: [WRONG] or [REMASK_WRONG] probabilities should decrease over time
 - **Tokens remasked per iteration**: Should generally decrease
+- **Model type detection**: Verify correct detection of remasking model type
 - **Final text quality**: Coherence and fluency
 
 ## Model Requirements
@@ -196,10 +203,23 @@ The system provides detailed logging when `verbose=True`:
 - Any attention type (causal or bidirectional)
 
 ### Remasking Model (Optional but Recommended)
+Two types of remasking models are supported:
+
+#### Traditional Remasking Models
 - Trained with `training_type='remasking'` 
 - Learns to identify tokens that should be remasked
 - Must have identical architecture to unmasking model
 - Predicts [WRONG] token at positions needing remasking
+- **Issue**: Can have training instability due to asymmetric loss
+
+#### Binary Remasking Models (Recommended)
+- Trained with `training_type='remasking_binary'`
+- Symmetric binary classification task
+- Predicts [REMASK_GOOD] for uncorrupted positions, [REMASK_WRONG] for corrupted positions
+- **Advantage**: More stable training with symmetric loss function
+- Must have identical architecture to unmasking model
+
+The system automatically detects which type of remasking model you're using.
 
 ## Performance Tips
 

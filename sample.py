@@ -15,6 +15,7 @@ out_dir = 'out'
 checkpoint_name = '14.6_unmasking_no_noise.pt'  # Specific checkpoint to load
 remasking_checkpoint_name = 'BI_mixed_remasking_10000.pt'  # Optional: checkpoint for remasking model, if None uses random remasking
 use_intelligent_remasking = True  # Set to True to use remasking model instead of random
+remasking_model_type = 'auto'  # 'remasking', 'remasking_binary', or 'auto' to detect from checkpoint
 num_samples = 1  # Number of samples to generate
 sequence_length = 1024  # Total length of generated sequence
 seed = 1337
@@ -47,7 +48,7 @@ def exponential_remasking_schedule(total_iterations, current_iteration):
     exp_progress = (math.exp(decay_factor * progress) - 1) / (math.exp(decay_factor) - 1)
     return start_ratio - exp_progress * (start_ratio - end_ratio)
 
-def intelligent_remask(tokens, remasking_model, num_to_remask, mask_token_id, wrong_token_id, device, verbose=False):
+def intelligent_remask(tokens, remasking_model, num_to_remask, mask_token_id, wrong_token_id, remask_wrong_id, model_type, device, verbose=False):
     """
     Use remasking model to intelligently select positions to remask
     
@@ -56,7 +57,9 @@ def intelligent_remask(tokens, remasking_model, num_to_remask, mask_token_id, wr
         remasking_model: Trained remasking model
         num_to_remask: Number of positions to remask
         mask_token_id: ID of mask token
-        wrong_token_id: ID of wrong token
+        wrong_token_id: ID of wrong token (for remasking models)
+        remask_wrong_id: ID of wrong token (for remasking_binary models)
+        model_type: Type of remasking model ('remasking' or 'remasking_binary')
         device: Device to run on
         verbose: Whether to print debug info
     """
@@ -64,21 +67,26 @@ def intelligent_remask(tokens, remasking_model, num_to_remask, mask_token_id, wr
         # Get model predictions
         logits, _ = remasking_model(tokens, None)
         
-        # Get probabilities for wrong_token_id at each position
+        # Select appropriate target token based on model type
+        target_token_id = remask_wrong_id if model_type == 'remasking_binary' else wrong_token_id
+        
+        # Get probabilities for target token at each position
         probs = torch.softmax(logits[0], dim=-1)
-        wrong_probs = probs[:, wrong_token_id]
+        target_probs = probs[:, target_token_id]
         
         if verbose:
-            print(f"  [WRONG] token probabilities range: {wrong_probs.min().item():.4f} to {wrong_probs.max().item():.4f}")
+            model_name = "[REMASK_WRONG]" if model_type == 'remasking_binary' else "[WRONG]"
+            print(f"  {model_name} token probabilities range: {target_probs.min().item():.4f} to {target_probs.max().item():.4f}")
         
-        # Select top positions by [WRONG] token probability
+        # Select top positions by target token probability
         if num_to_remask > 0:
-            top_probs, top_indices = torch.topk(wrong_probs, min(num_to_remask, tokens.size(1)))
+            top_probs, top_indices = torch.topk(target_probs, min(num_to_remask, tokens.size(1)))
             tokens[0, top_indices] = mask_token_id
             
             if verbose:
                 lowest_qualifying_prob = top_probs[-1].item()
-                print(f"  Selected {len(top_indices)} positions with highest [WRONG] probabilities")
+                model_name = "[REMASK_WRONG]" if model_type == 'remasking_binary' else "[WRONG]"
+                print(f"  Selected {len(top_indices)} positions with highest {model_name} probabilities")
                 print(f"  Lowest qualifying probability: {lowest_qualifying_prob:.4f}")
         else:
             if verbose:
@@ -86,16 +94,18 @@ def intelligent_remask(tokens, remasking_model, num_to_remask, mask_token_id, wr
     
     return tokens
 
-def intelligent_remask_threshold(tokens, remasking_model, threshold, mask_token_id, wrong_token_id, device, verbose=False):
+def intelligent_remask_threshold(tokens, remasking_model, threshold, mask_token_id, wrong_token_id, remask_wrong_id, model_type, device, verbose=False):
     """
     Use remasking model with probability threshold to select positions to remask
     
     Args:
         tokens: Current token sequence
         remasking_model: Trained remasking model
-        threshold: [WRONG] probability threshold for remasking
+        threshold: Target token probability threshold for remasking
         mask_token_id: ID of mask token
-        wrong_token_id: ID of wrong token
+        wrong_token_id: ID of wrong token (for remasking models)
+        remask_wrong_id: ID of wrong token (for remasking_binary models)
+        model_type: Type of remasking model ('remasking' or 'remasking_binary')
         device: Device to run on
         verbose: Whether to print debug info
     
@@ -107,16 +117,20 @@ def intelligent_remask_threshold(tokens, remasking_model, threshold, mask_token_
         # Get model predictions
         logits, _ = remasking_model(tokens, None)
         
-        # Get probabilities for wrong_token_id at each position
-        probs = torch.softmax(logits[0], dim=-1)
-        wrong_probs = probs[:, wrong_token_id]
+        # Select appropriate target token based on model type
+        target_token_id = remask_wrong_id if model_type == 'remasking_binary' else wrong_token_id
         
-        # Find positions where [WRONG] probability exceeds threshold
-        threshold_mask = wrong_probs > threshold
+        # Get probabilities for target token at each position
+        probs = torch.softmax(logits[0], dim=-1)
+        target_probs = probs[:, target_token_id]
+        
+        # Find positions where target probability exceeds threshold
+        threshold_mask = target_probs > threshold
         num_remasked = threshold_mask.sum().item()
         
         if verbose:
-            print(f"  [WRONG] token probabilities range: {wrong_probs.min().item():.4f} to {wrong_probs.max().item():.4f}")
+            model_name = "[REMASK_WRONG]" if model_type == 'remasking_binary' else "[WRONG]"
+            print(f"  {model_name} token probabilities range: {target_probs.min().item():.4f} to {target_probs.max().item():.4f}")
             print(f"  Threshold: {threshold:.4f}")
             print(f"  Positions above threshold: {num_remasked}/{tokens.size(1)}")
         
@@ -125,7 +139,7 @@ def intelligent_remask_threshold(tokens, remasking_model, threshold, mask_token_
             tokens[0, threshold_mask] = mask_token_id
             
             if verbose:
-                min_remasked_prob = wrong_probs[threshold_mask].min().item()
+                min_remasked_prob = target_probs[threshold_mask].min().item()
                 print(f"  Lowest remasked probability: {min_remasked_prob:.4f}")
         else:
             if verbose:
@@ -133,7 +147,7 @@ def intelligent_remask_threshold(tokens, remasking_model, threshold, mask_token_
     
     return tokens, num_remasked
 
-def mixed_intelligent_remask(tokens, remasking_model, num_to_remask, threshold, mask_token_id, wrong_token_id, device, verbose=False):
+def mixed_intelligent_remask(tokens, remasking_model, num_to_remask, threshold, mask_token_id, wrong_token_id, remask_wrong_id, model_type, device, verbose=False):
     """
     Mixed remasking: combines intelligent candidate selection with schedule-based count
     
@@ -141,9 +155,11 @@ def mixed_intelligent_remask(tokens, remasking_model, num_to_remask, threshold, 
         tokens: Current token sequence
         remasking_model: Trained remasking model
         num_to_remask: Number of positions to remask (from schedule)
-        threshold: [WRONG] probability threshold for candidates
+        threshold: Target token probability threshold for candidates
         mask_token_id: ID of mask token
-        wrong_token_id: ID of wrong token
+        wrong_token_id: ID of wrong token (for remasking models)
+        remask_wrong_id: ID of wrong token (for remasking_binary models)
+        model_type: Type of remasking model ('remasking' or 'remasking_binary')
         device: Device to run on
         verbose: Whether to print debug info
     
@@ -156,23 +172,27 @@ def mixed_intelligent_remask(tokens, remasking_model, num_to_remask, threshold, 
         # Get model predictions
         logits, _ = remasking_model(tokens, None)
         
-        # Get probabilities for wrong_token_id at each position
+        # Select appropriate target token based on model type
+        target_token_id = remask_wrong_id if model_type == 'remasking_binary' else wrong_token_id
+        
+        # Get probabilities for target token at each position
         probs = torch.softmax(logits[0], dim=-1)
-        wrong_probs = probs[:, wrong_token_id]
+        target_probs = probs[:, target_token_id]
         
         # Find candidates above threshold
-        threshold_mask = wrong_probs > threshold
+        threshold_mask = target_probs > threshold
         num_candidates = threshold_mask.sum().item()
         
         if verbose:
-            print(f"  [WRONG] token probabilities range: {wrong_probs.min().item():.4f} to {wrong_probs.max().item():.4f}")
+            model_name = "[REMASK_WRONG]" if model_type == 'remasking_binary' else "[WRONG]"
+            print(f"  {model_name} token probabilities range: {target_probs.min().item():.4f} to {target_probs.max().item():.4f}")
             print(f"  Threshold: {threshold:.4f}")
             print(f"  Schedule requires: {num_to_remask} tokens")
             print(f"  Intelligent candidates: {num_candidates} tokens")
         
         if num_candidates >= num_to_remask:
             # More candidates than needed - select top N by probability
-            candidate_probs = wrong_probs[threshold_mask]
+            candidate_probs = target_probs[threshold_mask]
             _, top_indices_in_candidates = torch.topk(candidate_probs, num_to_remask)
             # Map back to original indices
             candidate_positions = torch.where(threshold_mask)[0]
@@ -232,7 +252,7 @@ def mixed_intelligent_remask(tokens, remasking_model, num_to_remask, threshold, 
     
     return tokens, intelligent_count, random_count
 
-def diffusion_generate(model, total_length, iterations, schedule='linear', mask_token_id=None, wrong_token_id=None, remasking_model=None, decode_fn=None, decode_mask_fn=None, verbose=True, use_threshold_remasking=False, use_mixed_remasking=False, threshold=0.1):
+def diffusion_generate(model, total_length, iterations, schedule='linear', mask_token_id=None, wrong_token_id=None, remask_wrong_id=None, remasking_model=None, remasking_model_type='remasking', decode_fn=None, decode_mask_fn=None, verbose=True, use_threshold_remasking=False, use_mixed_remasking=False, threshold=0.1):
     """
     Generate text using diffusion-based iterative demasking
 
@@ -243,13 +263,15 @@ def diffusion_generate(model, total_length, iterations, schedule='linear', mask_
         schedule: Remasking schedule ('linear' or 'exponential')
         mask_token_id: ID of the mask token
         wrong_token_id: ID of the wrong token (for remasking model)
+        remask_wrong_id: ID of the wrong token (for remasking_binary model)
         remasking_model: Optional trained remasking model for intelligent remasking
+        remasking_model_type: Type of remasking model ('remasking' or 'remasking_binary')
         decode_fn: Function to decode tokens to text (handles mask tokens)
         decode_mask_fn: Function to decode tokens with mask character
         verbose: Whether to print iteration results
         use_threshold_remasking: If True, use probability threshold instead of schedule
         use_mixed_remasking: If True, use mixed random+intelligent remasking
-        threshold: [WRONG] probability threshold for remasking
+        threshold: Target token probability threshold for remasking
     """
 
     # Start with ALL positions masked (pure diffusion approach)
@@ -307,7 +329,7 @@ def diffusion_generate(model, total_length, iterations, schedule='linear', mask_
                 
                 tokens, num_remasked = intelligent_remask_threshold(
                     tokens, remasking_model, threshold, 
-                    mask_token_id, wrong_token_id, device, verbose
+                    mask_token_id, wrong_token_id, remask_wrong_id, remasking_model_type, device, verbose
                 )
                 
                 if verbose:
@@ -340,7 +362,7 @@ def diffusion_generate(model, total_length, iterations, schedule='linear', mask_
                 if num_to_remask > 0:
                     tokens, intelligent_count, random_count = mixed_intelligent_remask(
                         tokens, remasking_model, num_to_remask, threshold,
-                        mask_token_id, wrong_token_id, device, verbose
+                        mask_token_id, wrong_token_id, remask_wrong_id, remasking_model_type, device, verbose
                     )
                     
                     if verbose:
@@ -370,7 +392,7 @@ def diffusion_generate(model, total_length, iterations, schedule='linear', mask_
                             print(f"Using intelligent remasking model...")
                         tokens = intelligent_remask(
                             tokens, remasking_model, num_to_remask, 
-                            mask_token_id, wrong_token_id, device, verbose
+                            mask_token_id, wrong_token_id, remask_wrong_id, remasking_model_type, device, verbose
                         )
                     else:
                         # Fallback to random remasking
@@ -430,6 +452,7 @@ if compile:
 
 # Load remasking model if specified
 remasking_model = None
+detected_remasking_type = None
 if use_intelligent_remasking and remasking_checkpoint_name is not None:
     print(f"Loading remasking model from {remasking_checkpoint_name}...")
     remasking_ckpt_path = os.path.join(out_dir, remasking_checkpoint_name)
@@ -459,8 +482,22 @@ if use_intelligent_remasking and remasking_checkpoint_name is not None:
         remasking_model.to(device)
         if compile:
             remasking_model = torch.compile(remasking_model)
+        
+        # Detect remasking model type
+        if remasking_model_type == 'auto':
+            # Check if checkpoint has training_type or infer from checkpoint name
+            if 'config' in remasking_checkpoint and 'training_type' in remasking_checkpoint['config']:
+                detected_remasking_type = remasking_checkpoint['config']['training_type']
+            elif 'remasking_binary' in remasking_checkpoint_name:
+                detected_remasking_type = 'remasking_binary'
+            elif 'remasking' in remasking_checkpoint_name:
+                detected_remasking_type = 'remasking'
+            else:
+                detected_remasking_type = 'remasking'  # Default fallback
+        else:
+            detected_remasking_type = remasking_model_type
             
-        print(f"Remasking model loaded successfully")
+        print(f"Remasking model loaded successfully (type: {detected_remasking_type})")
     else:
         print(f"Warning: Remasking checkpoint {remasking_ckpt_path} not found, falling back to random remasking")
         use_intelligent_remasking = False
@@ -482,7 +519,9 @@ if 'config' in checkpoint and 'dataset' in checkpoint['config']:
         stoi, itos = meta['stoi'], meta['itos']
         vocab_size = meta['vocab_size']
         mask_token_id = vocab_size  # Mask token is next ID after vocabulary
-        wrong_token_id = vocab_size + 1  # Wrong token is next ID after mask
+        wrong_token_id = vocab_size + 1  # Wrong token is next ID after mask (for remasking models)
+        remask_good_id = vocab_size + 2  # Good token for binary remasking models
+        remask_wrong_id = vocab_size + 3  # Wrong token for binary remasking models
 
         def encode(text):
             return [stoi[c] for c in text]
@@ -531,7 +570,9 @@ with torch.no_grad():
                 remasking_schedule,
                 mask_token_id,
                 wrong_token_id,
+                remask_wrong_id,
                 remasking_model,
+                detected_remasking_type or 'remasking',
                 decode,
                 decode_with_mask_char,
                 verbose=True,
