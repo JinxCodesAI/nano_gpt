@@ -83,7 +83,7 @@ attention_type = 'bidirectional' # 'causal' or 'bidirectional' - type of attenti
 learning_rate = 1e-3 # with baby networks can afford to go a bit higher
 max_iters = 10000
 warmup_iters = 2000 # how many steps to warm up for
-lr_decay_iters = 10000 # make equal to max_iters usually
+lr_decay_iters = 8000 # make equal to max_iters usually
 min_lr = 1e-4 # learning_rate / 10 usually
 beta1 = 0.9
 beta2 = 0.99 # make a bit bigger because number of tokens per iter is small
@@ -152,6 +152,24 @@ data_dir = os.path.join('data', dataset)
 # Cache for consistent validation batches
 _val_batch_cache = None
 
+def find_double_newline_indices(data, meta_vocab_size):
+    """Find all valid starting indices that begin with double newlines (\n\n)"""
+    # Get the token IDs for newlines
+    if meta_vocab_size is not None:
+        # For Shakespeare character-level data, newline is token 0
+        newline_id = 0
+    else:
+        # For GPT-2 style tokenization, this would be different
+        newline_id = 198  # GPT-2 newline token
+    
+    # Find positions where we have \n\n (two consecutive newlines)
+    valid_indices = []
+    for i in range(len(data) - block_size - 1):  # -1 to ensure we can check i+1
+        if i >= 1 and data[i] == newline_id and data[i+1] == newline_id:
+            valid_indices.append(i)
+    
+    return np.array(valid_indices)
+
 def get_batch(split):
     if training_type == 'remasking':
         return get_batch_remasking(split)
@@ -172,15 +190,31 @@ def get_batch(split):
     else:
         data = np.memmap(os.path.join(data_dir, 'val.bin'), dtype=np.uint16, mode='r')
 
-    if split == 'val':
-        # For validation, use fixed seed to ensure reproducible indices
-        torch.manual_seed(42)
-        ix = torch.randint(len(data) - block_size, (batch_size,))
-        # Reset to original seed
-        torch.manual_seed(1337 + seed_offset)
+    # Find valid starting indices that begin with double newlines
+    valid_indices = find_double_newline_indices(data, meta_vocab_size)
+    
+    if len(valid_indices) == 0:
+        # Fallback to original random sampling if no double newlines found
+        print("Warning: No double newlines found, falling back to random sampling")
+        if split == 'val':
+            torch.manual_seed(42)
+            ix = torch.randint(len(data) - block_size, (batch_size,))
+            torch.manual_seed(1337 + seed_offset)
+        else:
+            ix = torch.randint(len(data) - block_size, (batch_size,))
     else:
-        # For training, use random indices as before
-        ix = torch.randint(len(data) - block_size, (batch_size,))
+        # Sample from valid double-newline starting positions
+        if split == 'val':
+            # For validation, use fixed seed to ensure reproducible indices
+            torch.manual_seed(42)
+            ix_indices = torch.randint(len(valid_indices), (batch_size,))
+            ix = torch.from_numpy(valid_indices[ix_indices.numpy()])
+            # Reset to original seed
+            torch.manual_seed(1337 + seed_offset)
+        else:
+            # For training, use random indices from valid positions
+            ix_indices = torch.randint(len(valid_indices), (batch_size,))
+            ix = torch.from_numpy(valid_indices[ix_indices.numpy()])
 
     x = torch.stack([torch.from_numpy((data[i:i+block_size]).astype(np.int64)) for i in ix])
 
@@ -505,15 +539,31 @@ def get_batch_remasking(split):
     else:
         data = np.memmap(os.path.join(data_dir, 'val.bin'), dtype=np.uint16, mode='r')
 
-    if split == 'val':
-        # For validation, use fixed seed to ensure reproducible indices
-        torch.manual_seed(42)
-        ix = torch.randint(len(data) - block_size, (batch_size,))
-        # Reset to original seed
-        torch.manual_seed(1337 + seed_offset)
+    # Find valid starting indices that begin with double newlines
+    valid_indices = find_double_newline_indices(data, meta_vocab_size)
+    
+    if len(valid_indices) == 0:
+        # Fallback to original random sampling if no double newlines found
+        print("Warning: No double newlines found, falling back to random sampling")
+        if split == 'val':
+            torch.manual_seed(42)
+            ix = torch.randint(len(data) - block_size, (batch_size,))
+            torch.manual_seed(1337 + seed_offset)
+        else:
+            ix = torch.randint(len(data) - block_size, (batch_size,))
     else:
-        # For training, use random indices as before
-        ix = torch.randint(len(data) - block_size, (batch_size,))
+        # Sample from valid double-newline starting positions
+        if split == 'val':
+            # For validation, use fixed seed to ensure reproducible indices
+            torch.manual_seed(42)
+            ix_indices = torch.randint(len(valid_indices), (batch_size,))
+            ix = torch.from_numpy(valid_indices[ix_indices.numpy()])
+            # Reset to original seed
+            torch.manual_seed(1337 + seed_offset)
+        else:
+            # For training, use random indices from valid positions
+            ix_indices = torch.randint(len(valid_indices), (batch_size,))
+            ix = torch.from_numpy(valid_indices[ix_indices.numpy()])
 
     x = torch.stack([torch.from_numpy((data[i:i+block_size]).astype(np.int64)) for i in ix])
 
@@ -574,15 +624,31 @@ def get_batch_remasking_binary(split):
     else:
         data = np.memmap(os.path.join(data_dir, 'val.bin'), dtype=np.uint16, mode='r')
 
-    if split == 'val':
-        # For validation, use fixed seed to ensure reproducible indices
-        torch.manual_seed(42)
-        ix = torch.randint(len(data) - block_size, (batch_size,))
-        # Reset to original seed
-        torch.manual_seed(1337 + seed_offset)
+    # Find valid starting indices that begin with double newlines
+    valid_indices = find_double_newline_indices(data, meta_vocab_size)
+    
+    if len(valid_indices) == 0:
+        # Fallback to original random sampling if no double newlines found
+        print("Warning: No double newlines found, falling back to random sampling")
+        if split == 'val':
+            torch.manual_seed(42)
+            ix = torch.randint(len(data) - block_size, (batch_size,))
+            torch.manual_seed(1337 + seed_offset)
+        else:
+            ix = torch.randint(len(data) - block_size, (batch_size,))
     else:
-        # For training, use random indices as before
-        ix = torch.randint(len(data) - block_size, (batch_size,))
+        # Sample from valid double-newline starting positions
+        if split == 'val':
+            # For validation, use fixed seed to ensure reproducible indices
+            torch.manual_seed(42)
+            ix_indices = torch.randint(len(valid_indices), (batch_size,))
+            ix = torch.from_numpy(valid_indices[ix_indices.numpy()])
+            # Reset to original seed
+            torch.manual_seed(1337 + seed_offset)
+        else:
+            # For training, use random indices from valid positions
+            ix_indices = torch.randint(len(valid_indices), (batch_size,))
+            ix = torch.from_numpy(valid_indices[ix_indices.numpy()])
 
     x = torch.stack([torch.from_numpy((data[i:i+block_size]).astype(np.int64)) for i in ix])
 

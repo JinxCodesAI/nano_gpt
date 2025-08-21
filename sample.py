@@ -13,7 +13,7 @@ from model import GPTConfig, GPT
 init_from = 'resume'
 out_dir = 'out'
 checkpoint_name = '14.6_unmasking_no_noise.pt'  # Specific checkpoint to load
-remasking_checkpoint_name = 'BI_mixed_remasking_10000.pt'  # Optional: checkpoint for remasking model, if None uses random remasking
+remasking_checkpoint_name = '1.23_remasking_bin.pt'  # Optional: checkpoint for remasking model, if None uses random remasking
 use_intelligent_remasking = True  # Set to True to use remasking model instead of random
 remasking_model_type = 'auto'  # 'remasking', 'remasking_binary', or 'auto' to detect from checkpoint
 num_samples = 1  # Number of samples to generate
@@ -25,9 +25,10 @@ compile = False
 
 use_intelligent_remasking = False
 use_mixed_remasking = False
-remasking_confidence_threshold = 0.01
+remasking_confidence_threshold = 0.58
 remasking_schedule = 'linear'
 diffusion_iterations = 100
+min_random_ratio = 0.9
 start_ratio = 0.8
 end_ratio = 0.05
 
@@ -147,7 +148,7 @@ def intelligent_remask_threshold(tokens, remasking_model, threshold, mask_token_
     
     return tokens, num_remasked
 
-def mixed_intelligent_remask(tokens, remasking_model, num_to_remask, threshold, mask_token_id, wrong_token_id, remask_wrong_id, model_type, device, verbose=False):
+def mixed_intelligent_remask(tokens, remasking_model, num_to_remask, threshold, mask_token_id, wrong_token_id, remask_wrong_id, model_type, device, min_random_ratio=0.0, verbose=False):
     """
     Mixed remasking: combines intelligent candidate selection with schedule-based count
     
@@ -161,6 +162,7 @@ def mixed_intelligent_remask(tokens, remasking_model, num_to_remask, threshold, 
         remask_wrong_id: ID of wrong token (for remasking_binary models)
         model_type: Type of remasking model ('remasking' or 'remasking_binary')
         device: Device to run on
+        min_random_ratio: Minimum fraction that must be randomly selected
         verbose: Whether to print debug info
     
     Returns:
@@ -169,6 +171,10 @@ def mixed_intelligent_remask(tokens, remasking_model, num_to_remask, threshold, 
         random_count: Number of randomly selected tokens
     """
     with torch.no_grad():
+        # Calculate minimum random tokens required
+        min_random_tokens = int(num_to_remask * min_random_ratio)
+        max_intelligent_tokens = num_to_remask - min_random_tokens
+        
         # Get model predictions
         logits, _ = remasking_model(tokens, None)
         
@@ -187,68 +193,79 @@ def mixed_intelligent_remask(tokens, remasking_model, num_to_remask, threshold, 
             model_name = "[REMASK_WRONG]" if model_type == 'remasking_binary' else "[WRONG]"
             print(f"  {model_name} token probabilities range: {target_probs.min().item():.4f} to {target_probs.max().item():.4f}")
             print(f"  Threshold: {threshold:.4f}")
-            print(f"  Schedule requires: {num_to_remask} tokens")
-            print(f"  Intelligent candidates: {num_candidates} tokens")
+            print(f"  Schedule requires: {num_to_remask} tokens to remask")
+            print(f"  Min random ratio: {min_random_ratio:.2f} → min {min_random_tokens} random, max {max_intelligent_tokens} intelligent")
+            print(f"  Intelligent candidates above threshold: {num_candidates}/{tokens.size(1)} tokens ({num_candidates/tokens.size(1)*100:.1f}%)")
         
-        if num_candidates >= num_to_remask:
-            # More candidates than needed - select top N by probability
+        # Determine how many intelligent tokens we can actually use
+        intelligent_tokens_to_use = min(num_candidates, max_intelligent_tokens)
+        random_tokens_to_use = num_to_remask - intelligent_tokens_to_use
+        
+        # Step 1: Select intelligent tokens (if any)
+        intelligent_positions = []
+        if intelligent_tokens_to_use > 0:
             candidate_probs = target_probs[threshold_mask]
-            _, top_indices_in_candidates = torch.topk(candidate_probs, num_to_remask)
-            # Map back to original indices
+            _, top_indices_in_candidates = torch.topk(candidate_probs, intelligent_tokens_to_use)
             candidate_positions = torch.where(threshold_mask)[0]
-            selected_positions = candidate_positions[top_indices_in_candidates]
-            tokens[0, selected_positions] = mask_token_id
-            
-            intelligent_count = num_to_remask
-            random_count = 0
-            
-            if verbose:
-                lowest_prob = candidate_probs[top_indices_in_candidates[-1]].item()
-                print(f"  Selected top {num_to_remask} candidates (lowest prob: {lowest_prob:.4f})")
+            intelligent_positions = candidate_positions[top_indices_in_candidates]
+            tokens[0, intelligent_positions] = mask_token_id
         
-        elif num_candidates > 0:
-            # Fewer candidates than needed - take all candidates + random additional
-            # First, remask all candidates
-            tokens[0, threshold_mask] = mask_token_id
-            intelligent_count = num_candidates
-            
-            # Add random positions for the remainder
-            remaining_needed = num_to_remask - num_candidates
-            actual_random_added = 0
-            
-            if remaining_needed > 0:
-                # Find positions not already selected
-                available_positions = torch.arange(tokens.size(1), device=device)
-                available_mask = ~threshold_mask  # Positions not already selected
-                available_positions = available_positions[available_mask]
-                
-                if len(available_positions) >= remaining_needed:
-                    random_indices = torch.randperm(len(available_positions))[:remaining_needed]
-                    additional_positions = available_positions[random_indices]
-                    tokens[0, additional_positions] = mask_token_id
-                    actual_random_added = remaining_needed
-                else:
-                    # Not enough positions available, take all remaining
-                    tokens[0, available_positions] = mask_token_id
-                    actual_random_added = len(available_positions)
-            
-            random_count = actual_random_added
-            
-            if verbose:
-                print(f"  Used {intelligent_count} intelligent + {random_count} random positions")
-        
-        else:
-            # No candidates above threshold - fall back to pure random
+        # Step 2: Select random tokens for the remainder
+        random_positions = []
+        if random_tokens_to_use > 0:
+            # Find positions not already selected by intelligent selection
             all_positions = torch.arange(tokens.size(1), device=device)
-            random_indices = torch.randperm(tokens.size(1))[:num_to_remask]
-            selected_positions = all_positions[random_indices]
-            tokens[0, selected_positions] = mask_token_id
+            if len(intelligent_positions) > 0:
+                # Create mask for positions not already selected
+                selected_mask = torch.zeros(tokens.size(1), dtype=torch.bool, device=device)
+                selected_mask[intelligent_positions] = True
+                available_positions = all_positions[~selected_mask]
+            else:
+                available_positions = all_positions
             
-            intelligent_count = 0
-            random_count = num_to_remask
+            if len(available_positions) >= random_tokens_to_use:
+                random_indices = torch.randperm(len(available_positions))[:random_tokens_to_use]
+                random_positions = available_positions[random_indices]
+                tokens[0, random_positions] = mask_token_id
+            else:
+                # Not enough positions available, take all remaining
+                random_positions = available_positions
+                tokens[0, random_positions] = mask_token_id
+                random_tokens_to_use = len(available_positions)
+        
+        intelligent_count = intelligent_tokens_to_use
+        random_count = len(random_positions)
+        
+        if verbose:
+            intelligent_pct = (intelligent_count / num_to_remask * 100) if num_to_remask > 0 else 0
+            random_pct = (random_count / num_to_remask * 100) if num_to_remask > 0 else 0
+            actual_random_ratio = random_count / num_to_remask if num_to_remask > 0 else 0
             
-            if verbose:
-                print(f"  No candidates above threshold - used {num_to_remask} random positions")
+            print(f"  ✓ INTELLIGENT SELECTION: Used {intelligent_count}/{num_to_remask} tokens ({intelligent_pct:.1f}%)")
+            if intelligent_count > 0:
+                candidate_probs = target_probs[threshold_mask]
+                if intelligent_count == len(candidate_probs):
+                    print(f"    - All {intelligent_count} candidates above threshold selected")
+                    min_intelligent_prob = candidate_probs.min().item()
+                    max_intelligent_prob = candidate_probs.max().item()
+                else:
+                    # Only top N were selected
+                    _, top_indices = torch.topk(candidate_probs, intelligent_count)
+                    selected_probs = candidate_probs[top_indices]
+                    print(f"    - Top {intelligent_count} candidates by probability (limited by min_random_ratio)")
+                    min_intelligent_prob = selected_probs.min().item()
+                    max_intelligent_prob = selected_probs.max().item()
+                print(f"    - Probability range: {min_intelligent_prob:.4f} to {max_intelligent_prob:.4f}")
+            else:
+                if num_candidates == 0:
+                    print(f"    - No candidates above threshold {threshold:.4f}")
+                else:
+                    print(f"    - {num_candidates} candidates available but limited by min_random_ratio")
+            
+            print(f"  ✗ RANDOM SELECTION: Used {random_count}/{num_to_remask} tokens ({random_pct:.1f}%)")
+            print(f"    - Actual random ratio: {actual_random_ratio:.2f} (required min: {min_random_ratio:.2f})")
+            if random_count < min_random_tokens:
+                print(f"    - WARNING: Could not meet minimum random requirement ({random_count} < {min_random_tokens})")
     
     return tokens, intelligent_count, random_count
 
@@ -323,26 +340,35 @@ def diffusion_generate(model, total_length, iterations, schedule='linear', mask_
         # Stop remasking on the final iteration (iteration == iterations - 1)
         if iteration < iterations - 1:
             if use_threshold_remasking and remasking_model is not None:
-                # Use threshold-based intelligent remasking
+                # Use schedule-based intelligent remasking with threshold
+                # Calculate how many tokens to re-mask from schedule
+                if schedule == 'linear':
+                    remask_ratio = linear_remasking_schedule(iterations, iteration + 1)
+                elif schedule == 'exponential':
+                    remask_ratio = exponential_remasking_schedule(iterations, iteration + 1)
+                else:
+                    remask_ratio = 0.5  # Default
+                
+                num_to_remask = int(total_length * remask_ratio)
+                
                 if verbose:
-                    print(f"Using threshold-based intelligent remasking (threshold={threshold:.3f})...")
+                    print(f"Using schedule-based intelligent remasking (threshold={threshold:.3f}, ratio={remask_ratio:.3f})...")
                 
-                tokens, num_remasked = intelligent_remask_threshold(
-                    tokens, remasking_model, threshold, 
-                    mask_token_id, wrong_token_id, remask_wrong_id, remasking_model_type, device, verbose
-                )
-                
-                if verbose:
-                    # Show state after remasking
-                    if decode_mask_fn:
-                        remasked_sequence = decode_mask_fn(tokens[0].tolist())
-                        print(f"AFTER remasking:  {remasked_sequence}")
-                    print(f"Re-masked {num_remasked} tokens based on threshold")
-                
-                # Early termination if no tokens were remasked
-                if num_remasked == 0:
+                if num_to_remask > 0:
+                    tokens, intelligent_count, random_count = mixed_intelligent_remask(
+                        tokens, remasking_model, num_to_remask, threshold,
+                        mask_token_id, wrong_token_id, remask_wrong_id, remasking_model_type, device, min_random_ratio, verbose
+                    )
+                    
                     if verbose:
-                        print(f"No tokens remasked - generation converged at iteration {iteration + 1}")
+                        # Show state after remasking
+                        if decode_mask_fn:
+                            remasked_sequence = decode_mask_fn(tokens[0].tolist())
+                            print(f"AFTER remasking:  {remasked_sequence}")
+                        print(f"Re-masked {num_to_remask} tokens (ratio: {remask_ratio:.2f}) - {intelligent_count} intelligent + {random_count} random")
+                else:
+                    if verbose:
+                        print(f"Schedule requires 0 tokens to remask - generation converged at iteration {iteration + 1}")
                     break
             elif use_mixed_remasking and remasking_model is not None:
                 # Use mixed random+intelligent remasking
@@ -362,7 +388,7 @@ def diffusion_generate(model, total_length, iterations, schedule='linear', mask_
                 if num_to_remask > 0:
                     tokens, intelligent_count, random_count = mixed_intelligent_remask(
                         tokens, remasking_model, num_to_remask, threshold,
-                        mask_token_id, wrong_token_id, remask_wrong_id, remasking_model_type, device, verbose
+                        mask_token_id, wrong_token_id, remask_wrong_id, remasking_model_type, device, min_random_ratio, verbose
                     )
                     
                     if verbose:
