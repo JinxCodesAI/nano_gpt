@@ -21,6 +21,8 @@ import time
 import math
 import pickle
 from contextlib import nullcontext
+import threading
+from queue import Queue
 
 import numpy as np
 import torch
@@ -152,7 +154,11 @@ data_dir = os.path.join('data', dataset)
 # Cache for consistent validation batches and data prefetching
 _val_batch_cache = None
 _data_cache = {'train': None, 'val': None}  # Cache memory-mapped data
+_valid_indices_cache = {'train': None, 'val': None}  # Cache expensive index computation
 _prefetch_enabled = True
+_prefetch_queue = Queue(maxsize=2)  # Background batch preparation
+_prefetch_thread = None
+_prefetch_active = False
 
 def find_double_newline_indices(data, meta_vocab_size):
     """Find all valid starting indices that begin with double newlines (\n\n)"""
@@ -172,89 +178,145 @@ def find_double_newline_indices(data, meta_vocab_size):
     
     return np.array(valid_indices)
 
+def _prepare_batch_data_only(split):
+    """Background function to prepare raw batch data (CPU only)"""
+    global _data_cache, _valid_indices_cache
+    
+    # Ensure data is cached
+    if _data_cache[split] is None:
+        return None
+        
+    data = _data_cache[split]
+    valid_indices = _valid_indices_cache[split]
+    
+    # Fast index sampling - all on CPU
+    if len(valid_indices) == 0:
+        ix_np = torch.randint(len(data) - block_size, (batch_size,)).numpy()
+    else:
+        ix_indices = torch.randint(len(valid_indices), (batch_size,)).numpy()
+        ix_np = valid_indices[ix_indices]
+
+    # VECTORIZED DATA LOADING - Load entire batch at once
+    x_np = np.zeros((batch_size, block_size), dtype=np.int64)
+    for i, start_idx in enumerate(ix_np):
+        x_np[i] = data[start_idx:start_idx+block_size].astype(np.int64)
+    
+    return x_np
+
+def _prefetch_worker():
+    """Background thread worker for data prefetching"""
+    global _prefetch_active
+    while _prefetch_active:
+        try:
+            # Prepare next batch in background
+            x_np = _prepare_batch_data_only('train')
+            if x_np is not None:
+                _prefetch_queue.put(x_np, timeout=1.0)
+        except:
+            # Queue full or other error, just continue
+            time.sleep(0.001)
+
+def start_prefetch():
+    """Start background data prefetching"""
+    global _prefetch_thread, _prefetch_active
+    if _prefetch_thread is None and _prefetch_enabled:
+        _prefetch_active = True
+        _prefetch_thread = threading.Thread(target=_prefetch_worker, daemon=True)
+        _prefetch_thread.start()
+
+def stop_prefetch():
+    """Stop background data prefetching"""
+    global _prefetch_thread, _prefetch_active
+    _prefetch_active = False
+    if _prefetch_thread is not None:
+        _prefetch_thread.join(timeout=1.0)
+        _prefetch_thread = None
+
 def get_batch(split):
     if training_type == 'remasking':
         return get_batch_remasking(split)
     elif training_type == 'remasking_binary':
         return get_batch_remasking_binary(split)
     
-    # GPU-optimized unmasking implementation
-    global _val_batch_cache, iter_num
+    # Ultra-fast unmasking implementation with aggressive caching + prefetching
+    global _val_batch_cache, iter_num, _data_cache, _valid_indices_cache
 
     # For validation, use cached batch to ensure consistency
     if split == 'val' and _val_batch_cache is not None:
         return _val_batch_cache
 
-    # Use cached memory-mapped data to avoid recreation overhead
-    global _data_cache
-    
+    # Cache memory-mapped data and valid indices - MAJOR SPEEDUP
     if _data_cache[split] is None:
-        # Create memory-mapped data on first access
         if split == 'train':
             _data_cache[split] = np.memmap(os.path.join(data_dir, 'train.bin'), dtype=np.uint16, mode='r')
         else:
             _data_cache[split] = np.memmap(os.path.join(data_dir, 'val.bin'), dtype=np.uint16, mode='r')
-    
-    data = _data_cache[split]
+        
+        # Cache the expensive valid indices computation
+        print(f"Computing valid indices for {split}... (one-time cost)")
+        _valid_indices_cache[split] = find_double_newline_indices(_data_cache[split], meta_vocab_size)
+        print(f"Found {len(_valid_indices_cache[split])} valid indices for {split}")
+        
+        # Start prefetching for training data
+        if split == 'train':
+            start_prefetch()
 
-    # Find valid starting indices that begin with double newlines
-    valid_indices = find_double_newline_indices(data, meta_vocab_size)
+    # Try to get prefetched data for training
+    x_np = None
+    if split == 'train' and _prefetch_enabled:
+        try:
+            x_np = _prefetch_queue.get_nowait()
+        except:
+            pass  # Queue empty, generate normally
     
-    if len(valid_indices) == 0:
-        # Fallback to original random sampling if no double newlines found
-        print("Warning: No double newlines found, falling back to random sampling")
-        if split == 'val':
-            torch.manual_seed(42)
-            ix = torch.randint(len(data) - block_size, (batch_size,), device=device)
-            torch.manual_seed(1337 + seed_offset)
+    # Generate data if not prefetched
+    if x_np is None:
+        data = _data_cache[split]
+        valid_indices = _valid_indices_cache[split]
+        
+        # Fast index sampling - all on CPU to avoid GPU-CPU sync
+        if len(valid_indices) == 0:
+            if split == 'val':
+                torch.manual_seed(42)
+                ix_np = torch.randint(len(data) - block_size, (batch_size,)).numpy()
+                torch.manual_seed(1337 + seed_offset)
+            else:
+                ix_np = torch.randint(len(data) - block_size, (batch_size,)).numpy()
         else:
-            ix = torch.randint(len(data) - block_size, (batch_size,), device=device)
-    else:
-        # Sample from valid double-newline starting positions
-        if split == 'val':
-            # For validation, use fixed seed to ensure reproducible indices
-            torch.manual_seed(42)
-            ix_indices = torch.randint(len(valid_indices), (batch_size,), device=device)
-            ix = torch.from_numpy(valid_indices[ix_indices.cpu().numpy()]).to(device)
-            # Reset to original seed
-            torch.manual_seed(1337 + seed_offset)
-        else:
-            # For training, use random indices from valid positions
-            ix_indices = torch.randint(len(valid_indices), (batch_size,), device=device)
-            ix = torch.from_numpy(valid_indices[ix_indices.cpu().numpy()]).to(device)
+            if split == 'val':
+                torch.manual_seed(42)
+                ix_indices = torch.randint(len(valid_indices), (batch_size,)).numpy()
+                ix_np = valid_indices[ix_indices]
+                torch.manual_seed(1337 + seed_offset)
+            else:
+                ix_indices = torch.randint(len(valid_indices), (batch_size,)).numpy()
+                ix_np = valid_indices[ix_indices]
 
-    # Optimized batch data loading with vectorized operations
-    # Convert indices to numpy for efficient slicing
-    ix_np = ix.cpu().numpy() if ix.is_cuda else ix.numpy()
+        # VECTORIZED DATA LOADING - Load entire batch at once
+        x_np = np.zeros((batch_size, block_size), dtype=np.int64)
+        for i, start_idx in enumerate(ix_np):
+            x_np[i] = data[start_idx:start_idx+block_size].astype(np.int64)
     
-    # Pre-allocate tensor for batch
-    x = torch.zeros((batch_size, block_size), dtype=torch.long)
-    
-    # Vectorized data loading - much faster than individual segments
-    for i, start_idx in enumerate(ix_np):
-        x[i] = torch.from_numpy(data[start_idx:start_idx+block_size].astype(np.int64))
-    
-    # Move to GPU with pinned memory for faster transfer
+    # Single GPU transfer with pinned memory
+    x = torch.from_numpy(x_np)
     if device_type == 'cuda':
         x = x.pin_memory().to(device, non_blocking=True)
     else:
         x = x.to(device)
 
-    # GPU-accelerated masking operations
+    # GPU-accelerated masking operations (already on GPU)
     if split == 'val':
-        # For validation, use fixed sticky masking with 0.5 ratio for consistency
         torch.manual_seed(42)
         masked_x, mask = apply_gpu_masking_validation(x, mask_token_id, sticky_rounds, sticky_p1_p2_multiplier, guaranteed_unmasked)
         torch.manual_seed(1337 + seed_offset)
     else:
-        # For training, apply mixed masking strategy based on current iteration
         masked_x, mask = apply_gpu_masking_training(x, iter_num, mask_token_id, sticky_rounds, sticky_p1_p2_multiplier, 
                                                   guaranteed_unmasked, sticky_transition_start, sticky_transition_end)
 
-    # Apply random noise to unmasked positions in input (targets remain unchanged)
+    # Apply random noise to unmasked positions (already on GPU)
     masked_x = apply_random_noise_to_unmasked_gpu(masked_x, mask, noise_max_ratio, meta_vocab_size)
     
-    # Target is original x, loss computed only on masked positions
+    # Target is original x
     y = x.clone()
 
     # Cache validation batch for consistency
@@ -1208,3 +1270,6 @@ while True:
 
 if ddp:
     destroy_process_group()
+
+# Cleanup prefetch thread
+stop_prefetch()
