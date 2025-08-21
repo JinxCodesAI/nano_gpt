@@ -47,9 +47,9 @@ eval_only = False # if True, script exits right after the first eval
 always_save_checkpoint = True # if True, always save a checkpoint after each eval
 init_from = 'scratch' # 'scratch' or 'resume' or 'gpt2*'
 # wandb logging
-wandb_log = False # disabled by default
-wandb_project = 'owt'
-wandb_run_name = 'gpt2' # 'run' + str(time.time())
+wandb_log = True # disabled by default
+wandb_project = 'diffusion'
+wandb_run_name = '10k_M5_Bi' # 'run' + str(time.time())
 # data
 dataset = 'shakespeare_char'
 gradient_accumulation_steps = 1 # used to simulate larger batch sizes
@@ -60,7 +60,7 @@ guaranteed_unmasked = 0.05       # Guaranteed fraction of tokens to keep unmaske
 
 # sticky masking configuration - gradual transition from independent to sticky
 sticky_transition_start = 1000   # When to start introducing sticky masking
-sticky_transition_end = 3000     # When to reach full sticky masking
+sticky_transition_end = 7000     # When to reach full sticky masking
 sticky_rounds = 10                # Number of sticky masking rounds
 sticky_p1_p2_multiplier = 10.0    # Multiplier for sticky_p2 = sticky_p1 * multiplier
 # model
@@ -69,12 +69,13 @@ n_head = 6
 n_embd = 384
 dropout = 0.2 # for pretraining 0 is good, for finetuning try 0.1+
 bias = False # do we use bias inside LayerNorm and Linear layers?
-attention_type = 'causal' # 'causal' or 'bidirectional' - type of attention to use (bidirectional recommended for diffusion)
+attention_type = 'bidirectional' # 'causal' or 'bidirectional' - type of attention to use (bidirectional recommended for diffusion)
 # adamw optimizer
 
 learning_rate = 1e-3 # with baby networks can afford to go a bit higher
-max_iters = 5000
-lr_decay_iters = 5000 # make equal to max_iters usually
+max_iters = 10000
+warmup_iters = 2000 # how many steps to warm up for
+lr_decay_iters = 6000 # make equal to max_iters usually
 min_lr = 1e-4 # learning_rate / 10 usually
 beta1 = 0.9
 beta2 = 0.99 # make a bit bigger because number of tokens per iter is small
@@ -82,10 +83,7 @@ weight_decay=1e-1
 
 grad_clip = 1.0 # clip gradients at this value, or disable if == 0.0
 # learning rate decay settings
-decay_lr = True # whether to decay the learning rate
-warmup_iters = 2000 # how many steps to warm up for
-lr_decay_iters = 600000 # should be ~= max_iters per Chinchilla
-min_lr = 6e-5 # minimum learning rate, should be ~= learning_rate/10 per Chinchilla
+decay_lr = True # whether to decay the learning rat
 # DDP settings
 backend = 'nccl' # 'nccl', 'gloo', etc.
 # system
@@ -474,14 +472,9 @@ while True:
                 "train/loss": losses['train'],
                 "val/loss": losses['val'],
                 "lr": lr,
+                "model vs random": losses.get('val_model_vs_random', 0.0),
                 "mfu": running_mfu*100, # convert to percentage
             }
-
-            # Add model vs random statistics to wandb if available
-            if 'val_model_vs_random' in losses:
-                log_dict["val/model_vs_random_ratio"] = losses['val_model_vs_random']
-                log_dict["val/avg_correct_prob"] = losses['val_avg_correct_prob']
-                log_dict["val/random_prob"] = 1.0 / extended_vocab_size
 
             wandb.log(log_dict)
         if losses['val'] < best_val_loss or always_save_checkpoint:
