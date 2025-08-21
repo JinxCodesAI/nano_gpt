@@ -60,6 +60,7 @@ training_type = 'unmasking'  # 'unmasking' or 'remasking' - type of training
 remasking_corruption_strategy = 'mixed'  # 'random', 'sticky', 'fragment', 'mixed' - corruption strategy for remasking
 remasking_strategy_weights = [0.2, 0.3, 0.5]  # weights for [random, sticky, fragment] when using 'mixed'
 guaranteed_unmasked = 0.0       # Guaranteed fraction of tokens to keep unmasked
+noise_max_ratio = 0.0            # Maximum ratio of unmasked tokens to corrupt with random noise (0.0 to 1.0) - only for unmasking training
 
 # sticky masking configuration - gradual transition from independent to sticky
 sticky_transition_start = 500   # When to start introducing sticky masking
@@ -75,11 +76,11 @@ bias = False # do we use bias inside LayerNorm and Linear layers?
 attention_type = 'bidirectional' # 'causal' or 'bidirectional' - type of attention to use (bidirectional recommended for diffusion)
 # adamw optimizer
 
-learning_rate = 1e-4 # with baby networks can afford to go a bit higher
+learning_rate = 1e-3 # with baby networks can afford to go a bit higher
 max_iters = 10000
 warmup_iters = 2000 # how many steps to warm up for
 lr_decay_iters = 10000 # make equal to max_iters usually
-min_lr = 1e-5 # learning_rate / 10 usually
+min_lr = 1e-4 # learning_rate / 10 usually
 beta1 = 0.9
 beta2 = 0.99 # make a bit bigger because number of tokens per iter is small
 weight_decay=1e-1
@@ -252,6 +253,9 @@ def get_batch(split):
                 masked_x[-num_sticky_batches:] = sticky_masked_x
                 mask[-num_sticky_batches:] = sticky_mask
 
+    # Apply random noise to unmasked positions in input (targets remain unchanged)
+    masked_x = apply_random_noise_to_unmasked(masked_x, mask, noise_max_ratio, meta_vocab_size)
+    
     # Target is original x, loss computed only on masked positions
     y = x.clone()
 
@@ -338,6 +342,40 @@ def apply_fragment_corruption(x, data, block_size, sticky_rounds, sticky_p1_p2_m
             corrupted_x[batch_idx][batch_mask] = fragment[batch_mask]
     
     return corrupted_x, mask
+
+def apply_random_noise_to_unmasked(x, mask, noise_max_ratio, meta_vocab_size):
+    """Apply random token noise to unmasked positions in input for unmasking training.
+    
+    This helps the model learn to unmask tokens even when some context tokens are noisy.
+    Only applied during training_type='unmasking' to improve robustness.
+    """
+    if noise_max_ratio <= 0.0:
+        return x
+    
+    noisy_x = x.clone()
+    vocab_size_to_use = meta_vocab_size if meta_vocab_size is not None else 50257
+    
+    # Get unmasked positions for all batch elements
+    unmasked_positions = ~mask  # Shape: (batch_size, seq_len)
+    
+    # Sample noise ratios for each batch element
+    batch_size = x.shape[0]
+    noise_ratios = torch.rand(batch_size, device=x.device) * noise_max_ratio  # Shape: (batch_size,)
+    
+    # For each position, determine if it should be noised
+    # First, generate random values for all unmasked positions
+    random_probs = torch.rand_like(x, dtype=torch.float, device=x.device)  # Shape: (batch_size, seq_len)
+    
+    # Create noise mask: position gets noised if it's unmasked AND random_prob < noise_ratio
+    noise_ratios_expanded = noise_ratios.unsqueeze(1).expand(-1, x.shape[1])  # Shape: (batch_size, seq_len)
+    should_noise = unmasked_positions & (random_probs < noise_ratios_expanded)
+    
+    # Generate random tokens for all positions that should be noised
+    if should_noise.any():
+        random_tokens = torch.randint(0, vocab_size_to_use, x.shape, device=x.device)
+        noisy_x = torch.where(should_noise, random_tokens, noisy_x)
+    
+    return noisy_x
 
 def get_batch_remasking(split):
     global _val_batch_cache, iter_num
