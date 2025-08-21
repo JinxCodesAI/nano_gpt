@@ -75,11 +75,11 @@ bias = False # do we use bias inside LayerNorm and Linear layers?
 attention_type = 'bidirectional' # 'causal' or 'bidirectional' - type of attention to use (bidirectional recommended for diffusion)
 # adamw optimizer
 
-learning_rate = 1e-3 # with baby networks can afford to go a bit higher
+learning_rate = 1e-4 # with baby networks can afford to go a bit higher
 max_iters = 10000
 warmup_iters = 2000 # how many steps to warm up for
 lr_decay_iters = 10000 # make equal to max_iters usually
-min_lr = 1e-4 # learning_rate / 10 usually
+min_lr = 1e-5 # learning_rate / 10 usually
 beta1 = 0.9
 beta2 = 0.99 # make a bit bigger because number of tokens per iter is small
 weight_decay=1e-1
@@ -94,6 +94,7 @@ device = 'cuda' # examples: 'cpu', 'cuda', 'cuda:0', 'cuda:1' etc., or try 'mps'
 dtype = 'float16'
 #dtype = 'bfloat16' if torch.cuda.is_available() and torch.cuda.is_bf16_supported() else 'float16' # 'float32', 'bfloat16', or 'float16', the latter will auto implement a GradScaler
 compile = True # use PyTorch 2.0 to compile the model to be faster
+
 # -----------------------------------------------------------------------------
 config_keys = [k for k,v in globals().items() if not k.startswith('_') and isinstance(v, (int, float, bool, str))]
 exec(open('configurator.py').read()) # overrides from command line or config file
