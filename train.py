@@ -995,9 +995,10 @@ def estimate_loss():
 
                 # For validation, compute model vs random statistics
                 if split == 'val':
-                    # Get probabilities from logits
+                    # Get probabilities from logits and flatten for statistics
                     probs = torch.nn.functional.softmax(logits, dim=-1)  # (batch_size, seq_len, vocab_size)
                     probs_flat = probs.view(-1, probs.size(-1))  # (batch_size * seq_len, vocab_size)
+                    targets_flat = Y.view(-1)  # (batch_size * seq_len,) - needed for validation stats
                     
                     if training_type == 'remasking_binary':
                         # For binary classification, compute accuracy on all positions
