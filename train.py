@@ -57,6 +57,8 @@ batch_size = 16 # if gradient_accumulation_steps > 1, this is the micro-batch si
 block_size = 1024
 # diffusion training config
 training_type = 'unmasking'  # 'unmasking' or 'remasking' - type of training
+remasking_corruption_strategy = 'mixed'  # 'random', 'sticky', 'fragment', 'mixed' - corruption strategy for remasking
+remasking_strategy_weights = [0.2, 0.3, 0.5]  # weights for [random, sticky, fragment] when using 'mixed'
 guaranteed_unmasked = 0.0       # Guaranteed fraction of tokens to keep unmasked
 
 # sticky masking configuration - gradual transition from independent to sticky
@@ -290,6 +292,52 @@ else:
     wrong_token_id = 50305
     extended_vocab_size = 50306
 
+def apply_random_corruption(x, corruption_prob, guaranteed_unmasked, meta_vocab_size):
+    """Strategy 1: Random token corruption (original method)"""
+    mask = torch.rand(x.shape) < (corruption_prob * (1.0 - guaranteed_unmasked))
+    corrupted_x = x.clone()
+    
+    if mask.sum() > 0:
+        vocab_size_to_use = meta_vocab_size if meta_vocab_size is not None else 50257
+        random_tokens = torch.randint(0, vocab_size_to_use, (mask.sum().item(),))
+        corrupted_x[mask] = random_tokens
+    
+    return corrupted_x, mask
+
+def apply_sticky_corruption(x, sticky_rounds, sticky_p1_p2_multiplier, mask_token_id, meta_vocab_size):
+    """Strategy 2: Sticky-style corruption without transitions"""
+    # Use sticky masking logic but replace mask tokens with random tokens
+    sticky_corrupted_x, mask = apply_sticky_masking(x, sticky_rounds, mask_token_id, sticky_p1_p2_multiplier)
+    
+    # Replace mask tokens with random tokens
+    vocab_size_to_use = meta_vocab_size if meta_vocab_size is not None else 50257
+    for batch_idx in range(sticky_corrupted_x.shape[0]):
+        for pos_idx in range(sticky_corrupted_x.shape[1]):
+            if sticky_corrupted_x[batch_idx, pos_idx] == mask_token_id:
+                sticky_corrupted_x[batch_idx, pos_idx] = torch.randint(0, vocab_size_to_use, (1,)).item()
+    
+    return sticky_corrupted_x, mask
+
+def apply_fragment_corruption(x, data, block_size, sticky_rounds, sticky_p1_p2_multiplier, mask_token_id):
+    """Strategy 3: Fragment-based corruption using real text segments"""
+    # Use sticky masking to get corruption patterns
+    _, mask = apply_sticky_masking(x, sticky_rounds, mask_token_id, sticky_p1_p2_multiplier)
+    
+    corrupted_x = x.clone()
+    
+    # For each sequence in the batch, get a different source fragment
+    for batch_idx in range(x.shape[0]):
+        batch_mask = mask[batch_idx]
+        if batch_mask.sum() > 0:
+            # Sample a random fragment from training data
+            fragment_start = torch.randint(0, len(data) - block_size, (1,)).item()
+            fragment = torch.from_numpy(data[fragment_start:fragment_start + block_size].astype(np.int64))
+            
+            # Replace corrupted positions with tokens from the fragment
+            corrupted_x[batch_idx][batch_mask] = fragment[batch_mask]
+    
+    return corrupted_x, mask
+
 def get_batch_remasking(split):
     global _val_batch_cache, iter_num
 
@@ -315,119 +363,26 @@ def get_batch_remasking(split):
 
     x = torch.stack([torch.from_numpy((data[i:i+block_size]).astype(np.int64)) for i in ix])
 
-    if split == 'val':
-        # For validation, use fixed corruption with 0.5 ratio for consistency
-        torch.manual_seed(42)
-
-        # Apply mixed corruption strategy with fixed 0.5 sticky ratio
-        current_batch_size = x.shape[0]
-        num_sticky_batches = int(current_batch_size * 0.5)  # Fixed 50% sticky ratio
-
-        corrupted_x = x.clone()
-        mask = torch.zeros_like(x, dtype=torch.bool)
-
-        # Apply independent corruption to first part of batch
-        if num_sticky_batches < current_batch_size:
-            corruption_prob = 0.5 * (1.0 - guaranteed_unmasked)  # Fixed at middle of range
-            indep_mask = torch.rand(x[:current_batch_size-num_sticky_batches].shape) < corruption_prob
-            
-            # Replace with random tokens from vocabulary (not wrong_token_id)
-            if indep_mask.sum() > 0:
-                vocab_size_to_use = meta_vocab_size if meta_vocab_size is not None else 50257
-                random_tokens = torch.randint(0, vocab_size_to_use, (indep_mask.sum().item(),))
-                corrupted_x[:current_batch_size-num_sticky_batches][indep_mask] = random_tokens
-            mask[:current_batch_size-num_sticky_batches] = indep_mask
-
-        # Apply sticky corruption to remaining part of batch
-        if num_sticky_batches > 0:
-            # Use sticky masking logic but replace with random tokens
-            sticky_corrupted_x, sticky_mask = apply_sticky_masking(
-                x[-num_sticky_batches:], sticky_rounds, mask_token_id, sticky_p1_p2_multiplier
-            )
-            # Replace mask tokens with random tokens
-            for batch_idx in range(sticky_corrupted_x.shape[0]):
-                for pos_idx in range(sticky_corrupted_x.shape[1]):
-                    if sticky_corrupted_x[batch_idx, pos_idx] == mask_token_id:
-                        vocab_size_to_use = meta_vocab_size if meta_vocab_size is not None else 50257
-                        sticky_corrupted_x[batch_idx, pos_idx] = torch.randint(0, vocab_size_to_use, (1,)).item()
-            
-            corrupted_x[-num_sticky_batches:] = sticky_corrupted_x
-            mask[-num_sticky_batches:] = sticky_mask
-
-        # Reset to original seed
-        torch.manual_seed(1337 + seed_offset)
+    # Select corruption strategy based on configuration
+    if remasking_corruption_strategy == 'random':
+        corrupted_x, mask = apply_random_corruption(x, 0.5, guaranteed_unmasked, meta_vocab_size)
+    elif remasking_corruption_strategy == 'sticky':
+        corrupted_x, mask = apply_sticky_corruption(x, sticky_rounds, sticky_p1_p2_multiplier, mask_token_id, meta_vocab_size)
+    elif remasking_corruption_strategy == 'fragment':
+        corrupted_x, mask = apply_fragment_corruption(x, data, block_size, sticky_rounds, sticky_p1_p2_multiplier, mask_token_id)
+    elif remasking_corruption_strategy == 'mixed':
+        # Select strategy based on weights
+        strategy_choice = np.random.choice(['random', 'sticky', 'fragment'], p=remasking_strategy_weights)
+        
+        if strategy_choice == 'random':
+            corrupted_x, mask = apply_random_corruption(x, 0.5, guaranteed_unmasked, meta_vocab_size)
+        elif strategy_choice == 'sticky':
+            corrupted_x, mask = apply_sticky_corruption(x, sticky_rounds, sticky_p1_p2_multiplier, mask_token_id, meta_vocab_size)
+        else:  # fragment
+            corrupted_x, mask = apply_fragment_corruption(x, data, block_size, sticky_rounds, sticky_p1_p2_multiplier, mask_token_id)
     else:
-        # For training, apply mixed corruption strategy based on current iteration
-        # Calculate sticky masking ratio based on current training iteration
-        if iter_num < sticky_transition_start:
-            # Pure independent corruption
-            sticky_ratio = 0.0
-        elif iter_num >= sticky_transition_end:
-            # Pure sticky corruption
-            sticky_ratio = 1.0
-        else:
-            # Gradual transition from independent to sticky
-            progress = (iter_num - sticky_transition_start) / (sticky_transition_end - sticky_transition_start)
-            sticky_ratio = progress
-
-        # Apply mixed corruption strategy
-        if sticky_ratio == 0.0:
-            # Pure independent corruption
-            corruption_prob = torch.rand(1).item() * (1.0 - guaranteed_unmasked)
-            mask = torch.rand(x.shape) < corruption_prob
-            corrupted_x = x.clone()
-            
-            # Replace with random tokens from vocabulary
-            if mask.sum() > 0:
-                vocab_size_to_use = meta_vocab_size if meta_vocab_size is not None else 50257
-                random_tokens = torch.randint(0, vocab_size_to_use, (mask.sum().item(),))
-                corrupted_x[mask] = random_tokens
-
-        elif sticky_ratio == 1.0:
-            # Pure sticky corruption
-            sticky_corrupted_x, mask = apply_sticky_masking(x, sticky_rounds, mask_token_id, sticky_p1_p2_multiplier)
-            # Replace mask tokens with random tokens
-            corrupted_x = sticky_corrupted_x.clone()
-            for batch_idx in range(corrupted_x.shape[0]):
-                for pos_idx in range(corrupted_x.shape[1]):
-                    if corrupted_x[batch_idx, pos_idx] == mask_token_id:
-                        vocab_size_to_use = meta_vocab_size if meta_vocab_size is not None else 50257
-                        corrupted_x[batch_idx, pos_idx] = torch.randint(0, vocab_size_to_use, (1,)).item()
-
-        else:
-            # Mixed strategy: some batches independent, some sticky
-            current_batch_size = x.shape[0]
-            num_sticky_batches = int(current_batch_size * sticky_ratio)
-
-            corrupted_x = x.clone()
-            mask = torch.zeros_like(x, dtype=torch.bool)
-
-            # Apply independent corruption to first part of batch
-            if num_sticky_batches < current_batch_size:
-                corruption_prob = torch.rand(1).item() * (1.0 - guaranteed_unmasked)
-                indep_mask = torch.rand(x[:current_batch_size-num_sticky_batches].shape) < corruption_prob
-                
-                # Replace with random tokens from vocabulary
-                if indep_mask.sum() > 0:
-                    vocab_size_to_use = meta_vocab_size if meta_vocab_size is not None else 50257
-                    random_tokens = torch.randint(0, vocab_size_to_use, (indep_mask.sum().item(),))
-                    corrupted_x[:current_batch_size-num_sticky_batches][indep_mask] = random_tokens
-                mask[:current_batch_size-num_sticky_batches] = indep_mask
-
-            # Apply sticky corruption to remaining part of batch
-            if num_sticky_batches > 0:
-                sticky_corrupted_x, sticky_mask = apply_sticky_masking(
-                    x[-num_sticky_batches:], sticky_rounds, mask_token_id, sticky_p1_p2_multiplier
-                )
-                # Replace mask tokens with random tokens
-                for batch_idx in range(sticky_corrupted_x.shape[0]):
-                    for pos_idx in range(sticky_corrupted_x.shape[1]):
-                        if sticky_corrupted_x[batch_idx, pos_idx] == mask_token_id:
-                            vocab_size_to_use = meta_vocab_size if meta_vocab_size is not None else 50257
-                        sticky_corrupted_x[batch_idx, pos_idx] = torch.randint(0, vocab_size_to_use, (1,)).item()
-                
-                corrupted_x[-num_sticky_batches:] = sticky_corrupted_x
-                mask[-num_sticky_batches:] = sticky_mask
+        # Default fallback to random
+        corrupted_x, mask = apply_random_corruption(x, 0.5, guaranteed_unmasked, meta_vocab_size)
 
     # Target: original tokens at correct positions, wrong_token_id at corrupted positions
     y = x.clone()

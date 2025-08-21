@@ -13,8 +13,8 @@ from model import GPTConfig, GPT
 init_from = 'resume'
 out_dir = 'out'
 checkpoint_name = 'BI2_10000.pt'  # Specific checkpoint to load
-remasking_checkpoint_name = None  # Optional: checkpoint for remasking model, if None uses random remasking
-use_intelligent_remasking = False  # Set to True to use remasking model instead of random
+remasking_checkpoint_name = 'ckpt_remasking_naive_4400.pt'  # Optional: checkpoint for remasking model, if None uses random remasking
+use_intelligent_remasking = True  # Set to True to use remasking model instead of random
 num_samples = 1  # Number of samples to generate
 sequence_length = 1024  # Total length of generated sequence
 start_ratio = 1.0  # Start with all tokens masked
@@ -25,7 +25,7 @@ dtype = 'float32'
 compile = False
 
 # Diffusion generation parameters
-diffusion_iterations = 100        # Number of demasking/remasking rounds
+diffusion_iterations = 10        # Number of demasking/remasking rounds
 remasking_schedule = 'linear'    # 'linear' or 'exponential'
 remasking_confidence_threshold = 0.1  # Minimum confidence for remasking decisions
 exec(open('configurator.py').read()) # overrides from command line or config file
@@ -61,40 +61,26 @@ def intelligent_remask(tokens, remasking_model, num_to_remask, mask_token_id, wr
     with torch.no_grad():
         # Get model predictions
         logits, _ = remasking_model(tokens, None)
-        predicted_tokens = torch.argmax(logits, dim=-1)
         
-        # Find positions where model predicts wrong_token_id
-        # These are positions the model thinks should be remasked
-        wrong_positions = (predicted_tokens[0] == wrong_token_id)
+        # Get probabilities for wrong_token_id at each position
+        probs = torch.softmax(logits[0], dim=-1)
+        wrong_probs = probs[:, wrong_token_id]
         
         if verbose:
-            print(f"  Model identified {wrong_positions.sum().item()} positions as needing remasking")
+            print(f"  [WRONG] token probabilities range: {wrong_probs.min().item():.4f} to {wrong_probs.max().item():.4f}")
         
-        # Select positions to remask based on model's predictions
-        if wrong_positions.sum() > num_to_remask:
-            # Get probabilities for wrong_token_id predictions
-            probs = torch.softmax(logits[0], dim=-1)
-            wrong_probs = probs[:, wrong_token_id]
-            
-            # Select top positions by confidence
-            _, top_indices = torch.topk(wrong_probs, num_to_remask)
+        # Select top positions by [WRONG] token probability
+        if num_to_remask > 0:
+            top_probs, top_indices = torch.topk(wrong_probs, min(num_to_remask, tokens.size(1)))
             tokens[0, top_indices] = mask_token_id
             
             if verbose:
-                print(f"  Selected top {num_to_remask} positions by confidence")
-        elif wrong_positions.sum() > 0:
-            # Remask all positions model thinks are wrong
-            tokens[0, wrong_positions] = mask_token_id
-            
-            if verbose:
-                print(f"  Remasked all {wrong_positions.sum().item()} identified positions")
+                lowest_qualifying_prob = top_probs[-1].item()
+                print(f"  Selected {len(top_indices)} positions with highest [WRONG] probabilities")
+                print(f"  Lowest qualifying probability: {lowest_qualifying_prob:.4f}")
         else:
-            # Fallback to random if model doesn't identify any positions
             if verbose:
-                print("  No positions identified, falling back to random remasking")
-            all_positions = torch.arange(tokens.size(1), device=device)
-            remask_indices = torch.randperm(tokens.size(1))[:num_to_remask]
-            tokens[0, remask_indices] = mask_token_id
+                print("  No positions to remask (num_to_remask = 0)")
     
     return tokens
 
