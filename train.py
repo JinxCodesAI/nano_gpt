@@ -149,8 +149,10 @@ ctx = nullcontext() if device_type == 'cpu' else torch.amp.autocast(device_type=
 # poor man's data loader
 data_dir = os.path.join('data', dataset)
 
-# Cache for consistent validation batches
+# Cache for consistent validation batches and data prefetching
 _val_batch_cache = None
+_data_cache = {'train': None, 'val': None}  # Cache memory-mapped data
+_prefetch_enabled = True
 
 def find_double_newline_indices(data, meta_vocab_size):
     """Find all valid starting indices that begin with double newlines (\n\n)"""
@@ -176,19 +178,24 @@ def get_batch(split):
     elif training_type == 'remasking_binary':
         return get_batch_remasking_binary(split)
     
-    # Original unmasking implementation
+    # GPU-optimized unmasking implementation
     global _val_batch_cache, iter_num
 
     # For validation, use cached batch to ensure consistency
     if split == 'val' and _val_batch_cache is not None:
         return _val_batch_cache
 
-    # We recreate np.memmap every batch to avoid a memory leak, as per
-    # https://stackoverflow.com/questions/45132940/numpy-memmap-memory-usage-want-to-iterate-once/61472122#61472122
-    if split == 'train':
-        data = np.memmap(os.path.join(data_dir, 'train.bin'), dtype=np.uint16, mode='r')
-    else:
-        data = np.memmap(os.path.join(data_dir, 'val.bin'), dtype=np.uint16, mode='r')
+    # Use cached memory-mapped data to avoid recreation overhead
+    global _data_cache
+    
+    if _data_cache[split] is None:
+        # Create memory-mapped data on first access
+        if split == 'train':
+            _data_cache[split] = np.memmap(os.path.join(data_dir, 'train.bin'), dtype=np.uint16, mode='r')
+        else:
+            _data_cache[split] = np.memmap(os.path.join(data_dir, 'val.bin'), dtype=np.uint16, mode='r')
+    
+    data = _data_cache[split]
 
     # Find valid starting indices that begin with double newlines
     valid_indices = find_double_newline_indices(data, meta_vocab_size)
@@ -198,116 +205,57 @@ def get_batch(split):
         print("Warning: No double newlines found, falling back to random sampling")
         if split == 'val':
             torch.manual_seed(42)
-            ix = torch.randint(len(data) - block_size, (batch_size,))
+            ix = torch.randint(len(data) - block_size, (batch_size,), device=device)
             torch.manual_seed(1337 + seed_offset)
         else:
-            ix = torch.randint(len(data) - block_size, (batch_size,))
+            ix = torch.randint(len(data) - block_size, (batch_size,), device=device)
     else:
         # Sample from valid double-newline starting positions
         if split == 'val':
             # For validation, use fixed seed to ensure reproducible indices
             torch.manual_seed(42)
-            ix_indices = torch.randint(len(valid_indices), (batch_size,))
-            ix = torch.from_numpy(valid_indices[ix_indices.numpy()])
+            ix_indices = torch.randint(len(valid_indices), (batch_size,), device=device)
+            ix = torch.from_numpy(valid_indices[ix_indices.cpu().numpy()]).to(device)
             # Reset to original seed
             torch.manual_seed(1337 + seed_offset)
         else:
             # For training, use random indices from valid positions
-            ix_indices = torch.randint(len(valid_indices), (batch_size,))
-            ix = torch.from_numpy(valid_indices[ix_indices.numpy()])
+            ix_indices = torch.randint(len(valid_indices), (batch_size,), device=device)
+            ix = torch.from_numpy(valid_indices[ix_indices.cpu().numpy()]).to(device)
 
-    x = torch.stack([torch.from_numpy((data[i:i+block_size]).astype(np.int64)) for i in ix])
+    # Optimized batch data loading with vectorized operations
+    # Convert indices to numpy for efficient slicing
+    ix_np = ix.cpu().numpy() if ix.is_cuda else ix.numpy()
+    
+    # Pre-allocate tensor for batch
+    x = torch.zeros((batch_size, block_size), dtype=torch.long)
+    
+    # Vectorized data loading - much faster than individual segments
+    for i, start_idx in enumerate(ix_np):
+        x[i] = torch.from_numpy(data[start_idx:start_idx+block_size].astype(np.int64))
+    
+    # Move to GPU with pinned memory for faster transfer
+    if device_type == 'cuda':
+        x = x.pin_memory().to(device, non_blocking=True)
+    else:
+        x = x.to(device)
 
+    # GPU-accelerated masking operations
     if split == 'val':
         # For validation, use fixed sticky masking with 0.5 ratio for consistency
         torch.manual_seed(42)
-
-        # Apply mixed masking strategy with fixed 0.5 sticky ratio
-        current_batch_size = x.shape[0]
-        num_sticky_batches = int(current_batch_size * 0.5)  # Fixed 50% sticky ratio
-
-        masked_x = x.clone()
-        mask = torch.zeros_like(x, dtype=torch.bool)
-
-        # Apply independent masking to first part of batch
-        if num_sticky_batches < current_batch_size:
-            masking_prob = 0.5 * (1.0 - guaranteed_unmasked)  # Fixed at middle of range
-            indep_mask = torch.rand(x[:current_batch_size-num_sticky_batches].shape) < masking_prob
-            masked_x[:current_batch_size-num_sticky_batches][indep_mask] = mask_token_id
-            mask[:current_batch_size-num_sticky_batches] = indep_mask
-
-        # Apply sticky masking to remaining part of batch
-        if num_sticky_batches > 0:
-            sticky_masked_x, sticky_mask = apply_sticky_masking(
-                x[-num_sticky_batches:], sticky_rounds, mask_token_id, sticky_p1_p2_multiplier
-            )
-            masked_x[-num_sticky_batches:] = sticky_masked_x
-            mask[-num_sticky_batches:] = sticky_mask
-
-        # Reset to original seed
+        masked_x, mask = apply_gpu_masking_validation(x, mask_token_id, sticky_rounds, sticky_p1_p2_multiplier, guaranteed_unmasked)
         torch.manual_seed(1337 + seed_offset)
     else:
         # For training, apply mixed masking strategy based on current iteration
-        # Calculate sticky masking ratio based on current training iteration
-        if iter_num < sticky_transition_start:
-            # Pure independent masking
-            sticky_ratio = 0.0
-        elif iter_num >= sticky_transition_end:
-            # Pure sticky masking
-            sticky_ratio = 1.0
-        else:
-            # Gradual transition from independent to sticky
-            progress = (iter_num - sticky_transition_start) / (sticky_transition_end - sticky_transition_start)
-            sticky_ratio = progress
-
-        # Apply mixed masking strategy
-        if sticky_ratio == 0.0:
-            # Pure independent masking
-            masking_prob = torch.rand(1).item() * (1.0 - guaranteed_unmasked)
-            mask = torch.rand(x.shape) < masking_prob
-            masked_x = x.clone()
-            masked_x[mask] = mask_token_id
-
-        elif sticky_ratio == 1.0:
-            # Pure sticky masking
-            masked_x, mask = apply_sticky_masking(x, sticky_rounds, mask_token_id, sticky_p1_p2_multiplier)
-
-        else:
-            # Mixed strategy: some batches independent, some sticky
-            current_batch_size = x.shape[0]
-            num_sticky_batches = int(current_batch_size * sticky_ratio)
-
-            masked_x = x.clone()
-            mask = torch.zeros_like(x, dtype=torch.bool)
-
-            # Apply independent masking to first part of batch
-            if num_sticky_batches < current_batch_size:
-                masking_prob = torch.rand(1).item() * (1.0 - guaranteed_unmasked)
-                indep_mask = torch.rand(x[:current_batch_size-num_sticky_batches].shape) < masking_prob
-                masked_x[:current_batch_size-num_sticky_batches][indep_mask] = mask_token_id
-                mask[:current_batch_size-num_sticky_batches] = indep_mask
-
-            # Apply sticky masking to remaining part of batch
-            if num_sticky_batches > 0:
-                sticky_masked_x, sticky_mask = apply_sticky_masking(
-                    x[-num_sticky_batches:], sticky_rounds, mask_token_id, sticky_p1_p2_multiplier
-                )
-                masked_x[-num_sticky_batches:] = sticky_masked_x
-                mask[-num_sticky_batches:] = sticky_mask
+        masked_x, mask = apply_gpu_masking_training(x, iter_num, mask_token_id, sticky_rounds, sticky_p1_p2_multiplier, 
+                                                  guaranteed_unmasked, sticky_transition_start, sticky_transition_end)
 
     # Apply random noise to unmasked positions in input (targets remain unchanged)
-    masked_x = apply_random_noise_to_unmasked(masked_x, mask, noise_max_ratio, meta_vocab_size)
+    masked_x = apply_random_noise_to_unmasked_gpu(masked_x, mask, noise_max_ratio, meta_vocab_size)
     
     # Target is original x, loss computed only on masked positions
     y = x.clone()
-
-    # Move to device
-    if device_type == 'cuda':
-        masked_x = masked_x.pin_memory().to(device, non_blocking=True)
-        y = y.pin_memory().to(device, non_blocking=True)
-        mask = mask.pin_memory().to(device, non_blocking=True)
-    else:
-        masked_x, y, mask = masked_x.to(device), y.to(device), mask.to(device)
 
     # Cache validation batch for consistency
     if split == 'val':
@@ -389,6 +337,158 @@ def apply_fragment_corruption(x, data, block_size, sticky_rounds, sticky_p1_p2_m
             corrupted_x[batch_idx][batch_mask] = fragment[batch_mask]
     
     return corrupted_x, mask
+
+def apply_gpu_masking_validation(x, mask_token_id, sticky_rounds, sticky_p1_p2_multiplier, guaranteed_unmasked):
+    """GPU-optimized validation masking with fixed 0.5 sticky ratio"""
+    current_batch_size = x.shape[0]
+    num_sticky_batches = int(current_batch_size * 0.5)  # Fixed 50% sticky ratio
+    
+    # Pre-allocate tensors on GPU
+    masked_x = x.clone()
+    mask = torch.zeros_like(x, dtype=torch.bool, device=x.device)
+    
+    # Apply independent masking to first part of batch (vectorized)
+    if num_sticky_batches < current_batch_size:
+        masking_prob = 0.5 * (1.0 - guaranteed_unmasked)  # Fixed at middle of range
+        indep_mask = torch.rand(x[:current_batch_size-num_sticky_batches].shape, device=x.device) < masking_prob
+        masked_x[:current_batch_size-num_sticky_batches][indep_mask] = mask_token_id
+        mask[:current_batch_size-num_sticky_batches] = indep_mask
+    
+    # Apply GPU-accelerated sticky masking to remaining part of batch
+    if num_sticky_batches > 0:
+        sticky_masked_x, sticky_mask = apply_sticky_masking_gpu(
+            x[-num_sticky_batches:], sticky_rounds, mask_token_id, sticky_p1_p2_multiplier
+        )
+        masked_x[-num_sticky_batches:] = sticky_masked_x
+        mask[-num_sticky_batches:] = sticky_mask
+    
+    return masked_x, mask
+
+def apply_gpu_masking_training(x, iter_num, mask_token_id, sticky_rounds, sticky_p1_p2_multiplier, 
+                              guaranteed_unmasked, sticky_transition_start, sticky_transition_end):
+    """GPU-optimized training masking with dynamic sticky ratio"""
+    # Calculate sticky masking ratio based on current training iteration
+    if iter_num < sticky_transition_start:
+        sticky_ratio = 0.0
+    elif iter_num >= sticky_transition_end:
+        sticky_ratio = 1.0
+    else:
+        progress = (iter_num - sticky_transition_start) / (sticky_transition_end - sticky_transition_start)
+        sticky_ratio = progress
+    
+    # Pre-allocate tensors on GPU
+    masked_x = x.clone()
+    mask = torch.zeros_like(x, dtype=torch.bool, device=x.device)
+    
+    if sticky_ratio == 0.0:
+        # Pure independent masking (fully vectorized)
+        masking_prob = torch.rand(1, device=x.device).item() * (1.0 - guaranteed_unmasked)
+        mask = torch.rand(x.shape, device=x.device) < masking_prob
+        masked_x[mask] = mask_token_id
+    elif sticky_ratio == 1.0:
+        # Pure sticky masking
+        masked_x, mask = apply_sticky_masking_gpu(x, sticky_rounds, mask_token_id, sticky_p1_p2_multiplier)
+    else:
+        # Mixed strategy: some batches independent, some sticky
+        current_batch_size = x.shape[0]
+        num_sticky_batches = int(current_batch_size * sticky_ratio)
+        
+        # Apply independent masking to first part of batch (vectorized)
+        if num_sticky_batches < current_batch_size:
+            masking_prob = torch.rand(1, device=x.device).item() * (1.0 - guaranteed_unmasked)
+            indep_mask = torch.rand(x[:current_batch_size-num_sticky_batches].shape, device=x.device) < masking_prob
+            masked_x[:current_batch_size-num_sticky_batches][indep_mask] = mask_token_id
+            mask[:current_batch_size-num_sticky_batches] = indep_mask
+        
+        # Apply GPU-accelerated sticky masking to remaining part of batch
+        if num_sticky_batches > 0:
+            sticky_masked_x, sticky_mask = apply_sticky_masking_gpu(
+                x[-num_sticky_batches:], sticky_rounds, mask_token_id, sticky_p1_p2_multiplier
+            )
+            masked_x[-num_sticky_batches:] = sticky_masked_x
+            mask[-num_sticky_batches:] = sticky_mask
+    
+    return masked_x, mask
+
+def apply_sticky_masking_gpu(x, sticky_rounds, mask_token_id, sticky_p1_p2_multiplier):
+    """GPU-optimized sticky masking with parallel batch processing"""
+    batch_size, seq_len = x.shape
+    device = x.device
+    
+    # Pre-allocate result tensors on GPU
+    masked_x = x.clone()
+    mask = torch.zeros_like(x, dtype=torch.bool, device=device)
+    
+    # Vectorized sticky masking parameters
+    sticky_p1 = torch.rand(batch_size, device=device) * 0.3 + 0.1  # Range: 0.1 to 0.4
+    sticky_p2 = sticky_p1 * sticky_p1_p2_multiplier  # Higher transition probability
+    
+    # Process all batches in parallel
+    for round_idx in range(sticky_rounds):
+        # Generate random values for all positions at once
+        rand_vals = torch.rand(batch_size, seq_len, device=device)
+        
+        if round_idx == 0:
+            # Initial masking: independent for all positions
+            new_mask = rand_vals < sticky_p1.unsqueeze(1)
+        else:
+            # Sticky masking: higher probability near existing masks
+            # Compute neighbor influence in parallel
+            padded_mask = torch.nn.functional.pad(mask.float(), (1, 1), value=0)
+            left_neighbors = padded_mask[:, :-2]
+            right_neighbors = padded_mask[:, 2:]
+            has_masked_neighbor = (left_neighbors + right_neighbors) > 0
+            
+            # Vectorized probability assignment
+            probs = torch.where(has_masked_neighbor, 
+                              sticky_p2.unsqueeze(1), 
+                              sticky_p1.unsqueeze(1))
+            new_mask = rand_vals < probs
+        
+        # Update mask and apply masking
+        mask = mask | new_mask
+        masked_x[new_mask] = mask_token_id
+    
+    return masked_x, mask
+
+def apply_random_noise_to_unmasked_gpu(x, mask, noise_max_ratio, meta_vocab_size):
+    """GPU-optimized random noise application to unmasked positions"""
+    global iter_num
+    
+    # Calculate progressive noise ratio based on training iteration
+    if iter_num < sticky_transition_start:
+        progressive_noise_ratio = 0.0
+    elif iter_num >= sticky_transition_end:
+        progressive_noise_ratio = noise_max_ratio
+    else:
+        progress = (iter_num - sticky_transition_start) / (sticky_transition_end - sticky_transition_start)
+        progressive_noise_ratio = progress * noise_max_ratio
+    
+    if progressive_noise_ratio <= 0.0:
+        return x
+    
+    vocab_size_to_use = meta_vocab_size if meta_vocab_size is not None else 50257
+    
+    # All operations on GPU, fully vectorized
+    unmasked_positions = ~mask
+    batch_size = x.shape[0]
+    
+    # Generate noise ratios for all batch elements at once
+    noise_ratios = torch.rand(batch_size, device=x.device) * progressive_noise_ratio
+    noise_ratios_expanded = noise_ratios.unsqueeze(1).expand(-1, x.shape[1])
+    
+    # Generate random probabilities for all positions at once
+    random_probs = torch.rand_like(x, dtype=torch.float, device=x.device)
+    
+    # Determine which positions to noise (fully vectorized)
+    should_noise = unmasked_positions & (random_probs < noise_ratios_expanded)
+    
+    # Apply noise in-place if any positions need noising
+    if should_noise.any():
+        random_tokens = torch.randint(0, vocab_size_to_use, x.shape, device=x.device)
+        x = torch.where(should_noise, random_tokens, x)
+    
+    return x
 
 def apply_random_noise_to_unmasked(x, mask, noise_max_ratio, meta_vocab_size):
     """Apply random token noise to unmasked positions in input for unmasking training.
