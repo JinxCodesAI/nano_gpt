@@ -976,37 +976,22 @@ def estimate_loss():
                     # This is handled in validation_loss_computation section
                     pass
                 with timer.time_function('validation_loss_computation'):
-                    # Get logits without internal loss computation
-                    logits, _ = model(X, None)
+                    # Optimized single forward pass for validation
+                    logits, loss = model(X, Y)
                     
-                    # Ensure we have full sequence logits for both attention types
-                    if logits.size(1) == 1:  # Only last position (causal inference mode)
-                        # Force full sequence by passing targets
-                        logits, _ = model(X, Y)
-                    
-                    # Compute loss based on training type
-                    logits_flat = logits.view(-1, logits.size(-1))
-                    targets_flat = Y.view(-1)
-                    mask_flat = mask.view(-1)
-                    
-                    if training_type == 'unmasking':
-                        # Unmasking: compute loss only on masked positions
-                        if mask_flat.sum() > 0:
-                            masked_logits = logits_flat[mask_flat]
-                            masked_targets = targets_flat[mask_flat]
-                            loss = torch.nn.functional.cross_entropy(masked_logits, masked_targets)
-                        else:
-                            # Fallback if no masked tokens (shouldn't happen)
-                            loss = torch.nn.functional.cross_entropy(logits_flat, targets_flat)
-                            
-                    elif training_type == 'remasking':
-                        # Compute loss on all positions (always for remasking)
-                        loss = torch.nn.functional.cross_entropy(logits_flat, targets_flat)
+                    # Apply masking for unmasking training only
+                    if training_type == 'unmasking' and mask.any():
+                        # Fast validation path - single reshape and boolean indexing
+                        logits_reshaped = logits.view(-1, logits.size(-1))
+                        targets_reshaped = Y.view(-1)
+                        mask_reshaped = mask.view(-1)
                         
-                    elif training_type == 'remasking_binary':
-                        # Binary classification: compute loss on all positions
-                        # Symmetric task: predict remask_good_id or remask_wrong_id
-                        loss = torch.nn.functional.cross_entropy(logits_flat, targets_flat)
+                        loss = torch.nn.functional.cross_entropy(
+                            logits_reshaped[mask_reshaped], 
+                            targets_reshaped[mask_reshaped], 
+                            reduction='mean'
+                        )
+                    # For remasking variants, model's internal loss is correct
 
                 # For validation, compute model vs random statistics
                 if split == 'val':
@@ -1178,42 +1163,25 @@ while True:
             model.require_backward_grad_sync = (micro_step == gradient_accumulation_steps - 1)
         with ctx:
             with timer.time_function('forward_pass'):
-                # This is handled in loss_computation section
-                pass
-            with timer.time_function('loss_computation'):
-                # Get logits without internal loss computation
-                logits, _ = model(X, None)
+                # Combined forward pass and loss computation for efficiency
+                logits, loss = model(X, Y)
                 
-                # Ensure we have full sequence logits for both attention types
-                if logits.size(1) == 1:  # Only last position (causal inference mode)
-                    # Force full sequence by passing targets
-                    logits, _ = model(X, Y)
-                
-                # Compute loss based on training type
-                logits_flat = logits.view(-1, logits.size(-1))  # (batch_size * seq_len, vocab_size)
-                targets_flat = Y.view(-1)  # (batch_size * seq_len,)
-                mask_flat = mask.view(-1)  # (batch_size * seq_len,)
-                
-                if training_type == 'unmasking':
-                    # Unmasking: compute loss only on masked positions
-                    if mask_flat.sum() > 0:
-                        masked_logits = logits_flat[mask_flat]
-                        masked_targets = targets_flat[mask_flat]
-                        loss = torch.nn.functional.cross_entropy(masked_logits, masked_targets)
-                    else:
-                        # Fallback if no masked tokens (shouldn't happen)
-                        loss = torch.nn.functional.cross_entropy(logits_flat, targets_flat)
-                        
-                elif training_type == 'remasking':
-                    # Compute loss on all positions (always for remasking)
-                    loss = torch.nn.functional.cross_entropy(logits_flat, targets_flat)
+                # Apply masking for unmasking training only (most efficient path)
+                if training_type == 'unmasking' and mask.any():
+                    # Fast path: reshape once and use boolean indexing
+                    logits_reshaped = logits.view(-1, logits.size(-1))
+                    targets_reshaped = Y.view(-1)
+                    mask_reshaped = mask.view(-1)
                     
-                elif training_type == 'remasking_binary':
-                    # Binary classification: compute loss on all positions
-                    # Symmetric task: predict remask_good_id or remask_wrong_id
-                    loss = torch.nn.functional.cross_entropy(logits_flat, targets_flat)
+                    # Use boolean mask directly - most efficient
+                    loss = torch.nn.functional.cross_entropy(
+                        logits_reshaped[mask_reshaped], 
+                        targets_reshaped[mask_reshaped], 
+                        reduction='mean'
+                    )
+                # For remasking variants, model's internal loss is already correct
                         
-                loss = loss / gradient_accumulation_steps # scale the loss to account for gradient accumulation
+                loss = loss / gradient_accumulation_steps
         # immediately async prefetch next batch while model is doing the forward pass on the GPU
         with timer.time_function('data_generation'):
             X, Y, mask = get_batch('train')
