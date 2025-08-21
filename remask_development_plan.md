@@ -18,7 +18,7 @@ Currently, `sample.py` uses random remasking in the diffusion generation process
 - **Target**: `y = x.clone()` (original sequence)
 - **Loss**: Only on masked positions (where `mask[i] == True`)
 - **Objective**: Learn to "unmask" or "denoise" corrupted text
-- **Vocabulary**: `vocab_size + 1` (original + `mask_token_id`)
+- **Vocabulary**: `vocab_size + 2` (original + `mask_token_id` + `wrong_token_id`, but only uses `mask_token_id`)
 
 ### Current Sampling (Random Remasking)
 ```python
@@ -64,7 +64,7 @@ Mask is all true because if model predicts lat say [WRONG, WRONG, WRONG, WRONG, 
 | Target | Original tokens | Original + `wrong_token_id` at corrupted positions |
 | Loss function | Cross-entropy on masked positions | Cross-entropy (two approaches) |
 | Loss scope | Only corrupted positions | **Approach A**: Only corrupted positions<br>**Approach B**: ALL positions |
-| Vocabulary size | `vocab_size + 1` | `vocab_size + 2` |
+| Vocabulary size | `vocab_size + 2` | `vocab_size + 2` |
 | Corruption token | `mask_token_id` (vocab_size) | `wrong_token_id` (vocab_size + 1) |
 | Objective | Predict masked content | Identify and fix wrong content |
 
@@ -74,8 +74,8 @@ Mask is all true because if model predicts lat say [WRONG, WRONG, WRONG, WRONG, 
 
 #### 1.1 Vocabulary Extension (model.py)
 ```python
-# Current: vocab_size + 1 (mask_token_id)
-# New: vocab_size + 2 (mask_token_id, wrong_token_id)
+# Both models use vocab_size + 2 for identical architecture
+# mask_token_id = vocab_size, wrong_token_id = vocab_size + 1
 mask_token_id = meta_vocab_size      # Current
 wrong_token_id = meta_vocab_size + 1 # New
 extended_vocab_size = meta_vocab_size + 2
@@ -98,9 +98,10 @@ else:
 #### 1.3 Data Generation (train.py)
 ```python
 def get_batch_remasking(split):
-    # Same position selection logic as get_batch()
-    # Replace selected positions with wrong_token_id instead of mask_token_id
-    # Return (corrupted_x, original_y, corruption_mask)
+    # Same position selection logic as current get_batch()
+    # Replace selected positions with random vocab tokens instead of mask_token_id
+    # Target: original tokens at correct positions, wrong_token_id at corrupted positions
+    # Return (corrupted_x, target_with_wrong_tokens, corruption_mask)
     pass
 
 def get_batch(split):
@@ -165,13 +166,9 @@ def compute_loss(logits, targets, mask, training_type, loss_type):
 
 #### 3.2 Model Loading (sample.py)
 ```python
-# Load appropriate model based on checkpoint type
-if 'remasking' in checkpoint_name:
-    # Remasking model: predict tokens, identify wrong_token_id positions
-    remasking_model = load_remasking_model()
-else:
-    # Current unmasking model
-    unmasking_model = load_unmasking_model()
+# Both models have identical architecture, no special loading needed
+# Standard model loading works for both unmasking and remasking models
+model = load_model(checkpoint_name)  # Same loading for both types
 ```
 
 #### 3.3 Intelligent Remasking Logic
@@ -233,9 +230,8 @@ def intelligent_remask(tokens, remasking_model, num_to_remask):
    - Ensure compatibility for future model merging
 
 3. **sample.py**: 
-   - Add remasking model loading
    - Replace random remasking with intelligent remasking
-   - Handle different vocabulary sizes
+   - No architecture changes needed (identical vocab sizes)
 
 4. **configurator.py**: 
    - Add new configuration parameters
