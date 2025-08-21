@@ -49,13 +49,14 @@ init_from = 'scratch' # 'scratch' or 'resume' or 'gpt2*'
 # wandb logging
 wandb_log = True # disabled by default
 wandb_project = 'diffusion'
-wandb_run_name = '10k_M5_Bi' # 'run' + str(time.time())
+wandb_run_name = '10k_RE_Bi' # 'run' + str(time.time())
 # data
 dataset = 'shakespeare_char'
 gradient_accumulation_steps = 1 # used to simulate larger batch sizes
 batch_size = 16 # if gradient_accumulation_steps > 1, this is the micro-batch size
 block_size = 1024
 # diffusion training config
+training_type = 'unmasking'  # 'unmasking' or 'remasking' - type of training
 guaranteed_unmasked = 0.0       # Guaranteed fraction of tokens to keep unmasked
 
 # sticky masking configuration - gradual transition from independent to sticky
@@ -94,6 +95,11 @@ compile = True # use PyTorch 2.0 to compile the model to be faster
 # -----------------------------------------------------------------------------
 config_keys = [k for k,v in globals().items() if not k.startswith('_') and isinstance(v, (int, float, bool, str))]
 exec(open('configurator.py').read()) # overrides from command line or config file
+
+# Update wandb run name after configuration is loaded
+if training_type == 'remasking':
+    wandb_run_name = f'{wandb_run_name}_remasking'
+
 config = {k: globals()[k] for k in config_keys} # will be useful for logging
 # -----------------------------------------------------------------------------
 
@@ -137,6 +143,10 @@ data_dir = os.path.join('data', dataset)
 _val_batch_cache = None
 
 def get_batch(split):
+    if training_type == 'remasking':
+        return get_batch_remasking(split)
+    
+    # Original unmasking implementation
     global _val_batch_cache, iter_num
 
     # For validation, use cached batch to ensure consistency
@@ -269,14 +279,173 @@ if os.path.exists(meta_path):
     meta_vocab_size = meta['vocab_size']
     print(f"found vocab_size = {meta_vocab_size} (inside {meta_path})")
     
-    # Set mask_token_id to be vocab_size (next available ID)
+    # Set mask_token_id and wrong_token_id for both training types
     mask_token_id = meta_vocab_size
-    extended_vocab_size = meta_vocab_size + 1  # Add 1 for mask token
-    print(f"mask_token_id = {mask_token_id}, extended_vocab_size = {extended_vocab_size}")
+    wrong_token_id = meta_vocab_size + 1
+    extended_vocab_size = meta_vocab_size + 2  # Add 2 for mask and wrong tokens
+    print(f"mask_token_id = {mask_token_id}, wrong_token_id = {wrong_token_id}, extended_vocab_size = {extended_vocab_size}")
 else:
     print("No meta.pkl found, using default GPT-2 vocab")
     mask_token_id = 50304
-    extended_vocab_size = 50305
+    wrong_token_id = 50305
+    extended_vocab_size = 50306
+
+def get_batch_remasking(split):
+    global _val_batch_cache, iter_num
+
+    # For validation, use cached batch to ensure consistency
+    if split == 'val' and _val_batch_cache is not None:
+        return _val_batch_cache
+
+    # Load data same as unmasking
+    if split == 'train':
+        data = np.memmap(os.path.join(data_dir, 'train.bin'), dtype=np.uint16, mode='r')
+    else:
+        data = np.memmap(os.path.join(data_dir, 'val.bin'), dtype=np.uint16, mode='r')
+
+    if split == 'val':
+        # For validation, use fixed seed to ensure reproducible indices
+        torch.manual_seed(42)
+        ix = torch.randint(len(data) - block_size, (batch_size,))
+        # Reset to original seed
+        torch.manual_seed(1337 + seed_offset)
+    else:
+        # For training, use random indices as before
+        ix = torch.randint(len(data) - block_size, (batch_size,))
+
+    x = torch.stack([torch.from_numpy((data[i:i+block_size]).astype(np.int64)) for i in ix])
+
+    if split == 'val':
+        # For validation, use fixed corruption with 0.5 ratio for consistency
+        torch.manual_seed(42)
+
+        # Apply mixed corruption strategy with fixed 0.5 sticky ratio
+        current_batch_size = x.shape[0]
+        num_sticky_batches = int(current_batch_size * 0.5)  # Fixed 50% sticky ratio
+
+        corrupted_x = x.clone()
+        mask = torch.zeros_like(x, dtype=torch.bool)
+
+        # Apply independent corruption to first part of batch
+        if num_sticky_batches < current_batch_size:
+            corruption_prob = 0.5 * (1.0 - guaranteed_unmasked)  # Fixed at middle of range
+            indep_mask = torch.rand(x[:current_batch_size-num_sticky_batches].shape) < corruption_prob
+            
+            # Replace with random tokens from vocabulary (not wrong_token_id)
+            if indep_mask.sum() > 0:
+                vocab_size_to_use = meta_vocab_size if meta_vocab_size is not None else 50257
+                random_tokens = torch.randint(0, vocab_size_to_use, (indep_mask.sum().item(),))
+                corrupted_x[:current_batch_size-num_sticky_batches][indep_mask] = random_tokens
+            mask[:current_batch_size-num_sticky_batches] = indep_mask
+
+        # Apply sticky corruption to remaining part of batch
+        if num_sticky_batches > 0:
+            # Use sticky masking logic but replace with random tokens
+            sticky_corrupted_x, sticky_mask = apply_sticky_masking(
+                x[-num_sticky_batches:], sticky_rounds, mask_token_id, sticky_p1_p2_multiplier
+            )
+            # Replace mask tokens with random tokens
+            for batch_idx in range(sticky_corrupted_x.shape[0]):
+                for pos_idx in range(sticky_corrupted_x.shape[1]):
+                    if sticky_corrupted_x[batch_idx, pos_idx] == mask_token_id:
+                        vocab_size_to_use = meta_vocab_size if meta_vocab_size is not None else 50257
+                        sticky_corrupted_x[batch_idx, pos_idx] = torch.randint(0, vocab_size_to_use, (1,)).item()
+            
+            corrupted_x[-num_sticky_batches:] = sticky_corrupted_x
+            mask[-num_sticky_batches:] = sticky_mask
+
+        # Reset to original seed
+        torch.manual_seed(1337 + seed_offset)
+    else:
+        # For training, apply mixed corruption strategy based on current iteration
+        # Calculate sticky masking ratio based on current training iteration
+        if iter_num < sticky_transition_start:
+            # Pure independent corruption
+            sticky_ratio = 0.0
+        elif iter_num >= sticky_transition_end:
+            # Pure sticky corruption
+            sticky_ratio = 1.0
+        else:
+            # Gradual transition from independent to sticky
+            progress = (iter_num - sticky_transition_start) / (sticky_transition_end - sticky_transition_start)
+            sticky_ratio = progress
+
+        # Apply mixed corruption strategy
+        if sticky_ratio == 0.0:
+            # Pure independent corruption
+            corruption_prob = torch.rand(1).item() * (1.0 - guaranteed_unmasked)
+            mask = torch.rand(x.shape) < corruption_prob
+            corrupted_x = x.clone()
+            
+            # Replace with random tokens from vocabulary
+            if mask.sum() > 0:
+                vocab_size_to_use = meta_vocab_size if meta_vocab_size is not None else 50257
+                random_tokens = torch.randint(0, vocab_size_to_use, (mask.sum().item(),))
+                corrupted_x[mask] = random_tokens
+
+        elif sticky_ratio == 1.0:
+            # Pure sticky corruption
+            sticky_corrupted_x, mask = apply_sticky_masking(x, sticky_rounds, mask_token_id, sticky_p1_p2_multiplier)
+            # Replace mask tokens with random tokens
+            corrupted_x = sticky_corrupted_x.clone()
+            for batch_idx in range(corrupted_x.shape[0]):
+                for pos_idx in range(corrupted_x.shape[1]):
+                    if corrupted_x[batch_idx, pos_idx] == mask_token_id:
+                        vocab_size_to_use = meta_vocab_size if meta_vocab_size is not None else 50257
+                        corrupted_x[batch_idx, pos_idx] = torch.randint(0, vocab_size_to_use, (1,)).item()
+
+        else:
+            # Mixed strategy: some batches independent, some sticky
+            current_batch_size = x.shape[0]
+            num_sticky_batches = int(current_batch_size * sticky_ratio)
+
+            corrupted_x = x.clone()
+            mask = torch.zeros_like(x, dtype=torch.bool)
+
+            # Apply independent corruption to first part of batch
+            if num_sticky_batches < current_batch_size:
+                corruption_prob = torch.rand(1).item() * (1.0 - guaranteed_unmasked)
+                indep_mask = torch.rand(x[:current_batch_size-num_sticky_batches].shape) < corruption_prob
+                
+                # Replace with random tokens from vocabulary
+                if indep_mask.sum() > 0:
+                    vocab_size_to_use = meta_vocab_size if meta_vocab_size is not None else 50257
+                    random_tokens = torch.randint(0, vocab_size_to_use, (indep_mask.sum().item(),))
+                    corrupted_x[:current_batch_size-num_sticky_batches][indep_mask] = random_tokens
+                mask[:current_batch_size-num_sticky_batches] = indep_mask
+
+            # Apply sticky corruption to remaining part of batch
+            if num_sticky_batches > 0:
+                sticky_corrupted_x, sticky_mask = apply_sticky_masking(
+                    x[-num_sticky_batches:], sticky_rounds, mask_token_id, sticky_p1_p2_multiplier
+                )
+                # Replace mask tokens with random tokens
+                for batch_idx in range(sticky_corrupted_x.shape[0]):
+                    for pos_idx in range(sticky_corrupted_x.shape[1]):
+                        if sticky_corrupted_x[batch_idx, pos_idx] == mask_token_id:
+                            vocab_size_to_use = meta_vocab_size if meta_vocab_size is not None else 50257
+                        sticky_corrupted_x[batch_idx, pos_idx] = torch.randint(0, vocab_size_to_use, (1,)).item()
+                
+                corrupted_x[-num_sticky_batches:] = sticky_corrupted_x
+                mask[-num_sticky_batches:] = sticky_mask
+
+    # Target: original tokens at correct positions, wrong_token_id at corrupted positions
+    y = x.clone()
+    y[mask] = wrong_token_id
+
+    # Move to device
+    if device_type == 'cuda':
+        corrupted_x = corrupted_x.pin_memory().to(device, non_blocking=True)
+        y = y.pin_memory().to(device, non_blocking=True)
+        mask = mask.pin_memory().to(device, non_blocking=True)
+    else:
+        corrupted_x, y, mask = corrupted_x.to(device), y.to(device), mask.to(device)
+
+    # Cache validation batch for consistency
+    if split == 'val':
+        _val_batch_cache = (corrupted_x, y, mask)
+
+    return corrupted_x, y, mask
 
 # model init
 model_args = dict(n_layer=n_layer, n_head=n_head, n_embd=n_embd, block_size=block_size,
@@ -386,26 +555,31 @@ def estimate_loss():
                     # This is handled in validation_loss_computation section
                     pass
                 with timer.time_function('validation_loss_computation'):
-                    # For diffusion training, compute loss only on masked positions
-                    logits, _ = model(X, None)  # Get logits without internal loss computation
+                    # Get logits without internal loss computation
+                    logits, _ = model(X, None)
                     
                     # Ensure we have full sequence logits for both attention types
                     if logits.size(1) == 1:  # Only last position (causal inference mode)
                         # Force full sequence by passing targets
                         logits, _ = model(X, Y)
                     
-                    # Compute loss only on masked positions
+                    # Compute loss based on training type
                     logits_flat = logits.view(-1, logits.size(-1))
                     targets_flat = Y.view(-1)
                     mask_flat = mask.view(-1)
                     
-                    # Only compute loss where mask is True (masked tokens)
-                    if mask_flat.sum() > 0:
-                        masked_logits = logits_flat[mask_flat]
-                        masked_targets = targets_flat[mask_flat]
-                        loss = torch.nn.functional.cross_entropy(masked_logits, masked_targets)
-                    else:
-                        # Fallback if no masked tokens (shouldn't happen)
+                    if training_type == 'unmasking':
+                        # Unmasking: compute loss only on masked positions
+                        if mask_flat.sum() > 0:
+                            masked_logits = logits_flat[mask_flat]
+                            masked_targets = targets_flat[mask_flat]
+                            loss = torch.nn.functional.cross_entropy(masked_logits, masked_targets)
+                        else:
+                            # Fallback if no masked tokens (shouldn't happen)
+                            loss = torch.nn.functional.cross_entropy(logits_flat, targets_flat)
+                            
+                    elif training_type == 'remasking':
+                        # Compute loss on all positions (always for remasking)
                         loss = torch.nn.functional.cross_entropy(logits_flat, targets_flat)
 
                 # For validation, compute model vs random statistics on masked tokens only
@@ -505,7 +679,11 @@ while True:
                     'best_val_loss': best_val_loss,
                     'config': config,
                 }
-                ckpt_filename = f'ckpt_{iter_num}.pt'
+                if training_type == 'remasking':
+                    ckpt_filename = f'ckpt_remasking_{iter_num}.pt'
+                else:
+                    ckpt_filename = f'ckpt_unmasking_{iter_num}.pt'
+                    
                 print(f"saving checkpoint to {out_dir}/{ckpt_filename}")
                 torch.save(checkpoint, os.path.join(out_dir, ckpt_filename))
     if iter_num == 0 and eval_only:
@@ -525,28 +703,33 @@ while True:
                 # This is handled in loss_computation section
                 pass
             with timer.time_function('loss_computation'):
-                # For diffusion training, compute loss only on masked positions
-                logits, _ = model(X, None)  # Get logits without internal loss computation
+                # Get logits without internal loss computation
+                logits, _ = model(X, None)
                 
                 # Ensure we have full sequence logits for both attention types
                 if logits.size(1) == 1:  # Only last position (causal inference mode)
                     # Force full sequence by passing targets
                     logits, _ = model(X, Y)
                 
-                # Compute loss only on masked positions
+                # Compute loss based on training type
                 logits_flat = logits.view(-1, logits.size(-1))  # (batch_size * seq_len, vocab_size)
                 targets_flat = Y.view(-1)  # (batch_size * seq_len,)
                 mask_flat = mask.view(-1)  # (batch_size * seq_len,)
                 
-                # Only compute loss where mask is True (masked tokens)
-                if mask_flat.sum() > 0:
-                    masked_logits = logits_flat[mask_flat]
-                    masked_targets = targets_flat[mask_flat]
-                    loss = torch.nn.functional.cross_entropy(masked_logits, masked_targets)
-                else:
-                    # Fallback if no masked tokens (shouldn't happen)
+                if training_type == 'unmasking':
+                    # Unmasking: compute loss only on masked positions
+                    if mask_flat.sum() > 0:
+                        masked_logits = logits_flat[mask_flat]
+                        masked_targets = targets_flat[mask_flat]
+                        loss = torch.nn.functional.cross_entropy(masked_logits, masked_targets)
+                    else:
+                        # Fallback if no masked tokens (shouldn't happen)
+                        loss = torch.nn.functional.cross_entropy(logits_flat, targets_flat)
+                        
+                elif training_type == 'remasking':
+                    # Compute loss on all positions (always for remasking)
                     loss = torch.nn.functional.cross_entropy(logits_flat, targets_flat)
-                    
+                        
                 loss = loss / gradient_accumulation_steps # scale the loss to account for gradient accumulation
         # immediately async prefetch next batch while model is doing the forward pass on the GPU
         with timer.time_function('data_generation'):
