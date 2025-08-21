@@ -927,8 +927,50 @@ if iter_num % (log_interval * 10) == 0:
 ---
 
 ## Milestone 6: Multi-Phase Training Integration
-**Duration**: 3-4 days  
+**Duration**: 3-4 days
 **Goal**: Implement sophisticated multi-phase training with detailed loss function specifications
+
+### Key Clarifications:
+
+#### Phase 4 Concurrent Execution
+**Phase 4 runs concurrently with Phases 2-3**, not sequentially:
+- **Phase 1** (N1 iterations): Identity task only
+- **Phase 2** (N2 iterations): Gradual target increase + entropy penalty (if within N4 range)
+- **Phase 3** (N3 iterations): Standard training + entropy penalty (if within N4 range)
+
+The entropy penalty is an **independent loss multiplier** applied on top of the base loss during phases 2-3.
+
+#### N4 < N2 + N3 Constraint
+**N4 < N2 + N3** means entropy penalty doesn't run for the entire duration of phases 2-3:
+- **Early Phase 2**: Gradual targets + entropy penalty
+- **Late Phase 2**: Gradual targets only (no entropy penalty)
+- **Early Phase 3**: Standard training + entropy penalty
+- **Late Phase 3**: Standard training only (no entropy penalty)
+
+This allows the model to learn with regularization early, then fine-tune without penalty constraint later.
+
+#### Soft Targets Implementation
+**Soft targets** means some targets will be **probability distributions** (tensors) instead of hard labels:
+- **Hard targets**: `targets = torch.long` with values like `[5, 12, 3]` (token IDs)
+- **Soft targets**: `targets = torch.float` with values like `[[0.1, 0.8, 0.1], [0.2, 0.6, 0.2]]` (probability distributions)
+
+This enables **Phase 2's gradual target increase** where targets transition from uniform distribution to one-hot over N2 iterations.
+
+#### Entropy Penalty Mechanism
+**Entropy penalty** is a regularization technique that penalizes **overconfident wrong predictions** during unmasking tasks:
+
+1. **Identifies wrong predictions**: Calculates `incorrect_distribution = ReLU(model_probs - target_probs)`
+2. **Measures confidence in wrong answers**: Computes entropy of this incorrect distribution
+3. **Penalizes low entropy**: Low entropy = high confidence in wrong answers = bad
+
+**How it works**:
+- **High entropy in wrong predictions** = model uncertain about wrong answers = good (low penalty)
+- **Low entropy in wrong predictions** = model confident about wrong answers = bad (high penalty)
+
+**Why it helps**:
+- Prevents overconfident wrong predictions during unmasking
+- Encourages uncertainty rather than confident incorrectness
+- Critical for high-quality diffusion-based text generation
 
 ### Detailed Tasks:
 
@@ -937,21 +979,23 @@ if iter_num % (log_interval * 10) == 0:
 - **Phase 1 (N1 iterations)**: Identity task
   - Unmasked positions: predict same token (loss = 0 if correct)
   - Masked positions: uniform probability over all vocab except mask token
-- **Phase 2 (N2 iterations)**: Gradual target increase
+- **Phase 2 (N2 iterations)**: Gradual target increase + entropy penalty
   - Gradually increase probability of correct token from uniform to 100%
-  - Apply label smoothing 
-- **Phase 3 (N3 iterations)**: Standard training  
+  - Apply entropy penalty to prevent overconfident wrong predictions
+- **Phase 3 (N3 iterations)**: Standard training + entropy penalty
   - Standard cross-entropy loss on masked positions
-- **Phase 4 (N4 iterations)**: Entropy penalty (parallel to phases 2-3)
-  - Add entropy penalty to encourage confidence in predictions
+  - Continue entropy penalty until N4 iterations complete
+- **Phase 4 (N4 iterations)**: Entropy penalty fade (concurrent with phases 2-3)
+  - Independent loss multiplier that scales existing loss
   - Adaptive multiplier decreases from max to min over N4 iterations
+  - **Constraint**: N4 < N2 + N3 (penalty fades before training completes)
 
 ```python
 # Add to train.py config
 n1_iterations = 10000    # Phase 1: Identity task
-n2_iterations = 50000    # Phase 2: Gradual target increase  
+n2_iterations = 50000    # Phase 2: Gradual target increase
 n3_iterations = 140000   # Phase 3: Standard training
-n4_iterations = 100000   # Phase 4: Entropy penalty (overlaps 2-3)
+n4_iterations = 100000   # Phase 4: Entropy penalty (overlaps 2-3, N4 < N2 + N3)
 
 entropy_multiplier_max = 5.0    # Maximum entropy penalty multiplier
 entropy_multiplier_min = 1.0    # Minimum entropy penalty multiplier
@@ -961,30 +1005,118 @@ def get_current_phase(iter_num):
     if iter_num < n1_iterations:
         return 1
     elif iter_num < n1_iterations + n2_iterations:
-        return 2  
+        return 2
     elif iter_num < n1_iterations + n2_iterations + n3_iterations:
         return 3
     else:
         return 3  # Continue phase 3 beyond n3_iterations
-        
+
 def in_entropy_penalty_phase(iter_num):
-    \"\"\"Check if entropy penalty should be applied\"\"\"
+    \"\"\"Check if entropy penalty should be applied (concurrent with phases 2-3)\"\"\"
     phase_2_3_start = n1_iterations
-    phase_4_end = n1_iterations + max(n2_iterations + n3_iterations, n4_iterations)
+    phase_4_end = n1_iterations + n4_iterations  # N4 < N2 + N3 constraint
     return phase_2_3_start <= iter_num < phase_4_end
 ```
 
+#### 6.2 Entropy Penalty Implementation
+**Key requirements for entropy penalty**:
+- **Argmax-free**: Uses probability distributions, not discrete predictions
+- **Soft target support**: Handles both hard labels and probability distributions
+- **Unmasking focus**: Only applies penalty to unmasking tasks (where input == mask_token_id)
+- **Proper normalization**: Normalizes entropy penalty by maximum possible entropy
+- **Multiplicative penalty**: Scales loss weights rather than adding to loss
+
+```python
+class EntropyPenaltyModifier:
+    """
+    Applies penalty to loss for low-entropy (overconfident) wrong guesses
+    during unmasking tasks. Implements "override and recalculate" strategy
+    to be fully argmax-free and correctly handle soft targets.
+    """
+    def __init__(self, penalty_strength, vocab_size):
+        if vocab_size is None:
+            raise ValueError("EntropyPenaltyModifier requires vocab_size for max entropy calculation.")
+
+        self.penalty_strength = penalty_strength
+        self.vocab_size = vocab_size
+        self.max_entropy = torch.log(torch.tensor(self.vocab_size))
+
+    def __call__(self, weights, context):
+        """Apply entropy penalty by modifying weights tensor"""
+        # Get tensors from context
+        logits = context.get('biased_logits', context['logits'])
+        targets = context['targets']
+        inputs = context['inputs']
+        mask_token_id = context['mask_token_id']
+
+        # Identify unmasking task positions
+        is_hard_label = targets.dtype == torch.long
+        if is_hard_label:
+            unmask_task_mask = (inputs == mask_token_id) & (targets != mask_token_id)
+        else:
+            # For soft labels, unmask where input is masked
+            unmask_task_mask = (inputs == mask_token_id)
+
+        if not unmask_task_mask.any():
+            return weights, context
+
+        # Calculate entropy of incorrect predictions
+        probs = F.softmax(logits, dim=-1)
+
+        # Get target probability distribution
+        if is_hard_label:
+            target_probs = F.one_hot(targets, num_classes=self.vocab_size).float()
+        else:
+            target_probs = targets  # Already probability distribution
+
+        # Calculate incorrect distribution (model confidence in wrong answers)
+        incorrect_distribution = F.relu(probs - target_probs)
+
+        # Normalize to valid probability distribution
+        epsilon = 1e-9
+        incorrect_distribution = incorrect_distribution / (
+            incorrect_distribution.sum(dim=-1, keepdim=True) + epsilon
+        )
+
+        # Calculate entropy of incorrect predictions
+        entropy_of_incorrect = torch.distributions.Categorical(
+            probs=incorrect_distribution
+        ).entropy()
+
+        # Normalize penalty (low entropy = high penalty)
+        normalized_entropy_penalty = (
+            self.max_entropy.to(entropy_of_incorrect.device) - entropy_of_incorrect
+        ) / self.max_entropy
+
+        # Apply penalty multiplicatively to weights
+        penalty_map = torch.zeros_like(weights, dtype=torch.float32).view_as(unmask_task_mask)
+        penalty_map[unmask_task_mask] = normalized_entropy_penalty[unmask_task_mask]
+
+        new_weights = weights * (1 + self.penalty_strength * penalty_map.view(-1))
+
+        # Log diagnostics
+        context['avg_entropy_penalty_factor'] = penalty_map[unmask_task_mask].mean().item()
+        context['penalty_entropy_strength'] = self.penalty_strength
+
+        return new_weights, context
+```
+
 ### Deliverables:
-- Multi-phase training integrated in train.py
-- Configurable phase proportions (N1, N2, N3, N4)
-- Advanced loss functions with entropy penalty
-- Phase transition monitoring
+- Multi-phase training integrated in train.py with concurrent Phase 4 execution
+- Configurable phase proportions (N1, N2, N3, N4) with N4 < N2 + N3 constraint
+- Entropy penalty implementation with soft target support
+- Advanced loss functions with independent loss multiplier
+- Phase transition monitoring and entropy penalty diagnostics
+- Soft target system enabling gradual probability transitions
 
 ### Validation:
-- Identity task converges in phase 1
-- Target probability increases smoothly in phase 2
-- Entropy penalty effectively regularizes in phases 3-4
-- Standard training works well in phase 3
+- Identity task converges in phase 1 (unmasked = identity, masked = uniform)
+- Target probability increases smoothly in phase 2 (uniform → one-hot transition)
+- Entropy penalty effectively prevents overconfident wrong predictions
+- Phase 4 runs concurrently with phases 2-3, not sequentially
+- N4 < N2 + N3 constraint allows penalty-free fine-tuning in late training
+- Soft targets work correctly with both hard labels and probability distributions
+- Standard training works well in phase 3 with optional entropy penalty
 
 ---
 
