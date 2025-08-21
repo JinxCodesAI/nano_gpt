@@ -59,9 +59,9 @@ gradient_accumulation_steps = 1 # used to simulate larger batch sizes
 batch_size = 16 # if gradient_accumulation_steps > 1, this is the micro-batch size
 block_size = 1024
 # diffusion training config
-training_type = 'remasking'  # 'unmasking', 'remasking', or 'remasking_binary' - type of training
-remasking_corruption_strategy = 'synthetic'  # 'random', 'sticky', 'fragment', 'mixed', 'synthetic' - corruption strategy for remasking
-remasking_strategy_weights = [0.2, 0.3, 0.5]  # weights for [random, sticky, fragment] when using 'mixed'
+training_type = 'remasking_binary'  # 'unmasking', 'remasking', or 'remasking_binary' - type of training
+remasking_corruption_strategy = 'mixed'  # 'random', 'sticky', 'fragment', 'mixed', 'synthetic' - corruption strategy for remasking
+remasking_strategy_weights = [0.2, 0.2, 0.3, 0.3]  # weights for [random, sticky, fragment, synthetic] when using 'mixed'
 synthetic_checkpoint_name = '14.6_unmasking_no_noise.pt'  # Path to unmasking model checkpoint for synthetic data generation (only for 'synthetic' strategy)
 guaranteed_unmasked = 0.0       # Guaranteed fraction of tokens to keep unmasked
 noise_max_ratio = 0.05            # Maximum ratio of unmasked tokens to corrupt with random noise (0.0 to 1.0) - only for unmasking training
@@ -514,14 +514,16 @@ def get_batch_remasking(split):
         corrupted_x, mask = apply_synthetic_corruption(x, sticky_rounds, sticky_p1_p2_multiplier, mask_token_id, meta_vocab_size)
     elif remasking_corruption_strategy == 'mixed':
         # Select strategy based on weights
-        strategy_choice = np.random.choice(['random', 'sticky', 'fragment'], p=remasking_strategy_weights)
+        strategy_choice = np.random.choice(['random', 'sticky', 'fragment', 'synthetic'], p=remasking_strategy_weights)
         
         if strategy_choice == 'random':
             corrupted_x, mask = apply_random_corruption(x, 0.5, guaranteed_unmasked, meta_vocab_size)
         elif strategy_choice == 'sticky':
             corrupted_x, mask = apply_sticky_corruption(x, sticky_rounds, sticky_p1_p2_multiplier, mask_token_id, meta_vocab_size)
-        else:  # fragment
+        elif strategy_choice == 'fragment':
             corrupted_x, mask = apply_fragment_corruption(x, data, block_size, sticky_rounds, sticky_p1_p2_multiplier, mask_token_id)
+        else:  # synthetic
+            corrupted_x, mask = apply_synthetic_corruption(x, sticky_rounds, sticky_p1_p2_multiplier, mask_token_id, meta_vocab_size)
     else:
         # Default fallback to random
         corrupted_x, mask = apply_random_corruption(x, 0.5, guaranteed_unmasked, meta_vocab_size)
@@ -581,14 +583,16 @@ def get_batch_remasking_binary(split):
         corrupted_x, mask = apply_synthetic_corruption(x, sticky_rounds, sticky_p1_p2_multiplier, mask_token_id, meta_vocab_size)
     elif remasking_corruption_strategy == 'mixed':
         # Select strategy based on weights
-        strategy_choice = np.random.choice(['random', 'sticky', 'fragment'], p=remasking_strategy_weights)
+        strategy_choice = np.random.choice(['random', 'sticky', 'fragment', 'synthetic'], p=remasking_strategy_weights)
         
         if strategy_choice == 'random':
             corrupted_x, mask = apply_random_corruption(x, 0.5, guaranteed_unmasked, meta_vocab_size)
         elif strategy_choice == 'sticky':
             corrupted_x, mask = apply_sticky_corruption(x, sticky_rounds, sticky_p1_p2_multiplier, mask_token_id, meta_vocab_size)
-        else:  # fragment
+        elif strategy_choice == 'fragment':
             corrupted_x, mask = apply_fragment_corruption(x, data, block_size, sticky_rounds, sticky_p1_p2_multiplier, mask_token_id)
+        else:  # synthetic
+            corrupted_x, mask = apply_synthetic_corruption(x, sticky_rounds, sticky_p1_p2_multiplier, mask_token_id, meta_vocab_size)
     else:
         # Default fallback to random
         corrupted_x, mask = apply_random_corruption(x, 0.5, guaranteed_unmasked, meta_vocab_size)
