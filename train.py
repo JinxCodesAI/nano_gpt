@@ -59,9 +59,9 @@ gradient_accumulation_steps = 1 # used to simulate larger batch sizes
 batch_size = 16 # if gradient_accumulation_steps > 1, this is the micro-batch size
 block_size = 1024
 # diffusion training config
-training_type = 'remasking_binary'  # 'unmasking', 'remasking', or 'remasking_binary' - type of training
+training_type = 'remasking'  # 'unmasking', 'remasking', or 'remasking_binary' - type of training
 remasking_corruption_strategy = 'mixed'  # 'random', 'sticky', 'fragment', 'mixed', 'synthetic' - corruption strategy for remasking
-remasking_strategy_weights = [0.2, 0.2, 0.3, 0.3]  # weights for [random, sticky, fragment, synthetic] when using 'mixed'
+remasking_strategy_weights = [0.3, 0.4, 0.3, 0.0]  # weights for [random, sticky, fragment, synthetic] when using 'mixed'
 synthetic_checkpoint_name = '14.6_unmasking_no_noise.pt'  # Path to unmasking model checkpoint for synthetic data generation (only for 'synthetic' strategy)
 guaranteed_unmasked = 0.0       # Guaranteed fraction of tokens to keep unmasked
 noise_max_ratio = 0.05            # Maximum ratio of unmasked tokens to corrupt with random noise (0.0 to 1.0) - only for unmasking training
@@ -362,7 +362,21 @@ def apply_random_noise_to_unmasked(x, mask, noise_max_ratio, meta_vocab_size):
     This helps the model learn to unmask tokens even when some context tokens are noisy.
     Only applied during training_type='unmasking' to improve robustness.
     """
-    if noise_max_ratio <= 0.0:
+    global iter_num
+    
+    # Calculate progressive noise ratio based on training iteration
+    if iter_num < sticky_transition_start:
+        # No noise during early training
+        progressive_noise_ratio = 0.0
+    elif iter_num >= sticky_transition_end:
+        # Full noise ratio after transition
+        progressive_noise_ratio = noise_max_ratio
+    else:
+        # Gradual increase from 0 to noise_max_ratio
+        progress = (iter_num - sticky_transition_start) / (sticky_transition_end - sticky_transition_start)
+        progressive_noise_ratio = progress * noise_max_ratio
+    
+    if progressive_noise_ratio <= 0.0:
         return x
     
     noisy_x = x.clone()
@@ -371,9 +385,9 @@ def apply_random_noise_to_unmasked(x, mask, noise_max_ratio, meta_vocab_size):
     # Get unmasked positions for all batch elements
     unmasked_positions = ~mask  # Shape: (batch_size, seq_len)
     
-    # Sample noise ratios for each batch element
+    # Sample noise ratios for each batch element using progressive ratio
     batch_size = x.shape[0]
-    noise_ratios = torch.rand(batch_size, device=x.device) * noise_max_ratio  # Shape: (batch_size,)
+    noise_ratios = torch.rand(batch_size, device=x.device) * progressive_noise_ratio  # Shape: (batch_size,)
     
     # For each position, determine if it should be noised
     # First, generate random values for all unmasked positions
@@ -685,8 +699,10 @@ if block_size < model.config.block_size:
 model.to(device)
 
 # Load synthetic model if needed for remasking or remasking_binary training
-if training_type in ['remasking', 'remasking_binary'] and remasking_corruption_strategy == 'synthetic' and synthetic_checkpoint_name:
-    load_synthetic_model(os.path.join(out_dir, synthetic_checkpoint_name), device, extended_vocab_size)
+if training_type in ['remasking', 'remasking_binary'] and synthetic_checkpoint_name:
+    # Load synthetic model if strategy is 'synthetic' or 'mixed' (which can use synthetic)
+    if remasking_corruption_strategy == 'synthetic' or remasking_corruption_strategy == 'mixed':
+        load_synthetic_model(os.path.join(out_dir, synthetic_checkpoint_name), device, extended_vocab_size)
 
 # initialize a GradScaler. If enabled=False scaler is a no-op
 scaler = torch.cuda.amp.GradScaler(enabled=(dtype == 'float16'))
@@ -717,7 +733,12 @@ def estimate_loss():
         if split == 'val':
             # For validation, also track model vs random performance
             model_probs = []
-            random_prob = 1.0 / extended_vocab_size  # Random chance probability
+            # For binary classification and remasking, track corruption statistics
+            if training_type in ['remasking_binary', 'remasking']:
+                total_positions = 0
+                corrupted_positions = 0
+            else:
+                random_prob = 1.0 / extended_vocab_size  # Random chance probability
 
         for k in range(eval_iters):
             with timer.time_function('validation_data_generation'):
@@ -759,20 +780,38 @@ def estimate_loss():
                         # Symmetric task: predict remask_good_id or remask_wrong_id
                         loss = torch.nn.functional.cross_entropy(logits_flat, targets_flat)
 
-                # For validation, compute model vs random statistics on masked tokens only
+                # For validation, compute model vs random statistics
                 if split == 'val':
                     # Get probabilities from logits
                     probs = torch.nn.functional.softmax(logits, dim=-1)  # (batch_size, seq_len, vocab_size)
-
-                    # Flatten mask to match targets
-                    mask_flat = mask.view(-1)  # (batch_size * seq_len,)
-
-                    # Get probabilities for correct tokens at masked positions only
-                    masked_positions = mask_flat.bool()
-                    if masked_positions.sum() > 0:  # Only if there are masked tokens
-                        probs_flat = probs.view(-1, probs.size(-1))  # (batch_size * seq_len, vocab_size)
-                        correct_token_probs = probs_flat[masked_positions, targets_flat[masked_positions]]
+                    probs_flat = probs.view(-1, probs.size(-1))  # (batch_size * seq_len, vocab_size)
+                    
+                    if training_type == 'remasking_binary':
+                        # For binary classification, compute accuracy on all positions
+                        # Track corruption statistics for proper baseline
+                        total_positions += targets_flat.numel()
+                        corrupted_positions += (targets_flat == remask_wrong_id).sum().item()
+                        
+                        # Get probabilities for correct binary classification
+                        correct_token_probs = probs_flat[range(len(targets_flat)), targets_flat]
                         model_probs.extend(correct_token_probs.cpu().tolist())
+                    elif training_type == 'remasking':
+                        # For remasking, compute accuracy on ALL positions (corrupted + uncorrupted)
+                        # Track corruption statistics for proper baseline
+                        mask_flat = mask.view(-1)  # (batch_size * seq_len,)
+                        total_positions += targets_flat.numel()
+                        corrupted_positions += mask_flat.sum().item()  # mask indicates corrupted positions
+                        
+                        # Get probabilities for correct predictions at ALL positions
+                        correct_token_probs = probs_flat[range(len(targets_flat)), targets_flat]
+                        model_probs.extend(correct_token_probs.cpu().tolist())
+                    else:
+                        # For unmasking, compute on masked positions only
+                        mask_flat = mask.view(-1)  # (batch_size * seq_len,)
+                        masked_positions = mask_flat.bool()
+                        if masked_positions.sum() > 0:  # Only if there are masked tokens
+                            correct_token_probs = probs_flat[masked_positions, targets_flat[masked_positions]]
+                            model_probs.extend(correct_token_probs.cpu().tolist())
 
             losses[k] = loss.item()
 
@@ -781,9 +820,36 @@ def estimate_loss():
         # Add model vs random comparison for validation
         if split == 'val' and model_probs:
             avg_model_prob = sum(model_probs) / len(model_probs)
-            prob_ratio = avg_model_prob / random_prob
-            out[f'{split}_model_vs_random'] = prob_ratio
-            out[f'{split}_avg_correct_prob'] = avg_model_prob
+            
+            if training_type == 'remasking_binary':
+                # For binary classification, compare against distribution-aware random baseline
+                corruption_ratio = corrupted_positions / total_positions if total_positions > 0 else 0.0
+                # Random classifier matching the distribution would get:
+                # P(correct) = P(guess_good) * P(actual_good) + P(guess_wrong) * P(actual_wrong)
+                # With optimal random strategy: P(guess_good) = P(actual_good), P(guess_wrong) = P(actual_wrong)
+                random_accuracy = (1 - corruption_ratio) ** 2 + corruption_ratio ** 2
+                prob_ratio = avg_model_prob / random_accuracy if random_accuracy > 0 else float('inf')
+                out[f'{split}_model_vs_random'] = prob_ratio
+                out[f'{split}_avg_correct_prob'] = avg_model_prob
+                out[f'{split}_corruption_ratio'] = corruption_ratio
+                out[f'{split}_random_baseline'] = random_accuracy
+            elif training_type == 'remasking':
+                # For remasking, the task is corruption detection + appropriate response
+                corruption_ratio = corrupted_positions / total_positions if total_positions > 0 else 0.0
+                # Optimal random baseline: always guess the majority class
+                # With corruption_ratio=0.2: always guess "uncorrupted" → 80% accuracy
+                # General: max(corruption_ratio, 1-corruption_ratio)
+                random_accuracy = max(corruption_ratio, 1 - corruption_ratio)
+                prob_ratio = avg_model_prob / random_accuracy if random_accuracy > 0 else float('inf')
+                out[f'{split}_model_vs_random'] = prob_ratio
+                out[f'{split}_avg_correct_prob'] = avg_model_prob
+                out[f'{split}_corruption_ratio'] = corruption_ratio
+                out[f'{split}_random_baseline'] = random_accuracy
+            else:
+                # For unmasking, use uniform random baseline
+                prob_ratio = avg_model_prob / random_prob
+                out[f'{split}_model_vs_random'] = prob_ratio
+                out[f'{split}_avg_correct_prob'] = avg_model_prob
 
     model.train()
     return out
@@ -831,8 +897,13 @@ while True:
 
         # Print model vs random statistics if available
         if 'val_model_vs_random' in losses:
-            print(f"  val model vs random: {losses['val_model_vs_random']:.2f}x better")
-            print(f"  val avg correct prob: {losses['val_avg_correct_prob']:.4f} (random: {1.0/extended_vocab_size:.4f})")
+            if training_type in ['remasking_binary', 'remasking']:
+                print(f"  val model vs random: {losses['val_model_vs_random']:.2f}x better")
+                print(f"  val accuracy: {losses['val_avg_correct_prob']:.4f} (random baseline: {losses.get('val_random_baseline', 0.0):.4f})")
+                print(f"  val corruption ratio: {losses.get('val_corruption_ratio', 0.0):.4f}")
+            else:
+                print(f"  val model vs random: {losses['val_model_vs_random']:.2f}x better")
+                print(f"  val avg correct prob: {losses['val_avg_correct_prob']:.4f} (random: {1.0/extended_vocab_size:.4f})")
 
         if wandb_log:
             log_dict = {
