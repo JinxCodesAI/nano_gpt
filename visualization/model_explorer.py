@@ -646,7 +646,8 @@ class ModelExplorerApp(QMainWindow):
         
         if strategy == "random":
             corrupted_x, mask = apply_random_corruption_gpu(
-                x, corruption_prob, self.training_ctx.guaranteed_unmasked, self.training_ctx.meta_vocab_size
+                x, self.training_ctx.iter_num, self.training_ctx.guaranteed_unmasked_max, self.training_ctx.guaranteed_unmasked_min,
+                self.training_ctx.sticky_transition_start, self.training_ctx.sticky_transition_end, self.training_ctx.meta_vocab_size
             )
         elif strategy == "sticky":
             # First mask with sticky strategy
@@ -663,7 +664,8 @@ class ModelExplorerApp(QMainWindow):
             )
         else:  # fragment or mixed - use random for preview
             corrupted_x, mask = apply_random_corruption_gpu(
-                x, corruption_prob, self.training_ctx.guaranteed_unmasked, self.training_ctx.meta_vocab_size
+                x, self.training_ctx.iter_num, self.training_ctx.guaranteed_unmasked_max, self.training_ctx.guaranteed_unmasked_min,
+                self.training_ctx.sticky_transition_start, self.training_ctx.sticky_transition_end, self.training_ctx.meta_vocab_size
             )
             
         return corrupted_x.squeeze(0).cpu().numpy(), mask.squeeze(0).cpu().numpy()

@@ -111,10 +111,11 @@ class BatchProcessor(QThread):
         ratio = self.corruption_settings['ratio']
         
         if strategy == 'random':
-            return apply_random_corruption_gpu(x, ratio, 0.0, self.corruption_settings['vocab_size'])
+            # For visualization, use simple parameters - no transition needed
+            return apply_random_corruption_gpu(x, 0, 0.0, 0.0, 0, 1, self.corruption_settings['vocab_size'])
         else:
             # Default to random for batch processing
-            return apply_random_corruption_gpu(x, ratio, 0.0, self.corruption_settings['vocab_size'])
+            return apply_random_corruption_gpu(x, 0, 0.0, 0.0, 0, 1, self.corruption_settings['vocab_size'])
 
 
 class ComparisonTable(QWidget):

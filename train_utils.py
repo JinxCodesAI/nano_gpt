@@ -60,7 +60,9 @@ class TrainingContext:
     iter_num: int = 0
     
     # Masking parameters
-    guaranteed_unmasked: float = 0.0
+    guaranteed_unmasked: float = 0.0  # Deprecated - use guaranteed_unmasked_max/min
+    guaranteed_unmasked_max: float = 0.8  # Maximum guaranteed fraction (at start of training)
+    guaranteed_unmasked_min: float = 0.0  # Minimum guaranteed fraction (at end of training)
     noise_max_ratio: float = 0.05
     sticky_rounds: int = 10
     sticky_p1_p2_multiplier: float = 10.0
@@ -157,21 +159,33 @@ def stop_prefetch():
         _prefetch_thread.join(timeout=1.0)
         _prefetch_thread = None
 
-def apply_random_corruption_gpu(x, corruption_prob, guaranteed_unmasked, meta_vocab_size):
-    """GPU-optimized Strategy 1: Random token corruption"""
+def apply_random_corruption_gpu(x, iter_num, guaranteed_unmasked_max, guaranteed_unmasked_min,
+                               sticky_transition_start, sticky_transition_end, meta_vocab_size):
+    """GPU-optimized Strategy 1: Random token corruption with dynamic guaranteed_unmasked"""
     device = x.device
     vocab_size_to_use = meta_vocab_size if meta_vocab_size is not None else 50257
-    
-    # Generate mask on GPU
-    mask = torch.rand(x.shape, device=device) < (corruption_prob * (1.0 - guaranteed_unmasked))
-    
+
+    # Calculate dynamic guaranteed_unmasked based on training iteration
+    if iter_num < sticky_transition_start:
+        guaranteed_unmasked = guaranteed_unmasked_max
+    elif iter_num >= sticky_transition_end:
+        guaranteed_unmasked = guaranteed_unmasked_min
+    else:
+        # Linear transition from max to min
+        progress = (iter_num - sticky_transition_start) / (sticky_transition_end - sticky_transition_start)
+        guaranteed_unmasked = guaranteed_unmasked_max + progress * (guaranteed_unmasked_min - guaranteed_unmasked_max)
+
+    # Generate mask on GPU - corruption probability is now (1.0 - guaranteed_unmasked)
+    corruption_prob = 1.0 - guaranteed_unmasked
+    mask = torch.rand(x.shape, device=device) < corruption_prob
+
     # Apply corruption in-place for efficiency
     corrupted_x = x.clone()
     if mask.any():
         # Generate random tokens directly on GPU
         random_tokens = torch.randint(0, vocab_size_to_use, x.shape, device=device)
         corrupted_x = torch.where(mask, random_tokens, corrupted_x)
-    
+
     return corrupted_x, mask
 
 def apply_random_corruption(x, corruption_prob, guaranteed_unmasked, meta_vocab_size):
@@ -713,7 +727,8 @@ def get_batch_remasking(split, ctx: TrainingContext):
 
     # GPU-accelerated corruption strategy selection and application
     if ctx.remasking_corruption_strategy == 'random':
-        corrupted_x, mask = apply_random_corruption_gpu(x, 0.5, ctx.guaranteed_unmasked, ctx.meta_vocab_size)
+        corrupted_x, mask = apply_random_corruption_gpu(x, ctx.iter_num, ctx.guaranteed_unmasked_max, ctx.guaranteed_unmasked_min,
+                                                       ctx.sticky_transition_start, ctx.sticky_transition_end, ctx.meta_vocab_size)
     elif ctx.remasking_corruption_strategy == 'sticky':
         corrupted_x, mask = apply_sticky_corruption_gpu(x, ctx.sticky_rounds, ctx.sticky_p1_p2_multiplier, ctx.mask_token_id, ctx.meta_vocab_size, ctx.sticky_p1_divisor)
     elif ctx.remasking_corruption_strategy == 'fragment':
@@ -725,7 +740,8 @@ def get_batch_remasking(split, ctx: TrainingContext):
         strategy_choice = np.random.choice(['random', 'sticky', 'fragment', 'synthetic'], p=ctx.remasking_strategy_weights)
         
         if strategy_choice == 'random':
-            corrupted_x, mask = apply_random_corruption_gpu(x, 0.5, ctx.guaranteed_unmasked, ctx.meta_vocab_size)
+            corrupted_x, mask = apply_random_corruption_gpu(x, ctx.iter_num, ctx.guaranteed_unmasked_max, ctx.guaranteed_unmasked_min,
+                                                           ctx.sticky_transition_start, ctx.sticky_transition_end, ctx.meta_vocab_size)
         elif strategy_choice == 'sticky':
             corrupted_x, mask = apply_sticky_corruption_gpu(x, ctx.sticky_rounds, ctx.sticky_p1_p2_multiplier, ctx.mask_token_id, ctx.meta_vocab_size, ctx.sticky_p1_divisor)
         elif strategy_choice == 'fragment':
@@ -734,7 +750,8 @@ def get_batch_remasking(split, ctx: TrainingContext):
             corrupted_x, mask = apply_synthetic_corruption(x, ctx.sticky_rounds, ctx.sticky_p1_p2_multiplier, ctx.mask_token_id, ctx.meta_vocab_size, ctx.sticky_p1_divisor)
     else:
         # Default fallback to random
-        corrupted_x, mask = apply_random_corruption_gpu(x, 0.5, ctx.guaranteed_unmasked, ctx.meta_vocab_size)
+        corrupted_x, mask = apply_random_corruption_gpu(x, ctx.iter_num, ctx.guaranteed_unmasked_max, ctx.guaranteed_unmasked_min,
+                                                       ctx.sticky_transition_start, ctx.sticky_transition_end, ctx.meta_vocab_size)
 
     # Target: original tokens at correct positions, wrong_token_id at corrupted positions (already on GPU)
     y = x.clone()
@@ -812,7 +829,8 @@ def get_batch_remasking_binary(split, ctx: TrainingContext):
 
     # GPU-accelerated corruption (same strategies as remasking)
     if ctx.remasking_corruption_strategy == 'random':
-        corrupted_x, mask = apply_random_corruption_gpu(x, 0.5, ctx.guaranteed_unmasked, ctx.meta_vocab_size)
+        corrupted_x, mask = apply_random_corruption_gpu(x, ctx.iter_num, ctx.guaranteed_unmasked_max, ctx.guaranteed_unmasked_min,
+                                                       ctx.sticky_transition_start, ctx.sticky_transition_end, ctx.meta_vocab_size)
     elif ctx.remasking_corruption_strategy == 'sticky':
         corrupted_x, mask = apply_sticky_corruption_gpu(x, ctx.sticky_rounds, ctx.sticky_p1_p2_multiplier, ctx.mask_token_id, ctx.meta_vocab_size, ctx.sticky_p1_divisor)
     elif ctx.remasking_corruption_strategy == 'fragment':
@@ -823,7 +841,8 @@ def get_batch_remasking_binary(split, ctx: TrainingContext):
         strategy_choice = np.random.choice(['random', 'sticky', 'fragment', 'synthetic'], p=ctx.remasking_strategy_weights)
         
         if strategy_choice == 'random':
-            corrupted_x, mask = apply_random_corruption_gpu(x, 0.5, ctx.guaranteed_unmasked, ctx.meta_vocab_size)
+            corrupted_x, mask = apply_random_corruption_gpu(x, ctx.iter_num, ctx.guaranteed_unmasked_max, ctx.guaranteed_unmasked_min,
+                                                           ctx.sticky_transition_start, ctx.sticky_transition_end, ctx.meta_vocab_size)
         elif strategy_choice == 'sticky':
             corrupted_x, mask = apply_sticky_corruption_gpu(x, ctx.sticky_rounds, ctx.sticky_p1_p2_multiplier, ctx.mask_token_id, ctx.meta_vocab_size, ctx.sticky_p1_divisor)
         elif strategy_choice == 'fragment':
@@ -831,7 +850,8 @@ def get_batch_remasking_binary(split, ctx: TrainingContext):
         else:  # synthetic
             corrupted_x, mask = apply_synthetic_corruption(x, ctx.sticky_rounds, ctx.sticky_p1_p2_multiplier, ctx.mask_token_id, ctx.meta_vocab_size, ctx.sticky_p1_divisor)
     else:
-        corrupted_x, mask = apply_random_corruption_gpu(x, 0.5, ctx.guaranteed_unmasked, ctx.meta_vocab_size)
+        corrupted_x, mask = apply_random_corruption_gpu(x, ctx.iter_num, ctx.guaranteed_unmasked_max, ctx.guaranteed_unmasked_min,
+                                                       ctx.sticky_transition_start, ctx.sticky_transition_end, ctx.meta_vocab_size)
 
     # Binary targets: remask_good_id for uncorrupted, remask_wrong_id for corrupted (already on GPU)
     y = torch.full_like(x, ctx.remask_good_id)
@@ -849,6 +869,9 @@ def estimate_loss(model, torch_ctx, timer, training_ctx: TrainingContext):
     model.eval()
     for split in ['train', 'val']:
         losses = torch.zeros(training_ctx.eval_iters)
+        # Track masked token ratios for all splits
+        masked_token_ratios = []
+
         if split == 'val':
             # For validation, also track model vs random performance
             model_probs = []
@@ -862,6 +885,11 @@ def estimate_loss(model, torch_ctx, timer, training_ctx: TrainingContext):
         for k in range(training_ctx.eval_iters):
             with timer.time_function('validation_data_generation'):
                 X, Y, mask = get_batch(split, training_ctx)
+
+            # Calculate masked token ratio for this batch
+            mask_ratio = mask.float().mean().item()
+            masked_token_ratios.append(mask_ratio)
+
             with torch_ctx:
                 with timer.time_function('validation_forward_pass'):
                     # This is handled in validation_loss_computation section
@@ -869,17 +897,17 @@ def estimate_loss(model, torch_ctx, timer, training_ctx: TrainingContext):
                 with timer.time_function('validation_loss_computation'):
                     # Optimized single forward pass for validation
                     logits, loss = model(X, Y)
-                    
+
                     # Apply masking for unmasking training only
                     if training_ctx.training_type == 'unmasking' and mask.any():
                         # Fast validation path - single reshape and boolean indexing
                         logits_reshaped = logits.view(-1, logits.size(-1))
                         targets_reshaped = Y.view(-1)
                         mask_reshaped = mask.view(-1)
-                        
+
                         loss = torch.nn.functional.cross_entropy(
-                            logits_reshaped[mask_reshaped], 
-                            targets_reshaped[mask_reshaped], 
+                            logits_reshaped[mask_reshaped],
+                            targets_reshaped[mask_reshaped],
                             reduction='mean'
                         )
                     # For remasking variants, model's internal loss is correct
@@ -890,13 +918,13 @@ def estimate_loss(model, torch_ctx, timer, training_ctx: TrainingContext):
                     probs = torch.nn.functional.softmax(logits, dim=-1)  # (batch_size, seq_len, vocab_size)
                     probs_flat = probs.view(-1, probs.size(-1))  # (batch_size * seq_len, vocab_size)
                     targets_flat = Y.view(-1)  # (batch_size * seq_len,) - needed for validation stats
-                    
+
                     if training_ctx.training_type == 'remasking_binary':
                         # For binary classification, compute accuracy on all positions
                         # Track corruption statistics for proper baseline
                         total_positions += targets_flat.numel()
                         corrupted_positions += (targets_flat == training_ctx.remask_wrong_id).sum().item()
-                        
+
                         # Get probabilities for correct binary classification
                         correct_token_probs = probs_flat[range(len(targets_flat)), targets_flat]
                         model_probs.extend(correct_token_probs.cpu().tolist())
@@ -906,7 +934,7 @@ def estimate_loss(model, torch_ctx, timer, training_ctx: TrainingContext):
                         mask_flat = mask.view(-1)  # (batch_size * seq_len,)
                         total_positions += targets_flat.numel()
                         corrupted_positions += mask_flat.sum().item()  # mask indicates corrupted positions
-                        
+
                         # Get probabilities for correct predictions at ALL positions
                         correct_token_probs = probs_flat[range(len(targets_flat)), targets_flat]
                         model_probs.extend(correct_token_probs.cpu().tolist())
@@ -922,10 +950,17 @@ def estimate_loss(model, torch_ctx, timer, training_ctx: TrainingContext):
 
         out[split] = losses.mean()
 
+        # Add masked token ratio statistics
+        if masked_token_ratios:
+            avg_masked_ratio = sum(masked_token_ratios) / len(masked_token_ratios)
+            out[f'{split}_masked_token_ratio'] = avg_masked_ratio
+            out[f'{split}_min_masked_token_ratio'] = min(masked_token_ratios)
+            out[f'{split}_max_masked_token_ratio'] = max(masked_token_ratios)
+
         # Add model vs random comparison for validation
         if split == 'val' and model_probs:
             avg_model_prob = sum(model_probs) / len(model_probs)
-            
+
             if training_ctx.training_type == 'remasking_binary':
                 # For binary classification, compare against distribution-aware random baseline
                 corruption_ratio = corrupted_positions / total_positions if total_positions > 0 else 0.0
