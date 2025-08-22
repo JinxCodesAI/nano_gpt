@@ -82,11 +82,11 @@ bias = False # do we use bias inside LayerNorm and Linear layers?
 attention_type = 'bidirectional' # 'causal' or 'bidirectional' - type of attention to use (bidirectional recommended for diffusion)
 # adamw optimizer
 
-learning_rate = 1e-3 # with baby networks can afford to go a bit higher
+learning_rate = 1e-4 # with baby networks can afford to go a bit higher
 max_iters = 10000
 warmup_iters = 2000 # how many steps to warm up for
 lr_decay_iters = 8000 # make equal to max_iters usually
-min_lr = 1e-4 # learning_rate / 10 usually
+min_lr = 1e-5 # learning_rate / 10 usually
 beta1 = 0.9
 beta2 = 0.99 # make a bit bigger because number of tokens per iter is small
 weight_decay=1e-1

@@ -23,6 +23,10 @@ device = 'cpu'
 dtype = 'float32'
 compile = False
 
+# Sampling parameters for non-deterministic generation
+temperature = 1.0  # Temperature for sampling (1.0 = no change, <1.0 = more deterministic, >1.0 = more random)
+seed_offset_multiplier = 42  # Multiplier for seed separation between samples
+
 use_intelligent_remasking = False
 use_mixed_remasking = False
 remasking_confidence_threshold = 0.58
@@ -269,12 +273,13 @@ def mixed_intelligent_remask(tokens, remasking_model, num_to_remask, threshold, 
     
     return tokens, intelligent_count, random_count
 
-def diffusion_generate(model, total_length, iterations, schedule='linear', mask_token_id=None, wrong_token_id=None, remask_wrong_id=None, remasking_model=None, remasking_model_type='remasking', decode_fn=None, decode_mask_fn=None, verbose=True, use_threshold_remasking=False, use_mixed_remasking=False, threshold=0.1):
+def diffusion_generate_batch(model, batch_size, total_length, iterations, schedule='linear', mask_token_id=None, wrong_token_id=None, remask_wrong_id=None, remasking_model=None, remasking_model_type='remasking', decode_fn=None, decode_mask_fn=None, verbose=True, use_threshold_remasking=False, use_mixed_remasking=False, threshold=0.1, temperature=1.0):
     """
-    Generate text using diffusion-based iterative demasking
+    Generate multiple text samples using diffusion-based iterative demasking with batching
 
     Args:
         model: Trained diffusion model
+        batch_size: Number of samples to generate in parallel
         total_length: Total length of sequence to generate
         iterations: Number of demasking/remasking iterations
         schedule: Remasking schedule ('linear' or 'exponential')
@@ -289,159 +294,122 @@ def diffusion_generate(model, total_length, iterations, schedule='linear', mask_
         use_threshold_remasking: If True, use probability threshold instead of schedule
         use_mixed_remasking: If True, use mixed random+intelligent remasking
         threshold: Target token probability threshold for remasking
+        temperature: Temperature for sampling (1.0 = no change, <1.0 = more deterministic, >1.0 = more random)
+    
+    Returns:
+        torch.Tensor: Generated tokens of shape (batch_size, total_length)
     """
 
-    # Start with ALL positions masked (pure diffusion approach)
-    tokens = torch.full((1, total_length), mask_token_id, dtype=torch.long, device=device)
+    # Start with ALL positions masked for all samples in batch
+    tokens = torch.full((batch_size, total_length), mask_token_id, dtype=torch.long, device=device)
 
     if verbose:
-        print(f"Starting diffusion generation with {iterations} iterations, schedule: {schedule}")
+        print(f"Starting batched diffusion generation: {batch_size} samples, {iterations} iterations, schedule: {schedule}")
         print(f"Total length: {total_length} (all tokens start masked)")
-        print("=" * 60)
+        print("=" * 80)
 
     for iteration in range(iterations):
-        # Show state before unmasking
+        # Show state before unmasking (show stats for all samples)
         if verbose:
-            masked_positions = (tokens[0] == mask_token_id)
-            num_masked = masked_positions.sum().item()
+            masked_positions = (tokens == mask_token_id)
+            num_masked_per_sample = masked_positions.sum(dim=1)
+            avg_masked = num_masked_per_sample.float().mean().item()
             print(f"\nIteration {iteration + 1}/{iterations}")
-            print(f"Tokens masked: {num_masked}/{total_length} ({num_masked/total_length*100:.1f}%)")
+            print(f"Average tokens masked: {avg_masked:.1f}/{total_length} ({avg_masked/total_length*100:.1f}%)")
 
-            # Show sequence with mask characters
+            # Show first sample's sequence with mask characters as example
             if decode_mask_fn:
                 masked_sequence = decode_mask_fn(tokens[0].tolist())
-                print(f"BEFORE unmasking: {masked_sequence}")
+                print(f"Sample 1 BEFORE unmasking: {masked_sequence[:100]}{'...' if len(masked_sequence) > 100 else ''}")
 
-        # Step 1: Predict tokens for all masked positions
-        masked_positions = (tokens[0] == mask_token_id)
-        num_masked = masked_positions.sum().item()
+        # Step 1: Predict tokens for all masked positions (batch processing)
+        masked_positions = (tokens == mask_token_id)
+        total_masked = masked_positions.sum().item()
 
-        if num_masked > 0:
+        if total_masked > 0:
             with torch.no_grad():
-                # Get logits for all positions
-                dummy_targets = torch.zeros_like(tokens[0])
+                # Get logits for all positions and all samples in batch
+                dummy_targets = torch.zeros_like(tokens)
                 logits, _ = model(tokens, dummy_targets)
 
-            # Sample new tokens for masked positions
-            mask_indices = torch.where(masked_positions)[0]
-            masked_logits = logits[0, mask_indices]
-            probs = torch.softmax(masked_logits, dim=-1)
-            new_tokens = torch.multinomial(probs, num_samples=1).squeeze(-1)
+            # Process each sample in the batch
+            for sample_idx in range(batch_size):
+                sample_masked_positions = masked_positions[sample_idx]
+                if sample_masked_positions.sum() > 0:
+                    # Sample new tokens for masked positions with temperature
+                    mask_indices = torch.where(sample_masked_positions)[0]
+                    masked_logits = logits[sample_idx, mask_indices]
+                    
+                    # Apply temperature to logits before softmax
+                    if temperature != 1.0:
+                        masked_logits = masked_logits / temperature
+                    
+                    probs = torch.softmax(masked_logits, dim=-1)
+                    new_tokens = torch.multinomial(probs, num_samples=1).squeeze(-1)
 
-            # Replace masked tokens with predictions
-            tokens[0, mask_indices] = new_tokens
+                    # Replace masked tokens with predictions
+                    tokens[sample_idx, mask_indices] = new_tokens
 
-        # Show state after unmasking
+        # Show state after unmasking (show first sample as example)
         if verbose and decode_fn:
             unmasked_sequence = decode_fn(tokens[0].tolist())
-            print(f"AFTER unmasking:  {unmasked_sequence}")
+            print(f"Sample 1 AFTER unmasking:  {unmasked_sequence[:100]}{'...' if len(unmasked_sequence) > 100 else ''}")
 
-        # Step 2: Re-mask some tokens for next iteration
+        # Step 2: Re-mask some tokens for next iteration (batch processing)
         # Stop remasking on the final iteration (iteration == iterations - 1)
         if iteration < iterations - 1:
-            if use_threshold_remasking and remasking_model is not None:
-                # Use schedule-based intelligent remasking with threshold
-                # Calculate how many tokens to re-mask from schedule
-                if schedule == 'linear':
-                    remask_ratio = linear_remasking_schedule(iterations, iteration + 1)
-                elif schedule == 'exponential':
-                    remask_ratio = exponential_remasking_schedule(iterations, iteration + 1)
-                else:
-                    remask_ratio = 0.5  # Default
-                
-                num_to_remask = int(total_length * remask_ratio)
-                
-                if verbose:
-                    print(f"Using schedule-based intelligent remasking (threshold={threshold:.3f}, ratio={remask_ratio:.3f})...")
-                
-                if num_to_remask > 0:
-                    tokens, intelligent_count, random_count = mixed_intelligent_remask(
-                        tokens, remasking_model, num_to_remask, threshold,
-                        mask_token_id, wrong_token_id, remask_wrong_id, remasking_model_type, device, min_random_ratio, verbose
-                    )
-                    
-                    if verbose:
-                        # Show state after remasking
-                        if decode_mask_fn:
-                            remasked_sequence = decode_mask_fn(tokens[0].tolist())
-                            print(f"AFTER remasking:  {remasked_sequence}")
-                        print(f"Re-masked {num_to_remask} tokens (ratio: {remask_ratio:.2f}) - {intelligent_count} intelligent + {random_count} random")
-                else:
-                    if verbose:
-                        print(f"Schedule requires 0 tokens to remask - generation converged at iteration {iteration + 1}")
-                    break
-            elif use_mixed_remasking and remasking_model is not None:
-                # Use mixed random+intelligent remasking
-                # Calculate how many tokens to re-mask from schedule
-                if schedule == 'linear':
-                    remask_ratio = linear_remasking_schedule(iterations, iteration + 1)
-                elif schedule == 'exponential':
-                    remask_ratio = exponential_remasking_schedule(iterations, iteration + 1)
-                else:
-                    remask_ratio = 0.5  # Default
-                
-                num_to_remask = int(total_length * remask_ratio)
-                
-                if verbose:
-                    print(f"Using mixed random+intelligent remasking (threshold={threshold:.3f})...")
-                
-                if num_to_remask > 0:
-                    tokens, intelligent_count, random_count = mixed_intelligent_remask(
-                        tokens, remasking_model, num_to_remask, threshold,
-                        mask_token_id, wrong_token_id, remask_wrong_id, remasking_model_type, device, min_random_ratio, verbose
-                    )
-                    
-                    if verbose:
-                        # Show state after remasking
-                        if decode_mask_fn:
-                            remasked_sequence = decode_mask_fn(tokens[0].tolist())
-                            print(f"AFTER remasking:  {remasked_sequence}")
-                        print(f"Re-masked {num_to_remask} tokens (ratio: {remask_ratio:.2f}) - {intelligent_count} intelligent + {random_count} random")
+            # Calculate how many tokens to re-mask from schedule
+            if schedule == 'linear':
+                remask_ratio = linear_remasking_schedule(iterations, iteration + 1)
+            elif schedule == 'exponential':
+                remask_ratio = exponential_remasking_schedule(iterations, iteration + 1)
             else:
-                # Traditional schedule-based remasking
-                # Calculate how many tokens to re-mask
-                if schedule == 'linear':
-                    remask_ratio = linear_remasking_schedule(iterations, iteration + 1)
-                elif schedule == 'exponential':
-                    remask_ratio = exponential_remasking_schedule(iterations, iteration + 1)
-                else:
-                    remask_ratio = 0.5  # Default
+                remask_ratio = 0.5  # Default
 
-                # Re-mask all positions (pure diffusion - no protected prompt)
-                all_positions = torch.arange(total_length, device=device)
-                num_to_remask = int(total_length * remask_ratio)
+            num_to_remask = int(total_length * remask_ratio)
 
-                if num_to_remask > 0:
-                    if remasking_model is not None:
-                        # Use intelligent remasking
-                        if verbose:
-                            print(f"Using intelligent remasking model...")
-                        tokens = intelligent_remask(
-                            tokens, remasking_model, num_to_remask, 
-                            mask_token_id, wrong_token_id, remask_wrong_id, remasking_model_type, device, verbose
-                        )
-                    else:
-                        # Fallback to random remasking
-                        if verbose:
-                            print(f"Using random remasking...")
-                        remask_indices = torch.randperm(total_length)[:num_to_remask]
-                        positions_to_remask = all_positions[remask_indices]
-                        tokens[0, positions_to_remask] = mask_token_id
+            if num_to_remask > 0:
+                if verbose:
+                    print(f"Using random remasking for batch (ratio: {remask_ratio:.3f})...")
+                
+                # Apply random remasking to each sample in the batch
+                for sample_idx in range(batch_size):
+                    # Random remasking for each sample independently
+                    all_positions = torch.arange(total_length, device=device)
+                    remask_indices = torch.randperm(total_length, device=device)[:num_to_remask]
+                    positions_to_remask = all_positions[remask_indices]
+                    tokens[sample_idx, positions_to_remask] = mask_token_id
 
-                    if verbose:
-                        # Show state after remasking
-                        if decode_mask_fn:
-                            remasked_sequence = decode_mask_fn(tokens[0].tolist())
-                            print(f"AFTER remasking:  {remasked_sequence}")
-                        print(f"Re-masked {num_to_remask} tokens (ratio: {remask_ratio:.2f})")
+                if verbose:
+                    # Show state after remasking (first sample as example)
+                    if decode_mask_fn:
+                        remasked_sequence = decode_mask_fn(tokens[0].tolist())
+                        print(f"Sample 1 AFTER remasking:  {remasked_sequence[:100]}{'...' if len(remasked_sequence) > 100 else ''}")
+                    print(f"Re-masked {num_to_remask} tokens per sample (ratio: {remask_ratio:.2f})")
+            else:
+                if verbose:
+                    print(f"Schedule requires 0 tokens to remask - generation converged at iteration {iteration + 1}")
+                break
 
         if verbose:
             print("=" * 80)
 
-    return tokens[0]
+    return tokens
 
-torch.manual_seed(seed)
-torch.cuda.manual_seed(seed)
+def diffusion_generate(model, total_length, iterations, schedule='linear', mask_token_id=None, wrong_token_id=None, remask_wrong_id=None, remasking_model=None, remasking_model_type='remasking', decode_fn=None, decode_mask_fn=None, verbose=True, use_threshold_remasking=False, use_mixed_remasking=False, threshold=0.1, temperature=1.0):
+    """
+    Generate single text sample using diffusion-based iterative demasking (backward compatibility)
+    """
+    # Use batch function with batch_size=1 and return single result
+    batch_results = diffusion_generate_batch(
+        model, 1, total_length, iterations, schedule, mask_token_id, wrong_token_id, remask_wrong_id,
+        remasking_model, remasking_model_type, decode_fn, decode_mask_fn, verbose,
+        use_threshold_remasking, use_mixed_remasking, threshold, temperature
+    )
+    return batch_results[0]
+
+# Set initial seed (will be modified per sample)
+base_seed = seed
 torch.backends.cuda.matmul.allow_tf32 = True # allow tf32 on matmul
 torch.backends.cudnn.allow_tf32 = True # allow tf32 on cudnn
 device_type = 'cuda' if 'cuda' in device else 'cpu' # for later use in torch.autocast
@@ -582,12 +550,18 @@ if 'config' in checkpoint and 'dataset' in checkpoint['config']:
 else:
     raise ValueError("Checkpoint does not contain dataset configuration")
 
-# Run diffusion generation
+# Run diffusion generation with batching
 with torch.no_grad():
     with ctx:
-        for k in range(num_samples):
+        if num_samples == 1:
+            # Single sample - use original behavior for backward compatibility
+            current_seed = base_seed
+            torch.manual_seed(current_seed)
+            if torch.cuda.is_available():
+                torch.cuda.manual_seed(current_seed)
+            
             print(f"\n{'='*80}")
-            print(f"SAMPLE {k+1}/{num_samples}")
+            print(f"SINGLE SAMPLE GENERATION (seed: {current_seed}, temperature: {temperature})")
             print(f"{'='*80}")
             generated_tokens = diffusion_generate(
                 model,
@@ -604,8 +578,60 @@ with torch.no_grad():
                 verbose=True,
                 use_threshold_remasking=use_intelligent_remasking and not use_mixed_remasking,
                 use_mixed_remasking=use_mixed_remasking,
-                threshold=remasking_confidence_threshold
+                threshold=remasking_confidence_threshold,
+                temperature=temperature
             )
             print(f"\nFINAL RESULT:")
             print(decode(generated_tokens.tolist()))
             print('='*80)
+            
+        else:
+            # Multiple samples - use batching for efficiency
+            # Set seed to ensure different results with different seeds per sample
+            batch_seeds = [base_seed + k * seed_offset_multiplier for k in range(num_samples)]
+            torch.manual_seed(batch_seeds[0])  # Use first seed as base
+            if torch.cuda.is_available():
+                torch.cuda.manual_seed(batch_seeds[0])
+            
+            print(f"\n{'='*80}")
+            print(f"BATCH GENERATION: {num_samples} samples (temperature: {temperature})")
+            print(f"Seeds: {batch_seeds}")
+            print(f"{'='*80}")
+            
+            # Generate all samples in batch
+            all_generated_tokens = diffusion_generate_batch(
+                model,
+                num_samples,
+                sequence_length,
+                diffusion_iterations,
+                remasking_schedule,
+                mask_token_id,
+                wrong_token_id,
+                remask_wrong_id,
+                remasking_model,
+                detected_remasking_type or 'remasking',
+                decode,
+                decode_with_mask_char,
+                verbose=True,
+                use_threshold_remasking=False,  # Disable intelligent remasking for batch mode
+                use_mixed_remasking=False,
+                threshold=remasking_confidence_threshold,
+                temperature=temperature
+            )
+            
+            # Display all generated samples at the end
+            print(f"\n{'='*80}")
+            print(f"ALL GENERATED SAMPLES")
+            print(f"{'='*80}")
+            
+            for k in range(num_samples):
+                print(f"\n{'─'*60}")
+                print(f"SAMPLE {k+1}/{num_samples} (seed: {batch_seeds[k]})")
+                print(f"{'─'*60}")
+                sample_text = decode(all_generated_tokens[k].tolist())
+                print(sample_text)
+                print(f"{'─'*60}")
+            
+            print(f"\n{'='*80}")
+            print(f"GENERATION COMPLETE - {num_samples} samples generated")
+            print(f"{'='*80}")
