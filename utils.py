@@ -37,7 +37,7 @@ class Timer:
         return sum(self.times[name][-last_n:]) / min(len(self.times[name]), last_n)
 
 
-def apply_sticky_masking(tokens, rounds, mask_token_id, sticky_p1_p2_multiplier):
+def apply_sticky_masking(tokens, rounds, mask_token_id, sticky_p1_p2_multiplier, sticky_p1_divisor=2.0):
     """
     Apply sticky masking algorithm
 
@@ -46,6 +46,7 @@ def apply_sticky_masking(tokens, rounds, mask_token_id, sticky_p1_p2_multiplier)
         rounds: Number of masking rounds
         mask_token_id: ID of mask token
         sticky_p1_p2_multiplier: Multiplier for p2 = p1 * multiplier
+        sticky_p1_divisor: Divisor for p1 calculation: p1 = rand() / (rounds * divisor)
 
     Returns:
         masked_tokens: Tokens with sticky masking applied
@@ -59,14 +60,15 @@ def apply_sticky_masking(tokens, rounds, mask_token_id, sticky_p1_p2_multiplier)
 
     for round_idx in range(rounds):
         # Dynamically sample sticky probabilities each round
-        p1 = torch.rand(1).item() / (rounds * 2)  # Sample from (0, 1/(rounds*2))
+        # Use CPU RNG for consistency between CPU and GPU implementations
+        p1 = torch.rand(1).item() / (rounds * sticky_p1_divisor)  # Sample from (0, 1/(rounds*divisor))
         p2 = min(1.0, p1 * sticky_p1_p2_multiplier)  # p2 = p1 * multiplier, capped at 1
 
         # Current mask state
         current_mask = (masked_tokens == mask_token_id)
 
         # For each position, check if neighbors are masked
-        neighbor_masked = torch.zeros_like(current_mask, dtype=torch.bool)
+        neighbor_masked = torch.zeros_like(current_mask, dtype=torch.bool, device=device)
 
         # Check left neighbor
         neighbor_masked[:, 1:] |= current_mask[:, :-1]
@@ -74,7 +76,8 @@ def apply_sticky_masking(tokens, rounds, mask_token_id, sticky_p1_p2_multiplier)
         neighbor_masked[:, :-1] |= current_mask[:, 1:]
 
         # Generate random values for masking decision
-        rand_vals = torch.rand(batch_size, seq_len, device=device)
+        # Use CPU RNG for consistency, then move to target device
+        rand_vals = torch.rand(batch_size, seq_len).to(device)
 
         # Apply p1 where neighbors not masked, p2 where neighbors masked
         mask_probs = torch.where(neighbor_masked, p2, p1)

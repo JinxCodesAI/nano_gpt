@@ -64,6 +64,7 @@ class TrainingContext:
     noise_max_ratio: float = 0.05
     sticky_rounds: int = 10
     sticky_p1_p2_multiplier: float = 10.0
+    sticky_p1_divisor: float = 2.0
     sticky_transition_start: int = 500
     sticky_transition_end: int = 12000
     
@@ -185,13 +186,13 @@ def apply_random_corruption(x, corruption_prob, guaranteed_unmasked, meta_vocab_
     
     return corrupted_x, mask
 
-def apply_sticky_corruption_gpu(x, sticky_rounds, sticky_p1_p2_multiplier, mask_token_id, meta_vocab_size):
+def apply_sticky_corruption_gpu(x, sticky_rounds, sticky_p1_p2_multiplier, mask_token_id, meta_vocab_size, sticky_p1_divisor=2.0):
     """GPU-optimized Strategy 2: Sticky-style corruption without transitions"""
     device = x.device
     vocab_size_to_use = meta_vocab_size if meta_vocab_size is not None else 50257
-    
+
     # Use GPU-optimized sticky masking
-    sticky_corrupted_x, mask = apply_sticky_masking_gpu(x, sticky_rounds, mask_token_id, sticky_p1_p2_multiplier)
+    sticky_corrupted_x, mask = apply_sticky_masking_gpu(x, sticky_rounds, mask_token_id, sticky_p1_p2_multiplier, sticky_p1_divisor)
     
     # Replace mask tokens with random tokens (vectorized on GPU)
     mask_positions = (sticky_corrupted_x == mask_token_id)
@@ -201,10 +202,10 @@ def apply_sticky_corruption_gpu(x, sticky_rounds, sticky_p1_p2_multiplier, mask_
     
     return sticky_corrupted_x, mask
 
-def apply_sticky_corruption(x, sticky_rounds, sticky_p1_p2_multiplier, mask_token_id, meta_vocab_size):
+def apply_sticky_corruption(x, sticky_rounds, sticky_p1_p2_multiplier, mask_token_id, meta_vocab_size, sticky_p1_divisor=2.0):
     """Strategy 2: Sticky-style corruption without transitions"""
     # Use sticky masking logic but replace mask tokens with random tokens
-    sticky_corrupted_x, mask = apply_sticky_masking(x, sticky_rounds, mask_token_id, sticky_p1_p2_multiplier)
+    sticky_corrupted_x, mask = apply_sticky_masking(x, sticky_rounds, mask_token_id, sticky_p1_p2_multiplier, sticky_p1_divisor)
     
     # Replace mask tokens with random tokens
     vocab_size_to_use = meta_vocab_size if meta_vocab_size is not None else 50257
@@ -215,13 +216,13 @@ def apply_sticky_corruption(x, sticky_rounds, sticky_p1_p2_multiplier, mask_toke
     
     return sticky_corrupted_x, mask
 
-def apply_fragment_corruption_gpu(x, data, block_size, sticky_rounds, sticky_p1_p2_multiplier, mask_token_id):
+def apply_fragment_corruption_gpu(x, data, block_size, sticky_rounds, sticky_p1_p2_multiplier, mask_token_id, sticky_p1_divisor=2.0):
     """GPU-optimized Strategy 3: Fragment-based corruption using real text segments"""
     device = x.device
     batch_size = x.shape[0]
-    
+
     # Use GPU-optimized sticky masking to get corruption patterns
-    _, mask = apply_sticky_masking_gpu(x, sticky_rounds, mask_token_id, sticky_p1_p2_multiplier)
+    _, mask = apply_sticky_masking_gpu(x, sticky_rounds, mask_token_id, sticky_p1_p2_multiplier, sticky_p1_divisor)
     
     corrupted_x = x.clone()
     
@@ -261,34 +262,34 @@ def apply_fragment_corruption(x, data, block_size, sticky_rounds, sticky_p1_p2_m
     
     return corrupted_x, mask
 
-def apply_gpu_masking_validation(x, mask_token_id, sticky_rounds, sticky_p1_p2_multiplier, guaranteed_unmasked):
+def apply_gpu_masking_validation(x, mask_token_id, sticky_rounds, sticky_p1_p2_multiplier, guaranteed_unmasked, sticky_p1_divisor=2.0):
     """GPU-optimized validation masking with fixed 0.5 sticky ratio"""
     current_batch_size = x.shape[0]
     num_sticky_batches = int(current_batch_size * 0.5)  # Fixed 50% sticky ratio
-    
+
     # Pre-allocate tensors on GPU
     masked_x = x.clone()
     mask = torch.zeros_like(x, dtype=torch.bool, device=x.device)
-    
+
     # Apply independent masking to first part of batch (vectorized)
     if num_sticky_batches < current_batch_size:
         masking_prob = 0.5 * (1.0 - guaranteed_unmasked)  # Fixed at middle of range
         indep_mask = torch.rand(x[:current_batch_size-num_sticky_batches].shape, device=x.device) < masking_prob
         masked_x[:current_batch_size-num_sticky_batches][indep_mask] = mask_token_id
         mask[:current_batch_size-num_sticky_batches] = indep_mask
-    
+
     # Apply GPU-accelerated sticky masking to remaining part of batch
     if num_sticky_batches > 0:
         sticky_masked_x, sticky_mask = apply_sticky_masking_gpu(
-            x[-num_sticky_batches:], sticky_rounds, mask_token_id, sticky_p1_p2_multiplier
+            x[-num_sticky_batches:], sticky_rounds, mask_token_id, sticky_p1_p2_multiplier, sticky_p1_divisor
         )
         masked_x[-num_sticky_batches:] = sticky_masked_x
         mask[-num_sticky_batches:] = sticky_mask
     
     return masked_x, mask
 
-def apply_gpu_masking_training(x, iter_num, mask_token_id, sticky_rounds, sticky_p1_p2_multiplier, 
-                              guaranteed_unmasked, sticky_transition_start, sticky_transition_end):
+def apply_gpu_masking_training(x, iter_num, mask_token_id, sticky_rounds, sticky_p1_p2_multiplier,
+                              guaranteed_unmasked, sticky_transition_start, sticky_transition_end, sticky_p1_divisor=2.0):
     """GPU-optimized training masking with dynamic sticky ratio"""
     # Calculate sticky masking ratio based on current training iteration
     if iter_num < sticky_transition_start:
@@ -298,11 +299,11 @@ def apply_gpu_masking_training(x, iter_num, mask_token_id, sticky_rounds, sticky
     else:
         progress = (iter_num - sticky_transition_start) / (sticky_transition_end - sticky_transition_start)
         sticky_ratio = progress
-    
+
     # Pre-allocate tensors on GPU
     masked_x = x.clone()
     mask = torch.zeros_like(x, dtype=torch.bool, device=x.device)
-    
+
     if sticky_ratio == 0.0:
         # Pure independent masking (fully vectorized)
         masking_prob = torch.rand(1, device=x.device).item() * (1.0 - guaranteed_unmasked)
@@ -310,69 +311,71 @@ def apply_gpu_masking_training(x, iter_num, mask_token_id, sticky_rounds, sticky
         masked_x[mask] = mask_token_id
     elif sticky_ratio == 1.0:
         # Pure sticky masking
-        masked_x, mask = apply_sticky_masking_gpu(x, sticky_rounds, mask_token_id, sticky_p1_p2_multiplier)
+        masked_x, mask = apply_sticky_masking_gpu(x, sticky_rounds, mask_token_id, sticky_p1_p2_multiplier, sticky_p1_divisor)
     else:
         # Mixed strategy: some batches independent, some sticky
         current_batch_size = x.shape[0]
         num_sticky_batches = int(current_batch_size * sticky_ratio)
-        
+
         # Apply independent masking to first part of batch (vectorized)
         if num_sticky_batches < current_batch_size:
             masking_prob = torch.rand(1, device=x.device).item() * (1.0 - guaranteed_unmasked)
             indep_mask = torch.rand(x[:current_batch_size-num_sticky_batches].shape, device=x.device) < masking_prob
             masked_x[:current_batch_size-num_sticky_batches][indep_mask] = mask_token_id
             mask[:current_batch_size-num_sticky_batches] = indep_mask
-        
+
         # Apply GPU-accelerated sticky masking to remaining part of batch
         if num_sticky_batches > 0:
             sticky_masked_x, sticky_mask = apply_sticky_masking_gpu(
-                x[-num_sticky_batches:], sticky_rounds, mask_token_id, sticky_p1_p2_multiplier
+                x[-num_sticky_batches:], sticky_rounds, mask_token_id, sticky_p1_p2_multiplier, sticky_p1_divisor
             )
             masked_x[-num_sticky_batches:] = sticky_masked_x
             mask[-num_sticky_batches:] = sticky_mask
     
     return masked_x, mask
 
-def apply_sticky_masking_gpu(x, sticky_rounds, mask_token_id, sticky_p1_p2_multiplier):
-    """GPU-optimized sticky masking with parallel batch processing"""
+def apply_sticky_masking_gpu(x, sticky_rounds, mask_token_id, sticky_p1_p2_multiplier, sticky_p1_divisor=2.0):
+    """GPU-optimized sticky masking with parallel batch processing - logically equivalent to utils.py version"""
     batch_size, seq_len = x.shape
     device = x.device
-    
-    # Pre-allocate result tensors on GPU
+
+    # Start with no masks (same as original)
     masked_x = x.clone()
-    mask = torch.zeros_like(x, dtype=torch.bool, device=device)
-    
-    # Vectorized sticky masking parameters
-    sticky_p1 = torch.rand(batch_size, device=device) * 0.3 + 0.1  # Range: 0.1 to 0.4
-    sticky_p2 = sticky_p1 * sticky_p1_p2_multiplier  # Higher transition probability
-    
-    # Process all batches in parallel
+
     for round_idx in range(sticky_rounds):
-        # Generate random values for all positions at once
-        rand_vals = torch.rand(batch_size, seq_len, device=device)
+        # Dynamically sample sticky probabilities each round (same logic as original)
+        # Use CPU RNG for consistency between CPU and GPU implementations
+        p1 = torch.rand(1).item() / (sticky_rounds * sticky_p1_divisor)  # Sample from (0, 1/(rounds*divisor))
+        p2 = min(1.0, p1 * sticky_p1_p2_multiplier)  # p2 = p1 * multiplier, capped at 1
         
-        if round_idx == 0:
-            # Initial masking: independent for all positions
-            new_mask = rand_vals < sticky_p1.unsqueeze(1)
-        else:
-            # Sticky masking: higher probability near existing masks
-            # Compute neighbor influence in parallel
-            padded_mask = torch.nn.functional.pad(mask.float(), (1, 1), value=0)
-            left_neighbors = padded_mask[:, :-2]
-            right_neighbors = padded_mask[:, 2:]
-            has_masked_neighbor = (left_neighbors + right_neighbors) > 0
-            
-            # Vectorized probability assignment
-            probs = torch.where(has_masked_neighbor, 
-                              sticky_p2.unsqueeze(1), 
-                              sticky_p1.unsqueeze(1))
-            new_mask = rand_vals < probs
+        # Current mask state
+        current_mask = (masked_x == mask_token_id)
         
-        # Update mask and apply masking
-        mask = mask | new_mask
-        masked_x[new_mask] = mask_token_id
+        # For each position, check if neighbors are masked (vectorized version of original logic)
+        neighbor_masked = torch.zeros_like(current_mask, dtype=torch.bool, device=device)
+        
+        # Check left neighbor
+        neighbor_masked[:, 1:] |= current_mask[:, :-1]
+        # Check right neighbor  
+        neighbor_masked[:, :-1] |= current_mask[:, 1:]
+        
+        # Generate random values for masking decision
+        # Use CPU RNG for consistency, then move to target device
+        rand_vals = torch.rand(batch_size, seq_len).to(device)
+        
+        # Apply p1 where neighbors not masked, p2 where neighbors masked
+        mask_probs = torch.where(neighbor_masked, p2, p1)
+        new_masks = rand_vals < mask_probs
+        
+        # Don't mask positions that are already masked (same as original)
+        new_masks = new_masks & ~current_mask
+        
+        # Apply new masks
+        masked_x[new_masks] = mask_token_id
     
-    return masked_x, mask
+    # Final mask state
+    final_mask = (masked_x == mask_token_id)
+    return masked_x, final_mask
 
 def apply_random_noise_to_unmasked_gpu(x, mask, noise_max_ratio, meta_vocab_size, iter_num, 
                                        sticky_transition_start, sticky_transition_end):
@@ -491,16 +494,16 @@ def load_synthetic_model(checkpoint_path, device, extended_vocab_size):
         print(f"Warning: Could not load synthetic model from {checkpoint_path}: {e}")
         synthetic_model = None
 
-def apply_synthetic_corruption(x, sticky_rounds, sticky_p1_p2_multiplier, mask_token_id, meta_vocab_size):
+def apply_synthetic_corruption(x, sticky_rounds, sticky_p1_p2_multiplier, mask_token_id, meta_vocab_size, sticky_p1_divisor=2.0):
     """Strategy 4: Synthetic corruption using loaded unmasking model"""
     global synthetic_model
-    
+
     if synthetic_model is None:
         print("Warning: Synthetic model not loaded, falling back to sticky corruption")
-        return apply_sticky_corruption(x, sticky_rounds, sticky_p1_p2_multiplier, mask_token_id, meta_vocab_size)
-    
+        return apply_sticky_corruption(x, sticky_rounds, sticky_p1_p2_multiplier, mask_token_id, meta_vocab_size, sticky_p1_divisor)
+
     # Use sticky masking to get corruption patterns
-    _, mask = apply_sticky_masking(x, sticky_rounds, mask_token_id, sticky_p1_p2_multiplier)
+    _, mask = apply_sticky_masking(x, sticky_rounds, mask_token_id, sticky_p1_p2_multiplier, sticky_p1_divisor)
     
     # Create input for synthetic model: replace masked positions with mask tokens
     synthetic_input = x.clone()
@@ -622,11 +625,11 @@ def get_batch_unmasking(split, ctx: TrainingContext):
     # GPU-accelerated masking operations (already on GPU)
     if split == 'val':
         torch.manual_seed(42)
-        masked_x, mask = apply_gpu_masking_validation(x, ctx.mask_token_id, ctx.sticky_rounds, ctx.sticky_p1_p2_multiplier, ctx.guaranteed_unmasked)
+        masked_x, mask = apply_gpu_masking_validation(x, ctx.mask_token_id, ctx.sticky_rounds, ctx.sticky_p1_p2_multiplier, ctx.guaranteed_unmasked, ctx.sticky_p1_divisor)
         torch.manual_seed(1337 + ctx.seed_offset)
     else:
-        masked_x, mask = apply_gpu_masking_training(x, ctx.iter_num, ctx.mask_token_id, ctx.sticky_rounds, ctx.sticky_p1_p2_multiplier, 
-                                                  ctx.guaranteed_unmasked, ctx.sticky_transition_start, ctx.sticky_transition_end)
+        masked_x, mask = apply_gpu_masking_training(x, ctx.iter_num, ctx.mask_token_id, ctx.sticky_rounds, ctx.sticky_p1_p2_multiplier,
+                                                  ctx.guaranteed_unmasked, ctx.sticky_transition_start, ctx.sticky_transition_end, ctx.sticky_p1_divisor)
 
     # Apply random noise to unmasked positions (already on GPU)
     masked_x = apply_random_noise_to_unmasked_gpu(masked_x, mask, ctx.noise_max_ratio, ctx.meta_vocab_size, ctx.iter_num,
@@ -712,11 +715,11 @@ def get_batch_remasking(split, ctx: TrainingContext):
     if ctx.remasking_corruption_strategy == 'random':
         corrupted_x, mask = apply_random_corruption_gpu(x, 0.5, ctx.guaranteed_unmasked, ctx.meta_vocab_size)
     elif ctx.remasking_corruption_strategy == 'sticky':
-        corrupted_x, mask = apply_sticky_corruption_gpu(x, ctx.sticky_rounds, ctx.sticky_p1_p2_multiplier, ctx.mask_token_id, ctx.meta_vocab_size)
+        corrupted_x, mask = apply_sticky_corruption_gpu(x, ctx.sticky_rounds, ctx.sticky_p1_p2_multiplier, ctx.mask_token_id, ctx.meta_vocab_size, ctx.sticky_p1_divisor)
     elif ctx.remasking_corruption_strategy == 'fragment':
-        corrupted_x, mask = apply_fragment_corruption_gpu(x, _data_cache[split], ctx.block_size, ctx.sticky_rounds, ctx.sticky_p1_p2_multiplier, ctx.mask_token_id)
+        corrupted_x, mask = apply_fragment_corruption_gpu(x, _data_cache[split], ctx.block_size, ctx.sticky_rounds, ctx.sticky_p1_p2_multiplier, ctx.mask_token_id, ctx.sticky_p1_divisor)
     elif ctx.remasking_corruption_strategy == 'synthetic':
-        corrupted_x, mask = apply_synthetic_corruption(x, ctx.sticky_rounds, ctx.sticky_p1_p2_multiplier, ctx.mask_token_id, ctx.meta_vocab_size)
+        corrupted_x, mask = apply_synthetic_corruption(x, ctx.sticky_rounds, ctx.sticky_p1_p2_multiplier, ctx.mask_token_id, ctx.meta_vocab_size, ctx.sticky_p1_divisor)
     elif ctx.remasking_corruption_strategy == 'mixed':
         # Select strategy based on weights (keep CPU choice for simplicity)
         strategy_choice = np.random.choice(['random', 'sticky', 'fragment', 'synthetic'], p=ctx.remasking_strategy_weights)
@@ -724,11 +727,11 @@ def get_batch_remasking(split, ctx: TrainingContext):
         if strategy_choice == 'random':
             corrupted_x, mask = apply_random_corruption_gpu(x, 0.5, ctx.guaranteed_unmasked, ctx.meta_vocab_size)
         elif strategy_choice == 'sticky':
-            corrupted_x, mask = apply_sticky_corruption_gpu(x, ctx.sticky_rounds, ctx.sticky_p1_p2_multiplier, ctx.mask_token_id, ctx.meta_vocab_size)
+            corrupted_x, mask = apply_sticky_corruption_gpu(x, ctx.sticky_rounds, ctx.sticky_p1_p2_multiplier, ctx.mask_token_id, ctx.meta_vocab_size, ctx.sticky_p1_divisor)
         elif strategy_choice == 'fragment':
-            corrupted_x, mask = apply_fragment_corruption_gpu(x, _data_cache[split], ctx.block_size, ctx.sticky_rounds, ctx.sticky_p1_p2_multiplier, ctx.mask_token_id)
+            corrupted_x, mask = apply_fragment_corruption_gpu(x, _data_cache[split], ctx.block_size, ctx.sticky_rounds, ctx.sticky_p1_p2_multiplier, ctx.mask_token_id, ctx.sticky_p1_divisor)
         else:  # synthetic
-            corrupted_x, mask = apply_synthetic_corruption(x, ctx.sticky_rounds, ctx.sticky_p1_p2_multiplier, ctx.mask_token_id, ctx.meta_vocab_size)
+            corrupted_x, mask = apply_synthetic_corruption(x, ctx.sticky_rounds, ctx.sticky_p1_p2_multiplier, ctx.mask_token_id, ctx.meta_vocab_size, ctx.sticky_p1_divisor)
     else:
         # Default fallback to random
         corrupted_x, mask = apply_random_corruption_gpu(x, 0.5, ctx.guaranteed_unmasked, ctx.meta_vocab_size)
@@ -811,22 +814,22 @@ def get_batch_remasking_binary(split, ctx: TrainingContext):
     if ctx.remasking_corruption_strategy == 'random':
         corrupted_x, mask = apply_random_corruption_gpu(x, 0.5, ctx.guaranteed_unmasked, ctx.meta_vocab_size)
     elif ctx.remasking_corruption_strategy == 'sticky':
-        corrupted_x, mask = apply_sticky_corruption_gpu(x, ctx.sticky_rounds, ctx.sticky_p1_p2_multiplier, ctx.mask_token_id, ctx.meta_vocab_size)
+        corrupted_x, mask = apply_sticky_corruption_gpu(x, ctx.sticky_rounds, ctx.sticky_p1_p2_multiplier, ctx.mask_token_id, ctx.meta_vocab_size, ctx.sticky_p1_divisor)
     elif ctx.remasking_corruption_strategy == 'fragment':
-        corrupted_x, mask = apply_fragment_corruption_gpu(x, _data_cache[split], ctx.block_size, ctx.sticky_rounds, ctx.sticky_p1_p2_multiplier, ctx.mask_token_id)
+        corrupted_x, mask = apply_fragment_corruption_gpu(x, _data_cache[split], ctx.block_size, ctx.sticky_rounds, ctx.sticky_p1_p2_multiplier, ctx.mask_token_id, ctx.sticky_p1_divisor)
     elif ctx.remasking_corruption_strategy == 'synthetic':
-        corrupted_x, mask = apply_synthetic_corruption(x, ctx.sticky_rounds, ctx.sticky_p1_p2_multiplier, ctx.mask_token_id, ctx.meta_vocab_size)
+        corrupted_x, mask = apply_synthetic_corruption(x, ctx.sticky_rounds, ctx.sticky_p1_p2_multiplier, ctx.mask_token_id, ctx.meta_vocab_size, ctx.sticky_p1_divisor)
     elif ctx.remasking_corruption_strategy == 'mixed':
         strategy_choice = np.random.choice(['random', 'sticky', 'fragment', 'synthetic'], p=ctx.remasking_strategy_weights)
         
         if strategy_choice == 'random':
             corrupted_x, mask = apply_random_corruption_gpu(x, 0.5, ctx.guaranteed_unmasked, ctx.meta_vocab_size)
         elif strategy_choice == 'sticky':
-            corrupted_x, mask = apply_sticky_corruption_gpu(x, ctx.sticky_rounds, ctx.sticky_p1_p2_multiplier, ctx.mask_token_id, ctx.meta_vocab_size)
+            corrupted_x, mask = apply_sticky_corruption_gpu(x, ctx.sticky_rounds, ctx.sticky_p1_p2_multiplier, ctx.mask_token_id, ctx.meta_vocab_size, ctx.sticky_p1_divisor)
         elif strategy_choice == 'fragment':
-            corrupted_x, mask = apply_fragment_corruption_gpu(x, _data_cache[split], ctx.block_size, ctx.sticky_rounds, ctx.sticky_p1_p2_multiplier, ctx.mask_token_id)
+            corrupted_x, mask = apply_fragment_corruption_gpu(x, _data_cache[split], ctx.block_size, ctx.sticky_rounds, ctx.sticky_p1_p2_multiplier, ctx.mask_token_id, ctx.sticky_p1_divisor)
         else:  # synthetic
-            corrupted_x, mask = apply_synthetic_corruption(x, ctx.sticky_rounds, ctx.sticky_p1_p2_multiplier, ctx.mask_token_id, ctx.meta_vocab_size)
+            corrupted_x, mask = apply_synthetic_corruption(x, ctx.sticky_rounds, ctx.sticky_p1_p2_multiplier, ctx.mask_token_id, ctx.meta_vocab_size, ctx.sticky_p1_divisor)
     else:
         corrupted_x, mask = apply_random_corruption_gpu(x, 0.5, ctx.guaranteed_unmasked, ctx.meta_vocab_size)
 

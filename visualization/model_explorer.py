@@ -95,7 +95,7 @@ class TextVisualizer(QWidget):
         layout.addWidget(self.text_display)
         self.setLayout(layout)
         
-    def display_text(self, tokens, vocab, mask=None, predictions=None, title="Text"):
+    def display_text(self, tokens, vocab, mask=None, predictions=None, title="Text", probabilities=None, min_prob=None, max_prob=None):
         """Display text with optional mask and prediction highlighting"""
         html = f"<h3>{title}</h3><div style='font-family: Consolas, monospace; font-size: 14px;'>"
         
@@ -114,9 +114,22 @@ class TextVisualizer(QWidget):
             elif char == '\n':
                 char = '<br>'
                 
-            # Apply styling based on mask/predictions
+            # Apply styling based on mask/predictions/probabilities
             style = ""
-            if mask is not None and mask[i]:
+            
+            if probabilities is not None and min_prob is not None and max_prob is not None:
+                # Probability-based coloring (for remasking assessment)
+                prob = probabilities[i]
+                if max_prob > min_prob:
+                    # Normalize probability to 0-1 range
+                    normalized_prob = (prob - min_prob) / (max_prob - min_prob)
+                    # Interpolate between gray (low prob) and red (high prob)
+                    red_intensity = int(255 * normalized_prob)
+                    gray_intensity = int(128 * (1 - normalized_prob))
+                    style = f"background-color: rgb({red_intensity + gray_intensity}, {gray_intensity}, {gray_intensity}); color: black;"
+                else:
+                    style = "background-color: #808080; color: black;"  # All same probability - gray
+            elif mask is not None and mask[i]:
                 if predictions is not None:
                     # Show prediction vs original
                     pred_char = vocab.get(predictions[i], f"[UNK{predictions[i]}]")
@@ -124,7 +137,7 @@ class TextVisualizer(QWidget):
                         style = "background-color: #90EE90; color: black;"  # Correct prediction - green
                     else:
                         style = "background-color: #FFB6C1; color: black;"  # Wrong prediction - pink
-                        char = f"{char}→{pred_char}"
+                        char = pred_char  # Show only the wrong predicted character
                 else:
                     style = "background-color: #87CEEB; color: black;"  # Masked - blue
             elif predictions is not None:
@@ -151,6 +164,9 @@ class ModelExplorerApp(QMainWindow):
         self.current_sample = None
         self.current_corrupted = None
         self.current_predictions = None
+        self.token_probabilities = None
+        self.min_probability = None
+        self.max_probability = None
         self.data = None
         self.current_sample = None
         self.training_ctx = None
@@ -439,6 +455,40 @@ class ModelExplorerApp(QMainWindow):
         actions_group.setLayout(actions_layout)
         layout.addWidget(actions_group)
         
+        # Remasking Section
+        remasking_group = QGroupBox("Remasking")
+        remasking_layout = QVBoxLayout()
+        
+        # Remasking model selection
+        remasking_model_layout = QHBoxLayout()
+        remasking_model_layout.addWidget(QLabel("Remasking Model:"))
+        self.remasking_model_combo = QComboBox()
+        self.remasking_model_combo.addItem("Select remasking model...")
+        remasking_model_layout.addWidget(self.remasking_model_combo)
+        remasking_layout.addLayout(remasking_model_layout)
+        
+        # Remasking buttons
+        remasking_buttons_layout = QHBoxLayout()
+        self.assess_btn = QPushButton("Assess")
+        self.assess_btn.clicked.connect(self.assess_tokens)
+        self.assess_btn.setEnabled(False)
+        remasking_buttons_layout.addWidget(self.assess_btn)
+        
+        self.apply_remasking_btn = QPushButton("Apply")
+        self.apply_remasking_btn.clicked.connect(self.apply_remasking)
+        self.apply_remasking_btn.setEnabled(False)
+        remasking_buttons_layout.addWidget(self.apply_remasking_btn)
+        
+        remasking_layout.addLayout(remasking_buttons_layout)
+        
+        # Probability info display
+        self.prob_info_label = QLabel("Min/Max Probability: -")
+        self.prob_info_label.setStyleSheet("font-size: 11px; color: #666666;")
+        remasking_layout.addWidget(self.prob_info_label)
+        
+        remasking_group.setLayout(remasking_layout)
+        layout.addWidget(remasking_group)
+        
         # Add stretch to push everything to top
         layout.addStretch()
         
@@ -464,6 +514,10 @@ class ModelExplorerApp(QMainWindow):
         # Predictions tab
         self.predictions_viz = TextVisualizer()
         self.tab_widget.addTab(self.predictions_viz, "Model Predictions")
+        
+        # Remasking tab
+        self.remasking_viz = TextVisualizer()
+        self.tab_widget.addTab(self.remasking_viz, "Remasking Assessment")
         
         layout.addWidget(self.tab_widget)
         panel.setLayout(layout)
@@ -512,6 +566,10 @@ class ModelExplorerApp(QMainWindow):
         # Update model combo box
         if model_name not in [self.model_combo.itemText(i) for i in range(1, self.model_combo.count())]:
             self.model_combo.addItem(model_name)
+        
+        # Update remasking model combo box 
+        if model_name not in [self.remasking_model_combo.itemText(i) for i in range(1, self.remasking_model_combo.count())]:
+            self.remasking_model_combo.addItem(model_name)
         
         # Update status
         model_names = list(self.models.keys())
@@ -674,6 +732,9 @@ class ModelExplorerApp(QMainWindow):
             
             # Switch to predictions tab
             self.tab_widget.setCurrentIndex(2)
+            
+            # Enable remasking assess button if remasking model is selected
+            self.assess_btn.setEnabled(self.remasking_model_combo.currentIndex() > 0)
             
         except Exception as e:
             QMessageBox.critical(self, "Error", f"Failed to generate predictions: {str(e)}")

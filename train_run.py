@@ -60,6 +60,7 @@ sticky_transition_start = 500   # When to start introducing sticky masking
 sticky_transition_end = 12000     # When to reach full sticky masking
 sticky_rounds = 10                # Number of sticky masking rounds
 sticky_p1_p2_multiplier = 10.0    # Multiplier for sticky_p2 = sticky_p1 * multiplier
+sticky_p1_divisor = 2.0           # Divisor for p1 calculation: p1 = rand() / (sticky_rounds * divisor)
 # model
 n_layer = 6
 n_head = 6
@@ -185,6 +186,7 @@ training_ctx = TrainingContext(
     noise_max_ratio=noise_max_ratio,
     sticky_rounds=sticky_rounds,
     sticky_p1_p2_multiplier=sticky_p1_p2_multiplier,
+    sticky_p1_divisor=sticky_p1_divisor,
     sticky_transition_start=sticky_transition_start,
     sticky_transition_end=sticky_transition_end,
     remasking_corruption_strategy=remasking_corruption_strategy,
