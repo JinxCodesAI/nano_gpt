@@ -12,7 +12,7 @@ from model import GPTConfig, GPT
 # Configuration
 init_from = 'resume'
 out_dir = 'out'
-checkpoint_name = '14.6_unmasking_no_noise.pt'  # Specific checkpoint to load
+checkpoint_name = 'ckpt_unmasking_8200.pt'  # Specific checkpoint to load
 remasking_checkpoint_name = '1.23_remasking_bin.pt'  # Optional: checkpoint for remasking model, if None uses random remasking
 use_intelligent_remasking = True  # Set to True to use remasking model instead of random
 remasking_model_type = 'auto'  # 'remasking', 'remasking_binary', or 'auto' to detect from checkpoint
@@ -34,7 +34,7 @@ remasking_schedule = 'linear'
 diffusion_iterations = 100
 min_random_ratio = 0.9
 start_ratio = 0.8
-end_ratio = 0.05
+end_ratio = 0.1
 
 exec(open('configurator.py').read()) # overrides from command line or config file
 # -----------------------------------------------------------------------------
