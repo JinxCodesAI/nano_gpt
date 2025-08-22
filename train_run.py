@@ -48,7 +48,7 @@ gradient_accumulation_steps = 1 # used to simulate larger batch sizes
 batch_size = 16 # if gradient_accumulation_steps > 1, this is the micro-batch size
 block_size = 1024
 # diffusion training config
-training_type = 'remasking_binary'  # 'unmasking', 'remasking', or 'remasking_binary' - type of training
+training_type = 'unmasking'  # 'unmasking', 'remasking', or 'remasking_binary' - type of training
 remasking_corruption_strategy = 'mixed'  # 'random', 'sticky', 'fragment', 'mixed', 'synthetic' - corruption strategy for remasking
 remasking_strategy_weights = [0.25, 0.4, 0.25, 0.1]  # weights for [random, sticky, fragment, synthetic] when using 'mixed'
 synthetic_checkpoint_name = '14.6_unmasking_no_noise.pt'  # Path to unmasking model checkpoint for synthetic data generation (only for 'synthetic' strategy)
@@ -58,9 +58,9 @@ noise_max_ratio = 0.05            # Maximum ratio of unmasked tokens to corrupt 
 # sticky masking configuration - gradual transition from independent to sticky
 sticky_transition_start = 500   # When to start introducing sticky masking
 sticky_transition_end = 12000     # When to reach full sticky masking
-sticky_rounds = 10                # Number of sticky masking rounds
-sticky_p1_p2_multiplier = 10.0    # Multiplier for sticky_p2 = sticky_p1 * multiplier
-sticky_p1_divisor = 2.0           # Divisor for p1 calculation: p1 = rand() / (sticky_rounds * divisor)
+sticky_rounds = 6                # Number of sticky masking rounds
+sticky_p1_p2_multiplier = 5.0    # Multiplier for sticky_p2 = sticky_p1 * multiplier
+sticky_p1_divisor = 10.0           # Divisor for p1 calculation: p1 = rand() / (sticky_rounds * divisor)
 # model
 n_layer = 6
 n_head = 6
