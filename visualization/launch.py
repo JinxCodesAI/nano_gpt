@@ -46,24 +46,12 @@ def main():
         return 1
         
     print("✅ All dependencies satisfied!")
-    print("\n🔍 Available Applications:")
-    print("1. Model Explorer (Basic) - Single sample analysis")
-    print("2. Enhanced Explorer - Batch processing & comparison")
+    print("🚀 Starting Model Explorer...")
     
-    choice = input("\nSelect application (1 or 2, default=1): ").strip()
-    
-    print(f"\n🚀 Starting application...")
-    
-    # Import and run the selected application
+    # Import and run the model explorer
     try:
-        if choice == "2":
-            print("Loading Enhanced Explorer...")
-            from enhanced_explorer import main as run_enhanced
-            run_enhanced()
-        else:
-            print("Loading Basic Model Explorer...")
-            from model_explorer import main as run_basic
-            run_basic()
+        from model_explorer import main as run_basic
+        run_basic()
     except Exception as e:
         print(f"❌ Error starting application: {e}")
         print("\n💡 Troubleshooting:")

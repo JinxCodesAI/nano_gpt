@@ -17,7 +17,7 @@ from PyQt6.QtWidgets import (
     QApplication, QMainWindow, QVBoxLayout, QHBoxLayout, QWidget, 
     QTextEdit, QPushButton, QLabel, QComboBox, QSlider, QSpinBox,
     QGroupBox, QGridLayout, QSplitter, QScrollArea, QFrame,
-    QProgressBar, QMessageBox, QTabWidget, QListWidget
+    QProgressBar, QMessageBox, QTabWidget, QListWidget, QDoubleSpinBox
 )
 from PyQt6.QtCore import Qt, QThread, pyqtSignal, QTimer
 from PyQt6.QtGui import QFont, QPixmap, QPalette, QColor
@@ -396,37 +396,31 @@ class ModelExplorerApp(QMainWindow):
         strategy_layout = QHBoxLayout()
         strategy_layout.addWidget(QLabel("Strategy:"))
         self.strategy_combo = QComboBox()
-        self.strategy_combo.addItems(["random", "sticky", "fragment", "mixed"])
+        self.strategy_combo.addItems(["random", "sticky", "fragment", "synthetic", "mixed"])
         self.strategy_combo.setCurrentText("mixed")
-        self.strategy_combo.currentTextChanged.connect(self.update_corruption_preview)
+        self.strategy_combo.currentTextChanged.connect(self.on_strategy_changed)
         strategy_layout.addWidget(self.strategy_combo)
         corruption_layout.addLayout(strategy_layout)
         
-        # Masking ratio
-        ratio_layout = QVBoxLayout()
-        ratio_layout.addWidget(QLabel("Masking Ratio:"))
-        self.ratio_slider = QSlider(Qt.Orientation.Horizontal)
-        self.ratio_slider.setRange(10, 80)
-        self.ratio_slider.setValue(50)
-        self.ratio_slider.valueChanged.connect(self.update_ratio_label)
-        self.ratio_slider.valueChanged.connect(self.update_corruption_preview)
-        ratio_layout.addWidget(self.ratio_slider)
+        # Create tab widget for strategy-specific controls
+        self.corruption_tabs = QTabWidget()
         
-        self.ratio_label = QLabel("50%")
-        self.ratio_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        ratio_layout.addWidget(self.ratio_label)
-        corruption_layout.addLayout(ratio_layout)
+        # Random Corruption Tab
+        self.create_random_corruption_tab()
         
-        # Sticky rounds (for sticky masking)
-        rounds_layout = QHBoxLayout()
-        rounds_layout.addWidget(QLabel("Sticky Rounds:"))
-        self.rounds_spinbox = QSpinBox()
-        self.rounds_spinbox.setRange(1, 20)
-        self.rounds_spinbox.setValue(10)
-        self.rounds_spinbox.valueChanged.connect(self.update_corruption_preview)
-        rounds_layout.addWidget(self.rounds_spinbox)
-        corruption_layout.addLayout(rounds_layout)
+        # Sticky Corruption Tab  
+        self.create_sticky_corruption_tab()
         
+        # Fragment Corruption Tab
+        self.create_fragment_corruption_tab()
+        
+        # Synthetic Corruption Tab
+        self.create_synthetic_corruption_tab()
+        
+        # Mixed Strategy Tab
+        self.create_mixed_corruption_tab()
+        
+        corruption_layout.addWidget(self.corruption_tabs)
         corruption_group.setLayout(corruption_layout)
         layout.addWidget(corruption_group)
         
@@ -464,6 +458,7 @@ class ModelExplorerApp(QMainWindow):
         remasking_model_layout.addWidget(QLabel("Remasking Model:"))
         self.remasking_model_combo = QComboBox()
         self.remasking_model_combo.addItem("Select remasking model...")
+        self.remasking_model_combo.currentTextChanged.connect(self.update_remasking_buttons)
         remasking_model_layout.addWidget(self.remasking_model_combo)
         remasking_layout.addLayout(remasking_model_layout)
         
@@ -494,6 +489,263 @@ class ModelExplorerApp(QMainWindow):
         
         panel.setLayout(layout)
         return panel
+    
+    def create_random_corruption_tab(self):
+        """Create tab for random corruption parameters"""
+        tab = QWidget()
+        layout = QVBoxLayout()
+        
+        # Guaranteed unmasked range
+        unmasked_group = QGroupBox("Dynamic Guaranteed Unmasked")
+        unmasked_layout = QGridLayout()
+        
+        # Max guaranteed unmasked (start of training)
+        unmasked_layout.addWidget(QLabel("Max (start):"), 0, 0)
+        self.guaranteed_unmasked_max = QDoubleSpinBox()
+        self.guaranteed_unmasked_max.setRange(0.0, 1.0)
+        self.guaranteed_unmasked_max.setSingleStep(0.1)
+        self.guaranteed_unmasked_max.setValue(0.8)
+        self.guaranteed_unmasked_max.valueChanged.connect(self.update_corruption_preview)
+        unmasked_layout.addWidget(self.guaranteed_unmasked_max, 0, 1)
+        
+        # Min guaranteed unmasked (end of training)
+        unmasked_layout.addWidget(QLabel("Min (end):"), 1, 0)
+        self.guaranteed_unmasked_min = QDoubleSpinBox()
+        self.guaranteed_unmasked_min.setRange(0.0, 1.0)
+        self.guaranteed_unmasked_min.setSingleStep(0.1)
+        self.guaranteed_unmasked_min.setValue(0.0)
+        self.guaranteed_unmasked_min.valueChanged.connect(self.update_corruption_preview)
+        unmasked_layout.addWidget(self.guaranteed_unmasked_min, 1, 1)
+        
+        unmasked_group.setLayout(unmasked_layout)
+        layout.addWidget(unmasked_group)
+        
+        # Transition settings
+        transition_group = QGroupBox("Sticky Transition")
+        transition_layout = QGridLayout()
+        
+        transition_layout.addWidget(QLabel("Start iteration:"), 0, 0)
+        self.sticky_transition_start = QSpinBox()
+        self.sticky_transition_start.setRange(0, 50000)
+        self.sticky_transition_start.setValue(500)
+        self.sticky_transition_start.valueChanged.connect(self.update_corruption_preview)
+        transition_layout.addWidget(self.sticky_transition_start, 0, 1)
+        
+        transition_layout.addWidget(QLabel("End iteration:"), 1, 0)
+        self.sticky_transition_end = QSpinBox()
+        self.sticky_transition_end.setRange(0, 50000)
+        self.sticky_transition_end.setValue(15000)
+        self.sticky_transition_end.valueChanged.connect(self.update_corruption_preview)
+        transition_layout.addWidget(self.sticky_transition_end, 1, 1)
+        
+        transition_group.setLayout(transition_layout)
+        layout.addWidget(transition_group)
+        
+        layout.addStretch()
+        tab.setLayout(layout)
+        self.corruption_tabs.addTab(tab, "Random")
+    
+    def create_sticky_corruption_tab(self):
+        """Create tab for sticky corruption parameters"""
+        tab = QWidget()
+        layout = QVBoxLayout()
+        
+        # Sticky masking parameters
+        sticky_group = QGroupBox("Sticky Masking Parameters")
+        sticky_layout = QGridLayout()
+        
+        sticky_layout.addWidget(QLabel("Rounds:"), 0, 0)
+        self.sticky_rounds = QSpinBox()
+        self.sticky_rounds.setRange(1, 50)
+        self.sticky_rounds.setValue(6)
+        self.sticky_rounds.valueChanged.connect(self.update_corruption_preview)
+        sticky_layout.addWidget(self.sticky_rounds, 0, 1)
+        
+        sticky_layout.addWidget(QLabel("P1-P2 Multiplier:"), 1, 0)
+        self.sticky_p1_p2_multiplier = QDoubleSpinBox()
+        self.sticky_p1_p2_multiplier.setRange(1.0, 50.0)
+        self.sticky_p1_p2_multiplier.setValue(7.0)
+        self.sticky_p1_p2_multiplier.valueChanged.connect(self.update_corruption_preview)
+        sticky_layout.addWidget(self.sticky_p1_p2_multiplier, 1, 1)
+        
+        sticky_layout.addWidget(QLabel("P1 Divisor:"), 2, 0)
+        self.sticky_p1_divisor = QDoubleSpinBox()
+        self.sticky_p1_divisor.setRange(1.0, 20.0)
+        self.sticky_p1_divisor.setValue(10.0)
+        self.sticky_p1_divisor.valueChanged.connect(self.update_corruption_preview)
+        sticky_layout.addWidget(self.sticky_p1_divisor, 2, 1)
+        
+        sticky_group.setLayout(sticky_layout)
+        layout.addWidget(sticky_group)
+        
+        layout.addStretch()
+        tab.setLayout(layout)
+        self.corruption_tabs.addTab(tab, "Sticky")
+    
+    def create_fragment_corruption_tab(self):
+        """Create tab for fragment corruption parameters"""
+        tab = QWidget()
+        layout = QVBoxLayout()
+        
+        # Info about fragment corruption
+        info_label = QLabel("Fragment corruption uses real text segments from training data.\nIt uses sticky masking parameters to determine corruption patterns.")
+        info_label.setWordWrap(True)
+        info_label.setStyleSheet("color: #888888; font-size: 11px;")
+        layout.addWidget(info_label)
+        
+        # Reuse sticky parameters for fragment
+        fragment_group = QGroupBox("Fragment + Sticky Parameters")
+        fragment_layout = QGridLayout()
+        
+        fragment_layout.addWidget(QLabel("Sticky Rounds:"), 0, 0)
+        self.fragment_sticky_rounds = QSpinBox()
+        self.fragment_sticky_rounds.setRange(1, 50)
+        self.fragment_sticky_rounds.setValue(6)
+        self.fragment_sticky_rounds.valueChanged.connect(self.update_corruption_preview)
+        fragment_layout.addWidget(self.fragment_sticky_rounds, 0, 1)
+        
+        fragment_layout.addWidget(QLabel("P1-P2 Multiplier:"), 1, 0)
+        self.fragment_p1_p2_multiplier = QDoubleSpinBox()
+        self.fragment_p1_p2_multiplier.setRange(1.0, 50.0)
+        self.fragment_p1_p2_multiplier.setValue(7.0)
+        self.fragment_p1_p2_multiplier.valueChanged.connect(self.update_corruption_preview)
+        fragment_layout.addWidget(self.fragment_p1_p2_multiplier, 1, 1)
+        
+        fragment_layout.addWidget(QLabel("P1 Divisor:"), 2, 0)
+        self.fragment_p1_divisor = QDoubleSpinBox()
+        self.fragment_p1_divisor.setRange(1.0, 20.0)
+        self.fragment_p1_divisor.setValue(10.0)
+        self.fragment_p1_divisor.valueChanged.connect(self.update_corruption_preview)
+        fragment_layout.addWidget(self.fragment_p1_divisor, 2, 1)
+        
+        fragment_group.setLayout(fragment_layout)
+        layout.addWidget(fragment_group)
+        
+        layout.addStretch()
+        tab.setLayout(layout)
+        self.corruption_tabs.addTab(tab, "Fragment")
+    
+    def create_synthetic_corruption_tab(self):
+        """Create tab for synthetic corruption parameters"""
+        tab = QWidget()
+        layout = QVBoxLayout()
+        
+        # Info about synthetic corruption
+        info_label = QLabel("Synthetic corruption uses a trained unmasking model to generate realistic corrupted text.\nRequires loading a synthetic model first.")
+        info_label.setWordWrap(True)
+        info_label.setStyleSheet("color: #888888; font-size: 11px;")
+        layout.addWidget(info_label)
+        
+        # Synthetic model loading
+        synthetic_group = QGroupBox("Synthetic Model")
+        synthetic_layout = QVBoxLayout()
+        
+        self.synthetic_model_combo = QComboBox()
+        self.synthetic_model_combo.addItem("No synthetic model loaded...")
+        synthetic_layout.addWidget(QLabel("Synthetic Model:"))
+        synthetic_layout.addWidget(self.synthetic_model_combo)
+        
+        synthetic_group.setLayout(synthetic_layout)
+        layout.addWidget(synthetic_group)
+        
+        # Synthetic + sticky parameters
+        synth_sticky_group = QGroupBox("Synthetic + Sticky Parameters")
+        synth_sticky_layout = QGridLayout()
+        
+        synth_sticky_layout.addWidget(QLabel("Temperature:"), 0, 0)
+        self.synthetic_temperature = QDoubleSpinBox()
+        self.synthetic_temperature.setRange(0.1, 2.0)
+        self.synthetic_temperature.setSingleStep(0.1)
+        self.synthetic_temperature.setValue(0.8)
+        self.synthetic_temperature.valueChanged.connect(self.update_corruption_preview)
+        synth_sticky_layout.addWidget(self.synthetic_temperature, 0, 1)
+        
+        synth_sticky_layout.addWidget(QLabel("Sticky Rounds:"), 1, 0)
+        self.synthetic_sticky_rounds = QSpinBox()
+        self.synthetic_sticky_rounds.setRange(1, 50)
+        self.synthetic_sticky_rounds.setValue(6)
+        self.synthetic_sticky_rounds.valueChanged.connect(self.update_corruption_preview)
+        synth_sticky_layout.addWidget(self.synthetic_sticky_rounds, 1, 1)
+        
+        synth_sticky_layout.addWidget(QLabel("P1-P2 Multiplier:"), 2, 0)
+        self.synthetic_p1_p2_multiplier = QDoubleSpinBox()
+        self.synthetic_p1_p2_multiplier.setRange(1.0, 50.0)
+        self.synthetic_p1_p2_multiplier.setValue(7.0)
+        self.synthetic_p1_p2_multiplier.valueChanged.connect(self.update_corruption_preview)
+        synth_sticky_layout.addWidget(self.synthetic_p1_p2_multiplier, 2, 1)
+        
+        synth_sticky_layout.addWidget(QLabel("P1 Divisor:"), 3, 0)
+        self.synthetic_p1_divisor = QDoubleSpinBox()
+        self.synthetic_p1_divisor.setRange(1.0, 20.0)
+        self.synthetic_p1_divisor.setValue(10.0)
+        self.synthetic_p1_divisor.valueChanged.connect(self.update_corruption_preview)
+        synth_sticky_layout.addWidget(self.synthetic_p1_divisor, 3, 1)
+        
+        synth_sticky_group.setLayout(synth_sticky_layout)
+        layout.addWidget(synth_sticky_group)
+        
+        layout.addStretch()
+        tab.setLayout(layout)
+        self.corruption_tabs.addTab(tab, "Synthetic")
+    
+    def create_mixed_corruption_tab(self):
+        """Create tab for mixed corruption strategy weights"""
+        tab = QWidget()
+        layout = QVBoxLayout()
+        
+        # Info about mixed strategy
+        info_label = QLabel("Mixed strategy randomly selects from different corruption methods based on weights.\nWeights should sum to 1.0.")
+        info_label.setWordWrap(True)
+        info_label.setStyleSheet("color: #888888; font-size: 11px;")
+        layout.addWidget(info_label)
+        
+        # Strategy weights
+        weights_group = QGroupBox("Strategy Weights")
+        weights_layout = QGridLayout()
+        
+        weights_layout.addWidget(QLabel("Random:"), 0, 0)
+        self.weight_random = QDoubleSpinBox()
+        self.weight_random.setRange(0.0, 1.0)
+        self.weight_random.setSingleStep(0.05)
+        self.weight_random.setValue(0.25)
+        self.weight_random.valueChanged.connect(self.update_corruption_preview)
+        weights_layout.addWidget(self.weight_random, 0, 1)
+        
+        weights_layout.addWidget(QLabel("Sticky:"), 1, 0)
+        self.weight_sticky = QDoubleSpinBox()
+        self.weight_sticky.setRange(0.0, 1.0)
+        self.weight_sticky.setSingleStep(0.05)
+        self.weight_sticky.setValue(0.4)
+        self.weight_sticky.valueChanged.connect(self.update_corruption_preview)
+        weights_layout.addWidget(self.weight_sticky, 1, 1)
+        
+        weights_layout.addWidget(QLabel("Fragment:"), 2, 0)
+        self.weight_fragment = QDoubleSpinBox()
+        self.weight_fragment.setRange(0.0, 1.0)
+        self.weight_fragment.setSingleStep(0.05)
+        self.weight_fragment.setValue(0.25)
+        self.weight_fragment.valueChanged.connect(self.update_corruption_preview)
+        weights_layout.addWidget(self.weight_fragment, 2, 1)
+        
+        weights_layout.addWidget(QLabel("Synthetic:"), 3, 0)
+        self.weight_synthetic = QDoubleSpinBox()
+        self.weight_synthetic.setRange(0.0, 1.0)
+        self.weight_synthetic.setSingleStep(0.05)
+        self.weight_synthetic.setValue(0.1)
+        self.weight_synthetic.valueChanged.connect(self.update_corruption_preview)
+        weights_layout.addWidget(self.weight_synthetic, 3, 1)
+        
+        # Normalize button
+        normalize_btn = QPushButton("Normalize Weights")
+        normalize_btn.clicked.connect(self.normalize_weights)
+        weights_layout.addWidget(normalize_btn, 4, 0, 1, 2)
+        
+        weights_group.setLayout(weights_layout)
+        layout.addWidget(weights_group)
+        
+        layout.addStretch()
+        tab.setLayout(layout)
+        self.corruption_tabs.addTab(tab, "Mixed")
         
     def create_visualization_panel(self):
         """Create the visualization panel with tabs"""
@@ -571,10 +823,16 @@ class ModelExplorerApp(QMainWindow):
         if model_name not in [self.remasking_model_combo.itemText(i) for i in range(1, self.remasking_model_combo.count())]:
             self.remasking_model_combo.addItem(model_name)
         
+        # Update synthetic model combo box
+        self.update_synthetic_model_combo()
+        
         # Update status
         model_names = list(self.models.keys())
         self.model_status.setText(f"Loaded: {', '.join(model_names)}")
         self.model_status.setStyleSheet("color: #90EE90;")
+        
+        # Update button states
+        self.update_remasking_buttons()
         
         self.statusBar().showMessage(f"Successfully loaded {model_name}")
         
@@ -613,11 +871,49 @@ class ModelExplorerApp(QMainWindow):
             
         except Exception as e:
             QMessageBox.critical(self, "Error", f"Failed to generate sample: {str(e)}")
-            
-    def update_ratio_label(self):
-        """Update the ratio label"""
-        self.ratio_label.setText(f"{self.ratio_slider.value()}%")
+    
+    def on_strategy_changed(self):
+        """Handle strategy selection change"""
+        strategy = self.strategy_combo.currentText()
         
+        # Switch to appropriate tab
+        if strategy == "random":
+            self.corruption_tabs.setCurrentIndex(0)
+        elif strategy == "sticky":
+            self.corruption_tabs.setCurrentIndex(1)
+        elif strategy == "fragment":
+            self.corruption_tabs.setCurrentIndex(2)
+        elif strategy == "synthetic":
+            self.corruption_tabs.setCurrentIndex(3)
+        elif strategy == "mixed":
+            self.corruption_tabs.setCurrentIndex(4)
+            
+        # Update synthetic model combo
+        if strategy == "synthetic":
+            self.update_synthetic_model_combo()
+            
+        self.update_corruption_preview()
+    
+    def update_synthetic_model_combo(self):
+        """Update synthetic model combo with available models"""
+        self.synthetic_model_combo.clear()
+        self.synthetic_model_combo.addItem("No synthetic model loaded...")
+        for model_name in self.models.keys():
+            self.synthetic_model_combo.addItem(model_name)
+    
+    def normalize_weights(self):
+        """Normalize strategy weights to sum to 1.0"""
+        total = (self.weight_random.value() + 
+                self.weight_sticky.value() + 
+                self.weight_fragment.value() + 
+                self.weight_synthetic.value())
+        
+        if total > 0:
+            self.weight_random.setValue(self.weight_random.value() / total)
+            self.weight_sticky.setValue(self.weight_sticky.value() / total)
+            self.weight_fragment.setValue(self.weight_fragment.value() / total)
+            self.weight_synthetic.setValue(self.weight_synthetic.value() / total)
+            
     def update_corruption_preview(self):
         """Update corruption preview when settings change"""
         if self.current_sample is None:
@@ -642,33 +938,149 @@ class ModelExplorerApp(QMainWindow):
         x = torch.from_numpy(self.current_sample).unsqueeze(0).to(self.device)
         
         strategy = self.strategy_combo.currentText()
-        corruption_prob = self.ratio_slider.value() / 100.0
         
-        if strategy == "random":
-            corrupted_x, mask = apply_random_corruption_gpu(
-                x, self.training_ctx.iter_num, self.training_ctx.guaranteed_unmasked_max, self.training_ctx.guaranteed_unmasked_min,
-                self.training_ctx.sticky_transition_start, self.training_ctx.sticky_transition_end, self.training_ctx.meta_vocab_size
-            )
-        elif strategy == "sticky":
-            # First mask with sticky strategy
-            masked_x, mask = apply_gpu_masking_training(
-                x, self.training_ctx.iter_num, self.training_ctx.mask_token_id,
-                self.rounds_spinbox.value(), self.training_ctx.sticky_p1_p2_multiplier,
-                self.training_ctx.guaranteed_unmasked, 
-                self.training_ctx.sticky_transition_start, self.training_ctx.sticky_transition_end
-            )
-            # Then apply sticky corruption
-            corrupted_x, mask = apply_sticky_corruption_gpu(
-                x, self.rounds_spinbox.value(), self.training_ctx.sticky_p1_p2_multiplier,
-                self.training_ctx.mask_token_id, self.training_ctx.meta_vocab_size
-            )
-        else:  # fragment or mixed - use random for preview
-            corrupted_x, mask = apply_random_corruption_gpu(
-                x, self.training_ctx.iter_num, self.training_ctx.guaranteed_unmasked_max, self.training_ctx.guaranteed_unmasked_min,
-                self.training_ctx.sticky_transition_start, self.training_ctx.sticky_transition_end, self.training_ctx.meta_vocab_size
-            )
+        try:
+            if strategy == "random":
+                # Use random corruption with UI parameters
+                corrupted_x, mask = apply_random_corruption_gpu(
+                    x, 
+                    iter_num=self.training_ctx.iter_num,
+                    guaranteed_unmasked_max=self.guaranteed_unmasked_max.value(),
+                    guaranteed_unmasked_min=self.guaranteed_unmasked_min.value(),
+                    sticky_transition_start=self.sticky_transition_start.value(),
+                    sticky_transition_end=self.sticky_transition_end.value(),
+                    meta_vocab_size=self.vocab_size
+                )
+                
+            elif strategy == "sticky":
+                # Use sticky corruption with UI parameters
+                corrupted_x, mask = apply_sticky_corruption_gpu(
+                    x,
+                    sticky_rounds=self.sticky_rounds.value(),
+                    sticky_p1_p2_multiplier=self.sticky_p1_p2_multiplier.value(),
+                    mask_token_id=self.training_ctx.mask_token_id,
+                    meta_vocab_size=self.vocab_size,
+                    sticky_p1_divisor=self.sticky_p1_divisor.value()
+                )
+                
+            elif strategy == "fragment":
+                # Use fragment corruption with UI parameters
+                if self.data is not None:
+                    corrupted_x, mask = apply_fragment_corruption_gpu(
+                        x,
+                        data=self.data,
+                        block_size=len(self.current_sample),
+                        sticky_rounds=self.fragment_sticky_rounds.value(),
+                        sticky_p1_p2_multiplier=self.fragment_p1_p2_multiplier.value(),
+                        mask_token_id=self.training_ctx.mask_token_id,
+                        sticky_p1_divisor=self.fragment_p1_divisor.value()
+                    )
+                else:
+                    # Fallback to sticky if no data available
+                    corrupted_x, mask = apply_sticky_corruption_gpu(
+                        x,
+                        sticky_rounds=self.fragment_sticky_rounds.value(),
+                        sticky_p1_p2_multiplier=self.fragment_p1_p2_multiplier.value(),
+                        mask_token_id=self.training_ctx.mask_token_id,
+                        meta_vocab_size=self.vocab_size,
+                        sticky_p1_divisor=self.fragment_p1_divisor.value()
+                    )
+                    
+            elif strategy == "synthetic":
+                # Use synthetic corruption with UI parameters
+                # For now, fallback to sticky since synthetic requires loaded model
+                corrupted_x, mask = apply_sticky_corruption_gpu(
+                    x,
+                    sticky_rounds=self.synthetic_sticky_rounds.value(),
+                    sticky_p1_p2_multiplier=self.synthetic_p1_p2_multiplier.value(),
+                    mask_token_id=self.training_ctx.mask_token_id,
+                    meta_vocab_size=self.vocab_size,
+                    sticky_p1_divisor=self.synthetic_p1_divisor.value()
+                )
+                
+            elif strategy == "mixed":
+                # Use mixed strategy - randomly select based on weights
+                import random
+                weights = [
+                    self.weight_random.value(),
+                    self.weight_sticky.value(), 
+                    self.weight_fragment.value(),
+                    self.weight_synthetic.value()
+                ]
+                strategies = ["random", "sticky", "fragment", "synthetic"]
+                
+                # Normalize weights
+                total_weight = sum(weights)
+                if total_weight > 0:
+                    weights = [w / total_weight for w in weights]
+                else:
+                    weights = [0.25, 0.25, 0.25, 0.25]
+                    
+                chosen_strategy = random.choices(strategies, weights=weights)[0]
+                
+                # Call specific corruption method directly without changing UI
+                if chosen_strategy == "random":
+                    corrupted_x, mask = apply_random_corruption_gpu(
+                        x, 
+                        iter_num=self.training_ctx.iter_num,
+                        guaranteed_unmasked_max=self.guaranteed_unmasked_max.value(),
+                        guaranteed_unmasked_min=self.guaranteed_unmasked_min.value(),
+                        sticky_transition_start=self.sticky_transition_start.value(),
+                        sticky_transition_end=self.sticky_transition_end.value(),
+                        meta_vocab_size=self.vocab_size
+                    )
+                elif chosen_strategy == "sticky":
+                    corrupted_x, mask = apply_sticky_corruption_gpu(
+                        x,
+                        sticky_rounds=self.sticky_rounds.value(),
+                        sticky_p1_p2_multiplier=self.sticky_p1_p2_multiplier.value(),
+                        mask_token_id=self.training_ctx.mask_token_id,
+                        meta_vocab_size=self.vocab_size,
+                        sticky_p1_divisor=self.sticky_p1_divisor.value()
+                    )
+                elif chosen_strategy == "fragment":
+                    if self.data is not None:
+                        corrupted_x, mask = apply_fragment_corruption_gpu(
+                            x,
+                            data=self.data,
+                            block_size=len(self.current_sample),
+                            sticky_rounds=self.fragment_sticky_rounds.value(),
+                            sticky_p1_p2_multiplier=self.fragment_p1_p2_multiplier.value(),
+                            mask_token_id=self.training_ctx.mask_token_id,
+                            sticky_p1_divisor=self.fragment_p1_divisor.value()
+                        )
+                    else:
+                        # Fallback to sticky
+                        corrupted_x, mask = apply_sticky_corruption_gpu(
+                            x,
+                            sticky_rounds=self.fragment_sticky_rounds.value(),
+                            sticky_p1_p2_multiplier=self.fragment_p1_p2_multiplier.value(),
+                            mask_token_id=self.training_ctx.mask_token_id,
+                            meta_vocab_size=self.vocab_size,
+                            sticky_p1_divisor=self.fragment_p1_divisor.value()
+                        )
+                else:  # synthetic
+                    corrupted_x, mask = apply_sticky_corruption_gpu(
+                        x,
+                        sticky_rounds=self.synthetic_sticky_rounds.value(),
+                        sticky_p1_p2_multiplier=self.synthetic_p1_p2_multiplier.value(),
+                        mask_token_id=self.training_ctx.mask_token_id,
+                        meta_vocab_size=self.vocab_size,
+                        sticky_p1_divisor=self.synthetic_p1_divisor.value()
+                    )
+                
+            else:
+                # Default fallback
+                corrupted_x, mask = apply_random_corruption_gpu(
+                    x, 0, 0.5, 0.0, 500, 15000, self.vocab_size
+                )
+                
+            return corrupted_x.squeeze(0).cpu().numpy(), mask.squeeze(0).cpu().numpy()
             
-        return corrupted_x.squeeze(0).cpu().numpy(), mask.squeeze(0).cpu().numpy()
+        except Exception as e:
+            print(f"Corruption error: {e}")
+            # Return uncorrupted as fallback
+            return self.current_sample, np.zeros(len(self.current_sample), dtype=bool)
         
     def apply_corruption(self):
         """Apply corruption to the current sample"""
@@ -736,10 +1148,104 @@ class ModelExplorerApp(QMainWindow):
             self.tab_widget.setCurrentIndex(2)
             
             # Enable remasking assess button if remasking model is selected
-            self.assess_btn.setEnabled(self.remasking_model_combo.currentIndex() > 0)
+            self.update_remasking_buttons()
             
         except Exception as e:
             QMessageBox.critical(self, "Error", f"Failed to generate predictions: {str(e)}")
+    
+    def update_remasking_buttons(self):
+        """Update remasking button states based on current conditions"""
+        has_predictions = self.current_predictions is not None
+        has_remasking_model = self.remasking_model_combo.currentIndex() > 0
+        
+        # Assess button: need both predictions and remasking model
+        self.assess_btn.setEnabled(has_predictions and has_remasking_model)
+        
+        # Apply button: enabled after successful assessment
+        # (this will be enabled in assess_tokens method)
+    
+    def assess_tokens(self):
+        """Assess token probabilities using remasking model"""
+        if self.current_predictions is None or self.remasking_model_combo.currentIndex() == 0:
+            QMessageBox.warning(self, "Warning", "Please generate predictions and select a remasking model first")
+            return
+            
+        try:
+            remasking_model_name = self.remasking_model_combo.currentText()
+            remasking_model = self.models[remasking_model_name]
+            
+            # Use predictions from third tab as input to assess their correctness
+            x = torch.from_numpy(self.current_predictions).unsqueeze(0).to(self.device)
+            
+            # Get token probabilities from remasking model
+            with torch.no_grad():
+                logits, _ = remasking_model(x, None)
+                # Debug info
+                print(f"Logits shape: {logits.shape}")
+                print(f"Vocab size: {self.vocab_size}")
+                print(f"Model vocab size: {logits.shape[-1]}")
+                
+                # For remasking models, we want probabilities of tokens being wrong
+                # Assuming the model outputs probabilities for each token being correct/incorrect
+                probs = torch.softmax(logits, dim=-1)
+                
+                # Get probability of each token being wrong (assume last class is "wrong" indicator)
+                if logits.shape[-1] > self.vocab_size:
+                    # If model has extended vocab (with wrong indicators), use that
+                    print("Using extended vocab for wrong probability")
+                    wrong_probs = probs[:, :, -1]  # Last class is typically wrong indicator
+                else:
+                    # Otherwise, use 1 - max probability as wrongness indicator
+                    print("Using 1 - max_prob as wrong probability")
+                    max_probs = torch.max(probs, dim=-1)[0]
+                    wrong_probs = 1.0 - max_probs
+                    
+            probabilities = wrong_probs.squeeze(0).cpu().numpy()
+            
+            # Store probability data
+            self.token_probabilities = probabilities
+            self.min_probability = float(np.min(probabilities))
+            self.max_probability = float(np.max(probabilities))
+            
+            # Update probability info display
+            self.prob_info_label.setText(f"Min/Max Probability: {self.min_probability:.3f} / {self.max_probability:.3f}")
+            
+            # Display in remasking tab with probability coloring
+            self.remasking_viz.display_text(
+                self.current_predictions, self.vocab, 
+                title=f"Remasking Assessment from {remasking_model_name}",
+                probabilities=probabilities, 
+                min_prob=self.min_probability, 
+                max_prob=self.max_probability
+            )
+            
+            # Switch to remasking tab
+            self.tab_widget.setCurrentIndex(3)
+            
+            # Enable apply button
+            self.apply_remasking_btn.setEnabled(True)
+            
+            self.statusBar().showMessage(f"Assessment complete - Prob range: {self.min_probability:.3f} to {self.max_probability:.3f}")
+            
+        except Exception as e:
+            QMessageBox.critical(self, "Error", f"Failed to assess tokens: {str(e)}")
+    
+    def apply_remasking(self):
+        """Apply remasking based on probability assessment"""
+        if self.token_probabilities is None:
+            QMessageBox.warning(self, "Warning", "Please run assessment first")
+            return
+            
+        try:
+            # For now, this could apply threshold-based remasking
+            # This is a placeholder for future functionality
+            QMessageBox.information(self, "Apply Remasking", 
+                                  "Apply remasking functionality would be implemented here.\n"
+                                  f"Current assessment shows {len(self.token_probabilities)} tokens\n"
+                                  f"with probability range {self.min_probability:.3f} to {self.max_probability:.3f}")
+            
+        except Exception as e:
+            QMessageBox.critical(self, "Error", f"Failed to apply remasking: {str(e)}")
 
 
 def main():

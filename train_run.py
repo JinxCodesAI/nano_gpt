@@ -39,13 +39,13 @@ eval_only = False # if True, script exits right after the first eval
 always_save_checkpoint = True # if True, always save a checkpoint after each eval
 init_from = 'scratch' # 'scratch' or 'resume' or 'gpt2*'
 # wandb logging
-wandb_log = True # disabled by default
+wandb_log = False # disabled by default
 wandb_project = 'diffusion'
 wandb_run_name = '13k_UN_noise_0.2' # 'run' + str(time.time())
 # data
 dataset = 'shakespeare_char'
 gradient_accumulation_steps = 1 # used to simulate larger batch sizes
-batch_size = 64 # if gradient_accumulation_steps > 1, this is the micro-batch size
+batch_size = 16 # if gradient_accumulation_steps > 1, this is the micro-batch size
 block_size = 1024
 # diffusion training config
 training_type = 'unmasking'  # 'unmasking', 'remasking', or 'remasking_binary' - type of training
@@ -57,11 +57,11 @@ guaranteed_unmasked_min = 0.2   # Minimum guaranteed fraction of tokens to keep 
 noise_max_ratio = 0.2           # Maximum ratio of unmasked tokens to corrupt with random noise (0.0 to 1.0) - only for unmasking training
 
 # sticky masking configuration - gradual transition from independent to sticky
-sticky_transition_start = 500   # When to start introducing sticky masking
-sticky_transition_end = 15000     # When to reach full sticky masking
-sticky_rounds = 10                # Number of sticky masking rounds
-sticky_p1_p2_multiplier = 10.0    # Multiplier for sticky_p2 = sticky_p1 * multiplier
-sticky_p1_divisor = 10.0           # Divisor for p1 calculation: p1 = rand() / (sticky_rounds * divisor)
+sticky_transition_start = 5000   # When to start introducing sticky masking
+sticky_transition_end = 20000     # When to reach full sticky masking
+sticky_rounds = 30                # Number of sticky masking rounds
+sticky_p1_p2_multiplier = 20.0    # Multiplier for sticky_p2 = sticky_p1 * multiplier
+sticky_p1_divisor = 3.0           # Divisor for p1 calculation: p1 = rand() / (sticky_rounds * divisor)
 # model
 n_layer = 6
 n_head = 6
@@ -172,6 +172,7 @@ training_ctx = TrainingContext(
     training_type=training_type,
     batch_size=batch_size,
     block_size=block_size,
+    max_iters=max_iters,
     device=device,
     device_type=device_type,
     seed_offset=seed_offset,
@@ -183,7 +184,6 @@ training_ctx = TrainingContext(
     remask_wrong_id=remask_wrong_id,
     extended_vocab_size=extended_vocab_size,
     iter_num=iter_num,
-    guaranteed_unmasked=guaranteed_unmasked_max,
     guaranteed_unmasked_max=guaranteed_unmasked_max,
     guaranteed_unmasked_min=guaranteed_unmasked_min,
     noise_max_ratio=noise_max_ratio,
@@ -316,13 +316,16 @@ while True:
 
     # evaluate the loss on train/val sets and write checkpoints
     if iter_num % eval_interval == 0 and master_process:
+        print(f"\n--- Starting validation at iteration {iter_num} ---")
         with timer.time_function('validation'):
             # Update training context with current iteration
             training_ctx.iter_num = iter_num
             losses = estimate_loss(model, ctx, timer, training_ctx)
 
         # Print basic losses
+        print(f"--- Validation complete ---")
         print(f"step {iter_num}: train loss {losses['train']:.4f}, val loss {losses['val']:.4f}, lr {lr:.6f}")
+        print(f"Progressive validation used {training_ctx.eval_iters * training_ctx.batch_size} samples representing full training difficulty range")
 
         # Print model vs random statistics if available
         if 'val_model_vs_random' in losses:
@@ -333,6 +336,8 @@ while True:
             else:
                 print(f"  val model vs random: {losses['val_model_vs_random']:.2f}x better")
                 print(f"  val avg correct prob: {losses['val_avg_correct_prob']:.4f} (random: {1.0/training_ctx.extended_vocab_size:.4f})")
+        print(f"Progressive validation: {training_ctx.eval_iters * training_ctx.batch_size} samples (difficulty: 0 → {training_ctx.max_iters} iters)")
+        print()  # Add blank line for readability
 
         if wandb_log:
             log_dict = {

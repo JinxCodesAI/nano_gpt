@@ -12,16 +12,18 @@ from model import GPTConfig, GPT
 # Configuration
 init_from = 'resume'
 out_dir = 'out'
-checkpoint_name = 'ckpt_unmasking_8200.pt'  # Specific checkpoint to load
+checkpoint_name = '42.6_unmask_noise_0.2.pt'  # Specific checkpoint to load
 remasking_checkpoint_name = '1.23_remasking_bin.pt'  # Optional: checkpoint for remasking model, if None uses random remasking
-use_intelligent_remasking = True  # Set to True to use remasking model instead of random
 remasking_model_type = 'auto'  # 'remasking', 'remasking_binary', or 'auto' to detect from checkpoint
 num_samples = 1  # Number of samples to generate
 sequence_length = 1024  # Total length of generated sequence
-seed = 1337
+seed = -1
 device = 'cpu'
 dtype = 'float32'
 compile = False
+
+if seed == -1:
+    seed = int.from_bytes(os.urandom(4), byteorder='little')
 
 # Sampling parameters for non-deterministic generation
 temperature = 1.0  # Temperature for sampling (1.0 = no change, <1.0 = more deterministic, >1.0 = more random)
@@ -33,8 +35,8 @@ remasking_confidence_threshold = 0.58
 remasking_schedule = 'linear'
 diffusion_iterations = 100
 min_random_ratio = 0.9
-start_ratio = 0.8
-end_ratio = 0.1
+start_ratio = 0.99
+end_ratio = 0.05
 
 exec(open('configurator.py').read()) # overrides from command line or config file
 # -----------------------------------------------------------------------------
