@@ -26,8 +26,7 @@ from PyQt6.QtGui import QFont, QPixmap, QPalette, QColor
 from train_utils import (
     TrainingContext, apply_random_corruption_gpu, apply_sticky_corruption_gpu,
     apply_fragment_corruption_gpu, apply_synthetic_corruption,
-    apply_gpu_masking_validation, apply_gpu_masking_training,
-    find_double_newline_indices, load_synthetic_model
+    apply_gpu_masking_training, find_double_newline_indices, load_synthetic_model
 )
 from model import GPT, GPTConfig
 
@@ -207,11 +206,12 @@ class ModelExplorerApp(QMainWindow):
             self.valid_indices = []
             
     def setup_training_context(self):
-        """Setup training context with default values"""
+        """Setup training context with default values matching current training configuration"""
         self.training_ctx = TrainingContext(
             training_type='unmasking',
             batch_size=1,
             block_size=512,
+            max_iters=13000,  # Match train_run.py default
             device=str(self.device),
             device_type='cuda' if 'cuda' in str(self.device) else 'cpu',
             seed_offset=0,
@@ -223,14 +223,22 @@ class ModelExplorerApp(QMainWindow):
             remask_wrong_id=self.vocab_size + 3,
             extended_vocab_size=self.vocab_size + 4,
             iter_num=5000,  # Middle of training
-            guaranteed_unmasked=0.0,
-            noise_max_ratio=0.05,
-            sticky_rounds=10,
-            sticky_p1_p2_multiplier=10.0,
-            sticky_transition_start=500,
-            sticky_transition_end=12000,
+            guaranteed_unmasked_max=0.8,  # Match train_run.py
+            guaranteed_unmasked_min=0.2,  # Match train_run.py
+            random_mask_warmup=8000,  # Match train_run.py
+            noise_max_ratio=0.2,  # Match train_run.py
+            sticky_rounds=30,  # Match train_run.py
+            sticky_p1_p2_multiplier=20.0,  # Match train_run.py
+            sticky_p1_divisor=3.0,  # Match train_run.py
+            sticky_transition_start=5000,  # Match train_run.py
+            sticky_transition_end=20000,  # Match train_run.py
             remasking_corruption_strategy='mixed',
-            remasking_strategy_weights=[0.25, 0.4, 0.25, 0.1]
+            remasking_strategy_weights=[0.25, 0.4, 0.25, 0.1],
+            eval_iters=20,  # Match train_run.py
+            warmup_iters=2000,
+            lr_decay_iters=11000,
+            learning_rate=1e-3,
+            min_lr=1e-4
         )
         
     def init_ui(self):
@@ -504,7 +512,7 @@ class ModelExplorerApp(QMainWindow):
         self.guaranteed_unmasked_max = QDoubleSpinBox()
         self.guaranteed_unmasked_max.setRange(0.0, 1.0)
         self.guaranteed_unmasked_max.setSingleStep(0.1)
-        self.guaranteed_unmasked_max.setValue(0.8)
+        self.guaranteed_unmasked_max.setValue(0.8)  # Match train_run.py
         self.guaranteed_unmasked_max.valueChanged.connect(self.update_corruption_preview)
         unmasked_layout.addWidget(self.guaranteed_unmasked_max, 0, 1)
         
@@ -513,12 +521,32 @@ class ModelExplorerApp(QMainWindow):
         self.guaranteed_unmasked_min = QDoubleSpinBox()
         self.guaranteed_unmasked_min.setRange(0.0, 1.0)
         self.guaranteed_unmasked_min.setSingleStep(0.1)
-        self.guaranteed_unmasked_min.setValue(0.0)
+        self.guaranteed_unmasked_min.setValue(0.2)  # Match train_run.py
         self.guaranteed_unmasked_min.valueChanged.connect(self.update_corruption_preview)
         unmasked_layout.addWidget(self.guaranteed_unmasked_min, 1, 1)
         
         unmasked_group.setLayout(unmasked_layout)
         layout.addWidget(unmasked_group)
+        
+        # Random mask warmup settings
+        warmup_group = QGroupBox("Random Mask Warmup")
+        warmup_layout = QGridLayout()
+        
+        warmup_layout.addWidget(QLabel("Warmup iterations:"), 0, 0)
+        self.random_mask_warmup = QSpinBox()
+        self.random_mask_warmup.setRange(1, 50000)
+        self.random_mask_warmup.setValue(8000)  # Match train_run.py
+        self.random_mask_warmup.valueChanged.connect(self.update_corruption_preview)
+        warmup_layout.addWidget(self.random_mask_warmup, 0, 1)
+        
+        # Add info label
+        info_label = QLabel("After this many iterations, guaranteed_unmasked stays at minimum value")
+        info_label.setWordWrap(True)
+        info_label.setStyleSheet("color: #888888; font-size: 10px;")
+        warmup_layout.addWidget(info_label, 1, 0, 1, 2)
+        
+        warmup_group.setLayout(warmup_layout)
+        layout.addWidget(warmup_group)
         
         # Transition settings
         transition_group = QGroupBox("Sticky Transition")
@@ -527,14 +555,14 @@ class ModelExplorerApp(QMainWindow):
         transition_layout.addWidget(QLabel("Start iteration:"), 0, 0)
         self.sticky_transition_start = QSpinBox()
         self.sticky_transition_start.setRange(0, 50000)
-        self.sticky_transition_start.setValue(500)
+        self.sticky_transition_start.setValue(5000)  # Match train_run.py
         self.sticky_transition_start.valueChanged.connect(self.update_corruption_preview)
         transition_layout.addWidget(self.sticky_transition_start, 0, 1)
         
         transition_layout.addWidget(QLabel("End iteration:"), 1, 0)
         self.sticky_transition_end = QSpinBox()
         self.sticky_transition_end.setRange(0, 50000)
-        self.sticky_transition_end.setValue(15000)
+        self.sticky_transition_end.setValue(20000)  # Match train_run.py
         self.sticky_transition_end.valueChanged.connect(self.update_corruption_preview)
         transition_layout.addWidget(self.sticky_transition_end, 1, 1)
         
@@ -557,21 +585,21 @@ class ModelExplorerApp(QMainWindow):
         sticky_layout.addWidget(QLabel("Rounds:"), 0, 0)
         self.sticky_rounds = QSpinBox()
         self.sticky_rounds.setRange(1, 50)
-        self.sticky_rounds.setValue(6)
+        self.sticky_rounds.setValue(30)  # Match train_run.py
         self.sticky_rounds.valueChanged.connect(self.update_corruption_preview)
         sticky_layout.addWidget(self.sticky_rounds, 0, 1)
         
         sticky_layout.addWidget(QLabel("P1-P2 Multiplier:"), 1, 0)
         self.sticky_p1_p2_multiplier = QDoubleSpinBox()
         self.sticky_p1_p2_multiplier.setRange(1.0, 50.0)
-        self.sticky_p1_p2_multiplier.setValue(7.0)
+        self.sticky_p1_p2_multiplier.setValue(20.0)  # Match train_run.py
         self.sticky_p1_p2_multiplier.valueChanged.connect(self.update_corruption_preview)
         sticky_layout.addWidget(self.sticky_p1_p2_multiplier, 1, 1)
         
         sticky_layout.addWidget(QLabel("P1 Divisor:"), 2, 0)
         self.sticky_p1_divisor = QDoubleSpinBox()
         self.sticky_p1_divisor.setRange(1.0, 20.0)
-        self.sticky_p1_divisor.setValue(10.0)
+        self.sticky_p1_divisor.setValue(3.0)  # Match train_run.py
         self.sticky_p1_divisor.valueChanged.connect(self.update_corruption_preview)
         sticky_layout.addWidget(self.sticky_p1_divisor, 2, 1)
         
@@ -600,21 +628,21 @@ class ModelExplorerApp(QMainWindow):
         fragment_layout.addWidget(QLabel("Sticky Rounds:"), 0, 0)
         self.fragment_sticky_rounds = QSpinBox()
         self.fragment_sticky_rounds.setRange(1, 50)
-        self.fragment_sticky_rounds.setValue(6)
+        self.fragment_sticky_rounds.setValue(30)  # Match train_run.py
         self.fragment_sticky_rounds.valueChanged.connect(self.update_corruption_preview)
         fragment_layout.addWidget(self.fragment_sticky_rounds, 0, 1)
         
         fragment_layout.addWidget(QLabel("P1-P2 Multiplier:"), 1, 0)
         self.fragment_p1_p2_multiplier = QDoubleSpinBox()
         self.fragment_p1_p2_multiplier.setRange(1.0, 50.0)
-        self.fragment_p1_p2_multiplier.setValue(7.0)
+        self.fragment_p1_p2_multiplier.setValue(20.0)  # Match train_run.py
         self.fragment_p1_p2_multiplier.valueChanged.connect(self.update_corruption_preview)
         fragment_layout.addWidget(self.fragment_p1_p2_multiplier, 1, 1)
         
         fragment_layout.addWidget(QLabel("P1 Divisor:"), 2, 0)
         self.fragment_p1_divisor = QDoubleSpinBox()
         self.fragment_p1_divisor.setRange(1.0, 20.0)
-        self.fragment_p1_divisor.setValue(10.0)
+        self.fragment_p1_divisor.setValue(3.0)  # Match train_run.py
         self.fragment_p1_divisor.valueChanged.connect(self.update_corruption_preview)
         fragment_layout.addWidget(self.fragment_p1_divisor, 2, 1)
         
@@ -663,21 +691,21 @@ class ModelExplorerApp(QMainWindow):
         synth_sticky_layout.addWidget(QLabel("Sticky Rounds:"), 1, 0)
         self.synthetic_sticky_rounds = QSpinBox()
         self.synthetic_sticky_rounds.setRange(1, 50)
-        self.synthetic_sticky_rounds.setValue(6)
+        self.synthetic_sticky_rounds.setValue(30)  # Match train_run.py
         self.synthetic_sticky_rounds.valueChanged.connect(self.update_corruption_preview)
         synth_sticky_layout.addWidget(self.synthetic_sticky_rounds, 1, 1)
         
         synth_sticky_layout.addWidget(QLabel("P1-P2 Multiplier:"), 2, 0)
         self.synthetic_p1_p2_multiplier = QDoubleSpinBox()
         self.synthetic_p1_p2_multiplier.setRange(1.0, 50.0)
-        self.synthetic_p1_p2_multiplier.setValue(7.0)
+        self.synthetic_p1_p2_multiplier.setValue(20.0)  # Match train_run.py
         self.synthetic_p1_p2_multiplier.valueChanged.connect(self.update_corruption_preview)
         synth_sticky_layout.addWidget(self.synthetic_p1_p2_multiplier, 2, 1)
         
         synth_sticky_layout.addWidget(QLabel("P1 Divisor:"), 3, 0)
         self.synthetic_p1_divisor = QDoubleSpinBox()
         self.synthetic_p1_divisor.setRange(1.0, 20.0)
-        self.synthetic_p1_divisor.setValue(10.0)
+        self.synthetic_p1_divisor.setValue(3.0)  # Match train_run.py
         self.synthetic_p1_divisor.valueChanged.connect(self.update_corruption_preview)
         synth_sticky_layout.addWidget(self.synthetic_p1_divisor, 3, 1)
         
@@ -949,7 +977,8 @@ class ModelExplorerApp(QMainWindow):
                     guaranteed_unmasked_min=self.guaranteed_unmasked_min.value(),
                     sticky_transition_start=self.sticky_transition_start.value(),
                     sticky_transition_end=self.sticky_transition_end.value(),
-                    meta_vocab_size=self.vocab_size
+                    meta_vocab_size=self.vocab_size,
+                    random_mask_warmup=self.random_mask_warmup.value()
                 )
                 
             elif strategy == "sticky":
@@ -1027,7 +1056,8 @@ class ModelExplorerApp(QMainWindow):
                         guaranteed_unmasked_min=self.guaranteed_unmasked_min.value(),
                         sticky_transition_start=self.sticky_transition_start.value(),
                         sticky_transition_end=self.sticky_transition_end.value(),
-                        meta_vocab_size=self.vocab_size
+                        meta_vocab_size=self.vocab_size,
+                        random_mask_warmup=self.random_mask_warmup.value()
                     )
                 elif chosen_strategy == "sticky":
                     corrupted_x, mask = apply_sticky_corruption_gpu(
@@ -1072,7 +1102,7 @@ class ModelExplorerApp(QMainWindow):
             else:
                 # Default fallback
                 corrupted_x, mask = apply_random_corruption_gpu(
-                    x, 0, 0.5, 0.0, 500, 15000, self.vocab_size
+                    x, 0, 0.5, 0.0, 500, 15000, self.vocab_size, 8000
                 )
                 
             return corrupted_x.squeeze(0).cpu().numpy(), mask.squeeze(0).cpu().numpy()

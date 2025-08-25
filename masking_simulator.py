@@ -31,6 +31,7 @@ class SimulationConfig:
     # Masking parameters (from train_run.py)
     guaranteed_unmasked_max: float
     guaranteed_unmasked_min: float 
+    random_mask_warmup: int
     
     # Sticky masking parameters
     sticky_rounds: int
@@ -88,6 +89,7 @@ class MaskingSimulator:
             iter_num=iter_num,
             guaranteed_unmasked_max=self.config.guaranteed_unmasked_max,
             guaranteed_unmasked_min=self.config.guaranteed_unmasked_min,
+            random_mask_warmup=self.config.random_mask_warmup,
             noise_max_ratio=0.2,  # Default noise ratio
             sticky_rounds=self.config.sticky_rounds,
             sticky_p1_p2_multiplier=self.config.sticky_p1_p2_multiplier,
@@ -495,7 +497,8 @@ Batch Size: {config.batch_size} | Block Size: {config.block_size} | Device: {con
 
 MASKING INTENSITY:
 guaranteed_unmasked_max: {config.guaranteed_unmasked_max} | guaranteed_unmasked_min: {config.guaranteed_unmasked_min}
-Transition: {config.sticky_transition_start} → {config.sticky_transition_end} iterations
+Random Mask Warmup: {config.random_mask_warmup} iterations (then stays at min)
+Sticky Transition: {config.sticky_transition_start} → {config.sticky_transition_end} iterations
 
 STICKY CLUSTERING:
 sticky_rounds: {config.sticky_rounds} | sticky_p1_divisor: {config.sticky_p1_divisor} | sticky_p1_p2_multiplier: {config.sticky_p1_p2_multiplier}
@@ -573,9 +576,9 @@ def main():
     
     # Create configuration
     config = SimulationConfig(
-        batch_size=64,
+        batch_size=16,  # Match current train_run.py batch_size
         block_size=1024,
-        max_iters=15000,
+        max_iters=13000,  # Match current train_run.py max_iters
         # Use your current settings from train_run.py
         sticky_rounds=30,
         sticky_p1_p2_multiplier=20.0,
@@ -583,7 +586,8 @@ def main():
         sticky_transition_start=5000,
         sticky_transition_end=20000,
         guaranteed_unmasked_max=0.8,
-        guaranteed_unmasked_min=0.2
+        guaranteed_unmasked_min=0.2,
+        random_mask_warmup=8000  # Match train_run.py
     )
     
     # Create and run simulator

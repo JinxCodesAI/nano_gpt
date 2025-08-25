@@ -54,6 +54,7 @@ remasking_strategy_weights = [0.25, 0.4, 0.25, 0.1]  # weights for [random, stic
 synthetic_checkpoint_name = '14.6_unmasking_no_noise.pt'  # Path to unmasking model checkpoint for synthetic data generation (only for 'synthetic' strategy)
 guaranteed_unmasked_max = 0.8   # Maximum guaranteed fraction of tokens to keep unmasked (at start of training)
 guaranteed_unmasked_min = 0.2   # Minimum guaranteed fraction of tokens to keep unmasked (at end of training)
+random_mask_warmup = 8000       # Iterations over which guaranteed_unmasked transitions from max to min (then stays at min)
 noise_max_ratio = 0.2           # Maximum ratio of unmasked tokens to corrupt with random noise (0.0 to 1.0) - only for unmasking training
 
 # sticky masking configuration - gradual transition from independent to sticky
@@ -186,6 +187,7 @@ training_ctx = TrainingContext(
     iter_num=iter_num,
     guaranteed_unmasked_max=guaranteed_unmasked_max,
     guaranteed_unmasked_min=guaranteed_unmasked_min,
+    random_mask_warmup=random_mask_warmup,
     noise_max_ratio=noise_max_ratio,
     sticky_rounds=sticky_rounds,
     sticky_p1_p2_multiplier=sticky_p1_p2_multiplier,

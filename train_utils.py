@@ -65,6 +65,7 @@ class TrainingContext:
     # Masking parameters
     guaranteed_unmasked_max: float = 0.8  # Maximum guaranteed fraction (at start of training)
     guaranteed_unmasked_min: float = 0.0  # Minimum guaranteed fraction (at end of training)
+    random_mask_warmup: int = 8000  # Iterations over which guaranteed_unmasked transitions from max to min
     noise_max_ratio: float = 0.05
     sticky_rounds: int = 10
     sticky_p1_p2_multiplier: float = 10.0
@@ -94,8 +95,11 @@ class TrainingContext:
         if iter_num is None:
             iter_num = self.iter_num
         
-        # Linear transition from max to min over the entire training duration
-        progress = min(1.0, iter_num / self.max_iters) if self.max_iters > 0 else 0.0
+        # Linear transition from max to min over random_mask_warmup iterations, then stay at min
+        if iter_num >= self.random_mask_warmup:
+            return self.guaranteed_unmasked_min
+        
+        progress = iter_num / self.random_mask_warmup if self.random_mask_warmup > 0 else 1.0
         return self.guaranteed_unmasked_max + progress * (self.guaranteed_unmasked_min - self.guaranteed_unmasked_max)
 
 def find_double_newline_indices(data, meta_vocab_size, block_size):
@@ -226,25 +230,22 @@ def create_progressive_validation_set(training_ctx: TrainingContext):
     return _progressive_val_full_cache
 
 def apply_random_corruption_gpu(x, iter_num, guaranteed_unmasked_max, guaranteed_unmasked_min,
-                               sticky_transition_start, sticky_transition_end, meta_vocab_size):
+                               sticky_transition_start, sticky_transition_end, meta_vocab_size, random_mask_warmup=None):
     """GPU-optimized Strategy 1: Random token corruption with dynamic guaranteed_unmasked"""
     device = x.device
     vocab_size_to_use = meta_vocab_size if meta_vocab_size is not None else 50257
 
-    # Calculate dynamic guaranteed_unmasked using centralized logic
+    # Calculate dynamic guaranteed_unmasked using new warmup logic
     # Note: This function should receive a TrainingContext, but for backward compatibility
     # we'll create a temporary one. TODO: Refactor callers to pass TrainingContext directly
-    temp_ctx = type('temp', (), {
-        'guaranteed_unmasked_max': guaranteed_unmasked_max,
-        'guaranteed_unmasked_min': guaranteed_unmasked_min,
-        'max_iters': sticky_transition_end  # Legacy: using transition_end as max_iters
-    })()
-    temp_ctx.get_guaranteed_unmasked = lambda iter_num: (
-        temp_ctx.guaranteed_unmasked_max + 
-        (min(1.0, iter_num / temp_ctx.max_iters) if temp_ctx.max_iters > 0 else 0.0) * 
-        (temp_ctx.guaranteed_unmasked_min - temp_ctx.guaranteed_unmasked_max)
-    )
-    guaranteed_unmasked = temp_ctx.get_guaranteed_unmasked(iter_num)
+    if random_mask_warmup is None:
+        random_mask_warmup = sticky_transition_end  # Fallback to old behavior
+    
+    if iter_num >= random_mask_warmup:
+        guaranteed_unmasked = guaranteed_unmasked_min
+    else:
+        progress = iter_num / random_mask_warmup if random_mask_warmup > 0 else 1.0
+        guaranteed_unmasked = guaranteed_unmasked_max + progress * (guaranteed_unmasked_min - guaranteed_unmasked_max)
 
     # Generate mask on GPU - corruption probability is now (1.0 - guaranteed_unmasked)
     corruption_prob = 1.0 - guaranteed_unmasked
@@ -847,7 +848,7 @@ def get_batch_remasking(split, ctx: TrainingContext):
     # GPU-accelerated corruption strategy selection and application
     if ctx.remasking_corruption_strategy == 'random':
         corrupted_x, mask = apply_random_corruption_gpu(x, ctx.iter_num, ctx.guaranteed_unmasked_max, ctx.guaranteed_unmasked_min,
-                                                       ctx.sticky_transition_start, ctx.sticky_transition_end, ctx.meta_vocab_size)
+                                                       ctx.sticky_transition_start, ctx.sticky_transition_end, ctx.meta_vocab_size, ctx.random_mask_warmup)
     elif ctx.remasking_corruption_strategy == 'sticky':
         corrupted_x, mask = apply_sticky_corruption_gpu(x, ctx.sticky_rounds, ctx.sticky_p1_p2_multiplier, ctx.mask_token_id, ctx.meta_vocab_size, ctx.sticky_p1_divisor)
     elif ctx.remasking_corruption_strategy == 'fragment':
@@ -860,7 +861,7 @@ def get_batch_remasking(split, ctx: TrainingContext):
         
         if strategy_choice == 'random':
             corrupted_x, mask = apply_random_corruption_gpu(x, ctx.iter_num, ctx.guaranteed_unmasked_max, ctx.guaranteed_unmasked_min,
-                                                           ctx.sticky_transition_start, ctx.sticky_transition_end, ctx.meta_vocab_size)
+                                                           ctx.sticky_transition_start, ctx.sticky_transition_end, ctx.meta_vocab_size, ctx.random_mask_warmup)
         elif strategy_choice == 'sticky':
             corrupted_x, mask = apply_sticky_corruption_gpu(x, ctx.sticky_rounds, ctx.sticky_p1_p2_multiplier, ctx.mask_token_id, ctx.meta_vocab_size, ctx.sticky_p1_divisor)
         elif strategy_choice == 'fragment':
@@ -870,7 +871,7 @@ def get_batch_remasking(split, ctx: TrainingContext):
     else:
         # Default fallback to random
         corrupted_x, mask = apply_random_corruption_gpu(x, ctx.iter_num, ctx.guaranteed_unmasked_max, ctx.guaranteed_unmasked_min,
-                                                       ctx.sticky_transition_start, ctx.sticky_transition_end, ctx.meta_vocab_size)
+                                                       ctx.sticky_transition_start, ctx.sticky_transition_end, ctx.meta_vocab_size, ctx.random_mask_warmup)
 
     # Target: original tokens at correct positions, wrong_token_id at corrupted positions (already on GPU)
     y = x.clone()
@@ -968,7 +969,7 @@ def get_batch_remasking_binary(split, ctx: TrainingContext, validation_sample_id
     # GPU-accelerated corruption (same strategies as remasking)
     if ctx.remasking_corruption_strategy == 'random':
         corrupted_x, mask = apply_random_corruption_gpu(x, corruption_iter, ctx.guaranteed_unmasked_max, ctx.guaranteed_unmasked_min,
-                                                       ctx.sticky_transition_start, ctx.sticky_transition_end, ctx.meta_vocab_size)
+                                                       ctx.sticky_transition_start, ctx.sticky_transition_end, ctx.meta_vocab_size, ctx.random_mask_warmup)
     elif ctx.remasking_corruption_strategy == 'sticky':
         corrupted_x, mask = apply_sticky_corruption_gpu(x, ctx.sticky_rounds, ctx.sticky_p1_p2_multiplier, ctx.mask_token_id, ctx.meta_vocab_size, ctx.sticky_p1_divisor)
     elif ctx.remasking_corruption_strategy == 'fragment':
@@ -980,7 +981,7 @@ def get_batch_remasking_binary(split, ctx: TrainingContext, validation_sample_id
         
         if strategy_choice == 'random':
             corrupted_x, mask = apply_random_corruption_gpu(x, corruption_iter, ctx.guaranteed_unmasked_max, ctx.guaranteed_unmasked_min,
-                                                           ctx.sticky_transition_start, ctx.sticky_transition_end, ctx.meta_vocab_size)
+                                                           ctx.sticky_transition_start, ctx.sticky_transition_end, ctx.meta_vocab_size, ctx.random_mask_warmup)
         elif strategy_choice == 'sticky':
             corrupted_x, mask = apply_sticky_corruption_gpu(x, ctx.sticky_rounds, ctx.sticky_p1_p2_multiplier, ctx.mask_token_id, ctx.meta_vocab_size, ctx.sticky_p1_divisor)
         elif strategy_choice == 'fragment':
@@ -989,7 +990,7 @@ def get_batch_remasking_binary(split, ctx: TrainingContext, validation_sample_id
             corrupted_x, mask = apply_synthetic_corruption(x, ctx.sticky_rounds, ctx.sticky_p1_p2_multiplier, ctx.mask_token_id, ctx.meta_vocab_size, ctx.sticky_p1_divisor)
     else:
         corrupted_x, mask = apply_random_corruption_gpu(x, corruption_iter, ctx.guaranteed_unmasked_max, ctx.guaranteed_unmasked_min,
-                                                       ctx.sticky_transition_start, ctx.sticky_transition_end, ctx.meta_vocab_size)
+                                                       ctx.sticky_transition_start, ctx.sticky_transition_end, ctx.meta_vocab_size, ctx.random_mask_warmup)
     
     # Restore random seed for training
     if split == 'val' and validation_sample_idx is not None:
