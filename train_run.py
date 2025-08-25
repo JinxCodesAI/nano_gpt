@@ -36,16 +36,16 @@ eval_interval = 100
 log_interval = 20
 eval_iters = 20
 eval_only = False # if True, script exits right after the first eval
-always_save_checkpoint = True # if True, always save a checkpoint after each eval
+always_save_checkpoint = False # if True, always save a checkpoint after each eval
 init_from = 'scratch' # 'scratch' or 'resume' or 'gpt2*'
 # wandb logging
-wandb_log = False # disabled by default
+wandb_log = True # disabled by default
 wandb_project = 'diffusion'
 wandb_run_name = '13k_UN_noise_0.2' # 'run' + str(time.time())
 # data
 dataset = 'shakespeare_char'
 gradient_accumulation_steps = 1 # used to simulate larger batch sizes
-batch_size = 16 # if gradient_accumulation_steps > 1, this is the micro-batch size
+batch_size = 256 # if gradient_accumulation_steps > 1, this is the micro-batch size
 block_size = 1024
 # diffusion training config
 training_type = 'unmasking'  # 'unmasking', 'remasking', or 'remasking_binary' - type of training
@@ -54,11 +54,11 @@ remasking_strategy_weights = [0.25, 0.4, 0.25, 0.1]  # weights for [random, stic
 synthetic_checkpoint_name = '14.6_unmasking_no_noise.pt'  # Path to unmasking model checkpoint for synthetic data generation (only for 'synthetic' strategy)
 guaranteed_unmasked_max = 0.8   # Maximum guaranteed fraction of tokens to keep unmasked (at start of training)
 guaranteed_unmasked_min = 0.2   # Minimum guaranteed fraction of tokens to keep unmasked (at end of training)
-random_mask_warmup = 8000       # Iterations over which guaranteed_unmasked transitions from max to min (then stays at min)
+random_mask_warmup = 13000       # Iterations over which guaranteed_unmasked transitions from max to min (then stays at min)
 noise_max_ratio = 0.2           # Maximum ratio of unmasked tokens to corrupt with random noise (0.0 to 1.0) - only for unmasking training
 
 # sticky masking configuration - gradual transition from independent to sticky
-sticky_transition_start = 5000   # When to start introducing sticky masking
+sticky_transition_start = 8000   # When to start introducing sticky masking
 sticky_transition_end = 20000     # When to reach full sticky masking
 sticky_rounds = 30                # Number of sticky masking rounds
 sticky_p1_p2_multiplier = 20.0    # Multiplier for sticky_p2 = sticky_p1 * multiplier
@@ -72,9 +72,9 @@ bias = False # do we use bias inside LayerNorm and Linear layers?
 attention_type = 'bidirectional' # 'causal' or 'bidirectional' - type of attention to use (bidirectional recommended for diffusion)
 # adamw optimizer
 learning_rate = 1e-3 # with baby networks can afford to go a bit higher
-max_iters = 13000
+max_iters = 25000
 warmup_iters = 2000 # how many steps to warm up for
-lr_decay_iters = 11000 # make equal to max_iters usually
+lr_decay_iters = 21000 # make equal to max_iters usually
 min_lr = 1e-4 # learning_rate / 10 usually
 beta1 = 0.9
 beta2 = 0.99 # make a bit bigger because number of tokens per iter is small
@@ -457,6 +457,16 @@ while True:
 
         # Add masking statistics logging with transition tracking
         log_masking_stats(mask, iter_num, log_interval, sticky_transition_start, sticky_transition_end)
+        
+        if wandb_log:
+            log_dict = {
+                "iter": iter_num,
+                "train/loss": lossf,
+                "lr": lr,
+                "mfu": running_mfu*100 # convert to percentage
+            }
+
+            wandb.log(log_dict)
     iter_num += 1
     local_iter_num += 1
 

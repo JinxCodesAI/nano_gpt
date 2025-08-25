@@ -1,0 +1,232 @@
+[2025-07-26 20:46:10] ================================================================================
+
+[2025-07-26 20:46:10] Training run started at 2025-07-26 20:46:10
+
+[2025-07-26 20:46:10] ================================================================================
+
+      Configuration:
+
+      ----------------------------------------
+
+      RARE_TOKEN_ID: None
+
+      always_save_checkpoint: True
+
+      attn_lora_rank: 0
+
+      backend: nccl
+
+      batch_size: 8
+
+      beta1: 0.9
+
+      beta2: 0.95
+
+      bias: False
+
+      block_size: 64
+
+      compile: False
+
+      dataset: fineweb10B
+
+      decay_lr: True
+
+      device: cpu
+
+      dropout: 0.0
+
+      dtype: bfloat16
+
+      embedding_mode: standard
+
+      embedding_rank: 0
+
+      eval_interval: 50
+
+      eval_iters: 10
+
+      eval_only: False
+
+      file_logging: True
+
+      grad_clip: 1.0
+
+      gradient_accumulation_steps: 4
+
+      ignored_outlayers_sum: 0.01
+
+      init_from: scratch
+
+      learning_rate: 0.0006
+
+      log_dir: logs
+
+      log_interval: 5
+
+      lora_alpha: 1.0
+
+      lr_decay_iters: 300
+
+      max_iters: 300
+
+      min_lr: 6e-05
+
+      n_embd: 128
+
+      n_head: 4
+
+      n_hidden: 256
+
+      n_layer: 1
+
+      num_train_shards: 103
+
+      out_dir: test-base
+
+      rotary_base: 10000.0
+
+      rotary_max_position_embeddings: 2048
+
+      scaling_schedule: []
+
+      scaling_schedule_file: configs/test_base_example.json
+
+      shrunken_vocab_size: None
+
+      target_architecture_config: None
+
+      train_shard_filenames: ['fineweb_train_000001.bin', 'fineweb_train_000002.bin', 'fineweb_train_000003.bin', 'fineweb_train_000004.bin', 'fineweb_train_000005.bin', 'fineweb_train_000006.bin', 'fineweb_train_000007.bin', 'fineweb_train_000008.bin', 'fineweb_train_000009.bin', 'fineweb_train_000010.bin', 'fineweb_train_000011.bin', 'fineweb_train_000012.bin', 'fineweb_train_000013.bin', 'fineweb_train_000014.bin', 'fineweb_train_000015.bin', 'fineweb_train_000016.bin', 'fineweb_train_000017.bin', 'fineweb_train_000018.bin', 'fineweb_train_000019.bin', 'fineweb_train_000020.bin', 'fineweb_train_000021.bin', 'fineweb_train_000022.bin', 'fineweb_train_000023.bin', 'fineweb_train_000024.bin', 'fineweb_train_000025.bin', 'fineweb_train_000026.bin', 'fineweb_train_000027.bin', 'fineweb_train_000028.bin', 'fineweb_train_000029.bin', 'fineweb_train_000030.bin', 'fineweb_train_000031.bin', 'fineweb_train_000032.bin', 'fineweb_train_000033.bin', 'fineweb_train_000034.bin', 'fineweb_train_000035.bin', 'fineweb_train_000036.bin', 'fineweb_train_000037.bin', 'fineweb_train_000038.bin', 'fineweb_train_000039.bin', 'fineweb_train_000040.bin', 'fineweb_train_000041.bin', 'fineweb_train_000042.bin', 'fineweb_train_000043.bin', 'fineweb_train_000044.bin', 'fineweb_train_000045.bin', 'fineweb_train_000046.bin', 'fineweb_train_000047.bin', 'fineweb_train_000048.bin', 'fineweb_train_000049.bin', 'fineweb_train_000050.bin', 'fineweb_train_000051.bin', 'fineweb_train_000052.bin', 'fineweb_train_000053.bin', 'fineweb_train_000054.bin', 'fineweb_train_000055.bin', 'fineweb_train_000056.bin', 'fineweb_train_000057.bin', 'fineweb_train_000058.bin', 'fineweb_train_000059.bin', 'fineweb_train_000060.bin', 'fineweb_train_000061.bin', 'fineweb_train_000062.bin', 'fineweb_train_000063.bin', 'fineweb_train_000064.bin', 'fineweb_train_000065.bin', 'fineweb_train_000066.bin', 'fineweb_train_000067.bin', 'fineweb_train_000068.bin', 'fineweb_train_000069.bin', 'fineweb_train_000070.bin', 'fineweb_train_000071.bin', 'fineweb_train_000072.bin', 'fineweb_train_000073.bin', 'fineweb_train_000074.bin', 'fineweb_train_000075.bin', 'fineweb_train_000076.bin', 'fineweb_train_000077.bin', 'fineweb_train_000078.bin', 'fineweb_train_000079.bin', 'fineweb_train_000080.bin', 'fineweb_train_000081.bin', 'fineweb_train_000082.bin', 'fineweb_train_000083.bin', 'fineweb_train_000084.bin', 'fineweb_train_000085.bin', 'fineweb_train_000086.bin', 'fineweb_train_000087.bin', 'fineweb_train_000088.bin', 'fineweb_train_000089.bin', 'fineweb_train_000090.bin', 'fineweb_train_000091.bin', 'fineweb_train_000092.bin', 'fineweb_train_000093.bin', 'fineweb_train_000094.bin', 'fineweb_train_000095.bin', 'fineweb_train_000096.bin', 'fineweb_train_000097.bin', 'fineweb_train_000098.bin', 'fineweb_train_000099.bin', 'fineweb_train_000100.bin', 'fineweb_train_000101.bin', 'fineweb_train_000102.bin', 'fineweb_train_000103.bin']
+
+      use_rotary_embeddings: False
+
+      vocab_remapping_file: None
+
+      wandb_log: False
+
+      wandb_project: owt-test
+
+      wandb_run_name: orchestrator-test
+
+      warmup_iters: 2000
+
+      weight_decay: 0.1
+
+      ----------------------------------------
+
+[2025-07-26 20:46:15] step 0: train loss 10.8501, val loss 10.8552, tokens/sec 1632
+[2025-07-26 20:46:15] --- ASYNC ANALYSIS RESULTS FOR ITERATION 0 ---
+[2025-07-26 20:46:15]   [Embeddings Geometry] Avg Neighbors: 0.00 10th-90th-99th Percentile: 0.0000 - 0.0000 - 0.0000 
+[2025-07-26 20:46:15]   [Embeddings Geometry] Mean Similarity: -0.0004 Std Similarity: 0.0912 | 10th-90th Percentile: -0.1251 - 0.1253
+[2025-07-26 20:46:15]   [Embeddings Analysis] Analyzed: 1965/50304 embeddings | Filtered: True
+[2025-07-26 20:46:15]   [FFN Rank L0] Utilization: 88.28% (113/128)
+[2025-07-26 20:46:15]   [Attn Q L0] Utilization: 71.88% (92/128)
+[2025-07-26 20:46:15]   [Attn K L0] Utilization: 71.88% (92/128)
+[2025-07-26 20:46:15]   [Attn V L0] Utilization: 70.31% (90/128)
+[2025-07-26 20:46:15] --- END OF ASYNC ANALYSIS RESULTS ---
+[2025-07-26 20:46:18] iter 0: loss 10.8582, lr 0.00000, time 1353.05ms, mfu -100.00%, VRAM 0.0/0.0GB (0.0%)
+[2025-07-26 20:46:33] iter 5: loss 10.8589, lr 0.00000, time 2954.23ms, mfu 0.02%, VRAM 0.0/0.0GB (0.0%)
+[2025-07-26 20:46:48] iter 10: loss 10.8437, lr 0.00000, time 2898.74ms, mfu 0.02%, VRAM 0.0/0.0GB (0.0%)
+[2025-07-26 20:47:02] iter 15: loss 10.8429, lr 0.00000, time 2886.68ms, mfu 0.02%, VRAM 0.0/0.0GB (0.0%)
+[2025-07-26 20:47:16] iter 20: loss 10.8467, lr 0.00001, time 2871.09ms, mfu 0.02%, VRAM 0.0/0.0GB (0.0%)
+[2025-07-26 20:47:30] iter 25: loss 10.8394, lr 0.00001, time 2763.04ms, mfu 0.02%, VRAM 0.0/0.0GB (0.0%)
+[2025-07-26 20:47:44] iter 30: loss 10.8428, lr 0.00001, time 2855.78ms, mfu 0.02%, VRAM 0.0/0.0GB (0.0%)
+[2025-07-26 20:47:59] iter 35: loss 10.8334, lr 0.00001, time 2855.49ms, mfu 0.02%, VRAM 0.0/0.0GB (0.0%)
+[2025-07-26 20:48:13] iter 40: loss 10.8176, lr 0.00001, time 2786.47ms, mfu 0.02%, VRAM 0.0/0.0GB (0.0%)
+[2025-07-26 20:48:27] iter 45: loss 10.8138, lr 0.00001, time 2802.71ms, mfu 0.02%, VRAM 0.0/0.0GB (0.0%)
+[2025-07-26 20:48:37] OPERATION_START: merge_lora_weights(None) | iter=49 | value=None | trigger=time threshold | val_loss=10.8168 | trigger_loss=0.0000 | max_wait=50
+[2025-07-26 20:48:37] OPERATION_SUCCESS: merge_lora_weights | iter=49 | new_config={'block_size': 64, 'vocab_size': 50304, 'n_layer': 1, 'n_head': 4, 'n_embd': 128, 'dropout': 0.0, 'bias': False, 'n_hidden': 256, 'use_rotary_embeddings': False, 'rotary_base': 10000.0, 'rotary_max_position_embeddings': 2048, 'embedding_mode': 'standard', 'embedding_rank': 0, 'attn_lora_rank': 0, 'lora_alpha': 1.0}
+[2025-07-26 20:48:41] step 50: train loss 10.6569, val loss 10.6435, tokens/sec 765
+[2025-07-26 20:48:41]   timing breakdown (avg last 50): evaluation 54.8%, operations 23.0%, forward_backward 21.9%, grad_clip 0.1%, optimizer_step 0.3%
+[2025-07-26 20:48:45] --- ASYNC ANALYSIS RESULTS FOR ITERATION 50 ---
+[2025-07-26 20:48:45]   [Embeddings Geometry] Avg Neighbors: 0.00 10th-90th-99th Percentile: 0.0000 - 0.0000 - 0.0000 
+[2025-07-26 20:48:45]   [Embeddings Geometry] Mean Similarity: 0.0033 Std Similarity: 0.0888 | 10th-90th Percentile: -0.1281 - 0.1208
+[2025-07-26 20:48:45]   [Embeddings Analysis] Analyzed: 15364/50304 embeddings | Filtered: True
+[2025-07-26 20:48:45]   [FFN Rank L0] Utilization: 88.28% (113/128)
+[2025-07-26 20:48:45]   [Attn Q L0] Utilization: 71.88% (92/128)
+[2025-07-26 20:48:45]   [Attn K L0] Utilization: 71.88% (92/128)
+[2025-07-26 20:48:45]   [Attn V L0] Utilization: 70.31% (90/128)
+[2025-07-26 20:48:45] --- END OF ASYNC ANALYSIS RESULTS ---
+[2025-07-26 20:48:46] iter 50: loss 10.6129, lr 0.00001, time 3867.98ms, mfu 0.02%, VRAM 0.0/0.0GB (0.0%)
+[2025-07-26 20:49:03] iter 55: loss 10.6891, lr 0.00002, time 3379.95ms, mfu 0.02%, VRAM 0.0/0.0GB (0.0%)
+[2025-07-26 20:49:17] iter 60: loss 10.6503, lr 0.00002, time 2822.42ms, mfu 0.02%, VRAM 0.0/0.0GB (0.0%)
+[2025-07-26 20:49:31] iter 65: loss 10.6157, lr 0.00002, time 2888.50ms, mfu 0.02%, VRAM 0.0/0.0GB (0.0%)
+[2025-07-26 20:49:46] iter 70: loss 10.4988, lr 0.00002, time 2840.21ms, mfu 0.02%, VRAM 0.0/0.0GB (0.0%)
+[2025-07-26 20:50:00] iter 75: loss 10.4663, lr 0.00002, time 2857.12ms, mfu 0.02%, VRAM 0.0/0.0GB (0.0%)
+[2025-07-26 20:50:15] iter 80: loss 10.3928, lr 0.00002, time 2945.36ms, mfu 0.02%, VRAM 0.0/0.0GB (0.0%)
+[2025-07-26 20:50:29] iter 85: loss 10.2950, lr 0.00003, time 2926.59ms, mfu 0.02%, VRAM 0.0/0.0GB (0.0%)
+[2025-07-26 20:50:44] iter 90: loss 10.2489, lr 0.00003, time 2887.09ms, mfu 0.02%, VRAM 0.0/0.0GB (0.0%)
+[2025-07-26 20:50:58] iter 95: loss 10.2920, lr 0.00003, time 2908.02ms, mfu 0.02%, VRAM 0.0/0.0GB (0.0%)
+[2025-07-26 20:51:09] OPERATION_START: merge_lora_weights(None) | iter=99 | value=None | trigger=time threshold | val_loss=10.2441 | trigger_loss=0.0000 | max_wait=50
+[2025-07-26 20:51:09] OPERATION_SUCCESS: merge_lora_weights | iter=99 | new_config={'block_size': 64, 'vocab_size': 50304, 'n_layer': 1, 'n_head': 4, 'n_embd': 128, 'dropout': 0.0, 'bias': False, 'n_hidden': 256, 'use_rotary_embeddings': False, 'rotary_base': 10000.0, 'rotary_max_position_embeddings': 2048, 'embedding_mode': 'standard', 'embedding_rank': 0, 'attn_lora_rank': 0, 'lora_alpha': 1.0}
+[2025-07-26 20:51:13] step 100: train loss 10.1684, val loss 10.1587, tokens/sec 1424
+[2025-07-26 20:51:13]   timing breakdown (avg last 50): evaluation 53.6%, operations 23.3%, forward_backward 22.4%, grad_clip 0.1%, optimizer_step 0.6%
+[2025-07-26 20:51:20] iter 100: loss 10.0909, lr 0.00003, time 4249.42ms, mfu 0.02%, VRAM 0.0/0.0GB (0.0%)
+[2025-07-26 20:51:21] --- ASYNC ANALYSIS RESULTS FOR ITERATION 101 ---
+[2025-07-26 20:51:21]   [Embeddings Geometry] Avg Neighbors: 0.00 10th-90th-99th Percentile: 0.0000 - 0.0000 - 0.0000 
+[2025-07-26 20:51:21]   [Embeddings Geometry] Mean Similarity: 0.0256 Std Similarity: 0.0895 | 10th-90th Percentile: -0.0940 - 0.1474
+[2025-07-26 20:51:21]   [Embeddings Analysis] Analyzed: 20824/50304 embeddings | Filtered: True
+[2025-07-26 20:51:21]   [FFN Rank L0] Utilization: 88.28% (113/128)
+[2025-07-26 20:51:21]   [Attn Q L0] Utilization: 71.88% (92/128)
+[2025-07-26 20:51:21]   [Attn K L0] Utilization: 71.88% (92/128)
+[2025-07-26 20:51:21]   [Attn V L0] Utilization: 70.31% (90/128)
+[2025-07-26 20:51:21] --- END OF ASYNC ANALYSIS RESULTS ---
+[2025-07-26 20:51:35] iter 105: loss 10.1310, lr 0.00003, time 3186.32ms, mfu 0.02%, VRAM 0.0/0.0GB (0.0%)
+[2025-07-26 20:51:50] iter 110: loss 9.9228, lr 0.00003, time 2815.45ms, mfu 0.02%, VRAM 0.0/0.0GB (0.0%)
+[2025-07-26 20:52:03] iter 115: loss 9.9132, lr 0.00003, time 2777.67ms, mfu 0.02%, VRAM 0.0/0.0GB (0.0%)
+[2025-07-26 20:52:17] iter 120: loss 10.1018, lr 0.00004, time 2807.35ms, mfu 0.02%, VRAM 0.0/0.0GB (0.0%)
+[2025-07-26 20:52:32] iter 125: loss 10.0272, lr 0.00004, time 2862.44ms, mfu 0.02%, VRAM 0.0/0.0GB (0.0%)
+[2025-07-26 20:52:46] iter 130: loss 9.8906, lr 0.00004, time 2892.39ms, mfu 0.02%, VRAM 0.0/0.0GB (0.0%)
+[2025-07-26 20:53:00] iter 135: loss 9.8521, lr 0.00004, time 2823.26ms, mfu 0.02%, VRAM 0.0/0.0GB (0.0%)
+[2025-07-26 20:53:15] iter 140: loss 9.7967, lr 0.00004, time 2865.76ms, mfu 0.02%, VRAM 0.0/0.0GB (0.0%)
+[2025-07-26 20:53:29] iter 145: loss 9.5402, lr 0.00004, time 2893.78ms, mfu 0.02%, VRAM 0.0/0.0GB (0.0%)
+[2025-07-26 20:53:40] OPERATION_START: merge_lora_weights(None) | iter=149 | value=None | trigger=time threshold | val_loss=9.6555 | trigger_loss=0.0000 | max_wait=50
+[2025-07-26 20:53:40] OPERATION_SUCCESS: merge_lora_weights | iter=149 | new_config={'block_size': 64, 'vocab_size': 50304, 'n_layer': 1, 'n_head': 4, 'n_embd': 128, 'dropout': 0.0, 'bias': False, 'n_hidden': 256, 'use_rotary_embeddings': False, 'rotary_base': 10000.0, 'rotary_max_position_embeddings': 2048, 'embedding_mode': 'standard', 'embedding_rank': 0, 'attn_lora_rank': 0, 'lora_alpha': 1.0}
+[2025-07-26 20:53:44] step 150: train loss 9.5766, val loss 9.5891, tokens/sec 2138
+[2025-07-26 20:53:44]   timing breakdown (avg last 50): evaluation 53.7%, operations 23.0%, forward_backward 22.6%, grad_clip 0.1%, optimizer_step 0.7%
+[2025-07-26 20:53:51] iter 150: loss 9.4612, lr 0.00004, time 4284.82ms, mfu 0.02%, VRAM 0.0/0.0GB (0.0%)
+[2025-07-26 20:53:54] --- ASYNC ANALYSIS RESULTS FOR ITERATION 151 ---
+[2025-07-26 20:53:54]   [Embeddings Geometry] Avg Neighbors: 0.00 10th-90th-99th Percentile: 0.0000 - 0.0000 - 0.0000 
+[2025-07-26 20:53:54]   [Embeddings Geometry] Mean Similarity: 0.0985 Std Similarity: 0.1001 | 10th-90th Percentile: -0.0273 - 0.2231
+[2025-07-26 20:53:54]   [Embeddings Analysis] Analyzed: 24114/50304 embeddings | Filtered: True
+[2025-07-26 20:53:54]   [FFN Rank L0] Utilization: 88.28% (113/128)
+[2025-07-26 20:53:54]   [Attn Q L0] Utilization: 71.09% (91/128)
+[2025-07-26 20:53:54]   [Attn K L0] Utilization: 71.88% (92/128)
+[2025-07-26 20:53:54]   [Attn V L0] Utilization: 70.31% (90/128)
+[2025-07-26 20:53:54] --- END OF ASYNC ANALYSIS RESULTS ---
+[2025-07-26 20:54:08] iter 155: loss 9.5839, lr 0.00005, time 3395.66ms, mfu 0.02%, VRAM 0.0/0.0GB (0.0%)
+[2025-07-26 20:54:21] iter 160: loss 9.1969, lr 0.00005, time 2788.76ms, mfu 0.02%, VRAM 0.0/0.0GB (0.0%)
+[2025-07-26 20:54:35] iter 165: loss 9.4538, lr 0.00005, time 2735.33ms, mfu 0.02%, VRAM 0.0/0.0GB (0.0%)
+[2025-07-26 20:54:49] iter 170: loss 9.2717, lr 0.00005, time 2833.67ms, mfu 0.02%, VRAM 0.0/0.0GB (0.0%)
+[2025-07-26 20:55:03] iter 175: loss 9.2391, lr 0.00005, time 2822.26ms, mfu 0.02%, VRAM 0.0/0.0GB (0.0%)
+[2025-07-26 20:55:17] iter 180: loss 8.9681, lr 0.00005, time 2730.85ms, mfu 0.02%, VRAM 0.0/0.0GB (0.0%)
+[2025-07-26 20:55:31] iter 185: loss 9.1971, lr 0.00006, time 2744.31ms, mfu 0.02%, VRAM 0.0/0.0GB (0.0%)
+[2025-07-26 20:55:45] iter 190: loss 9.2131, lr 0.00006, time 2764.33ms, mfu 0.02%, VRAM 0.0/0.0GB (0.0%)
+[2025-07-26 20:55:59] iter 195: loss 9.2113, lr 0.00006, time 2783.71ms, mfu 0.02%, VRAM 0.0/0.0GB (0.0%)
+[2025-07-26 20:56:08] OPERATION_START: merge_lora_weights(None) | iter=199 | value=None | trigger=time threshold | val_loss=8.9486 | trigger_loss=0.0000 | max_wait=50
+[2025-07-26 20:56:08] OPERATION_SUCCESS: merge_lora_weights | iter=199 | new_config={'block_size': 64, 'vocab_size': 50304, 'n_layer': 1, 'n_head': 4, 'n_embd': 128, 'dropout': 0.0, 'bias': False, 'n_hidden': 256, 'use_rotary_embeddings': False, 'rotary_base': 10000.0, 'rotary_max_position_embeddings': 2048, 'embedding_mode': 'standard', 'embedding_rank': 0, 'attn_lora_rank': 0, 'lora_alpha': 1.0}
+[2025-07-26 20:56:13] step 200: train loss 8.9407, val loss 8.8263, tokens/sec 2891
+[2025-07-26 20:56:13]   timing breakdown (avg last 50): evaluation 54.9%, operations 22.7%, forward_backward 21.8%, grad_clip 0.1%, optimizer_step 0.5%
+[2025-07-26 20:56:18] iter 200: loss 9.2861, lr 0.00006, time 3916.23ms, mfu 0.02%, VRAM 0.0/0.0GB (0.0%)
+[2025-07-26 20:56:24] --- ASYNC ANALYSIS RESULTS FOR ITERATION 201 ---
+[2025-07-26 20:56:24]   [Embeddings Geometry] Avg Neighbors: 0.00 10th-90th-99th Percentile: 0.0000 - 0.0000 - 0.0000 
+[2025-07-26 20:56:24]   [Embeddings Geometry] Mean Similarity: 0.2295 Std Similarity: 0.1356 | 10th-90th Percentile: 0.0583 - 0.3902
+[2025-07-26 20:56:24]   [Embeddings Analysis] Analyzed: 26323/50304 embeddings | Filtered: True
+[2025-07-26 20:56:24]   [FFN Rank L0] Utilization: 87.50% (112/128)
+[2025-07-26 20:56:24]   [Attn Q L0] Utilization: 71.09% (91/128)
+[2025-07-26 20:56:24]   [Attn K L0] Utilization: 71.09% (91/128)
+[2025-07-26 20:56:24]   [Attn V L0] Utilization: 70.31% (90/128)
+[2025-07-26 20:56:24] --- END OF ASYNC ANALYSIS RESULTS ---
+[2025-07-26 20:56:36] iter 205: loss 8.9912, lr 0.00006, time 3641.93ms, mfu 0.02%, VRAM 0.0/0.0GB (0.0%)
+[2025-07-26 20:56:50] iter 210: loss 8.8810, lr 0.00006, time 2678.08ms, mfu 0.02%, VRAM 0.0/0.0GB (0.0%)
+[2025-07-26 20:57:03] iter 215: loss 8.1420, lr 0.00006, time 2729.45ms, mfu 0.02%, VRAM 0.0/0.0GB (0.0%)
+[2025-07-26 20:57:17] iter 220: loss 8.7637, lr 0.00007, time 2653.35ms, mfu 0.02%, VRAM 0.0/0.0GB (0.0%)
+[2025-07-26 20:57:30] iter 225: loss 8.6302, lr 0.00007, time 2645.53ms, mfu 0.02%, VRAM 0.0/0.0GB (0.0%)
+[2025-07-26 20:57:43] iter 230: loss 7.9937, lr 0.00007, time 2675.34ms, mfu 0.02%, VRAM 0.0/0.0GB (0.0%)
+[2025-07-26 20:57:57] iter 235: loss 7.8023, lr 0.00007, time 2746.20ms, mfu 0.02%, VRAM 0.0/0.0GB (0.0%)
+[2025-07-26 20:58:13] iter 240: loss 8.1631, lr 0.00007, time 3117.67ms, mfu 0.02%, VRAM 0.0/0.0GB (0.0%)
+[2025-07-26 20:58:26] iter 245: loss 8.1372, lr 0.00007, time 2768.86ms, mfu 0.02%, VRAM 0.0/0.0GB (0.0%)
+[2025-07-26 20:58:36] OPERATION_START: merge_lora_weights(None) | iter=249 | value=None | trigger=time threshold | val_loss=8.1747 | trigger_loss=0.0000 | max_wait=50
+[2025-07-26 20:58:36] OPERATION_SUCCESS: merge_lora_weights | iter=249 | new_config={'block_size': 64, 'vocab_size': 50304, 'n_layer': 1, 'n_head': 4, 'n_embd': 128, 'dropout': 0.0, 'bias': False, 'n_hidden': 256, 'use_rotary_embeddings': False, 'rotary_base': 10000.0, 'rotary_max_position_embeddings': 2048, 'embedding_mode': 'standard', 'embedding_rank': 0, 'attn_lora_rank': 0, 'lora_alpha': 1.0}
+[2025-07-26 20:58:41] step 250: train loss 7.9861, val loss 8.2023, tokens/sec 3600
+[2025-07-26 20:58:41]   timing breakdown (avg last 50): evaluation 54.0%, operations 23.3%, forward_backward 22.1%, grad_clip 0.1%, optimizer_step 0.5%

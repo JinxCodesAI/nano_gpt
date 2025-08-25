@@ -1,0 +1,362 @@
+[2025-07-26 11:40:35] ================================================================================
+
+[2025-07-26 11:40:35] Training run started at 2025-07-26 11:40:35
+
+[2025-07-26 11:40:35] ================================================================================
+
+      Configuration:
+
+      ----------------------------------------
+
+      RARE_TOKEN_ID: 31
+
+      always_save_checkpoint: False
+
+      attn_lora_rank: 0
+
+      backend: nccl
+
+      batch_size: 512
+
+      beta1: 0.9
+
+      beta2: 0.95
+
+      bias: False
+
+      block_size: 256
+
+      compile: False
+
+      dataset: shakespeare_char
+
+      decay_lr: True
+
+      device: cuda
+
+      dropout: 0.2
+
+      dtype: bfloat16
+
+      embedding_mode: standard
+
+      embedding_rank: 0
+
+      eval_interval: 50
+
+      eval_iters: 5
+
+      eval_only: False
+
+      file_logging: True
+
+      grad_clip: 1.0
+
+      gradient_accumulation_steps: 1
+
+      ignored_outlayers_sum: 0.01
+
+      init_from: scratch
+
+      learning_rate: 0.001
+
+      log_dir: logs
+
+      log_interval: 10
+
+      lora_alpha: 1.0
+
+      lr_decay_iters: 3000
+
+      max_iters: 3500
+
+      min_lr: 0.0001
+
+      n_embd: 384
+
+      n_head: 6
+
+      n_hidden: None
+
+      n_layer: 6
+
+      num_train_shards: 1
+
+      out_dir: out-test-basic-shrunken
+
+      rotary_base: 10000.0
+
+      rotary_max_position_embeddings: 2048
+
+      scaling_schedule_file: None
+
+      shrunken_vocab_size: None
+
+      target_architecture_config: None
+
+      use_rotary_embeddings: False
+
+      vocab_remapping_file: None
+
+      vocab_size: None
+
+      vram_debug: True
+
+      wandb_log: False
+
+      wandb_project: owt
+
+      wandb_run_name: gpt2
+
+      warmup_iters: 100
+
+      weight_decay: 0.01
+
+      ----------------------------------------
+
+[2025-07-26 11:40:39]   timing breakdown: evaluation 0.0%
+[2025-07-26 11:40:39]   timing breakdown: gradient_accumulation 0.0%
+[2025-07-26 11:40:39]   timing breakdown:     forward 0.0%, backward 0.0%, data 0.0%, optim 0.0%
+[2025-07-26 11:40:39]   timing breakdown: gradient_clipping 0.0%
+[2025-07-26 11:40:39] step 0: train loss 4.3702, val loss 4.3586, tokens/sec 339978
+[2025-07-26 11:40:39]   timing breakdown (avg last 10): evaluation 100.0%
+[2025-07-26 11:40:39]   [VRAM Debug] Allocated: 0.157GB (0.7%), Reserved: 11.998GB (54.6%)
+[2025-07-26 11:40:44]   [VRAM Debug] Allocated: 0.157GB (0.7%), Reserved: 12.006GB (54.7%)
+[2025-07-26 11:40:50]   [VRAM Debug] Allocated: 0.157GB (0.7%), Reserved: 12.006GB (54.7%)
+[2025-07-26 11:40:55]   [VRAM Debug] Allocated: 0.157GB (0.7%), Reserved: 12.006GB (54.7%)
+[2025-07-26 11:41:00]   [VRAM Debug] Allocated: 0.157GB (0.7%), Reserved: 12.006GB (54.7%)
+[2025-07-26 11:41:06]   timing breakdown: evaluation 3.1%
+[2025-07-26 11:41:06]   timing breakdown: gradient_accumulation 93.7%
+[2025-07-26 11:41:06]   timing breakdown:     forward 34.4%, backward 58.6%, data 0.8%, optim 0.2%
+[2025-07-26 11:41:06]   timing breakdown: gradient_clipping 3.0%
+[2025-07-26 11:41:06] step 50: train loss 2.4880, val loss 2.5219, tokens/sec 265743
+[2025-07-26 11:41:06]   timing breakdown (avg last 10): evaluation 78.3%, forward_pass 3.8%, data_loading 0.1%, backward_pass 6.7%, gradient_accumulation 10.6%, gradient_clipping 0.4%, optimizer_step 0.0%
+[2025-07-26 11:41:07]   [VRAM Debug] Allocated: 0.157GB (0.7%), Reserved: 12.006GB (54.7%)
+[2025-07-26 11:41:12]   [VRAM Debug] Allocated: 0.157GB (0.7%), Reserved: 12.006GB (54.7%)
+[2025-07-26 11:41:17]   [VRAM Debug] Allocated: 0.157GB (0.7%), Reserved: 12.006GB (54.7%)
+[2025-07-26 11:41:23]   [VRAM Debug] Allocated: 0.157GB (0.7%), Reserved: 12.006GB (54.7%)
+[2025-07-26 11:41:28]   [VRAM Debug] Allocated: 0.157GB (0.7%), Reserved: 12.006GB (54.7%)
+[2025-07-26 11:41:35]   timing breakdown: evaluation 0.4%
+[2025-07-26 11:41:35]   timing breakdown: gradient_accumulation 96.4%
+[2025-07-26 11:41:35]   timing breakdown:     forward 35.3%, backward 60.4%, data 0.7%, optim 0.2%
+[2025-07-26 11:41:35]   timing breakdown: gradient_clipping 3.0%
+[2025-07-26 11:41:35] step 100: train loss 2.4223, val loss 2.4740, tokens/sec 259886
+[2025-07-26 11:41:35]   timing breakdown (avg last 10): evaluation 79.5%, forward_pass 3.7%, data_loading 0.1%, backward_pass 6.3%, gradient_accumulation 10.1%, gradient_clipping 0.3%, optimizer_step 0.0%
+[2025-07-26 11:41:35]   [VRAM Debug] Allocated: 0.157GB (0.7%), Reserved: 12.006GB (54.7%)
+[2025-07-26 11:41:41]   [VRAM Debug] Allocated: 0.157GB (0.7%), Reserved: 12.006GB (54.7%)
+[2025-07-26 11:41:46]   [VRAM Debug] Allocated: 0.157GB (0.7%), Reserved: 12.006GB (54.7%)
+[2025-07-26 11:41:52]   [VRAM Debug] Allocated: 0.157GB (0.7%), Reserved: 12.006GB (54.7%)
+[2025-07-26 11:41:57]   [VRAM Debug] Allocated: 0.157GB (0.7%), Reserved: 12.006GB (54.7%)
+[2025-07-26 11:42:04]   timing breakdown: evaluation 0.4%
+[2025-07-26 11:42:04]   timing breakdown: gradient_accumulation 96.4%
+[2025-07-26 11:42:04]   timing breakdown:     forward 35.6%, backward 60.1%, data 0.7%, optim 0.2%
+[2025-07-26 11:42:04]   timing breakdown: gradient_clipping 3.0%
+[2025-07-26 11:42:04] step 150: train loss 2.2510, val loss 2.3192, tokens/sec 256116
+[2025-07-26 11:42:04]   timing breakdown (avg last 10): evaluation 79.5%, forward_pass 3.7%, data_loading 0.1%, backward_pass 6.3%, gradient_accumulation 10.1%, gradient_clipping 0.3%, optimizer_step 0.0%
+[2025-07-26 11:42:04]   [VRAM Debug] Allocated: 0.157GB (0.7%), Reserved: 12.006GB (54.7%)
+[2025-07-26 11:42:10]   [VRAM Debug] Allocated: 0.157GB (0.7%), Reserved: 12.006GB (54.7%)
+[2025-07-26 11:42:15]   [VRAM Debug] Allocated: 0.157GB (0.7%), Reserved: 12.006GB (54.7%)
+[2025-07-26 11:42:20]   [VRAM Debug] Allocated: 0.157GB (0.7%), Reserved: 12.006GB (54.7%)
+[2025-07-26 11:42:26]   [VRAM Debug] Allocated: 0.157GB (0.7%), Reserved: 12.006GB (54.7%)
+[2025-07-26 11:42:32]   timing breakdown: evaluation 0.4%
+[2025-07-26 11:42:32]   timing breakdown: gradient_accumulation 96.4%
+[2025-07-26 11:42:32]   timing breakdown:     forward 35.4%, backward 60.3%, data 0.7%, optim 0.2%
+[2025-07-26 11:42:32]   timing breakdown: gradient_clipping 3.0%
+[2025-07-26 11:42:32] step 200: train loss 1.9478, val loss 2.1100, tokens/sec 255765
+[2025-07-26 11:42:32]   timing breakdown (avg last 10): evaluation 80.1%, forward_pass 3.6%, data_loading 0.1%, backward_pass 6.1%, gradient_accumulation 9.8%, gradient_clipping 0.3%, optimizer_step 0.0%
+[2025-07-26 11:42:33]   [VRAM Debug] Allocated: 0.157GB (0.7%), Reserved: 12.006GB (54.7%)
+[2025-07-26 11:42:38]   [VRAM Debug] Allocated: 0.157GB (0.7%), Reserved: 12.006GB (54.7%)
+[2025-07-26 11:42:43]   [VRAM Debug] Allocated: 0.157GB (0.7%), Reserved: 12.006GB (54.7%)
+[2025-07-26 11:42:49]   [VRAM Debug] Allocated: 0.157GB (0.7%), Reserved: 12.006GB (54.7%)
+[2025-07-26 11:42:54]   [VRAM Debug] Allocated: 0.157GB (0.7%), Reserved: 12.006GB (54.7%)
+[2025-07-26 11:43:00]   timing breakdown: evaluation 0.4%
+[2025-07-26 11:43:00]   timing breakdown: gradient_accumulation 96.4%
+[2025-07-26 11:43:00]   timing breakdown:     forward 35.5%, backward 60.3%, data 0.6%, optim 0.2%
+[2025-07-26 11:43:00]   timing breakdown: gradient_clipping 3.0%
+[2025-07-26 11:43:00] step 250: train loss 1.7471, val loss 1.9860, tokens/sec 255609
+[2025-07-26 11:43:00]   timing breakdown (avg last 10): evaluation 80.3%, forward_pass 3.5%, data_loading 0.1%, backward_pass 6.1%, gradient_accumulation 9.7%, gradient_clipping 0.3%, optimizer_step 0.0%
+[2025-07-26 11:43:01]   [VRAM Debug] Allocated: 0.157GB (0.7%), Reserved: 12.006GB (54.7%)
+[2025-07-26 11:43:06]   [VRAM Debug] Allocated: 0.157GB (0.7%), Reserved: 12.006GB (54.7%)
+[2025-07-26 11:43:12]   [VRAM Debug] Allocated: 0.157GB (0.7%), Reserved: 12.006GB (54.7%)
+[2025-07-26 11:43:17]   [VRAM Debug] Allocated: 0.157GB (0.7%), Reserved: 12.006GB (54.7%)
+[2025-07-26 11:43:22]   [VRAM Debug] Allocated: 0.157GB (0.7%), Reserved: 12.006GB (54.7%)
+[2025-07-26 11:43:29]   timing breakdown: evaluation 0.4%
+[2025-07-26 11:43:29]   timing breakdown: gradient_accumulation 96.4%
+[2025-07-26 11:43:29]   timing breakdown:     forward 35.5%, backward 60.1%, data 0.8%, optim 0.2%
+[2025-07-26 11:43:29]   timing breakdown: gradient_clipping 3.0%
+[2025-07-26 11:43:29] step 300: train loss 1.6185, val loss 1.9117, tokens/sec 255048
+[2025-07-26 11:43:29]   timing breakdown (avg last 10): evaluation 80.3%, forward_pass 3.5%, data_loading 0.1%, backward_pass 6.1%, gradient_accumulation 9.7%, gradient_clipping 0.3%, optimizer_step 0.0%
+[2025-07-26 11:43:30]   [VRAM Debug] Allocated: 0.157GB (0.7%), Reserved: 12.006GB (54.7%)
+[2025-07-26 11:43:35]   [VRAM Debug] Allocated: 0.157GB (0.7%), Reserved: 12.006GB (54.7%)
+[2025-07-26 11:43:40]   [VRAM Debug] Allocated: 0.157GB (0.7%), Reserved: 12.006GB (54.7%)
+[2025-07-26 11:43:46]   [VRAM Debug] Allocated: 0.157GB (0.7%), Reserved: 12.006GB (54.7%)
+[2025-07-26 11:43:51]   [VRAM Debug] Allocated: 0.157GB (0.7%), Reserved: 12.006GB (54.7%)
+[2025-07-26 11:43:58]   timing breakdown: evaluation 0.4%
+[2025-07-26 11:43:58]   timing breakdown: gradient_accumulation 96.4%
+[2025-07-26 11:43:58]   timing breakdown:     forward 35.6%, backward 60.0%, data 0.9%, optim 0.2%
+[2025-07-26 11:43:58]   timing breakdown: gradient_clipping 2.9%
+[2025-07-26 11:43:58] step 350: train loss 1.4840, val loss 1.8470, tokens/sec 254692
+[2025-07-26 11:43:58]   timing breakdown (avg last 10): evaluation 80.4%, forward_pass 3.5%, data_loading 0.1%, backward_pass 6.0%, gradient_accumulation 9.7%, gradient_clipping 0.3%, optimizer_step 0.0%
+[2025-07-26 11:43:58]   [VRAM Debug] Allocated: 0.157GB (0.7%), Reserved: 12.006GB (54.7%)
+[2025-07-26 11:44:03]   [VRAM Debug] Allocated: 0.157GB (0.7%), Reserved: 12.006GB (54.7%)
+[2025-07-26 11:44:09]   [VRAM Debug] Allocated: 0.157GB (0.7%), Reserved: 12.006GB (54.7%)
+[2025-07-26 11:44:14]   [VRAM Debug] Allocated: 0.157GB (0.7%), Reserved: 12.006GB (54.7%)
+[2025-07-26 11:44:19]   [VRAM Debug] Allocated: 0.157GB (0.7%), Reserved: 12.006GB (54.7%)
+[2025-07-26 11:44:26]   timing breakdown: evaluation 0.4%
+[2025-07-26 11:44:26]   timing breakdown: gradient_accumulation 96.4%
+[2025-07-26 11:44:26]   timing breakdown:     forward 35.6%, backward 60.1%, data 0.7%, optim 0.2%
+[2025-07-26 11:44:26]   timing breakdown: gradient_clipping 3.0%
+[2025-07-26 11:44:26] step 400: train loss 1.3914, val loss 1.8118, tokens/sec 254624
+[2025-07-26 11:44:26]   timing breakdown (avg last 10): evaluation 80.5%, forward_pass 3.5%, data_loading 0.1%, backward_pass 6.0%, gradient_accumulation 9.6%, gradient_clipping 0.3%, optimizer_step 0.0%
+[2025-07-26 11:44:26]   [VRAM Debug] Allocated: 0.157GB (0.7%), Reserved: 12.006GB (54.7%)
+[2025-07-26 11:44:32]   [VRAM Debug] Allocated: 0.157GB (0.7%), Reserved: 12.006GB (54.7%)
+[2025-07-26 11:44:37]   [VRAM Debug] Allocated: 0.157GB (0.7%), Reserved: 12.006GB (54.7%)
+[2025-07-26 11:44:42]   [VRAM Debug] Allocated: 0.157GB (0.7%), Reserved: 12.006GB (54.7%)
+[2025-07-26 11:44:48]   [VRAM Debug] Allocated: 0.157GB (0.7%), Reserved: 12.006GB (54.7%)
+[2025-07-26 11:44:54]   timing breakdown: evaluation 0.4%
+[2025-07-26 11:44:54]   timing breakdown: gradient_accumulation 96.4%
+[2025-07-26 11:44:54]   timing breakdown:     forward 35.5%, backward 60.0%, data 0.9%, optim 0.2%
+[2025-07-26 11:44:54]   timing breakdown: gradient_clipping 3.0%
+[2025-07-26 11:44:54] step 450: train loss 1.3312, val loss 1.7877, tokens/sec 254523
+[2025-07-26 11:44:54]   timing breakdown (avg last 10): evaluation 80.6%, forward_pass 3.5%, data_loading 0.1%, backward_pass 6.0%, gradient_accumulation 9.6%, gradient_clipping 0.3%, optimizer_step 0.0%
+[2025-07-26 11:44:55]   [VRAM Debug] Allocated: 0.157GB (0.7%), Reserved: 12.006GB (54.7%)
+[2025-07-26 11:45:00]   [VRAM Debug] Allocated: 0.157GB (0.7%), Reserved: 12.006GB (54.7%)
+[2025-07-26 11:45:06]   [VRAM Debug] Allocated: 0.157GB (0.7%), Reserved: 12.006GB (54.7%)
+[2025-07-26 11:45:11]   [VRAM Debug] Allocated: 0.157GB (0.7%), Reserved: 12.006GB (54.7%)
+[2025-07-26 11:45:16]   [VRAM Debug] Allocated: 0.157GB (0.7%), Reserved: 12.006GB (54.7%)
+[2025-07-26 11:45:23]   timing breakdown: evaluation 0.4%
+[2025-07-26 11:45:23]   timing breakdown: gradient_accumulation 96.4%
+[2025-07-26 11:45:23]   timing breakdown:     forward 35.4%, backward 60.2%, data 0.8%, optim 0.2%
+[2025-07-26 11:45:23]   timing breakdown: gradient_clipping 3.0%
+[2025-07-26 11:45:23] step 500: train loss 1.2591, val loss 1.7736, tokens/sec 254391
+[2025-07-26 11:45:23]   timing breakdown (avg last 10): evaluation 80.6%, forward_pass 3.5%, data_loading 0.1%, backward_pass 6.0%, gradient_accumulation 9.6%, gradient_clipping 0.3%, optimizer_step 0.0%
+[2025-07-26 11:45:23]   [VRAM Debug] Allocated: 0.157GB (0.7%), Reserved: 12.006GB (54.7%)
+[2025-07-26 11:45:29]   [VRAM Debug] Allocated: 0.157GB (0.7%), Reserved: 12.006GB (54.7%)
+[2025-07-26 11:45:34]   [VRAM Debug] Allocated: 0.157GB (0.7%), Reserved: 12.006GB (54.7%)
+[2025-07-26 11:45:39]   [VRAM Debug] Allocated: 0.157GB (0.7%), Reserved: 12.006GB (54.7%)
+[2025-07-26 11:45:45]   [VRAM Debug] Allocated: 0.157GB (0.7%), Reserved: 12.006GB (54.7%)
+[2025-07-26 11:45:51]   timing breakdown: evaluation 0.4%
+[2025-07-26 11:45:51]   timing breakdown: gradient_accumulation 96.4%
+[2025-07-26 11:45:51]   timing breakdown:     forward 35.6%, backward 60.0%, data 0.7%, optim 0.2%
+[2025-07-26 11:45:51]   timing breakdown: gradient_clipping 3.0%
+[2025-07-26 11:45:51] step 550: train loss 1.2085, val loss 1.7716, tokens/sec 254303
+[2025-07-26 11:45:51]   timing breakdown (avg last 10): evaluation 80.6%, forward_pass 3.5%, data_loading 0.1%, backward_pass 6.0%, gradient_accumulation 9.5%, gradient_clipping 0.3%, optimizer_step 0.0%
+[2025-07-26 11:45:52]   [VRAM Debug] Allocated: 0.157GB (0.7%), Reserved: 12.006GB (54.7%)
+[2025-07-26 11:45:57]   [VRAM Debug] Allocated: 0.157GB (0.7%), Reserved: 12.006GB (54.7%)
+[2025-07-26 11:46:02]   [VRAM Debug] Allocated: 0.157GB (0.7%), Reserved: 12.006GB (54.7%)
+[2025-07-26 11:46:08]   [VRAM Debug] Allocated: 0.157GB (0.7%), Reserved: 12.006GB (54.7%)
+[2025-07-26 11:46:13]   [VRAM Debug] Allocated: 0.157GB (0.7%), Reserved: 12.006GB (54.7%)
+[2025-07-26 11:46:20]   timing breakdown: evaluation 0.4%
+[2025-07-26 11:46:20]   timing breakdown: gradient_accumulation 96.4%
+[2025-07-26 11:46:20]   timing breakdown:     forward 35.5%, backward 60.0%, data 0.9%, optim 0.2%
+[2025-07-26 11:46:20]   timing breakdown: gradient_clipping 3.0%
+[2025-07-26 11:46:20] step 600: train loss 1.1591, val loss 1.7832, tokens/sec 254211
+[2025-07-26 11:46:20]   timing breakdown (avg last 10): evaluation 80.6%, forward_pass 3.5%, data_loading 0.1%, backward_pass 6.0%, gradient_accumulation 9.5%, gradient_clipping 0.3%, optimizer_step 0.0%
+[2025-07-26 11:46:20]   [VRAM Debug] Allocated: 0.157GB (0.7%), Reserved: 12.006GB (54.7%)
+[2025-07-26 11:46:26]   [VRAM Debug] Allocated: 0.157GB (0.7%), Reserved: 12.006GB (54.7%)
+[2025-07-26 11:46:31]   [VRAM Debug] Allocated: 0.157GB (0.7%), Reserved: 12.006GB (54.7%)
+[2025-07-26 11:46:36]   [VRAM Debug] Allocated: 0.157GB (0.7%), Reserved: 12.006GB (54.7%)
+[2025-07-26 11:46:42]   [VRAM Debug] Allocated: 0.157GB (0.7%), Reserved: 12.006GB (54.7%)
+[2025-07-26 11:46:48]   timing breakdown: evaluation 0.4%
+[2025-07-26 11:46:48]   timing breakdown: gradient_accumulation 96.4%
+[2025-07-26 11:46:48]   timing breakdown:     forward 35.6%, backward 60.1%, data 0.7%, optim 0.2%
+[2025-07-26 11:46:48]   timing breakdown: gradient_clipping 3.0%
+[2025-07-26 11:46:48] step 650: train loss 1.1073, val loss 1.7794, tokens/sec 254109
+[2025-07-26 11:46:48]   timing breakdown (avg last 10): evaluation 80.6%, forward_pass 3.5%, data_loading 0.1%, backward_pass 6.0%, gradient_accumulation 9.5%, gradient_clipping 0.3%, optimizer_step 0.0%
+[2025-07-26 11:46:49]   [VRAM Debug] Allocated: 0.157GB (0.7%), Reserved: 12.006GB (54.7%)
+[2025-07-26 11:46:54]   [VRAM Debug] Allocated: 0.157GB (0.7%), Reserved: 12.006GB (54.7%)
+[2025-07-26 11:46:59]   [VRAM Debug] Allocated: 0.157GB (0.7%), Reserved: 12.006GB (54.7%)
+[2025-07-26 11:47:05]   [VRAM Debug] Allocated: 0.157GB (0.7%), Reserved: 12.006GB (54.7%)
+[2025-07-26 11:47:10]   [VRAM Debug] Allocated: 0.157GB (0.7%), Reserved: 12.006GB (54.7%)
+[2025-07-26 11:47:17]   timing breakdown: evaluation 0.4%
+[2025-07-26 11:47:17]   timing breakdown: gradient_accumulation 96.4%
+[2025-07-26 11:47:17]   timing breakdown:     forward 35.3%, backward 60.2%, data 0.8%, optim 0.2%
+[2025-07-26 11:47:17]   timing breakdown: gradient_clipping 3.0%
+[2025-07-26 11:47:17] step 700: train loss 1.0340, val loss 1.8038, tokens/sec 254055
+[2025-07-26 11:47:17]   timing breakdown (avg last 10): evaluation 80.7%, forward_pass 3.5%, data_loading 0.1%, backward_pass 6.0%, gradient_accumulation 9.5%, gradient_clipping 0.3%, optimizer_step 0.0%
+[2025-07-26 11:47:17]   [VRAM Debug] Allocated: 0.157GB (0.7%), Reserved: 12.006GB (54.7%)
+[2025-07-26 11:47:23]   [VRAM Debug] Allocated: 0.157GB (0.7%), Reserved: 12.006GB (54.7%)
+[2025-07-26 11:47:28]   [VRAM Debug] Allocated: 0.157GB (0.7%), Reserved: 12.006GB (54.7%)
+[2025-07-26 11:47:33]   [VRAM Debug] Allocated: 0.157GB (0.7%), Reserved: 12.006GB (54.7%)
+[2025-07-26 11:47:39]   [VRAM Debug] Allocated: 0.157GB (0.7%), Reserved: 12.006GB (54.7%)
+[2025-07-26 11:47:45]   timing breakdown: evaluation 0.4%
+[2025-07-26 11:47:45]   timing breakdown: gradient_accumulation 96.4%
+[2025-07-26 11:47:45]   timing breakdown:     forward 35.5%, backward 60.2%, data 0.7%, optim 0.2%
+[2025-07-26 11:47:45]   timing breakdown: gradient_clipping 2.9%
+[2025-07-26 11:47:45] step 750: train loss 0.9710, val loss 1.8448, tokens/sec 253986
+[2025-07-26 11:47:45]   timing breakdown (avg last 10): evaluation 80.7%, forward_pass 3.5%, data_loading 0.1%, backward_pass 5.9%, gradient_accumulation 9.5%, gradient_clipping 0.3%, optimizer_step 0.0%
+[2025-07-26 11:47:46]   [VRAM Debug] Allocated: 0.157GB (0.7%), Reserved: 12.006GB (54.7%)
+[2025-07-26 11:47:51]   [VRAM Debug] Allocated: 0.157GB (0.7%), Reserved: 12.006GB (54.7%)
+[2025-07-26 11:47:56]   [VRAM Debug] Allocated: 0.157GB (0.7%), Reserved: 12.006GB (54.7%)
+[2025-07-26 11:48:02]   [VRAM Debug] Allocated: 0.157GB (0.7%), Reserved: 12.006GB (54.7%)
+[2025-07-26 11:48:07]   [VRAM Debug] Allocated: 0.157GB (0.7%), Reserved: 12.006GB (54.7%)
+[2025-07-26 11:48:14]   timing breakdown: evaluation 0.4%
+[2025-07-26 11:48:14]   timing breakdown: gradient_accumulation 96.4%
+[2025-07-26 11:48:14]   timing breakdown:     forward 35.5%, backward 60.0%, data 0.9%, optim 0.2%
+[2025-07-26 11:48:14]   timing breakdown: gradient_clipping 3.0%
+[2025-07-26 11:48:14] step 800: train loss 0.9229, val loss 1.8729, tokens/sec 253928
+[2025-07-26 11:48:14]   timing breakdown (avg last 10): evaluation 80.7%, forward_pass 3.5%, data_loading 0.1%, backward_pass 5.9%, gradient_accumulation 9.5%, gradient_clipping 0.3%, optimizer_step 0.0%
+[2025-07-26 11:48:14]   [VRAM Debug] Allocated: 0.157GB (0.7%), Reserved: 12.006GB (54.7%)
+[2025-07-26 11:48:20]   [VRAM Debug] Allocated: 0.157GB (0.7%), Reserved: 12.006GB (54.7%)
+[2025-07-26 11:48:25]   [VRAM Debug] Allocated: 0.157GB (0.7%), Reserved: 12.006GB (54.7%)
+[2025-07-26 11:48:30]   [VRAM Debug] Allocated: 0.157GB (0.7%), Reserved: 12.006GB (54.7%)
+[2025-07-26 11:48:36]   [VRAM Debug] Allocated: 0.157GB (0.7%), Reserved: 12.006GB (54.7%)
+[2025-07-26 11:48:42]   timing breakdown: evaluation 0.4%
+[2025-07-26 11:48:42]   timing breakdown: gradient_accumulation 96.4%
+[2025-07-26 11:48:42]   timing breakdown:     forward 35.4%, backward 60.2%, data 0.8%, optim 0.2%
+[2025-07-26 11:48:42]   timing breakdown: gradient_clipping 3.0%
+[2025-07-26 11:48:42] step 850: train loss 0.8727, val loss 1.8995, tokens/sec 253825
+[2025-07-26 11:48:42]   timing breakdown (avg last 10): evaluation 80.7%, forward_pass 3.5%, data_loading 0.1%, backward_pass 5.9%, gradient_accumulation 9.5%, gradient_clipping 0.3%, optimizer_step 0.0%
+[2025-07-26 11:48:43]   [VRAM Debug] Allocated: 0.157GB (0.7%), Reserved: 12.006GB (54.7%)
+[2025-07-26 11:48:48]   [VRAM Debug] Allocated: 0.157GB (0.7%), Reserved: 12.006GB (54.7%)
+[2025-07-26 11:48:53]   [VRAM Debug] Allocated: 0.157GB (0.7%), Reserved: 12.006GB (54.7%)
+[2025-07-26 11:48:59]   [VRAM Debug] Allocated: 0.157GB (0.7%), Reserved: 12.006GB (54.7%)
+[2025-07-26 11:49:04]   [VRAM Debug] Allocated: 0.157GB (0.7%), Reserved: 12.006GB (54.7%)
+[2025-07-26 11:49:11]   timing breakdown: evaluation 0.4%
+[2025-07-26 11:49:11]   timing breakdown: gradient_accumulation 96.4%
+[2025-07-26 11:49:11]   timing breakdown:     forward 35.4%, backward 60.2%, data 0.8%, optim 0.2%
+[2025-07-26 11:49:11]   timing breakdown: gradient_clipping 3.0%
+[2025-07-26 11:49:11] step 900: train loss 0.8124, val loss 1.9478, tokens/sec 253788
+[2025-07-26 11:49:11]   timing breakdown (avg last 10): evaluation 80.7%, forward_pass 3.5%, data_loading 0.1%, backward_pass 5.9%, gradient_accumulation 9.5%, gradient_clipping 0.3%, optimizer_step 0.0%
+[2025-07-26 11:49:11]   [VRAM Debug] Allocated: 0.157GB (0.7%), Reserved: 12.006GB (54.7%)
+[2025-07-26 11:49:17]   [VRAM Debug] Allocated: 0.157GB (0.7%), Reserved: 12.006GB (54.7%)
+[2025-07-26 11:49:22]   [VRAM Debug] Allocated: 0.157GB (0.7%), Reserved: 12.006GB (54.7%)
+[2025-07-26 11:49:27]   [VRAM Debug] Allocated: 0.157GB (0.7%), Reserved: 12.006GB (54.7%)
+[2025-07-26 11:49:33]   [VRAM Debug] Allocated: 0.157GB (0.7%), Reserved: 12.006GB (54.7%)
+[2025-07-26 11:49:39]   timing breakdown: evaluation 0.4%
+[2025-07-26 11:49:39]   timing breakdown: gradient_accumulation 96.4%
+[2025-07-26 11:49:39]   timing breakdown:     forward 35.5%, backward 60.1%, data 0.8%, optim 0.2%
+[2025-07-26 11:49:39]   timing breakdown: gradient_clipping 3.0%
+[2025-07-26 11:49:39] step 950: train loss 0.7526, val loss 2.0053, tokens/sec 253727
+[2025-07-26 11:49:39]   timing breakdown (avg last 10): evaluation 80.8%, forward_pass 3.4%, data_loading 0.1%, backward_pass 5.9%, gradient_accumulation 9.5%, gradient_clipping 0.3%, optimizer_step 0.0%
+[2025-07-26 11:49:40]   [VRAM Debug] Allocated: 0.157GB (0.7%), Reserved: 12.006GB (54.7%)
+[2025-07-26 11:49:45]   [VRAM Debug] Allocated: 0.157GB (0.7%), Reserved: 12.006GB (54.7%)
+[2025-07-26 11:49:50]   [VRAM Debug] Allocated: 0.157GB (0.7%), Reserved: 12.006GB (54.7%)
+[2025-07-26 11:49:56]   [VRAM Debug] Allocated: 0.157GB (0.7%), Reserved: 12.006GB (54.7%)
+[2025-07-26 11:50:01]   [VRAM Debug] Allocated: 0.157GB (0.7%), Reserved: 12.006GB (54.7%)
+[2025-07-26 11:50:08]   timing breakdown: evaluation 0.4%
+[2025-07-26 11:50:08]   timing breakdown: gradient_accumulation 96.4%
+[2025-07-26 11:50:08]   timing breakdown:     forward 35.5%, backward 60.2%, data 0.7%, optim 0.2%
+[2025-07-26 11:50:08]   timing breakdown: gradient_clipping 3.0%
+[2025-07-26 11:50:08] step 1000: train loss 0.7043, val loss 2.0668, tokens/sec 253673
+[2025-07-26 11:50:08]   timing breakdown (avg last 10): evaluation 80.8%, forward_pass 3.4%, data_loading 0.1%, backward_pass 5.9%, gradient_accumulation 9.5%, gradient_clipping 0.3%, optimizer_step 0.0%
+[2025-07-26 11:50:08]   [VRAM Debug] Allocated: 0.157GB (0.7%), Reserved: 12.006GB (54.7%)
+[2025-07-26 11:50:14]   [VRAM Debug] Allocated: 0.157GB (0.7%), Reserved: 12.006GB (54.7%)
+[2025-07-26 11:50:19]   [VRAM Debug] Allocated: 0.157GB (0.7%), Reserved: 12.006GB (54.7%)
+[2025-07-26 11:50:24]   [VRAM Debug] Allocated: 0.157GB (0.7%), Reserved: 12.006GB (54.7%)
+[2025-07-26 11:50:30]   [VRAM Debug] Allocated: 0.157GB (0.7%), Reserved: 12.006GB (54.7%)
+[2025-07-26 11:50:36]   timing breakdown: evaluation 0.4%
+[2025-07-26 11:50:36]   timing breakdown: gradient_accumulation 96.4%
+[2025-07-26 11:50:36]   timing breakdown:     forward 35.5%, backward 60.2%, data 0.7%, optim 0.2%
+[2025-07-26 11:50:36]   timing breakdown: gradient_clipping 3.0%
+[2025-07-26 11:50:36] step 1050: train loss 0.6292, val loss 2.0835, tokens/sec 253614
+[2025-07-26 11:50:36]   timing breakdown (avg last 10): evaluation 80.8%, forward_pass 3.4%, data_loading 0.1%, backward_pass 5.9%, gradient_accumulation 9.4%, gradient_clipping 0.3%, optimizer_step 0.0%
+[2025-07-26 11:50:37]   [VRAM Debug] Allocated: 0.157GB (0.7%), Reserved: 12.006GB (54.7%)
+[2025-07-26 11:50:42]   [VRAM Debug] Allocated: 0.157GB (0.7%), Reserved: 12.006GB (54.7%)
+[2025-07-26 11:50:48]   [VRAM Debug] Allocated: 0.157GB (0.7%), Reserved: 12.006GB (54.7%)
+[2025-07-26 11:50:51] ================================================================================
+
+[2025-07-26 11:50:51] Training run ended at 2025-07-26 11:50:51
+
+[2025-07-26 11:50:51] ================================================================================
+

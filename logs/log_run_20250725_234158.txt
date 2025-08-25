@@ -1,0 +1,202 @@
+[2025-07-25 23:41:58] ================================================================================
+
+[2025-07-25 23:41:58] Training run started at 2025-07-25 23:41:58
+
+[2025-07-25 23:41:58] ================================================================================
+
+      Configuration:
+
+      ----------------------------------------
+
+      RARE_TOKEN_ID: 31
+
+      always_save_checkpoint: False
+
+      attn_lora_rank: 0
+
+      backend: nccl
+
+      batch_size: 1024
+
+      beta1: 0.9
+
+      beta2: 0.95
+
+      bias: False
+
+      block_size: 256
+
+      compile: False
+
+      dataset: shakespeare_char
+
+      decay_lr: True
+
+      device: cuda
+
+      dropout: 0.2
+
+      dtype: float32
+
+      embedding_mode: standard
+
+      embedding_rank: 0
+
+      eval_interval: 50
+
+      eval_iters: 5
+
+      eval_only: False
+
+      file_logging: True
+
+      grad_clip: 1.0
+
+      gradient_accumulation_steps: 1
+
+      ignored_outlayers_sum: 0.01
+
+      init_from: scratch
+
+      learning_rate: 0.001
+
+      log_dir: logs
+
+      log_interval: 10
+
+      lora_alpha: 1.0
+
+      lr_decay_iters: 3000
+
+      max_iters: 3500
+
+      min_lr: 0.0001
+
+      n_embd: 384
+
+      n_head: 6
+
+      n_hidden: None
+
+      n_layer: 1
+
+      num_train_shards: 1
+
+      out_dir: out-test-basic-shrunken
+
+      rotary_base: 10000.0
+
+      rotary_max_position_embeddings: 2048
+
+      scaling_schedule_file: configs/test_basic_shrunken_schedule.json
+
+      shrunken_vocab_size: None
+
+      target_architecture_config: None
+
+      use_rotary_embeddings: False
+
+      vocab_remapping_file: None
+
+      vocab_size: None
+
+      wandb_log: False
+
+      wandb_project: owt
+
+      wandb_run_name: gpt2
+
+      warmup_iters: 100
+
+      weight_decay: 0.01
+
+      ----------------------------------------
+
+[2025-07-25 23:42:01]   timing breakdown: evaluation 0.0%
+[2025-07-25 23:42:01]   timing breakdown: gradient_accumulation 0.0%
+[2025-07-25 23:42:01]   timing breakdown:     forward 0.0%, backward 0.0%, data 0.0%, optim 0.0%
+[2025-07-25 23:42:01]   timing breakdown: gradient_clipping 0.0%
+[2025-07-25 23:42:01] step 0: train loss 4.3055, val loss 4.2990, tokens/sec 845345
+[2025-07-25 23:42:01]   timing breakdown (avg last 10): evaluation 100.0%
+[2025-07-25 23:42:18]   timing breakdown: evaluation 30.2%
+[2025-07-25 23:42:18]   timing breakdown: gradient_accumulation 59.5%
+[2025-07-25 23:42:18]   timing breakdown:     forward 6.0%, backward 39.6%, data 13.8%, optim 1.7%
+[2025-07-25 23:42:18]   timing breakdown: gradient_clipping 8.5%
+[2025-07-25 23:42:18] step 50: train loss 2.5047, val loss 2.5464, tokens/sec 859430
+[2025-07-25 23:42:18]   timing breakdown (avg last 10): evaluation 97.7%, forward_pass 0.1%, data_loading 0.2%, backward_pass 0.7%, gradient_accumulation 1.0%, gradient_clipping 0.2%, optimizer_step 0.0%
+[2025-07-25 23:42:34]   timing breakdown: evaluation 9.7%
+[2025-07-25 23:42:34]   timing breakdown: gradient_accumulation 77.7%
+[2025-07-25 23:42:34]   timing breakdown:     forward 5.4%, backward 54.2%, data 17.9%, optim 2.0%
+[2025-07-25 23:42:34]   timing breakdown: gradient_clipping 10.6%
+[2025-07-25 23:42:34] step 100: train loss 2.3995, val loss 2.4858, tokens/sec 861616
+[2025-07-25 23:42:34]   timing breakdown (avg last 10): evaluation 98.5%, forward_pass 0.0%, data_loading 0.1%, backward_pass 0.5%, gradient_accumulation 0.7%, gradient_clipping 0.1%, optimizer_step 0.0%
+[2025-07-25 23:42:51]   timing breakdown: evaluation 9.2%
+[2025-07-25 23:42:51]   timing breakdown: gradient_accumulation 78.3%
+[2025-07-25 23:42:51]   timing breakdown:     forward 5.6%, backward 51.9%, data 20.6%, optim 2.1%
+[2025-07-25 23:42:51]   timing breakdown: gradient_clipping 10.4%
+[2025-07-25 23:42:51] step 150: train loss 2.1959, val loss 2.3711, tokens/sec 858338
+[2025-07-25 23:42:51]   timing breakdown (avg last 10): evaluation 98.6%, forward_pass 0.0%, data_loading 0.1%, backward_pass 0.5%, gradient_accumulation 0.7%, gradient_clipping 0.1%, optimizer_step 0.0%
+[2025-07-25 23:43:08]   timing breakdown: evaluation 8.9%
+[2025-07-25 23:43:08]   timing breakdown: gradient_accumulation 79.5%
+[2025-07-25 23:43:08]   timing breakdown:     forward 5.5%, backward 53.8%, data 20.0%, optim 1.9%
+[2025-07-25 23:43:08]   timing breakdown: gradient_clipping 9.8%
+[2025-07-25 23:43:09] step 200: train loss 1.9543, val loss 2.2151, tokens/sec 852964
+[2025-07-25 23:43:09]   timing breakdown (avg last 10): evaluation 98.6%, forward_pass 0.0%, data_loading 0.1%, backward_pass 0.5%, gradient_accumulation 0.7%, gradient_clipping 0.1%, optimizer_step 0.0%
+[2025-07-25 23:43:26]   timing breakdown: evaluation 9.5%
+[2025-07-25 23:43:26]   timing breakdown: gradient_accumulation 78.3%
+[2025-07-25 23:43:26]   timing breakdown:     forward 5.3%, backward 56.4%, data 16.4%, optim 1.9%
+[2025-07-25 23:43:26]   timing breakdown: gradient_clipping 10.2%
+[2025-07-25 23:43:26] step 250: train loss 1.6958, val loss 2.0535, tokens/sec 847870
+[2025-07-25 23:43:26]   timing breakdown (avg last 10): evaluation 98.6%, forward_pass 0.0%, data_loading 0.1%, backward_pass 0.5%, gradient_accumulation 0.6%, gradient_clipping 0.1%, optimizer_step 0.0%
+[2025-07-25 23:43:44]   timing breakdown: evaluation 9.1%
+[2025-07-25 23:43:44]   timing breakdown: gradient_accumulation 78.9%
+[2025-07-25 23:43:44]   timing breakdown:     forward 5.8%, backward 51.5%, data 21.4%, optim 2.1%
+[2025-07-25 23:43:44]   timing breakdown: gradient_clipping 9.9%
+[2025-07-25 23:43:44] step 300: train loss 1.5639, val loss 2.0027, tokens/sec 842317
+[2025-07-25 23:43:44]   timing breakdown (avg last 10): evaluation 98.6%, forward_pass 0.0%, data_loading 0.1%, backward_pass 0.5%, gradient_accumulation 0.7%, gradient_clipping 0.1%, optimizer_step 0.0%
+[2025-07-25 23:44:01]   timing breakdown: evaluation 9.8%
+[2025-07-25 23:44:01]   timing breakdown: gradient_accumulation 77.8%
+[2025-07-25 23:44:01]   timing breakdown:     forward 5.6%, backward 46.1%, data 25.9%, optim 2.1%
+[2025-07-25 23:44:01]   timing breakdown: gradient_clipping 10.4%
+[2025-07-25 23:44:01] step 350: train loss 1.4701, val loss 1.9832, tokens/sec 839818
+[2025-07-25 23:44:01]   timing breakdown (avg last 10): evaluation 98.6%, forward_pass 0.0%, data_loading 0.1%, backward_pass 0.4%, gradient_accumulation 0.6%, gradient_clipping 0.1%, optimizer_step 0.0%
+[2025-07-25 23:44:19]   timing breakdown: evaluation 9.0%
+[2025-07-25 23:44:19]   timing breakdown: gradient_accumulation 79.3%
+[2025-07-25 23:44:19]   timing breakdown:     forward 5.4%, backward 53.8%, data 19.9%, optim 2.0%
+[2025-07-25 23:44:19]   timing breakdown: gradient_clipping 9.7%
+[2025-07-25 23:44:19] step 400: train loss 1.4122, val loss 1.9675, tokens/sec 838234
+[2025-07-25 23:44:19]   timing breakdown (avg last 10): evaluation 98.6%, forward_pass 0.0%, data_loading 0.1%, backward_pass 0.5%, gradient_accumulation 0.6%, gradient_clipping 0.1%, optimizer_step 0.0%
+[2025-07-25 23:44:36]   timing breakdown: evaluation 9.6%
+[2025-07-25 23:44:36]   timing breakdown: gradient_accumulation 78.0%
+[2025-07-25 23:44:36]   timing breakdown:     forward 5.6%, backward 52.6%, data 19.6%, optim 2.0%
+[2025-07-25 23:44:36]   timing breakdown: gradient_clipping 10.4%
+[2025-07-25 23:44:36] step 450: train loss 1.3752, val loss 1.9649, tokens/sec 837936
+[2025-07-25 23:44:36]   timing breakdown (avg last 10): evaluation 98.7%, forward_pass 0.0%, data_loading 0.1%, backward_pass 0.4%, gradient_accumulation 0.6%, gradient_clipping 0.1%, optimizer_step 0.0%
+[2025-07-25 23:44:53]   timing breakdown: evaluation 9.0%
+[2025-07-25 23:44:53]   timing breakdown: gradient_accumulation 79.1%
+[2025-07-25 23:44:53]   timing breakdown:     forward 5.7%, backward 54.4%, data 18.9%, optim 2.0%
+[2025-07-25 23:44:53]   timing breakdown: gradient_clipping 9.9%
+[2025-07-25 23:44:53] step 500: train loss 1.3357, val loss 1.9806, tokens/sec 837796
+[2025-07-25 23:44:53]   timing breakdown (avg last 10): evaluation 98.7%, forward_pass 0.0%, data_loading 0.1%, backward_pass 0.5%, gradient_accumulation 0.6%, gradient_clipping 0.1%, optimizer_step 0.0%
+[2025-07-25 23:44:53] OPERATION_START: merge_lora_weights Train first layer unfreezed for 500 iterations | iter=500 | value=None | trigger=Timeout | val_loss=1.9806 | trigger_loss=0.0000 | max_wait=500
+[2025-07-25 23:44:53] OPERATION_SUCCESS: merge_lora_weights | iter=500 | new_config={'block_size': 256, 'vocab_size': 65, 'n_layer': 1, 'n_head': 6, 'n_embd': 384, 'dropout': 0.2, 'bias': False, 'n_hidden': None, 'use_rotary_embeddings': False, 'rotary_base': 10000.0, 'rotary_max_position_embeddings': 2048, 'embedding_mode': 'standard', 'embedding_rank': 0, 'attn_lora_rank': 0, 'lora_alpha': 1.0}
+[2025-07-25 23:44:54] OPERATION_REEVALUATION: merge_lora_weights | iter=500 | old_val_loss=1.9806 | new_val_loss=1.9743 | change=-0.0063
+[2025-07-25 23:44:54] step 500: train loss 1.3402, val loss 1.9743, tokens/sec 839120
+[2025-07-25 23:45:12]   timing breakdown: evaluation 9.3%
+[2025-07-25 23:45:12]   timing breakdown: gradient_accumulation 78.1%
+[2025-07-25 23:45:12]   timing breakdown:     forward 5.7%, backward 53.6%, data 18.7%, optim 2.2%
+[2025-07-25 23:45:12]   timing breakdown: gradient_clipping 10.4%
+[2025-07-25 23:45:12] step 550: train loss 1.3179, val loss 1.9659, tokens/sec 838663
+[2025-07-25 23:45:12]   timing breakdown (avg last 10): evaluation 98.7%, forward_pass 0.0%, data_loading 0.1%, backward_pass 0.4%, gradient_accumulation 0.6%, gradient_clipping 0.1%, optimizer_step 0.0%
+[2025-07-25 23:45:12] OPERATION_START: set_batch_size_relative Reduce batch size to 50% before adding layer 2 | iter=550 | value=0.5 | trigger=Loss threshold | val_loss=1.9659 | trigger_loss=100.0000 | max_wait=0
+[2025-07-25 23:45:12] OPERATION_SUCCESS: set_batch_size_relative | iter=550 | new_batch_size=512 | original_batch_size=1024 | scale_factor=0.5
+[2025-07-25 23:45:12] OPERATION_START: stack_layers Add layer 2 after 500 iterations total | iter=550 | value=[0, 0] | trigger=Loss threshold | val_loss=1.9659 | trigger_loss=100.0000 | max_wait=0
+[2025-07-25 23:45:12] OPERATION_SUCCESS: stack_layers | iter=550 | new_config={'block_size': 256, 'vocab_size': 65, 'n_layer': 2, 'n_head': 6, 'n_embd': 384, 'dropout': 0.2, 'bias': False, 'n_hidden': None, 'use_rotary_embeddings': False, 'rotary_base': 10000.0, 'rotary_max_position_embeddings': 2048, 'embedding_mode': 'standard', 'embedding_rank': 0, 'attn_lora_rank': 0, 'lora_alpha': 1.0}
+[2025-07-25 23:45:12] OPERATION_START: adjust_batch_size Optimize batch size for VRAM after adding layer 2 | iter=550 | value={'max_batch_size': 512000, 'target_vram_percent': 85.0} | trigger=Loss threshold | val_loss=1.9659 | trigger_loss=100.0000 | max_wait=0
+[2025-07-25 23:45:12] OPERATION_SUCCESS: adjust_batch_size | iter=550 | calculated_batch_size=37152 | original_batch_size=512
+[2025-07-25 23:45:12] OPERATION_START: freeze_layer Freeze layer 0 attention when adding layer 2 | iter=550 | value=attn.0 | trigger=Loss threshold | val_loss=1.9659 | trigger_loss=100.0000 | max_wait=0
+[2025-07-25 23:45:12] OPERATION_SUCCESS: freeze_layer | iter=550 | new_config={'block_size': 256, 'vocab_size': 65, 'n_layer': 2, 'n_head': 6, 'n_embd': 384, 'dropout': 0.2, 'bias': False, 'n_hidden': None, 'use_rotary_embeddings': False, 'rotary_base': 10000.0, 'rotary_max_position_embeddings': 2048, 'embedding_mode': 'standard', 'embedding_rank': 0, 'attn_lora_rank': 0, 'lora_alpha': 1.0}
+[2025-07-25 23:45:12] OPERATION_START: freeze_layer Freeze layer 0 MLP when adding layer 2 | iter=550 | value=mlp.0 | trigger=Loss threshold | val_loss=1.9659 | trigger_loss=100.0000 | max_wait=0
+[2025-07-25 23:45:12] OPERATION_SUCCESS: freeze_layer | iter=550 | new_config={'block_size': 256, 'vocab_size': 65, 'n_layer': 2, 'n_head': 6, 'n_embd': 384, 'dropout': 0.2, 'bias': False, 'n_hidden': None, 'use_rotary_embeddings': False, 'rotary_base': 10000.0, 'rotary_max_position_embeddings': 2048, 'embedding_mode': 'standard', 'embedding_rank': 0, 'attn_lora_rank': 0, 'lora_alpha': 1.0}
+[2025-07-25 23:45:12] OPERATION_START: freeze_layer Freeze embeddings when adding layer 2 | iter=550 | value=wte | trigger=Loss threshold | val_loss=1.9659 | trigger_loss=100.0000 | max_wait=0
+[2025-07-25 23:45:12] OPERATION_SUCCESS: freeze_layer | iter=550 | new_config={'block_size': 256, 'vocab_size': 65, 'n_layer': 2, 'n_head': 6, 'n_embd': 384, 'dropout': 0.2, 'bias': False, 'n_hidden': None, 'use_rotary_embeddings': False, 'rotary_base': 10000.0, 'rotary_max_position_embeddings': 2048, 'embedding_mode': 'standard', 'embedding_rank': 0, 'attn_lora_rank': 0, 'lora_alpha': 1.0}

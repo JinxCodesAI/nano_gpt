@@ -1,0 +1,748 @@
+[2025-07-26 13:24:40] ================================================================================
+
+[2025-07-26 13:24:40] Training run started at 2025-07-26 13:24:40
+
+[2025-07-26 13:24:40] ================================================================================
+
+      Configuration:
+
+      ----------------------------------------
+
+      RARE_TOKEN_ID: None
+
+      always_save_checkpoint: True
+
+      attn_lora_rank: 0
+
+      backend: nccl
+
+      batch_size: 24
+
+      beta1: 0.9
+
+      beta2: 0.95
+
+      bias: False
+
+      block_size: 1024
+
+      compile: True
+
+      dataset: fineweb10B
+
+      decay_lr: True
+
+      device: cuda
+
+      dropout: 0.0
+
+      dtype: bfloat16
+
+      embedding_mode: standard
+
+      embedding_rank: 0
+
+      eval_interval: 100
+
+      eval_iters: 10
+
+      eval_only: False
+
+      file_logging: True
+
+      grad_clip: 1.0
+
+      gradient_accumulation_steps: 16
+
+      ignored_outlayers_sum: 0.01
+
+      init_from: scratch
+
+      learning_rate: 0.0006
+
+      log_dir: logs
+
+      log_interval: 1
+
+      lora_alpha: 1.0
+
+      lr_decay_iters: 600000
+
+      max_iters: 600000
+
+      min_lr: 6e-05
+
+      n_embd: 768
+
+      n_head: 12
+
+      n_hidden: None
+
+      n_layer: 12
+
+      num_train_shards: 1
+
+      out_dir: out
+
+      rotary_base: 10000.0
+
+      rotary_max_position_embeddings: 2048
+
+      scaling_schedule_file: None
+
+      shrunken_vocab_size: None
+
+      target_architecture_config: None
+
+      use_rotary_embeddings: False
+
+      vocab_remapping_file: None
+
+      vocab_size: 52000
+
+      vram_debug: True
+
+      wandb_log: False
+
+      wandb_project: owt
+
+      wandb_run_name: gpt2
+
+      warmup_iters: 2000
+
+      weight_decay: 0.1
+
+      ----------------------------------------
+
+[2025-07-26 13:24:54]   timing breakdown: evaluation 0.0%
+[2025-07-26 13:24:54]   timing breakdown: gradient_accumulation 0.0%
+[2025-07-26 13:24:54]   timing breakdown:     forward 0.0%, backward 0.0%, data 0.0%, optim 0.0%
+[2025-07-26 13:24:54]   timing breakdown: gradient_clipping 0.0%
+[2025-07-26 13:24:54] step 0: train loss 11.0170, val loss 11.0154, tokens/sec 30945
+[2025-07-26 13:24:54]   timing breakdown (avg last 10): evaluation 100.0%
+[2025-07-26 13:25:19]   [VRAM Debug] Allocated: 3.853GB (17.5%), Reserved: 18.248GB (83.1%)
+[2025-07-26 13:25:29]   [VRAM Debug] Allocated: 3.853GB (17.5%), Reserved: 18.250GB (83.1%)
+[2025-07-26 13:25:40]   [VRAM Debug] Allocated: 3.853GB (17.5%), Reserved: 18.250GB (83.1%)
+[2025-07-26 13:25:50]   [VRAM Debug] Allocated: 3.853GB (17.5%), Reserved: 18.250GB (83.1%)
+[2025-07-26 13:26:00]   [VRAM Debug] Allocated: 3.853GB (17.5%), Reserved: 18.250GB (83.1%)
+[2025-07-26 13:26:11]   [VRAM Debug] Allocated: 3.853GB (17.5%), Reserved: 18.250GB (83.1%)
+[2025-07-26 13:26:21]   [VRAM Debug] Allocated: 3.853GB (17.5%), Reserved: 18.250GB (83.1%)
+[2025-07-26 13:26:31]   [VRAM Debug] Allocated: 3.853GB (17.5%), Reserved: 18.250GB (83.1%)
+[2025-07-26 13:26:41]   [VRAM Debug] Allocated: 3.853GB (17.5%), Reserved: 18.250GB (83.1%)
+[2025-07-26 13:26:51]   [VRAM Debug] Allocated: 3.853GB (17.5%), Reserved: 18.250GB (83.1%)
+[2025-07-26 13:27:01]   [VRAM Debug] Allocated: 3.853GB (17.5%), Reserved: 18.250GB (83.1%)
+[2025-07-26 13:27:12]   [VRAM Debug] Allocated: 3.853GB (17.5%), Reserved: 18.250GB (83.1%)
+[2025-07-26 13:27:22]   [VRAM Debug] Allocated: 3.853GB (17.5%), Reserved: 18.250GB (83.1%)
+[2025-07-26 13:27:32]   [VRAM Debug] Allocated: 3.853GB (17.5%), Reserved: 18.250GB (83.1%)
+[2025-07-26 13:27:43]   [VRAM Debug] Allocated: 3.853GB (17.5%), Reserved: 18.250GB (83.1%)
+[2025-07-26 13:27:53]   [VRAM Debug] Allocated: 3.853GB (17.5%), Reserved: 18.250GB (83.1%)
+[2025-07-26 13:28:03]   [VRAM Debug] Allocated: 3.853GB (17.5%), Reserved: 18.250GB (83.1%)
+[2025-07-26 13:28:13]   [VRAM Debug] Allocated: 3.853GB (17.5%), Reserved: 18.250GB (83.1%)
+[2025-07-26 13:28:23]   [VRAM Debug] Allocated: 3.853GB (17.5%), Reserved: 18.250GB (83.1%)
+[2025-07-26 13:28:33]   [VRAM Debug] Allocated: 3.853GB (17.5%), Reserved: 18.250GB (83.1%)
+[2025-07-26 13:28:44]   [VRAM Debug] Allocated: 3.853GB (17.5%), Reserved: 18.250GB (83.1%)
+[2025-07-26 13:28:54]   [VRAM Debug] Allocated: 3.853GB (17.5%), Reserved: 18.250GB (83.1%)
+[2025-07-26 13:29:04]   [VRAM Debug] Allocated: 3.853GB (17.5%), Reserved: 18.250GB (83.1%)
+[2025-07-26 13:29:14]   [VRAM Debug] Allocated: 3.853GB (17.5%), Reserved: 18.250GB (83.1%)
+[2025-07-26 13:29:24]   [VRAM Debug] Allocated: 3.853GB (17.5%), Reserved: 18.250GB (83.1%)
+[2025-07-26 13:29:35]   [VRAM Debug] Allocated: 3.853GB (17.5%), Reserved: 18.250GB (83.1%)
+[2025-07-26 13:29:45]   [VRAM Debug] Allocated: 3.853GB (17.5%), Reserved: 18.250GB (83.1%)
+[2025-07-26 13:29:55]   [VRAM Debug] Allocated: 3.853GB (17.5%), Reserved: 18.250GB (83.1%)
+[2025-07-26 13:30:05]   [VRAM Debug] Allocated: 3.853GB (17.5%), Reserved: 18.250GB (83.1%)
+[2025-07-26 13:30:15]   [VRAM Debug] Allocated: 3.853GB (17.5%), Reserved: 18.250GB (83.1%)
+[2025-07-26 13:30:25]   [VRAM Debug] Allocated: 3.853GB (17.5%), Reserved: 18.250GB (83.1%)
+[2025-07-26 13:30:36]   [VRAM Debug] Allocated: 3.853GB (17.5%), Reserved: 18.250GB (83.1%)
+[2025-07-26 13:30:46]   [VRAM Debug] Allocated: 3.853GB (17.5%), Reserved: 18.250GB (83.1%)
+[2025-07-26 13:30:56]   [VRAM Debug] Allocated: 3.853GB (17.5%), Reserved: 18.250GB (83.1%)
+[2025-07-26 13:31:06]   [VRAM Debug] Allocated: 3.853GB (17.5%), Reserved: 18.250GB (83.1%)
+[2025-07-26 13:31:16]   [VRAM Debug] Allocated: 3.853GB (17.5%), Reserved: 18.250GB (83.1%)
+[2025-07-26 13:31:27]   [VRAM Debug] Allocated: 3.853GB (17.5%), Reserved: 18.250GB (83.1%)
+[2025-07-26 13:31:37]   [VRAM Debug] Allocated: 3.853GB (17.5%), Reserved: 18.250GB (83.1%)
+[2025-07-26 13:31:47]   [VRAM Debug] Allocated: 3.853GB (17.5%), Reserved: 18.250GB (83.1%)
+[2025-07-26 13:31:57]   [VRAM Debug] Allocated: 3.853GB (17.5%), Reserved: 18.250GB (83.1%)
+[2025-07-26 13:32:07]   [VRAM Debug] Allocated: 3.853GB (17.5%), Reserved: 18.250GB (83.1%)
+[2025-07-26 13:32:17]   [VRAM Debug] Allocated: 3.853GB (17.5%), Reserved: 18.250GB (83.1%)
+[2025-07-26 13:32:28]   [VRAM Debug] Allocated: 3.853GB (17.5%), Reserved: 18.250GB (83.1%)
+[2025-07-26 13:32:38]   [VRAM Debug] Allocated: 3.853GB (17.5%), Reserved: 18.250GB (83.1%)
+[2025-07-26 13:32:48]   [VRAM Debug] Allocated: 3.853GB (17.5%), Reserved: 18.250GB (83.1%)
+[2025-07-26 13:32:58]   [VRAM Debug] Allocated: 3.853GB (17.5%), Reserved: 18.250GB (83.1%)
+[2025-07-26 13:33:08]   [VRAM Debug] Allocated: 3.853GB (17.5%), Reserved: 18.250GB (83.1%)
+[2025-07-26 13:33:19]   [VRAM Debug] Allocated: 3.853GB (17.5%), Reserved: 18.250GB (83.1%)
+[2025-07-26 13:33:29]   [VRAM Debug] Allocated: 3.853GB (17.5%), Reserved: 18.250GB (83.1%)
+[2025-07-26 13:33:39]   [VRAM Debug] Allocated: 3.853GB (17.5%), Reserved: 18.250GB (83.1%)
+[2025-07-26 13:33:49]   [VRAM Debug] Allocated: 3.853GB (17.5%), Reserved: 18.250GB (83.1%)
+[2025-07-26 13:33:59]   [VRAM Debug] Allocated: 3.853GB (17.5%), Reserved: 18.250GB (83.1%)
+[2025-07-26 13:34:10]   [VRAM Debug] Allocated: 3.853GB (17.5%), Reserved: 18.250GB (83.1%)
+[2025-07-26 13:34:20]   [VRAM Debug] Allocated: 3.853GB (17.5%), Reserved: 18.250GB (83.1%)
+[2025-07-26 13:34:30]   [VRAM Debug] Allocated: 3.853GB (17.5%), Reserved: 18.250GB (83.1%)
+[2025-07-26 13:34:40]   [VRAM Debug] Allocated: 3.853GB (17.5%), Reserved: 18.250GB (83.1%)
+[2025-07-26 13:34:50]   [VRAM Debug] Allocated: 3.853GB (17.5%), Reserved: 18.250GB (83.1%)
+[2025-07-26 13:35:01]   [VRAM Debug] Allocated: 3.853GB (17.5%), Reserved: 18.250GB (83.1%)
+[2025-07-26 13:35:11]   [VRAM Debug] Allocated: 3.853GB (17.5%), Reserved: 18.250GB (83.1%)
+[2025-07-26 13:35:21]   [VRAM Debug] Allocated: 3.853GB (17.5%), Reserved: 18.250GB (83.1%)
+[2025-07-26 13:35:31]   [VRAM Debug] Allocated: 3.853GB (17.5%), Reserved: 18.250GB (83.1%)
+[2025-07-26 13:35:41]   [VRAM Debug] Allocated: 3.853GB (17.5%), Reserved: 18.250GB (83.1%)
+[2025-07-26 13:35:52]   [VRAM Debug] Allocated: 3.853GB (17.5%), Reserved: 18.250GB (83.1%)
+[2025-07-26 13:36:02]   [VRAM Debug] Allocated: 3.853GB (17.5%), Reserved: 18.250GB (83.1%)
+[2025-07-26 13:36:12]   [VRAM Debug] Allocated: 3.853GB (17.5%), Reserved: 18.250GB (83.1%)
+[2025-07-26 13:36:22]   [VRAM Debug] Allocated: 3.853GB (17.5%), Reserved: 18.250GB (83.1%)
+[2025-07-26 13:36:32]   [VRAM Debug] Allocated: 3.853GB (17.5%), Reserved: 18.250GB (83.1%)
+[2025-07-26 13:36:43]   [VRAM Debug] Allocated: 3.853GB (17.5%), Reserved: 18.250GB (83.1%)
+[2025-07-26 13:36:53]   [VRAM Debug] Allocated: 3.853GB (17.5%), Reserved: 18.250GB (83.1%)
+[2025-07-26 13:37:03]   [VRAM Debug] Allocated: 3.853GB (17.5%), Reserved: 18.250GB (83.1%)
+[2025-07-26 13:37:13]   [VRAM Debug] Allocated: 3.853GB (17.5%), Reserved: 18.250GB (83.1%)
+[2025-07-26 13:37:23]   [VRAM Debug] Allocated: 3.853GB (17.5%), Reserved: 18.250GB (83.1%)
+[2025-07-26 13:37:34]   [VRAM Debug] Allocated: 3.853GB (17.5%), Reserved: 18.250GB (83.1%)
+[2025-07-26 13:37:44]   [VRAM Debug] Allocated: 3.853GB (17.5%), Reserved: 18.250GB (83.1%)
+[2025-07-26 13:37:54]   [VRAM Debug] Allocated: 3.853GB (17.5%), Reserved: 18.250GB (83.1%)
+[2025-07-26 13:38:04]   [VRAM Debug] Allocated: 3.853GB (17.5%), Reserved: 18.250GB (83.1%)
+[2025-07-26 13:38:14]   [VRAM Debug] Allocated: 3.853GB (17.5%), Reserved: 18.250GB (83.1%)
+[2025-07-26 13:38:25]   [VRAM Debug] Allocated: 3.853GB (17.5%), Reserved: 18.250GB (83.1%)
+[2025-07-26 13:38:35]   [VRAM Debug] Allocated: 3.853GB (17.5%), Reserved: 18.250GB (83.1%)
+[2025-07-26 13:38:45]   [VRAM Debug] Allocated: 3.853GB (17.5%), Reserved: 18.250GB (83.1%)
+[2025-07-26 13:38:55]   [VRAM Debug] Allocated: 3.853GB (17.5%), Reserved: 18.250GB (83.1%)
+[2025-07-26 13:39:05]   [VRAM Debug] Allocated: 3.853GB (17.5%), Reserved: 18.250GB (83.1%)
+[2025-07-26 13:39:16]   [VRAM Debug] Allocated: 3.853GB (17.5%), Reserved: 18.250GB (83.1%)
+[2025-07-26 13:39:26]   [VRAM Debug] Allocated: 3.853GB (17.5%), Reserved: 18.250GB (83.1%)
+[2025-07-26 13:39:36]   [VRAM Debug] Allocated: 3.853GB (17.5%), Reserved: 18.250GB (83.1%)
+[2025-07-26 13:39:46]   [VRAM Debug] Allocated: 3.853GB (17.5%), Reserved: 18.250GB (83.1%)
+[2025-07-26 13:39:56]   [VRAM Debug] Allocated: 3.853GB (17.5%), Reserved: 18.250GB (83.1%)
+[2025-07-26 13:40:07]   [VRAM Debug] Allocated: 3.853GB (17.5%), Reserved: 18.250GB (83.1%)
+[2025-07-26 13:40:17]   [VRAM Debug] Allocated: 3.853GB (17.5%), Reserved: 18.250GB (83.1%)
+[2025-07-26 13:40:27]   [VRAM Debug] Allocated: 3.853GB (17.5%), Reserved: 18.250GB (83.1%)
+[2025-07-26 13:40:37]   [VRAM Debug] Allocated: 3.853GB (17.5%), Reserved: 18.250GB (83.1%)
+[2025-07-26 13:40:47]   [VRAM Debug] Allocated: 3.853GB (17.5%), Reserved: 18.250GB (83.1%)
+[2025-07-26 13:40:57]   [VRAM Debug] Allocated: 3.853GB (17.5%), Reserved: 18.250GB (83.1%)
+[2025-07-26 13:41:08]   [VRAM Debug] Allocated: 3.853GB (17.5%), Reserved: 18.250GB (83.1%)
+[2025-07-26 13:41:18]   [VRAM Debug] Allocated: 3.853GB (17.5%), Reserved: 18.250GB (83.1%)
+[2025-07-26 13:41:28]   [VRAM Debug] Allocated: 3.853GB (17.5%), Reserved: 18.250GB (83.1%)
+[2025-07-26 13:41:38]   [VRAM Debug] Allocated: 3.853GB (17.5%), Reserved: 18.250GB (83.1%)
+[2025-07-26 13:41:49]   [VRAM Debug] Allocated: 3.853GB (17.5%), Reserved: 18.250GB (83.1%)
+[2025-07-26 13:41:59]   [VRAM Debug] Allocated: 3.853GB (17.5%), Reserved: 18.250GB (83.1%)
+[2025-07-26 13:42:09]   [VRAM Debug] Allocated: 3.853GB (17.5%), Reserved: 18.250GB (83.1%)
+[2025-07-26 13:42:13]   timing breakdown: evaluation 0.0%
+[2025-07-26 13:42:13]   timing breakdown: gradient_accumulation 99.6%
+[2025-07-26 13:42:13]   timing breakdown:     forward 48.4%, backward 50.8%, data 0.4%, optim 0.1%
+[2025-07-26 13:42:13]   timing breakdown: gradient_clipping 0.3%
+[2025-07-26 13:42:13] step 100: train loss 8.1336, val loss 8.1914, tokens/sec 38024
+[2025-07-26 13:42:13]   timing breakdown (avg last 10): evaluation 39.7%, forward_pass 1.7%, data_loading 0.0%, backward_pass 1.8%, gradient_accumulation 56.5%, gradient_clipping 0.2%, optimizer_step 0.0%
+[2025-07-26 13:42:26]   [VRAM Debug] Allocated: 3.853GB (17.5%), Reserved: 18.250GB (83.1%)
+[2025-07-26 13:42:36]   [VRAM Debug] Allocated: 3.853GB (17.5%), Reserved: 18.250GB (83.1%)
+[2025-07-26 13:42:46]   [VRAM Debug] Allocated: 3.853GB (17.5%), Reserved: 18.250GB (83.1%)
+[2025-07-26 13:42:57]   [VRAM Debug] Allocated: 3.853GB (17.5%), Reserved: 18.250GB (83.1%)
+[2025-07-26 13:43:07]   [VRAM Debug] Allocated: 3.853GB (17.5%), Reserved: 18.250GB (83.1%)
+[2025-07-26 13:43:17]   [VRAM Debug] Allocated: 3.853GB (17.5%), Reserved: 18.250GB (83.1%)
+[2025-07-26 13:43:27]   [VRAM Debug] Allocated: 3.853GB (17.5%), Reserved: 18.250GB (83.1%)
+[2025-07-26 13:43:37]   [VRAM Debug] Allocated: 3.853GB (17.5%), Reserved: 18.250GB (83.1%)
+[2025-07-26 13:43:48]   [VRAM Debug] Allocated: 3.853GB (17.5%), Reserved: 18.250GB (83.1%)
+[2025-07-26 13:43:58]   [VRAM Debug] Allocated: 3.853GB (17.5%), Reserved: 18.250GB (83.1%)
+[2025-07-26 13:44:08]   [VRAM Debug] Allocated: 3.853GB (17.5%), Reserved: 18.250GB (83.1%)
+[2025-07-26 13:44:18]   [VRAM Debug] Allocated: 3.853GB (17.5%), Reserved: 18.250GB (83.1%)
+[2025-07-26 13:44:28]   [VRAM Debug] Allocated: 3.853GB (17.5%), Reserved: 18.250GB (83.1%)
+[2025-07-26 13:44:39]   [VRAM Debug] Allocated: 3.853GB (17.5%), Reserved: 18.250GB (83.1%)
+[2025-07-26 13:44:49]   [VRAM Debug] Allocated: 3.853GB (17.5%), Reserved: 18.250GB (83.1%)
+[2025-07-26 13:44:59]   [VRAM Debug] Allocated: 3.853GB (17.5%), Reserved: 18.250GB (83.1%)
+[2025-07-26 13:45:09]   [VRAM Debug] Allocated: 3.853GB (17.5%), Reserved: 18.250GB (83.1%)
+[2025-07-26 13:45:19]   [VRAM Debug] Allocated: 3.853GB (17.5%), Reserved: 18.250GB (83.1%)
+[2025-07-26 13:45:30]   [VRAM Debug] Allocated: 3.853GB (17.5%), Reserved: 18.250GB (83.1%)
+[2025-07-26 13:45:40]   [VRAM Debug] Allocated: 3.853GB (17.5%), Reserved: 18.250GB (83.1%)
+[2025-07-26 13:45:50]   [VRAM Debug] Allocated: 3.853GB (17.5%), Reserved: 18.250GB (83.1%)
+[2025-07-26 13:46:00]   [VRAM Debug] Allocated: 3.853GB (17.5%), Reserved: 18.250GB (83.1%)
+[2025-07-26 13:46:10]   [VRAM Debug] Allocated: 3.853GB (17.5%), Reserved: 18.250GB (83.1%)
+[2025-07-26 13:46:21]   [VRAM Debug] Allocated: 3.853GB (17.5%), Reserved: 18.250GB (83.1%)
+[2025-07-26 13:46:31]   [VRAM Debug] Allocated: 3.853GB (17.5%), Reserved: 18.250GB (83.1%)
+[2025-07-26 13:46:41]   [VRAM Debug] Allocated: 3.853GB (17.5%), Reserved: 18.250GB (83.1%)
+[2025-07-26 13:46:51]   [VRAM Debug] Allocated: 3.853GB (17.5%), Reserved: 18.250GB (83.1%)
+[2025-07-26 13:47:01]   [VRAM Debug] Allocated: 3.853GB (17.5%), Reserved: 18.250GB (83.1%)
+[2025-07-26 13:47:12]   [VRAM Debug] Allocated: 3.853GB (17.5%), Reserved: 18.250GB (83.1%)
+[2025-07-26 13:47:22]   [VRAM Debug] Allocated: 3.853GB (17.5%), Reserved: 18.250GB (83.1%)
+[2025-07-26 13:47:32]   [VRAM Debug] Allocated: 3.853GB (17.5%), Reserved: 18.250GB (83.1%)
+[2025-07-26 13:47:42]   [VRAM Debug] Allocated: 3.853GB (17.5%), Reserved: 18.250GB (83.1%)
+[2025-07-26 13:47:52]   [VRAM Debug] Allocated: 3.853GB (17.5%), Reserved: 18.250GB (83.1%)
+[2025-07-26 13:48:03]   [VRAM Debug] Allocated: 3.853GB (17.5%), Reserved: 18.250GB (83.1%)
+[2025-07-26 13:48:13]   [VRAM Debug] Allocated: 3.853GB (17.5%), Reserved: 18.250GB (83.1%)
+[2025-07-26 13:48:23]   [VRAM Debug] Allocated: 3.853GB (17.5%), Reserved: 18.250GB (83.1%)
+[2025-07-26 13:48:33]   [VRAM Debug] Allocated: 3.853GB (17.5%), Reserved: 18.250GB (83.1%)
+[2025-07-26 13:48:43]   [VRAM Debug] Allocated: 3.853GB (17.5%), Reserved: 18.250GB (83.1%)
+[2025-07-26 13:48:54]   [VRAM Debug] Allocated: 3.853GB (17.5%), Reserved: 18.250GB (83.1%)
+[2025-07-26 13:49:04]   [VRAM Debug] Allocated: 3.853GB (17.5%), Reserved: 18.250GB (83.1%)
+[2025-07-26 13:49:14]   [VRAM Debug] Allocated: 3.853GB (17.5%), Reserved: 18.250GB (83.1%)
+[2025-07-26 13:49:24]   [VRAM Debug] Allocated: 3.853GB (17.5%), Reserved: 18.250GB (83.1%)
+[2025-07-26 13:49:34]   [VRAM Debug] Allocated: 3.853GB (17.5%), Reserved: 18.250GB (83.1%)
+[2025-07-26 13:49:45]   [VRAM Debug] Allocated: 3.853GB (17.5%), Reserved: 18.250GB (83.1%)
+[2025-07-26 13:49:55]   [VRAM Debug] Allocated: 3.853GB (17.5%), Reserved: 18.250GB (83.1%)
+[2025-07-26 13:50:05]   [VRAM Debug] Allocated: 3.853GB (17.5%), Reserved: 18.250GB (83.1%)
+[2025-07-26 13:50:15]   [VRAM Debug] Allocated: 3.853GB (17.5%), Reserved: 18.250GB (83.1%)
+[2025-07-26 13:50:25]   [VRAM Debug] Allocated: 3.853GB (17.5%), Reserved: 18.250GB (83.1%)
+[2025-07-26 13:50:36]   [VRAM Debug] Allocated: 3.853GB (17.5%), Reserved: 18.250GB (83.1%)
+[2025-07-26 13:50:46]   [VRAM Debug] Allocated: 3.853GB (17.5%), Reserved: 18.250GB (83.1%)
+[2025-07-26 13:50:56]   [VRAM Debug] Allocated: 3.853GB (17.5%), Reserved: 18.250GB (83.1%)
+[2025-07-26 13:51:06]   [VRAM Debug] Allocated: 3.853GB (17.5%), Reserved: 18.250GB (83.1%)
+[2025-07-26 13:51:16]   [VRAM Debug] Allocated: 3.853GB (17.5%), Reserved: 18.250GB (83.1%)
+[2025-07-26 13:51:27]   [VRAM Debug] Allocated: 3.853GB (17.5%), Reserved: 18.250GB (83.1%)
+[2025-07-26 13:51:37]   [VRAM Debug] Allocated: 3.853GB (17.5%), Reserved: 18.250GB (83.1%)
+[2025-07-26 13:51:47]   [VRAM Debug] Allocated: 3.853GB (17.5%), Reserved: 18.250GB (83.1%)
+[2025-07-26 13:51:57]   [VRAM Debug] Allocated: 3.853GB (17.5%), Reserved: 18.250GB (83.1%)
+[2025-07-26 13:52:07]   [VRAM Debug] Allocated: 3.853GB (17.5%), Reserved: 18.250GB (83.1%)
+[2025-07-26 13:52:18]   [VRAM Debug] Allocated: 3.853GB (17.5%), Reserved: 18.250GB (83.1%)
+[2025-07-26 13:52:28]   [VRAM Debug] Allocated: 3.853GB (17.5%), Reserved: 18.250GB (83.1%)
+[2025-07-26 13:52:38]   [VRAM Debug] Allocated: 3.853GB (17.5%), Reserved: 18.250GB (83.1%)
+[2025-07-26 13:52:48]   [VRAM Debug] Allocated: 3.853GB (17.5%), Reserved: 18.250GB (83.1%)
+[2025-07-26 13:52:59]   [VRAM Debug] Allocated: 3.853GB (17.5%), Reserved: 18.250GB (83.1%)
+[2025-07-26 13:53:09]   [VRAM Debug] Allocated: 3.853GB (17.5%), Reserved: 18.250GB (83.1%)
+[2025-07-26 13:53:19]   [VRAM Debug] Allocated: 3.853GB (17.5%), Reserved: 18.250GB (83.1%)
+[2025-07-26 13:53:29]   [VRAM Debug] Allocated: 3.853GB (17.5%), Reserved: 18.250GB (83.1%)
+[2025-07-26 13:53:39]   [VRAM Debug] Allocated: 3.853GB (17.5%), Reserved: 18.250GB (83.1%)
+[2025-07-26 13:53:50]   [VRAM Debug] Allocated: 3.853GB (17.5%), Reserved: 18.250GB (83.1%)
+[2025-07-26 13:54:00]   [VRAM Debug] Allocated: 3.853GB (17.5%), Reserved: 18.250GB (83.1%)
+[2025-07-26 13:54:10]   [VRAM Debug] Allocated: 3.853GB (17.5%), Reserved: 18.250GB (83.1%)
+[2025-07-26 13:54:20]   [VRAM Debug] Allocated: 3.853GB (17.5%), Reserved: 18.250GB (83.1%)
+[2025-07-26 13:54:31]   [VRAM Debug] Allocated: 3.853GB (17.5%), Reserved: 18.250GB (83.1%)
+[2025-07-26 13:54:41]   [VRAM Debug] Allocated: 3.853GB (17.5%), Reserved: 18.250GB (83.1%)
+[2025-07-26 13:54:51]   [VRAM Debug] Allocated: 3.853GB (17.5%), Reserved: 18.250GB (83.1%)
+[2025-07-26 13:55:01]   [VRAM Debug] Allocated: 3.853GB (17.5%), Reserved: 18.250GB (83.1%)
+[2025-07-26 13:55:12]   [VRAM Debug] Allocated: 3.853GB (17.5%), Reserved: 18.250GB (83.1%)
+[2025-07-26 13:55:22]   [VRAM Debug] Allocated: 3.853GB (17.5%), Reserved: 18.250GB (83.1%)
+[2025-07-26 13:55:32]   [VRAM Debug] Allocated: 3.853GB (17.5%), Reserved: 18.250GB (83.1%)
+[2025-07-26 13:55:42]   [VRAM Debug] Allocated: 3.853GB (17.5%), Reserved: 18.250GB (83.1%)
+[2025-07-26 13:55:53]   [VRAM Debug] Allocated: 3.853GB (17.5%), Reserved: 18.250GB (83.1%)
+[2025-07-26 13:56:03]   [VRAM Debug] Allocated: 3.853GB (17.5%), Reserved: 18.250GB (83.1%)
+[2025-07-26 13:56:13]   [VRAM Debug] Allocated: 3.853GB (17.5%), Reserved: 18.250GB (83.1%)
+[2025-07-26 13:56:23]   [VRAM Debug] Allocated: 3.853GB (17.5%), Reserved: 18.250GB (83.1%)
+[2025-07-26 13:56:33]   [VRAM Debug] Allocated: 3.853GB (17.5%), Reserved: 18.250GB (83.1%)
+[2025-07-26 13:56:44]   [VRAM Debug] Allocated: 3.853GB (17.5%), Reserved: 18.250GB (83.1%)
+[2025-07-26 13:56:54]   [VRAM Debug] Allocated: 3.853GB (17.5%), Reserved: 18.250GB (83.1%)
+[2025-07-26 13:57:04]   [VRAM Debug] Allocated: 3.853GB (17.5%), Reserved: 18.250GB (83.1%)
+[2025-07-26 13:57:14]   [VRAM Debug] Allocated: 3.853GB (17.5%), Reserved: 18.250GB (83.1%)
+[2025-07-26 13:57:24]   [VRAM Debug] Allocated: 3.853GB (17.5%), Reserved: 18.250GB (83.1%)
+[2025-07-26 13:57:35]   [VRAM Debug] Allocated: 3.853GB (17.5%), Reserved: 18.250GB (83.1%)
+[2025-07-26 13:57:45]   [VRAM Debug] Allocated: 3.853GB (17.5%), Reserved: 18.250GB (83.1%)
+[2025-07-26 13:57:55]   [VRAM Debug] Allocated: 3.853GB (17.5%), Reserved: 18.250GB (83.1%)
+[2025-07-26 13:58:06]   [VRAM Debug] Allocated: 3.853GB (17.5%), Reserved: 18.250GB (83.1%)
+[2025-07-26 13:58:16]   [VRAM Debug] Allocated: 3.853GB (17.5%), Reserved: 18.250GB (83.1%)
+[2025-07-26 13:58:26]   [VRAM Debug] Allocated: 3.853GB (17.5%), Reserved: 18.250GB (83.1%)
+[2025-07-26 13:58:36]   [VRAM Debug] Allocated: 3.853GB (17.5%), Reserved: 18.250GB (83.1%)
+[2025-07-26 13:58:46]   [VRAM Debug] Allocated: 3.853GB (17.5%), Reserved: 18.250GB (83.1%)
+[2025-07-26 13:58:57]   [VRAM Debug] Allocated: 3.853GB (17.5%), Reserved: 18.250GB (83.1%)
+[2025-07-26 13:59:07]   [VRAM Debug] Allocated: 3.853GB (17.5%), Reserved: 18.250GB (83.1%)
+[2025-07-26 13:59:17]   [VRAM Debug] Allocated: 3.853GB (17.5%), Reserved: 18.250GB (83.1%)
+[2025-07-26 13:59:21]   timing breakdown: evaluation 0.0%
+[2025-07-26 13:59:21]   timing breakdown: gradient_accumulation 99.7%
+[2025-07-26 13:59:21]   timing breakdown:     forward 48.6%, backward 50.7%, data 0.4%, optim 0.1%
+[2025-07-26 13:59:21]   timing breakdown: gradient_clipping 0.3%
+[2025-07-26 13:59:21] step 200: train loss 6.8876, val loss 6.8905, tokens/sec 38250
+[2025-07-26 13:59:21]   timing breakdown (avg last 10): evaluation 37.1%, forward_pass 1.8%, data_loading 0.0%, backward_pass 1.9%, gradient_accumulation 59.0%, gradient_clipping 0.2%, optimizer_step 0.1%
+[2025-07-26 13:59:37]   [VRAM Debug] Allocated: 3.853GB (17.5%), Reserved: 18.250GB (83.1%)
+[2025-07-26 13:59:48]   [VRAM Debug] Allocated: 3.853GB (17.5%), Reserved: 18.250GB (83.1%)
+[2025-07-26 13:59:58]   [VRAM Debug] Allocated: 3.853GB (17.5%), Reserved: 18.250GB (83.1%)
+[2025-07-26 14:00:08]   [VRAM Debug] Allocated: 3.853GB (17.5%), Reserved: 18.250GB (83.1%)
+[2025-07-26 14:00:19]   [VRAM Debug] Allocated: 3.853GB (17.5%), Reserved: 18.250GB (83.1%)
+[2025-07-26 14:00:29]   [VRAM Debug] Allocated: 3.853GB (17.5%), Reserved: 18.250GB (83.1%)
+[2025-07-26 14:00:39]   [VRAM Debug] Allocated: 3.853GB (17.5%), Reserved: 18.250GB (83.1%)
+[2025-07-26 14:00:49]   [VRAM Debug] Allocated: 3.853GB (17.5%), Reserved: 18.250GB (83.1%)
+[2025-07-26 14:00:59]   [VRAM Debug] Allocated: 3.853GB (17.5%), Reserved: 18.250GB (83.1%)
+[2025-07-26 14:01:09]   [VRAM Debug] Allocated: 3.853GB (17.5%), Reserved: 18.250GB (83.1%)
+[2025-07-26 14:01:20]   [VRAM Debug] Allocated: 3.853GB (17.5%), Reserved: 18.250GB (83.1%)
+[2025-07-26 14:01:30]   [VRAM Debug] Allocated: 3.853GB (17.5%), Reserved: 18.250GB (83.1%)
+[2025-07-26 14:01:40]   [VRAM Debug] Allocated: 3.853GB (17.5%), Reserved: 18.250GB (83.1%)
+[2025-07-26 14:01:51]   [VRAM Debug] Allocated: 3.853GB (17.5%), Reserved: 18.250GB (83.1%)
+[2025-07-26 14:02:01]   [VRAM Debug] Allocated: 3.853GB (17.5%), Reserved: 18.250GB (83.1%)
+[2025-07-26 14:02:11]   [VRAM Debug] Allocated: 3.853GB (17.5%), Reserved: 18.250GB (83.1%)
+[2025-07-26 14:02:21]   [VRAM Debug] Allocated: 3.853GB (17.5%), Reserved: 18.250GB (83.1%)
+[2025-07-26 14:02:32]   [VRAM Debug] Allocated: 3.853GB (17.5%), Reserved: 18.250GB (83.1%)
+[2025-07-26 14:02:42]   [VRAM Debug] Allocated: 3.853GB (17.5%), Reserved: 18.250GB (83.1%)
+[2025-07-26 14:02:52]   [VRAM Debug] Allocated: 3.853GB (17.5%), Reserved: 18.250GB (83.1%)
+[2025-07-26 14:03:02]   [VRAM Debug] Allocated: 3.853GB (17.5%), Reserved: 18.250GB (83.1%)
+[2025-07-26 14:03:13]   [VRAM Debug] Allocated: 3.853GB (17.5%), Reserved: 18.250GB (83.1%)
+[2025-07-26 14:03:23]   [VRAM Debug] Allocated: 3.853GB (17.5%), Reserved: 18.250GB (83.1%)
+[2025-07-26 14:03:33]   [VRAM Debug] Allocated: 3.853GB (17.5%), Reserved: 18.250GB (83.1%)
+[2025-07-26 14:03:43]   [VRAM Debug] Allocated: 3.853GB (17.5%), Reserved: 18.250GB (83.1%)
+[2025-07-26 14:03:54]   [VRAM Debug] Allocated: 3.853GB (17.5%), Reserved: 18.250GB (83.1%)
+[2025-07-26 14:04:04]   [VRAM Debug] Allocated: 3.853GB (17.5%), Reserved: 18.250GB (83.1%)
+[2025-07-26 14:04:14]   [VRAM Debug] Allocated: 3.853GB (17.5%), Reserved: 18.250GB (83.1%)
+[2025-07-26 14:04:24]   [VRAM Debug] Allocated: 3.853GB (17.5%), Reserved: 18.250GB (83.1%)
+[2025-07-26 14:04:35]   [VRAM Debug] Allocated: 3.853GB (17.5%), Reserved: 18.250GB (83.1%)
+[2025-07-26 14:04:45]   [VRAM Debug] Allocated: 3.853GB (17.5%), Reserved: 18.250GB (83.1%)
+[2025-07-26 14:04:55]   [VRAM Debug] Allocated: 3.853GB (17.5%), Reserved: 18.250GB (83.1%)
+[2025-07-26 14:05:05]   [VRAM Debug] Allocated: 3.853GB (17.5%), Reserved: 18.250GB (83.1%)
+[2025-07-26 14:05:16]   [VRAM Debug] Allocated: 3.853GB (17.5%), Reserved: 18.250GB (83.1%)
+[2025-07-26 14:05:26]   [VRAM Debug] Allocated: 3.853GB (17.5%), Reserved: 18.250GB (83.1%)
+[2025-07-26 14:05:36]   [VRAM Debug] Allocated: 3.853GB (17.5%), Reserved: 18.250GB (83.1%)
+[2025-07-26 14:05:46]   [VRAM Debug] Allocated: 3.853GB (17.5%), Reserved: 18.250GB (83.1%)
+[2025-07-26 14:05:57]   [VRAM Debug] Allocated: 3.853GB (17.5%), Reserved: 18.250GB (83.1%)
+[2025-07-26 14:06:07]   [VRAM Debug] Allocated: 3.853GB (17.5%), Reserved: 18.250GB (83.1%)
+[2025-07-26 14:06:17]   [VRAM Debug] Allocated: 3.853GB (17.5%), Reserved: 18.250GB (83.1%)
+[2025-07-26 14:06:27]   [VRAM Debug] Allocated: 3.853GB (17.5%), Reserved: 18.250GB (83.1%)
+[2025-07-26 14:06:38]   [VRAM Debug] Allocated: 3.853GB (17.5%), Reserved: 18.250GB (83.1%)
+[2025-07-26 14:06:48]   [VRAM Debug] Allocated: 3.853GB (17.5%), Reserved: 18.250GB (83.1%)
+[2025-07-26 14:06:58]   [VRAM Debug] Allocated: 3.853GB (17.5%), Reserved: 18.250GB (83.1%)
+[2025-07-26 14:07:09]   [VRAM Debug] Allocated: 3.853GB (17.5%), Reserved: 18.250GB (83.1%)
+[2025-07-26 14:07:19]   [VRAM Debug] Allocated: 3.853GB (17.5%), Reserved: 18.250GB (83.1%)
+[2025-07-26 14:07:29]   [VRAM Debug] Allocated: 3.853GB (17.5%), Reserved: 18.250GB (83.1%)
+[2025-07-26 14:07:39]   [VRAM Debug] Allocated: 3.853GB (17.5%), Reserved: 18.250GB (83.1%)
+[2025-07-26 14:07:50]   [VRAM Debug] Allocated: 3.853GB (17.5%), Reserved: 18.250GB (83.1%)
+[2025-07-26 14:08:00]   [VRAM Debug] Allocated: 3.853GB (17.5%), Reserved: 18.250GB (83.1%)
+[2025-07-26 14:08:10]   [VRAM Debug] Allocated: 3.853GB (17.5%), Reserved: 18.250GB (83.1%)
+[2025-07-26 14:08:20]   [VRAM Debug] Allocated: 3.853GB (17.5%), Reserved: 18.250GB (83.1%)
+[2025-07-26 14:08:31]   [VRAM Debug] Allocated: 3.853GB (17.5%), Reserved: 18.250GB (83.1%)
+[2025-07-26 14:08:41]   [VRAM Debug] Allocated: 3.853GB (17.5%), Reserved: 18.250GB (83.1%)
+[2025-07-26 14:08:51]   [VRAM Debug] Allocated: 3.853GB (17.5%), Reserved: 18.250GB (83.1%)
+[2025-07-26 14:09:01]   [VRAM Debug] Allocated: 3.853GB (17.5%), Reserved: 18.250GB (83.1%)
+[2025-07-26 14:09:12]   [VRAM Debug] Allocated: 3.853GB (17.5%), Reserved: 18.250GB (83.1%)
+[2025-07-26 14:09:22]   [VRAM Debug] Allocated: 3.853GB (17.5%), Reserved: 18.250GB (83.1%)
+[2025-07-26 14:09:32]   [VRAM Debug] Allocated: 3.853GB (17.5%), Reserved: 18.250GB (83.1%)
+[2025-07-26 14:09:42]   [VRAM Debug] Allocated: 3.853GB (17.5%), Reserved: 18.250GB (83.1%)
+[2025-07-26 14:09:53]   [VRAM Debug] Allocated: 3.853GB (17.5%), Reserved: 18.250GB (83.1%)
+[2025-07-26 14:10:03]   [VRAM Debug] Allocated: 3.853GB (17.5%), Reserved: 18.250GB (83.1%)
+[2025-07-26 14:10:13]   [VRAM Debug] Allocated: 3.853GB (17.5%), Reserved: 18.250GB (83.1%)
+[2025-07-26 14:10:24]   [VRAM Debug] Allocated: 3.853GB (17.5%), Reserved: 18.250GB (83.1%)
+[2025-07-26 14:10:34]   [VRAM Debug] Allocated: 3.853GB (17.5%), Reserved: 18.250GB (83.1%)
+[2025-07-26 14:10:44]   [VRAM Debug] Allocated: 3.853GB (17.5%), Reserved: 18.250GB (83.1%)
+[2025-07-26 14:10:54]   [VRAM Debug] Allocated: 3.853GB (17.5%), Reserved: 18.250GB (83.1%)
+[2025-07-26 14:11:05]   [VRAM Debug] Allocated: 3.853GB (17.5%), Reserved: 18.250GB (83.1%)
+[2025-07-26 14:11:15]   [VRAM Debug] Allocated: 3.853GB (17.5%), Reserved: 18.250GB (83.1%)
+[2025-07-26 14:11:25]   [VRAM Debug] Allocated: 3.853GB (17.5%), Reserved: 18.250GB (83.1%)
+[2025-07-26 14:11:35]   [VRAM Debug] Allocated: 3.853GB (17.5%), Reserved: 18.250GB (83.1%)
+[2025-07-26 14:11:46]   [VRAM Debug] Allocated: 3.853GB (17.5%), Reserved: 18.250GB (83.1%)
+[2025-07-26 14:11:56]   [VRAM Debug] Allocated: 3.853GB (17.5%), Reserved: 18.250GB (83.1%)
+[2025-07-26 14:12:06]   [VRAM Debug] Allocated: 3.853GB (17.5%), Reserved: 18.250GB (83.1%)
+[2025-07-26 14:12:16]   [VRAM Debug] Allocated: 3.853GB (17.5%), Reserved: 18.250GB (83.1%)
+[2025-07-26 14:12:27]   [VRAM Debug] Allocated: 3.853GB (17.5%), Reserved: 18.250GB (83.1%)
+[2025-07-26 14:12:37]   [VRAM Debug] Allocated: 3.853GB (17.5%), Reserved: 18.250GB (83.1%)
+[2025-07-26 14:12:47]   [VRAM Debug] Allocated: 3.853GB (17.5%), Reserved: 18.250GB (83.1%)
+[2025-07-26 14:12:58]   [VRAM Debug] Allocated: 3.853GB (17.5%), Reserved: 18.250GB (83.1%)
+[2025-07-26 14:13:08]   [VRAM Debug] Allocated: 3.853GB (17.5%), Reserved: 18.250GB (83.1%)
+[2025-07-26 14:13:18]   [VRAM Debug] Allocated: 3.853GB (17.5%), Reserved: 18.250GB (83.1%)
+[2025-07-26 14:13:28]   [VRAM Debug] Allocated: 3.853GB (17.5%), Reserved: 18.250GB (83.1%)
+[2025-07-26 14:13:39]   [VRAM Debug] Allocated: 3.853GB (17.5%), Reserved: 18.250GB (83.1%)
+[2025-07-26 14:13:49]   [VRAM Debug] Allocated: 3.853GB (17.5%), Reserved: 18.250GB (83.1%)
+[2025-07-26 14:13:59]   [VRAM Debug] Allocated: 3.853GB (17.5%), Reserved: 18.250GB (83.1%)
+[2025-07-26 14:14:09]   [VRAM Debug] Allocated: 3.853GB (17.5%), Reserved: 18.250GB (83.1%)
+[2025-07-26 14:14:20]   [VRAM Debug] Allocated: 3.853GB (17.5%), Reserved: 18.250GB (83.1%)
+[2025-07-26 14:14:30]   [VRAM Debug] Allocated: 3.853GB (17.5%), Reserved: 18.250GB (83.1%)
+[2025-07-26 14:14:40]   [VRAM Debug] Allocated: 3.853GB (17.5%), Reserved: 18.250GB (83.1%)
+[2025-07-26 14:14:51]   [VRAM Debug] Allocated: 3.853GB (17.5%), Reserved: 18.250GB (83.1%)
+[2025-07-26 14:15:01]   [VRAM Debug] Allocated: 3.853GB (17.5%), Reserved: 18.250GB (83.1%)
+[2025-07-26 14:15:11]   [VRAM Debug] Allocated: 3.853GB (17.5%), Reserved: 18.250GB (83.1%)
+[2025-07-26 14:15:21]   [VRAM Debug] Allocated: 3.853GB (17.5%), Reserved: 18.250GB (83.1%)
+[2025-07-26 14:15:32]   [VRAM Debug] Allocated: 3.853GB (17.5%), Reserved: 18.250GB (83.1%)
+[2025-07-26 14:15:42]   [VRAM Debug] Allocated: 3.853GB (17.5%), Reserved: 18.250GB (83.1%)
+[2025-07-26 14:15:52]   [VRAM Debug] Allocated: 3.853GB (17.5%), Reserved: 18.250GB (83.1%)
+[2025-07-26 14:16:02]   [VRAM Debug] Allocated: 3.853GB (17.5%), Reserved: 18.250GB (83.1%)
+[2025-07-26 14:16:13]   [VRAM Debug] Allocated: 3.853GB (17.5%), Reserved: 18.250GB (83.1%)
+[2025-07-26 14:16:23]   [VRAM Debug] Allocated: 3.853GB (17.5%), Reserved: 18.250GB (83.1%)
+[2025-07-26 14:16:33]   [VRAM Debug] Allocated: 3.853GB (17.5%), Reserved: 18.250GB (83.1%)
+[2025-07-26 14:16:37]   timing breakdown: evaluation 0.0%
+[2025-07-26 14:16:37]   timing breakdown: gradient_accumulation 99.7%
+[2025-07-26 14:16:37]   timing breakdown:     forward 48.6%, backward 50.6%, data 0.4%, optim 0.1%
+[2025-07-26 14:16:37]   timing breakdown: gradient_clipping 0.3%
+[2025-07-26 14:16:38] step 300: train loss 6.3705, val loss 6.3799, tokens/sec 38229
+[2025-07-26 14:16:38]   timing breakdown (avg last 10): evaluation 35.4%, forward_pass 1.9%, data_loading 0.0%, backward_pass 1.9%, gradient_accumulation 60.6%, gradient_clipping 0.2%, optimizer_step 0.1%[2025-07-26 14:27:10]   [VRAM Debug] Allocated: 3.853GB (17.5%), Reserved: 18.250GB (83.1%)
+[2025-07-26 14:27:20]   [VRAM Debug] Allocated: 3.853GB (17.5%), Reserved: 18.250GB (83.1%)
+[2025-07-26 14:27:30]   [VRAM Debug] Allocated: 3.853GB (17.5%), Reserved: 18.250GB (83.1%)
+[2025-07-26 14:27:41]   [VRAM Debug] Allocated: 3.853GB (17.5%), Reserved: 18.250GB (83.1%)
+[2025-07-26 14:28:11]   [VRAM Debug] Allocated: 3.853GB (17.5%), Reserved: 18.250GB (83.1%)
+[2025-07-26 14:28:22]   [VRAM Debug] Allocated: 3.853GB (17.5%), Reserved: 18.250GB (83.1%)
+[2025-07-26 14:28:32]   [VRAM Debug] Allocated: 3.853GB (17.5%), Reserved: 18.250GB (83.1%)
+[2025-07-26 14:28:42]   [VRAM Debug] Allocated: 3.853GB (17.5%), Reserved: 18.250GB (83.1%)
+[2025-07-26 14:28:53]   [VRAM Debug] Allocated: 3.853GB (17.5%), Reserved: 18.250GB (83.1%)
+[2025-07-26 14:29:03]   [VRAM Debug] Allocated: 3.853GB (17.5%), Reserved: 18.250GB (83.1%)
+[2025-07-26 14:29:13]   [VRAM Debug] Allocated: 3.853GB (17.5%), Reserved: 18.250GB (83.1%)
+[2025-07-26 14:29:23]   [VRAM Debug] Allocated: 3.853GB (17.5%), Reserved: 18.250GB (83.1%)
+[2025-07-26 14:29:34]   [VRAM Debug] Allocated: 3.853GB (17.5%), Reserved: 18.250GB (83.1%)
+[2025-07-26 14:29:44]   [VRAM Debug] Allocated: 3.853GB (17.5%), Reserved: 18.250GB (83.1%)
+[2025-07-26 14:29:54]   [VRAM Debug] Allocated: 3.853GB (17.5%), Reserved: 18.250GB (83.1%)
+[2025-07-26 14:30:05]   [VRAM Debug] Allocated: 3.853GB (17.5%), Reserved: 18.250GB (83.1%)
+[2025-07-26 14:30:15]   [VRAM Debug] Allocated: 3.853GB (17.5%), Reserved: 18.250GB (83.1%)
+[2025-07-26 14:30:25]   [VRAM Debug] Allocated: 3.853GB (17.5%), Reserved: 18.250GB (83.1%)
+[2025-07-26 14:30:35]   [VRAM Debug] Allocated: 3.853GB (17.5%), Reserved: 18.250GB (83.1%)
+[2025-07-26 14:30:46]   [VRAM Debug] Allocated: 3.853GB (17.5%), Reserved: 18.250GB (83.1%)
+[2025-07-26 14:30:56]   [VRAM Debug] Allocated: 3.853GB (17.5%), Reserved: 18.250GB (83.1%)
+[2025-07-26 14:31:06]   [VRAM Debug] Allocated: 3.853GB (17.5%), Reserved: 18.250GB (83.1%)
+[2025-07-26 14:31:16]   [VRAM Debug] Allocated: 3.853GB (17.5%), Reserved: 18.250GB (83.1%)
+[2025-07-26 14:31:27]   [VRAM Debug] Allocated: 3.853GB (17.5%), Reserved: 18.250GB (83.1%)
+[2025-07-26 14:31:37]   [VRAM Debug] Allocated: 3.853GB (17.5%), Reserved: 18.250GB (83.1%)
+[2025-07-26 14:31:47]   [VRAM Debug] Allocated: 3.853GB (17.5%), Reserved: 18.250GB (83.1%)
+[2025-07-26 14:31:58]   [VRAM Debug] Allocated: 3.853GB (17.5%), Reserved: 18.250GB (83.1%)
+[2025-07-26 14:32:08]   [VRAM Debug] Allocated: 3.853GB (17.5%), Reserved: 18.250GB (83.1%)
+[2025-07-26 14:32:18]   [VRAM Debug] Allocated: 3.853GB (17.5%), Reserved: 18.250GB (83.1%)
+[2025-07-26 14:32:28]   [VRAM Debug] Allocated: 3.853GB (17.5%), Reserved: 18.250GB (83.1%)
+[2025-07-26 14:32:39]   [VRAM Debug] Allocated: 3.853GB (17.5%), Reserved: 18.250GB (83.1%)
+[2025-07-26 14:32:49]   [VRAM Debug] Allocated: 3.853GB (17.5%), Reserved: 18.250GB (83.1%)
+[2025-07-26 14:32:59]   [VRAM Debug] Allocated: 3.853GB (17.5%), Reserved: 18.250GB (83.1%)
+[2025-07-26 14:33:10]   [VRAM Debug] Allocated: 3.853GB (17.5%), Reserved: 18.250GB (83.1%)
+[2025-07-26 14:33:20]   [VRAM Debug] Allocated: 3.853GB (17.5%), Reserved: 18.250GB (83.1%)
+[2025-07-26 14:33:30]   [VRAM Debug] Allocated: 3.853GB (17.5%), Reserved: 18.250GB (83.1%)
+[2025-07-26 14:33:41]   [VRAM Debug] Allocated: 3.853GB (17.5%), Reserved: 18.250GB (83.1%)
+[2025-07-26 14:33:51]   [VRAM Debug] Allocated: 3.853GB (17.5%), Reserved: 18.250GB (83.1%)
+[2025-07-26 14:33:55]   timing breakdown: evaluation 0.0%
+[2025-07-26 14:33:55]   timing breakdown: gradient_accumulation 99.7%
+[2025-07-26 14:33:55]   timing breakdown:     forward 48.7%, backward 50.5%, data 0.4%, optim 0.1%
+[2025-07-26 14:33:55]   timing breakdown: gradient_clipping 0.3%
+[2025-07-26 14:33:55] step 400: train loss 6.2112, val loss 6.1310, tokens/sec 38205
+[2025-07-26 14:33:55]   timing breakdown (avg last 10): evaluation 34.3%, forward_pass 1.9%, data_loading 0.0%, backward_pass 2.0%, gradient_accumulation 61.6%, gradient_clipping 0.2%, optimizer_step 0.1%
+[2025-07-26 14:34:10]   [VRAM Debug] Allocated: 3.853GB (17.5%), Reserved: 18.250GB (83.1%)
+[2025-07-26 14:34:21]   [VRAM Debug] Allocated: 3.853GB (17.5%), Reserved: 18.250GB (83.1%)
+[2025-07-26 14:34:31]   [VRAM Debug] Allocated: 3.853GB (17.5%), Reserved: 18.250GB (83.1%)
+[2025-07-26 14:34:41]   [VRAM Debug] Allocated: 3.853GB (17.5%), Reserved: 18.250GB (83.1%)
+[2025-07-26 14:34:52]   [VRAM Debug] Allocated: 3.853GB (17.5%), Reserved: 18.250GB (83.1%)
+[2025-07-26 14:35:02]   [VRAM Debug] Allocated: 3.853GB (17.5%), Reserved: 18.250GB (83.1%)
+[2025-07-26 14:35:12]   [VRAM Debug] Allocated: 3.853GB (17.5%), Reserved: 18.250GB (83.1%)
+[2025-07-26 14:35:22]   [VRAM Debug] Allocated: 3.853GB (17.5%), Reserved: 18.250GB (83.1%)
+[2025-07-26 14:35:33]   [VRAM Debug] Allocated: 3.853GB (17.5%), Reserved: 18.250GB (83.1%)
+[2025-07-26 14:35:43]   [VRAM Debug] Allocated: 3.853GB (17.5%), Reserved: 18.250GB (83.1%)
+[2025-07-26 14:35:53]   [VRAM Debug] Allocated: 3.853GB (17.5%), Reserved: 18.250GB (83.1%)
+[2025-07-26 14:36:04]   [VRAM Debug] Allocated: 3.853GB (17.5%), Reserved: 18.250GB (83.1%)
+[2025-07-26 14:36:14]   [VRAM Debug] Allocated: 3.853GB (17.5%), Reserved: 18.250GB (83.1%)
+[2025-07-26 14:36:24]   [VRAM Debug] Allocated: 3.853GB (17.5%), Reserved: 18.250GB (83.1%)
+[2025-07-26 14:36:35]   [VRAM Debug] Allocated: 3.853GB (17.5%), Reserved: 18.250GB (83.1%)
+[2025-07-26 14:36:45]   [VRAM Debug] Allocated: 3.853GB (17.5%), Reserved: 18.250GB (83.1%)
+[2025-07-26 14:36:55]   [VRAM Debug] Allocated: 3.853GB (17.5%), Reserved: 18.250GB (83.1%)
+[2025-07-26 14:37:05]   [VRAM Debug] Allocated: 3.853GB (17.5%), Reserved: 18.250GB (83.1%)
+[2025-07-26 14:37:16]   [VRAM Debug] Allocated: 3.853GB (17.5%), Reserved: 18.250GB (83.1%)
+[2025-07-26 14:37:26]   [VRAM Debug] Allocated: 3.853GB (17.5%), Reserved: 18.250GB (83.1%)
+[2025-07-26 14:37:36]   [VRAM Debug] Allocated: 3.853GB (17.5%), Reserved: 18.250GB (83.1%)
+[2025-07-26 14:37:46]   [VRAM Debug] Allocated: 3.853GB (17.5%), Reserved: 18.250GB (83.1%)
+[2025-07-26 14:37:57]   [VRAM Debug] Allocated: 3.853GB (17.5%), Reserved: 18.250GB (83.1%)
+[2025-07-26 14:38:07]   [VRAM Debug] Allocated: 3.853GB (17.5%), Reserved: 18.250GB (83.1%)
+[2025-07-26 14:38:17]   [VRAM Debug] Allocated: 3.853GB (17.5%), Reserved: 18.250GB (83.1%)
+[2025-07-26 14:38:28]   [VRAM Debug] Allocated: 3.853GB (17.5%), Reserved: 18.250GB (83.1%)
+[2025-07-26 14:38:38]   [VRAM Debug] Allocated: 3.853GB (17.5%), Reserved: 18.250GB (83.1%)
+[2025-07-26 14:38:48]   [VRAM Debug] Allocated: 3.853GB (17.5%), Reserved: 18.250GB (83.1%)
+[2025-07-26 14:38:58]   [VRAM Debug] Allocated: 3.853GB (17.5%), Reserved: 18.250GB (83.1%)
+[2025-07-26 14:39:09]   [VRAM Debug] Allocated: 3.853GB (17.5%), Reserved: 18.250GB (83.1%)
+[2025-07-26 14:39:19]   [VRAM Debug] Allocated: 3.853GB (17.5%), Reserved: 18.250GB (83.1%)
+[2025-07-26 14:39:29]   [VRAM Debug] Allocated: 3.853GB (17.5%), Reserved: 18.250GB (83.1%)
+[2025-07-26 14:39:40]   [VRAM Debug] Allocated: 3.853GB (17.5%), Reserved: 18.250GB (83.1%)
+[2025-07-26 14:39:50]   [VRAM Debug] Allocated: 3.853GB (17.5%), Reserved: 18.250GB (83.1%)
+[2025-07-26 14:40:00]   [VRAM Debug] Allocated: 3.853GB (17.5%), Reserved: 18.250GB (83.1%)
+[2025-07-26 14:40:11]   [VRAM Debug] Allocated: 3.853GB (17.5%), Reserved: 18.250GB (83.1%)
+[2025-07-26 14:40:21]   [VRAM Debug] Allocated: 3.853GB (17.5%), Reserved: 18.250GB (83.1%)
+[2025-07-26 14:40:31]   [VRAM Debug] Allocated: 3.853GB (17.5%), Reserved: 18.250GB (83.1%)
+[2025-07-26 14:40:41]   [VRAM Debug] Allocated: 3.853GB (17.5%), Reserved: 18.250GB (83.1%)
+[2025-07-26 14:40:52]   [VRAM Debug] Allocated: 3.853GB (17.5%), Reserved: 18.250GB (83.1%)
+[2025-07-26 14:41:02]   [VRAM Debug] Allocated: 3.853GB (17.5%), Reserved: 18.250GB (83.1%)
+[2025-07-26 14:41:12]   [VRAM Debug] Allocated: 3.853GB (17.5%), Reserved: 18.250GB (83.1%)
+[2025-07-26 14:41:23]   [VRAM Debug] Allocated: 3.853GB (17.5%), Reserved: 18.250GB (83.1%)
+[2025-07-26 14:41:33]   [VRAM Debug] Allocated: 3.853GB (17.5%), Reserved: 18.250GB (83.1%)
+[2025-07-26 14:41:43]   [VRAM Debug] Allocated: 3.853GB (17.5%), Reserved: 18.250GB (83.1%)
+[2025-07-26 14:41:53]   [VRAM Debug] Allocated: 3.853GB (17.5%), Reserved: 18.250GB (83.1%)
+[2025-07-26 14:42:04]   [VRAM Debug] Allocated: 3.853GB (17.5%), Reserved: 18.250GB (83.1%)
+[2025-07-26 14:42:14]   [VRAM Debug] Allocated: 3.853GB (17.5%), Reserved: 18.250GB (83.1%)
+[2025-07-26 14:42:24]   [VRAM Debug] Allocated: 3.853GB (17.5%), Reserved: 18.250GB (83.1%)
+[2025-07-26 14:42:35]   [VRAM Debug] Allocated: 3.853GB (17.5%), Reserved: 18.250GB (83.1%)
+[2025-07-26 14:42:45]   [VRAM Debug] Allocated: 3.853GB (17.5%), Reserved: 18.250GB (83.1%)
+[2025-07-26 14:42:55]   [VRAM Debug] Allocated: 3.853GB (17.5%), Reserved: 18.250GB (83.1%)
+[2025-07-26 14:43:06]   [VRAM Debug] Allocated: 3.853GB (17.5%), Reserved: 18.250GB (83.1%)
+[2025-07-26 14:43:16]   [VRAM Debug] Allocated: 3.853GB (17.5%), Reserved: 18.250GB (83.1%)
+[2025-07-26 14:43:26]   [VRAM Debug] Allocated: 3.853GB (17.5%), Reserved: 18.250GB (83.1%)
+[2025-07-26 14:43:36]   [VRAM Debug] Allocated: 3.853GB (17.5%), Reserved: 18.250GB (83.1%)
+[2025-07-26 14:43:47]   [VRAM Debug] Allocated: 3.853GB (17.5%), Reserved: 18.250GB (83.1%)
+[2025-07-26 14:43:57]   [VRAM Debug] Allocated: 3.853GB (17.5%), Reserved: 18.250GB (83.1%)
+[2025-07-26 14:44:07]   [VRAM Debug] Allocated: 3.853GB (17.5%), Reserved: 18.250GB (83.1%)
+[2025-07-26 14:44:18]   [VRAM Debug] Allocated: 3.853GB (17.5%), Reserved: 18.250GB (83.1%)
+[2025-07-26 14:44:28]   [VRAM Debug] Allocated: 3.853GB (17.5%), Reserved: 18.250GB (83.1%)
+[2025-07-26 14:44:38]   [VRAM Debug] Allocated: 3.853GB (17.5%), Reserved: 18.250GB (83.1%)
+[2025-07-26 14:44:48]   [VRAM Debug] Allocated: 3.853GB (17.5%), Reserved: 18.250GB (83.1%)
+[2025-07-26 14:44:59]   [VRAM Debug] Allocated: 3.853GB (17.5%), Reserved: 18.250GB (83.1%)
+[2025-07-26 14:45:09]   [VRAM Debug] Allocated: 3.853GB (17.5%), Reserved: 18.250GB (83.1%)
+[2025-07-26 14:45:19]   [VRAM Debug] Allocated: 3.853GB (17.5%), Reserved: 18.250GB (83.1%)
+[2025-07-26 14:45:30]   [VRAM Debug] Allocated: 3.853GB (17.5%), Reserved: 18.250GB (83.1%)
+[2025-07-26 14:45:40]   [VRAM Debug] Allocated: 3.853GB (17.5%), Reserved: 18.250GB (83.1%)
+[2025-07-26 14:45:50]   [VRAM Debug] Allocated: 3.853GB (17.5%), Reserved: 18.250GB (83.1%)
+[2025-07-26 14:46:00]   [VRAM Debug] Allocated: 3.853GB (17.5%), Reserved: 18.250GB (83.1%)
+[2025-07-26 14:46:11]   [VRAM Debug] Allocated: 3.853GB (17.5%), Reserved: 18.250GB (83.1%)
+[2025-07-26 14:46:21]   [VRAM Debug] Allocated: 3.853GB (17.5%), Reserved: 18.250GB (83.1%)
+[2025-07-26 14:46:31]   [VRAM Debug] Allocated: 3.853GB (17.5%), Reserved: 18.250GB (83.1%)
+[2025-07-26 14:46:42]   [VRAM Debug] Allocated: 3.853GB (17.5%), Reserved: 18.250GB (83.1%)
+[2025-07-26 14:46:52]   [VRAM Debug] Allocated: 3.853GB (17.5%), Reserved: 18.250GB (83.1%)
+[2025-07-26 14:47:02]   [VRAM Debug] Allocated: 3.853GB (17.5%), Reserved: 18.250GB (83.1%)
+[2025-07-26 14:47:13]   [VRAM Debug] Allocated: 3.853GB (17.5%), Reserved: 18.250GB (83.1%)
+[2025-07-26 14:47:23]   [VRAM Debug] Allocated: 3.853GB (17.5%), Reserved: 18.250GB (83.1%)
+[2025-07-26 14:47:33]   [VRAM Debug] Allocated: 3.853GB (17.5%), Reserved: 18.250GB (83.1%)
+[2025-07-26 14:47:43]   [VRAM Debug] Allocated: 3.853GB (17.5%), Reserved: 18.250GB (83.1%)
+[2025-07-26 14:47:54]   [VRAM Debug] Allocated: 3.853GB (17.5%), Reserved: 18.250GB (83.1%)
+[2025-07-26 14:48:04]   [VRAM Debug] Allocated: 3.853GB (17.5%), Reserved: 18.250GB (83.1%)
+[2025-07-26 14:48:14]   [VRAM Debug] Allocated: 3.853GB (17.5%), Reserved: 18.250GB (83.1%)
+[2025-07-26 14:48:25]   [VRAM Debug] Allocated: 3.853GB (17.5%), Reserved: 18.250GB (83.1%)
+[2025-07-26 14:48:35]   [VRAM Debug] Allocated: 3.853GB (17.5%), Reserved: 18.250GB (83.1%)
+[2025-07-26 14:48:45]   [VRAM Debug] Allocated: 3.853GB (17.5%), Reserved: 18.250GB (83.1%)
+[2025-07-26 14:48:56]   [VRAM Debug] Allocated: 3.853GB (17.5%), Reserved: 18.250GB (83.1%)
+[2025-07-26 14:49:06]   [VRAM Debug] Allocated: 3.853GB (17.5%), Reserved: 18.250GB (83.1%)
+[2025-07-26 14:49:16]   [VRAM Debug] Allocated: 3.853GB (17.5%), Reserved: 18.250GB (83.1%)
+[2025-07-26 14:49:26]   [VRAM Debug] Allocated: 3.853GB (17.5%), Reserved: 18.250GB (83.1%)
+[2025-07-26 14:49:37]   [VRAM Debug] Allocated: 3.853GB (17.5%), Reserved: 18.250GB (83.1%)
+[2025-07-26 14:49:47]   [VRAM Debug] Allocated: 3.853GB (17.5%), Reserved: 18.250GB (83.1%)
+[2025-07-26 14:49:57]   [VRAM Debug] Allocated: 3.853GB (17.5%), Reserved: 18.250GB (83.1%)
+[2025-07-26 14:50:07]   [VRAM Debug] Allocated: 3.853GB (17.5%), Reserved: 18.250GB (83.1%)
+[2025-07-26 14:50:18]   [VRAM Debug] Allocated: 3.853GB (17.5%), Reserved: 18.250GB (83.1%)
+[2025-07-26 14:50:28]   [VRAM Debug] Allocated: 3.853GB (17.5%), Reserved: 18.250GB (83.1%)
+[2025-07-26 14:50:38]   [VRAM Debug] Allocated: 3.853GB (17.5%), Reserved: 18.250GB (83.1%)
+[2025-07-26 14:50:49]   [VRAM Debug] Allocated: 3.853GB (17.5%), Reserved: 18.250GB (83.1%)
+[2025-07-26 14:50:59]   [VRAM Debug] Allocated: 3.853GB (17.5%), Reserved: 18.250GB (83.1%)
+[2025-07-26 14:51:09]   [VRAM Debug] Allocated: 3.853GB (17.5%), Reserved: 18.250GB (83.1%)
+[2025-07-26 14:51:13]   timing breakdown: evaluation 0.0%
+[2025-07-26 14:51:13]   timing breakdown: gradient_accumulation 99.7%
+[2025-07-26 14:51:13]   timing breakdown:     forward 48.8%, backward 50.4%, data 0.4%, optim 0.1%
+[2025-07-26 14:51:13]   timing breakdown: gradient_clipping 0.3%
+[2025-07-26 14:51:14] step 500: train loss 5.8805, val loss 5.9408, tokens/sec 38185
+[2025-07-26 14:51:14]   timing breakdown (avg last 10): evaluation 33.6%, forward_pass 1.9%, data_loading 0.0%, backward_pass 2.0%, gradient_accumulation 62.2%, gradient_clipping 0.2%, optimizer_step 0.1%
+[2025-07-26 14:51:29]   [VRAM Debug] Allocated: 3.853GB (17.5%), Reserved: 18.250GB (83.1%)
+[2025-07-26 14:51:39]   [VRAM Debug] Allocated: 3.853GB (17.5%), Reserved: 18.250GB (83.1%)
+[2025-07-26 14:51:50]   [VRAM Debug] Allocated: 3.853GB (17.5%), Reserved: 18.250GB (83.1%)
+[2025-07-26 14:52:00]   [VRAM Debug] Allocated: 3.853GB (17.5%), Reserved: 18.250GB (83.1%)
+[2025-07-26 14:52:10]   [VRAM Debug] Allocated: 3.853GB (17.5%), Reserved: 18.250GB (83.1%)
+[2025-07-26 14:52:21]   [VRAM Debug] Allocated: 3.853GB (17.5%), Reserved: 18.250GB (83.1%)
+[2025-07-26 14:52:31]   [VRAM Debug] Allocated: 3.853GB (17.5%), Reserved: 18.250GB (83.1%)
+[2025-07-26 14:52:41]   [VRAM Debug] Allocated: 3.853GB (17.5%), Reserved: 18.250GB (83.1%)
+[2025-07-26 14:52:52]   [VRAM Debug] Allocated: 3.853GB (17.5%), Reserved: 18.250GB (83.1%)
+[2025-07-26 14:53:02]   [VRAM Debug] Allocated: 3.853GB (17.5%), Reserved: 18.250GB (83.1%)
+[2025-07-26 14:53:12]   [VRAM Debug] Allocated: 3.853GB (17.5%), Reserved: 18.250GB (83.1%)
+[2025-07-26 14:53:22]   [VRAM Debug] Allocated: 3.853GB (17.5%), Reserved: 18.250GB (83.1%)
+[2025-07-26 14:53:33]   [VRAM Debug] Allocated: 3.853GB (17.5%), Reserved: 18.250GB (83.1%)
+[2025-07-26 14:53:43]   [VRAM Debug] Allocated: 3.853GB (17.5%), Reserved: 18.250GB (83.1%)
+[2025-07-26 14:53:53]   [VRAM Debug] Allocated: 3.853GB (17.5%), Reserved: 18.250GB (83.1%)
+[2025-07-26 14:54:04]   [VRAM Debug] Allocated: 3.853GB (17.5%), Reserved: 18.250GB (83.1%)
+[2025-07-26 14:54:14]   [VRAM Debug] Allocated: 3.853GB (17.5%), Reserved: 18.250GB (83.1%)
+[2025-07-26 14:54:24]   [VRAM Debug] Allocated: 3.853GB (17.5%), Reserved: 18.250GB (83.1%)
+[2025-07-26 14:54:35]   [VRAM Debug] Allocated: 3.853GB (17.5%), Reserved: 18.250GB (83.1%)
+[2025-07-26 14:54:45]   [VRAM Debug] Allocated: 3.853GB (17.5%), Reserved: 18.250GB (83.1%)
+[2025-07-26 14:54:55]   [VRAM Debug] Allocated: 3.853GB (17.5%), Reserved: 18.250GB (83.1%)
+[2025-07-26 14:55:05]   [VRAM Debug] Allocated: 3.853GB (17.5%), Reserved: 18.250GB (83.1%)
+[2025-07-26 14:55:16]   [VRAM Debug] Allocated: 3.853GB (17.5%), Reserved: 18.250GB (83.1%)
+[2025-07-26 14:55:26]   [VRAM Debug] Allocated: 3.853GB (17.5%), Reserved: 18.250GB (83.1%)
+[2025-07-26 14:55:36]   [VRAM Debug] Allocated: 3.853GB (17.5%), Reserved: 18.250GB (83.1%)
+[2025-07-26 14:55:47]   [VRAM Debug] Allocated: 3.853GB (17.5%), Reserved: 18.250GB (83.1%)
+[2025-07-26 14:55:57]   [VRAM Debug] Allocated: 3.853GB (17.5%), Reserved: 18.250GB (83.1%)
+[2025-07-26 14:56:07]   [VRAM Debug] Allocated: 3.853GB (17.5%), Reserved: 18.250GB (83.1%)
+[2025-07-26 14:56:17]   [VRAM Debug] Allocated: 3.853GB (17.5%), Reserved: 18.250GB (83.1%)
+[2025-07-26 14:56:28]   [VRAM Debug] Allocated: 3.853GB (17.5%), Reserved: 18.250GB (83.1%)
+[2025-07-26 14:56:38]   [VRAM Debug] Allocated: 3.853GB (17.5%), Reserved: 18.250GB (83.1%)
+[2025-07-26 14:56:48]   [VRAM Debug] Allocated: 3.853GB (17.5%), Reserved: 18.250GB (83.1%)
+[2025-07-26 14:56:59]   [VRAM Debug] Allocated: 3.853GB (17.5%), Reserved: 18.250GB (83.1%)
+[2025-07-26 14:57:09]   [VRAM Debug] Allocated: 3.853GB (17.5%), Reserved: 18.250GB (83.1%)
+[2025-07-26 14:57:19]   [VRAM Debug] Allocated: 3.853GB (17.5%), Reserved: 18.250GB (83.1%)
+[2025-07-26 14:57:29]   [VRAM Debug] Allocated: 3.853GB (17.5%), Reserved: 18.250GB (83.1%)
+[2025-07-26 14:57:40]   [VRAM Debug] Allocated: 3.853GB (17.5%), Reserved: 18.250GB (83.1%)
+[2025-07-26 14:57:50]   [VRAM Debug] Allocated: 3.853GB (17.5%), Reserved: 18.250GB (83.1%)
+[2025-07-26 14:58:00]   [VRAM Debug] Allocated: 3.853GB (17.5%), Reserved: 18.250GB (83.1%)
+[2025-07-26 14:58:11]   [VRAM Debug] Allocated: 3.853GB (17.5%), Reserved: 18.250GB (83.1%)
+[2025-07-26 14:58:21]   [VRAM Debug] Allocated: 3.853GB (17.5%), Reserved: 18.250GB (83.1%)
+[2025-07-26 14:58:31]   [VRAM Debug] Allocated: 3.853GB (17.5%), Reserved: 18.250GB (83.1%)
+[2025-07-26 14:58:41]   [VRAM Debug] Allocated: 3.853GB (17.5%), Reserved: 18.250GB (83.1%)
+[2025-07-26 14:58:52]   [VRAM Debug] Allocated: 3.853GB (17.5%), Reserved: 18.250GB (83.1%)
+[2025-07-26 14:59:02]   [VRAM Debug] Allocated: 3.853GB (17.5%), Reserved: 18.250GB (83.1%)
+[2025-07-26 14:59:12]   [VRAM Debug] Allocated: 3.853GB (17.5%), Reserved: 18.250GB (83.1%)
+[2025-07-26 14:59:23]   [VRAM Debug] Allocated: 3.853GB (17.5%), Reserved: 18.250GB (83.1%)
+[2025-07-26 14:59:33]   [VRAM Debug] Allocated: 3.853GB (17.5%), Reserved: 18.250GB (83.1%)
+[2025-07-26 14:59:43]   [VRAM Debug] Allocated: 3.853GB (17.5%), Reserved: 18.250GB (83.1%)
+[2025-07-26 14:59:54]   [VRAM Debug] Allocated: 3.853GB (17.5%), Reserved: 18.250GB (83.1%)
+[2025-07-26 15:00:04]   [VRAM Debug] Allocated: 3.853GB (17.5%), Reserved: 18.250GB (83.1%)
+[2025-07-26 15:00:14]   [VRAM Debug] Allocated: 3.853GB (17.5%), Reserved: 18.250GB (83.1%)
+[2025-07-26 15:00:24]   [VRAM Debug] Allocated: 3.853GB (17.5%), Reserved: 18.250GB (83.1%)
+[2025-07-26 15:00:35]   [VRAM Debug] Allocated: 3.853GB (17.5%), Reserved: 18.250GB (83.1%)
+[2025-07-26 15:00:45]   [VRAM Debug] Allocated: 3.853GB (17.5%), Reserved: 18.250GB (83.1%)
+[2025-07-26 15:00:55]   [VRAM Debug] Allocated: 3.853GB (17.5%), Reserved: 18.250GB (83.1%)
+[2025-07-26 15:01:06]   [VRAM Debug] Allocated: 3.853GB (17.5%), Reserved: 18.250GB (83.1%)
+[2025-07-26 15:01:16]   [VRAM Debug] Allocated: 3.853GB (17.5%), Reserved: 18.250GB (83.1%)
+[2025-07-26 15:01:26]   [VRAM Debug] Allocated: 3.853GB (17.5%), Reserved: 18.250GB (83.1%)
+[2025-07-26 15:01:37]   [VRAM Debug] Allocated: 3.853GB (17.5%), Reserved: 18.250GB (83.1%)
+[2025-07-26 15:01:47]   [VRAM Debug] Allocated: 3.853GB (17.5%), Reserved: 18.250GB (83.1%)
+[2025-07-26 15:01:57]   [VRAM Debug] Allocated: 3.853GB (17.5%), Reserved: 18.250GB (83.1%)
+[2025-07-26 15:02:07]   [VRAM Debug] Allocated: 3.853GB (17.5%), Reserved: 18.250GB (83.1%)
+[2025-07-26 15:02:18]   [VRAM Debug] Allocated: 3.853GB (17.5%), Reserved: 18.250GB (83.1%)
+[2025-07-26 15:02:28]   [VRAM Debug] Allocated: 3.853GB (17.5%), Reserved: 18.250GB (83.1%)
+[2025-07-26 15:02:38]   [VRAM Debug] Allocated: 3.853GB (17.5%), Reserved: 18.250GB (83.1%)
+[2025-07-26 15:02:49]   [VRAM Debug] Allocated: 3.853GB (17.5%), Reserved: 18.250GB (83.1%)
+[2025-07-26 15:02:59]   [VRAM Debug] Allocated: 3.853GB (17.5%), Reserved: 18.250GB (83.1%)
+[2025-07-26 15:03:09]   [VRAM Debug] Allocated: 3.853GB (17.5%), Reserved: 18.250GB (83.1%)
+[2025-07-26 15:03:19]   [VRAM Debug] Allocated: 3.853GB (17.5%), Reserved: 18.250GB (83.1%)
+[2025-07-26 15:03:30]   [VRAM Debug] Allocated: 3.853GB (17.5%), Reserved: 18.250GB (83.1%)
+[2025-07-26 15:03:40]   [VRAM Debug] Allocated: 3.853GB (17.5%), Reserved: 18.250GB (83.1%)
+[2025-07-26 15:03:50]   [VRAM Debug] Allocated: 3.853GB (17.5%), Reserved: 18.250GB (83.1%)
+[2025-07-26 15:04:01]   [VRAM Debug] Allocated: 3.853GB (17.5%), Reserved: 18.250GB (83.1%)
+[2025-07-26 15:04:11]   [VRAM Debug] Allocated: 3.853GB (17.5%), Reserved: 18.250GB (83.1%)
+[2025-07-26 15:04:21]   [VRAM Debug] Allocated: 3.853GB (17.5%), Reserved: 18.250GB (83.1%)
+[2025-07-26 15:04:31]   [VRAM Debug] Allocated: 3.853GB (17.5%), Reserved: 18.250GB (83.1%)
+[2025-07-26 15:04:42]   [VRAM Debug] Allocated: 3.853GB (17.5%), Reserved: 18.250GB (83.1%)
+[2025-07-26 15:04:52]   [VRAM Debug] Allocated: 3.853GB (17.5%), Reserved: 18.250GB (83.1%)
+[2025-07-26 15:05:02]   [VRAM Debug] Allocated: 3.853GB (17.5%), Reserved: 18.250GB (83.1%)
+[2025-07-26 15:05:13]   [VRAM Debug] Allocated: 3.853GB (17.5%), Reserved: 18.250GB (83.1%)
+[2025-07-26 15:05:23]   [VRAM Debug] Allocated: 3.853GB (17.5%), Reserved: 18.250GB (83.1%)
+[2025-07-26 15:05:33]   [VRAM Debug] Allocated: 3.853GB (17.5%), Reserved: 18.250GB (83.1%)
+[2025-07-26 15:05:44]   [VRAM Debug] Allocated: 3.853GB (17.5%), Reserved: 18.250GB (83.1%)
+[2025-07-26 15:05:54]   [VRAM Debug] Allocated: 3.853GB (17.5%), Reserved: 18.250GB (83.1%)
+[2025-07-26 15:06:04]   [VRAM Debug] Allocated: 3.853GB (17.5%), Reserved: 18.250GB (83.1%)
+[2025-07-26 15:06:15]   [VRAM Debug] Allocated: 3.853GB (17.5%), Reserved: 18.250GB (83.1%)
+[2025-07-26 15:06:25]   [VRAM Debug] Allocated: 3.853GB (17.5%), Reserved: 18.250GB (83.1%)
+[2025-07-26 15:06:35]   [VRAM Debug] Allocated: 3.853GB (17.5%), Reserved: 18.250GB (83.1%)
+[2025-07-26 15:06:45]   [VRAM Debug] Allocated: 3.853GB (17.5%), Reserved: 18.250GB (83.1%)
+[2025-07-26 15:06:56]   [VRAM Debug] Allocated: 3.853GB (17.5%), Reserved: 18.250GB (83.1%)
+[2025-07-26 15:07:06]   [VRAM Debug] Allocated: 3.853GB (17.5%), Reserved: 18.250GB (83.1%)
+[2025-07-26 15:07:16]   [VRAM Debug] Allocated: 3.853GB (17.5%), Reserved: 18.250GB (83.1%)
+[2025-07-26 15:07:27]   [VRAM Debug] Allocated: 3.853GB (17.5%), Reserved: 18.250GB (83.1%)
+[2025-07-26 15:07:37]   [VRAM Debug] Allocated: 3.853GB (17.5%), Reserved: 18.250GB (83.1%)
+[2025-07-26 15:07:47]   [VRAM Debug] Allocated: 3.853GB (17.5%), Reserved: 18.250GB (83.1%)
+[2025-07-26 15:07:58]   [VRAM Debug] Allocated: 3.853GB (17.5%), Reserved: 18.250GB (83.1%)
+[2025-07-26 15:08:08]   [VRAM Debug] Allocated: 3.853GB (17.5%), Reserved: 18.250GB (83.1%)
+[2025-07-26 15:08:18]   [VRAM Debug] Allocated: 3.853GB (17.5%), Reserved: 18.250GB (83.1%)
+[2025-07-26 15:08:28]   [VRAM Debug] Allocated: 3.853GB (17.5%), Reserved: 18.250GB (83.1%)
+[2025-07-26 15:08:33]   timing breakdown: evaluation 0.0%
+[2025-07-26 15:08:33]   timing breakdown: gradient_accumulation 99.7%
+[2025-07-26 15:08:33]   timing breakdown:     forward 48.8%, backward 50.4%, data 0.4%, optim 0.1%
+[2025-07-26 15:08:33]   timing breakdown: gradient_clipping 0.3%
+[2025-07-26 15:08:33] step 600: train loss 5.6698, val loss 5.7047, tokens/sec 38167
+[2025-07-26 15:08:33]   timing breakdown (avg last 10): evaluation 33.1%, forward_pass 1.9%, data_loading 0.0%, backward_pass 2.0%, gradient_accumulation 62.7%, gradient_clipping 0.2%, optimizer_step 0.1%
+[2025-07-26 15:08:48]   [VRAM Debug] Allocated: 3.853GB (17.5%), Reserved: 18.250GB (83.1%)
+[2025-07-26 15:08:59]   [VRAM Debug] Allocated: 3.853GB (17.5%), Reserved: 18.250GB (83.1%)
+[2025-07-26 15:09:09]   [VRAM Debug] Allocated: 3.853GB (17.5%), Reserved: 18.250GB (83.1%)
+[2025-07-26 15:09:19]   [VRAM Debug] Allocated: 3.853GB (17.5%), Reserved: 18.250GB (83.1%)
+[2025-07-26 15:09:30]   [VRAM Debug] Allocated: 3.853GB (17.5%), Reserved: 18.250GB (83.1%)
+[2025-07-26 15:09:40]   [VRAM Debug] Allocated: 3.853GB (17.5%), Reserved: 18.250GB (83.1%)
+[2025-07-26 15:09:50]   [VRAM Debug] Allocated: 3.853GB (17.5%), Reserved: 18.250GB (83.1%)
+[2025-07-26 15:10:00]   [VRAM Debug] Allocated: 3.853GB (17.5%), Reserved: 18.250GB (83.1%)
+[2025-07-26 15:10:11]   [VRAM Debug] Allocated: 3.853GB (17.5%), Reserved: 18.250GB (83.1%)
+[2025-07-26 15:10:21]   [VRAM Debug] Allocated: 3.853GB (17.5%), Reserved: 18.250GB (83.1%)
+[2025-07-26 15:10:31]   [VRAM Debug] Allocated: 3.853GB (17.5%), Reserved: 18.250GB (83.1%)
+[2025-07-26 15:10:42]   [VRAM Debug] Allocated: 3.853GB (17.5%), Reserved: 18.250GB (83.1%)
+[2025-07-26 15:10:52]   [VRAM Debug] Allocated: 3.853GB (17.5%), Reserved: 18.250GB (83.1%)
+[2025-07-26 15:11:02]   [VRAM Debug] Allocated: 3.853GB (17.5%), Reserved: 18.250GB (83.1%)
+[2025-07-26 15:11:13]   [VRAM Debug] Allocated: 3.853GB (17.5%), Reserved: 18.250GB (83.1%)
+[2025-07-26 15:11:23]   [VRAM Debug] Allocated: 3.853GB (17.5%), Reserved: 18.250GB (83.1%)
+[2025-07-26 15:11:33]   [VRAM Debug] Allocated: 3.853GB (17.5%), Reserved: 18.250GB (83.1%)
+[2025-07-26 15:11:43]   [VRAM Debug] Allocated: 3.853GB (17.5%), Reserved: 18.250GB (83.1%)
+[2025-07-26 15:11:54]   [VRAM Debug] Allocated: 3.853GB (17.5%), Reserved: 18.250GB (83.1%)
+[2025-07-26 15:12:04]   [VRAM Debug] Allocated: 3.853GB (17.5%), Reserved: 18.250GB (83.1%)
+[2025-07-26 15:12:14]   [VRAM Debug] Allocated: 3.853GB (17.5%), Reserved: 18.250GB (83.1%)
+[2025-07-26 15:12:25]   [VRAM Debug] Allocated: 3.853GB (17.5%), Reserved: 18.250GB (83.1%)
+[2025-07-26 15:12:35]   [VRAM Debug] Allocated: 3.853GB (17.5%), Reserved: 18.250GB (83.1%)
+[2025-07-26 15:12:45]   [VRAM Debug] Allocated: 3.853GB (17.5%), Reserved: 18.250GB (83.1%)
+[2025-07-26 15:12:55]   [VRAM Debug] Allocated: 3.853GB (17.5%), Reserved: 18.250GB (83.1%)
+[2025-07-26 15:13:06]   [VRAM Debug] Allocated: 3.853GB (17.5%), Reserved: 18.250GB (83.1%)
+[2025-07-26 15:13:16]   [VRAM Debug] Allocated: 3.853GB (17.5%), Reserved: 18.250GB (83.1%)
+[2025-07-26 15:13:26]   [VRAM Debug] Allocated: 3.853GB (17.5%), Reserved: 18.250GB (83.1%)
+[2025-07-26 15:13:37]   [VRAM Debug] Allocated: 3.853GB (17.5%), Reserved: 18.250GB (83.1%)
+[2025-07-26 15:13:47]   [VRAM Debug] Allocated: 3.853GB (17.5%), Reserved: 18.250GB (83.1%)
+[2025-07-26 15:13:57]   [VRAM Debug] Allocated: 3.853GB (17.5%), Reserved: 18.250GB (83.1%)
+[2025-07-26 15:14:08]   [VRAM Debug] Allocated: 3.853GB (17.5%), Reserved: 18.250GB (83.1%)
+[2025-07-26 15:14:18]   [VRAM Debug] Allocated: 3.853GB (17.5%), Reserved: 18.250GB (83.1%)
+[2025-07-26 15:14:28]   [VRAM Debug] Allocated: 3.853GB (17.5%), Reserved: 18.250GB (83.1%)
+[2025-07-26 15:14:39]   [VRAM Debug] Allocated: 3.853GB (17.5%), Reserved: 18.250GB (83.1%)
+[2025-07-26 15:14:49]   [VRAM Debug] Allocated: 3.853GB (17.5%), Reserved: 18.250GB (83.1%)
+[2025-07-26 15:14:59]   [VRAM Debug] Allocated: 3.853GB (17.5%), Reserved: 18.250GB (83.1%)
+[2025-07-26 15:15:09]   [VRAM Debug] Allocated: 3.853GB (17.5%), Reserved: 18.250GB (83.1%)
+[2025-07-26 15:15:20]   [VRAM Debug] Allocated: 3.853GB (17.5%), Reserved: 18.250GB (83.1%)
+[2025-07-26 15:15:30]   [VRAM Debug] Allocated: 3.853GB (17.5%), Reserved: 18.250GB (83.1%)
+[2025-07-26 15:15:40]   [VRAM Debug] Allocated: 3.853GB (17.5%), Reserved: 18.250GB (83.1%)
+[2025-07-26 15:15:51]   [VRAM Debug] Allocated: 3.853GB (17.5%), Reserved: 18.250GB (83.1%)
+[2025-07-26 15:16:01]   [VRAM Debug] Allocated: 3.853GB (17.5%), Reserved: 18.250GB (83.1%)
+[2025-07-26 15:16:11]   [VRAM Debug] Allocated: 3.853GB (17.5%), Reserved: 18.250GB (83.1%)
+[2025-07-26 15:16:21]   [VRAM Debug] Allocated: 3.853GB (17.5%), Reserved: 18.250GB (83.1%)
+[2025-07-26 15:16:32]   [VRAM Debug] Allocated: 3.853GB (17.5%), Reserved: 18.250GB (83.1%)
+[2025-07-26 15:16:42]   [VRAM Debug] Allocated: 3.853GB (17.5%), Reserved: 18.250GB (83.1%)
+[2025-07-26 15:16:52]   [VRAM Debug] Allocated: 3.853GB (17.5%), Reserved: 18.250GB (83.1%)
+[2025-07-26 15:17:03]   [VRAM Debug] Allocated: 3.853GB (17.5%), Reserved: 18.250GB (83.1%)
+[2025-07-26 15:17:13]   [VRAM Debug] Allocated: 3.853GB (17.5%), Reserved: 18.250GB (83.1%)
+[2025-07-26 15:17:23]   [VRAM Debug] Allocated: 3.853GB (17.5%), Reserved: 18.250GB (83.1%)
+[2025-07-26 15:17:34]   [VRAM Debug] Allocated: 3.853GB (17.5%), Reserved: 18.250GB (83.1%)
+[2025-07-26 15:17:44]   [VRAM Debug] Allocated: 3.853GB (17.5%), Reserved: 18.250GB (83.1%)
