@@ -576,19 +576,68 @@ def get_batch_unmasking(split, ctx: TrainingContext, validation_sample_idx=None)
             if stage_config is None:
                 raise ValueError(f"No stage configuration available for {ctx.training_type} training")
     else:
-        # For training: use current stage configuration
-        stage_config = ctx.get_current_stage_config()
-        if stage_config is None:
-            raise ValueError(f"No stage configuration available for {ctx.training_type} training")
-    
-    # Apply target-driven sticky masking using selected stage parameters
-    masked_x, mask = apply_target_driven_sticky_masking_gpu(
-        x, 
-        stage_config.target_masked_ratio, 
-        stage_config.p1_probability, 
-        stage_config.p2_probability,
-        ctx.mask_token_id
-    )
+        # For training: distribute batch samples across all stages up to current stage (inclusive)
+        if ctx.unmasking_stages and ctx.current_stage >= 0:
+            # Get all available stages up to current stage
+            available_stages = ctx.unmasking_stages[:ctx.current_stage + 1]
+            num_stages = len(available_stages)
+            
+            # Distribute batch_size samples evenly across all available stages
+            samples_per_stage = ctx.batch_size // num_stages
+            remainder = ctx.batch_size % num_stages
+            
+            # Create mixed batch with samples from all stages
+            all_masked_x = []
+            all_masks = []
+            
+            for stage_idx, stage_config in enumerate(available_stages):
+                # Determine number of samples for this stage
+                stage_samples = samples_per_stage + (1 if stage_idx < remainder else 0)
+                
+                if stage_samples > 0:
+                    # Get subset of data for this stage
+                    stage_x = x[:stage_samples]
+                    
+                    # Apply masking for this stage
+                    stage_masked_x, stage_mask = apply_target_driven_sticky_masking_gpu(
+                        stage_x,
+                        stage_config.target_masked_ratio,
+                        stage_config.p1_probability,
+                        stage_config.p2_probability,
+                        ctx.mask_token_id
+                    )
+                    
+                    all_masked_x.append(stage_masked_x)
+                    all_masks.append(stage_mask)
+            
+            # Concatenate all stages back into batch
+            masked_x = torch.cat(all_masked_x, dim=0)
+            mask = torch.cat(all_masks, dim=0)
+            
+            # Shuffle the batch to mix stages randomly
+            perm = torch.randperm(masked_x.size(0))
+            masked_x = masked_x[perm]
+            mask = mask[perm]
+            x = x[perm]  # Also permute original x to match
+            
+            # Log stage distribution occasionally
+            if ctx.iter_num % 1000 == 0:
+                stage_counts = [samples_per_stage + (1 if i < remainder else 0) for i in range(num_stages)]
+                print(f"Training iter {ctx.iter_num}: Mixed batch from {num_stages} stages: {stage_counts}")
+        else:
+            # Fallback to current stage configuration
+            stage_config = ctx.get_current_stage_config()
+            if stage_config is None:
+                raise ValueError(f"No stage configuration available for {ctx.training_type} training")
+            
+            # Apply single stage masking (fallback case)
+            masked_x, mask = apply_target_driven_sticky_masking_gpu(
+                x, 
+                stage_config.target_masked_ratio, 
+                stage_config.p1_probability, 
+                stage_config.p2_probability,
+                ctx.mask_token_id
+            )
     
     if split == 'val':
         torch.manual_seed(1337 + ctx.seed_offset)
