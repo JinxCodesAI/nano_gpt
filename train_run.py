@@ -360,12 +360,28 @@ def reload_from_checkpoint():
     # Load checkpoint
     checkpoint = torch.load(ckpt_path, map_location=device)
     
-    # Reload model state
+    # Reload model state - handle compiled vs non-compiled model mismatches
     model_state = checkpoint['model']
-    unwanted_prefix = '_orig_mod.'
-    for k,v in list(model_state.items()):
-        if k.startswith(unwanted_prefix):
-            model_state[k[len(unwanted_prefix):]] = model_state.pop(k)
+    
+    # Check if current model expects _orig_mod prefix but checkpoint doesn't have it
+    current_keys = set(raw_model.state_dict().keys())
+    checkpoint_keys = set(model_state.keys())
+    
+    # Determine if we need to add or remove _orig_mod prefix
+    if any(k.startswith('_orig_mod.') for k in current_keys) and not any(k.startswith('_orig_mod.') for k in checkpoint_keys):
+        # Current model is compiled (has _orig_mod prefix), but checkpoint doesn't - add prefix
+        print("Adding _orig_mod prefix to checkpoint keys for compiled model")
+        new_state = {}
+        for k, v in model_state.items():
+            new_state[f'_orig_mod.{k}'] = v
+        model_state = new_state
+    elif not any(k.startswith('_orig_mod.') for k in current_keys) and any(k.startswith('_orig_mod.') for k in checkpoint_keys):
+        # Current model is not compiled, but checkpoint has _orig_mod prefix - remove prefix
+        print("Removing _orig_mod prefix from checkpoint keys for non-compiled model")
+        unwanted_prefix = '_orig_mod.'
+        for k, v in list(model_state.items()):
+            if k.startswith(unwanted_prefix):
+                model_state[k[len(unwanted_prefix):]] = model_state.pop(k)
     
     raw_model.load_state_dict(model_state)
     
