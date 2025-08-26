@@ -390,7 +390,8 @@ def reload_from_checkpoint():
     optimizer.load_state_dict(checkpoint['optimizer'])
     
     # Update iteration and loss tracking
-    iter_num = checkpoint['iter_num']
+    # Step back iteration to avoid immediately hitting the same problematic iteration
+    iter_num = checkpoint['iter_num'] - 1
     best_val_loss = checkpoint['best_val_loss']
     
     # Restore training context state if available
@@ -561,6 +562,8 @@ while True:
                         local_iter_num = 0
                         running_mfu = -1.0
                         training_ctx.iter_num = iter_num
+                        # Generate new batch to avoid same problematic data
+                        X, Y, mask = get_batch('train', training_ctx)
                         # Reset scaler state and start fresh iteration
                         scaler = torch.cuda.amp.GradScaler(enabled=(dtype == 'float16'))
                         optimizer.zero_grad(set_to_none=True)
@@ -580,6 +583,8 @@ while True:
                         local_iter_num = 0
                         running_mfu = -1.0
                         training_ctx.iter_num = iter_num
+                        # Generate new batch to avoid same problematic data
+                        X, Y, mask = get_batch('train', training_ctx)
                         # Reset scaler state and start fresh iteration
                         scaler = torch.cuda.amp.GradScaler(enabled=(dtype == 'float16'))
                         optimizer.zero_grad(set_to_none=True)
@@ -618,6 +623,8 @@ while True:
                         local_iter_num = 0
                         running_mfu = -1.0
                         training_ctx.iter_num = iter_num
+                        # Generate new batch to avoid same problematic data
+                        X, Y, mask = get_batch('train', training_ctx)
                         # Reset scaler state and start fresh iteration
                         scaler = torch.cuda.amp.GradScaler(enabled=(dtype == 'float16'))
                         optimizer.zero_grad(set_to_none=True)
@@ -679,6 +686,8 @@ while True:
                 local_iter_num = 0
                 running_mfu = -1.0
                 training_ctx.iter_num = iter_num
+                # Generate new batch to avoid same problematic data
+                X, Y, mask = get_batch('train', training_ctx)
                 # Reset scaler state and start fresh iteration
                 scaler = torch.cuda.amp.GradScaler(enabled=(dtype == 'float16'))
                 optimizer.zero_grad(set_to_none=True)
@@ -719,6 +728,8 @@ while True:
                 local_iter_num = 0
                 running_mfu = -1.0
                 training_ctx.iter_num = iter_num
+                # Generate new batch to avoid same problematic data
+                X, Y, mask = get_batch('train', training_ctx)
                 # Reset scaler state and start fresh iteration
                 scaler = torch.cuda.amp.GradScaler(enabled=(dtype == 'float16'))
                 optimizer.zero_grad(set_to_none=True)
@@ -758,6 +769,8 @@ while True:
             local_iter_num = 0
             running_mfu = -1.0
             training_ctx.iter_num = iter_num
+            # Generate new batch to avoid same problematic data
+            X, Y, mask = get_batch('train', training_ctx)
             # Reset scaler state and start fresh iteration
             scaler = torch.cuda.amp.GradScaler(enabled=(dtype == 'float16'))
             optimizer.zero_grad(set_to_none=True)
