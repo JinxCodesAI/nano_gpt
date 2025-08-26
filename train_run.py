@@ -39,19 +39,19 @@ eval_only = False # if True, script exits right after the first eval
 always_save_checkpoint = False # if True, always save a checkpoint after each eval
 init_from = 'scratch' # 'scratch' or 'resume' or 'gpt2*'
 # wandb logging
-wandb_log = True # disabled by default
+wandb_log = False # disabled by default
 wandb_project = 'diffusion'
 wandb_run_name = '13k_UN_noise_0.2' # 'run' + str(time.time())
 # data
 dataset = 'shakespeare_char'
 gradient_accumulation_steps = 1 # used to simulate larger batch sizes
-batch_size = 256 # if gradient_accumulation_steps > 1, this is the micro-batch size
+batch_size = 16 # if gradient_accumulation_steps > 1, this is the micro-batch size
 block_size = 1024
 # diffusion training config
-training_type = 'unmasking'  # 'unmasking', 'remasking', or 'remasking_binary' - type of training
+training_type = 'remasking_binary'  # 'unmasking', 'remasking', or 'remasking_binary' - type of training
 remasking_corruption_strategy = 'mixed'  # 'random', 'sticky', 'fragment', 'mixed', 'synthetic' - corruption strategy for remasking
 remasking_strategy_weights = [0.25, 0.4, 0.25, 0.1]  # weights for [random, sticky, fragment, synthetic] when using 'mixed'
-synthetic_checkpoint_name = '14.6_unmasking_no_noise.pt'  # Path to unmasking model checkpoint for synthetic data generation (only for 'synthetic' strategy)
+synthetic_checkpoint_name = '42.6_unmask_noise_0.2.pt'  # Path to unmasking model checkpoint for synthetic data generation (only for 'synthetic' strategy)
 guaranteed_unmasked_max = 0.8   # Maximum guaranteed fraction of tokens to keep unmasked (at start of training)
 guaranteed_unmasked_min = 0.2   # Minimum guaranteed fraction of tokens to keep unmasked (at end of training)
 random_mask_warmup = 13000       # Iterations over which guaranteed_unmasked transitions from max to min (then stays at min)
@@ -324,6 +324,14 @@ while True:
             training_ctx.iter_num = iter_num
             losses = estimate_loss(model, ctx, timer, training_ctx)
 
+        # VALIDATION INSTABILITY DETECTION
+        if not torch.isfinite(torch.tensor(losses['train'])) or not torch.isfinite(torch.tensor(losses['val'])):
+            print(f"\n*** VALIDATION INSTABILITY at iter {iter_num} ***")
+            print(f"Train loss: {losses['train']}, Val loss: {losses['val']}")
+            print("NaN detected in validation - model has become unstable")
+            print("*** TERMINATING TRAINING ***")
+            break
+        
         # Print basic losses
         print(f"--- Validation complete ---")
         print(f"step {iter_num}: train loss {losses['train']:.4f}, val loss {losses['val']:.4f}, lr {lr:.6f}")
@@ -392,6 +400,20 @@ while True:
                 # Combined forward pass and loss computation for efficiency
                 logits, loss = model(X, Y)
                 
+                # TRAINING INSTABILITY DETECTION
+                if not torch.isfinite(logits).all():
+                    print(f"\n*** INSTABILITY DETECTED at iter {iter_num} ***")
+                    print(f"Logits contain NaN/Inf: {torch.isnan(logits).sum().item()} NaN, {torch.isinf(logits).sum().item()} Inf")
+                    print(f"Logits stats: min={logits.min().item():.6f}, max={logits.max().item():.6f}, mean={logits.mean().item():.6f}")
+                    print("*** TERMINATING TRAINING ***")
+                    break
+                
+                if not torch.isfinite(loss):
+                    print(f"\n*** LOSS INSTABILITY at iter {iter_num} ***")
+                    print(f"Loss is {loss.item()}: {'NaN' if torch.isnan(loss) else 'Inf'}")
+                    print("*** TERMINATING TRAINING ***")
+                    break
+                
                 # Apply masking for unmasking training only (most efficient path)
                 if training_ctx.training_type == 'unmasking' and mask.any():
                     # Fast path: reshape once and use boolean indexing
@@ -406,6 +428,16 @@ while True:
                         reduction='mean'
                     )
                 # For remasking variants, model's internal loss is already correct
+                
+                # UNIVERSAL: Check final loss after any training-type-specific processing
+                if not torch.isfinite(loss):
+                    print(f"\n*** FINAL LOSS INSTABILITY at iter {iter_num} ***")
+                    print(f"Final loss is {loss.item()}: {'NaN' if torch.isnan(loss) else 'Inf'}")
+                    print(f"Training type: {training_ctx.training_type}")
+                    if hasattr(mask, 'float'):  # Check if mask exists
+                        print(f"Mask ratio: {mask.float().mean().item():.4f}")
+                    print("*** TERMINATING TRAINING ***")
+                    break
                         
                 loss = loss / gradient_accumulation_steps
         # immediately async prefetch next batch while model is doing the forward pass on the GPU
@@ -416,13 +448,82 @@ while True:
         # backward pass, with gradient scaling if training in fp16
         with timer.time_function('backward_pass'):
             scaler.scale(loss).backward()
-    # clip the gradient
+    
+    # GRADIENT INSTABILITY DETECTION
     if grad_clip != 0.0:
         scaler.unscale_(optimizer)
-        torch.nn.utils.clip_grad_norm_(model.parameters(), grad_clip)
+        # Monitor gradient norms before clipping
+        grad_norm = torch.nn.utils.clip_grad_norm_(model.parameters(), grad_clip)
+        
+        if not torch.isfinite(grad_norm):
+            print(f"\n*** GRADIENT INSTABILITY at iter {iter_num} ***")
+            print(f"Gradient norm is {grad_norm.item()}: {'NaN' if torch.isnan(grad_norm) else 'Inf'}")
+            
+            # Check individual parameter gradients
+            nan_params = 0
+            inf_params = 0
+            for name, param in model.named_parameters():
+                if param.grad is not None:
+                    if torch.isnan(param.grad).any():
+                        nan_params += 1
+                    if torch.isinf(param.grad).any():
+                        inf_params += 1
+            print(f"Parameters with NaN gradients: {nan_params}, with Inf gradients: {inf_params}")
+            print("*** TERMINATING TRAINING ***")
+            break
+        
+        if grad_norm > grad_clip * 10:  # Warn if gradient norm is very large
+            print(f"WARNING: Large gradient norm at iter {iter_num}: {grad_norm.item():.4f} (clip threshold: {grad_clip})")
+    else:
+        # Still check gradient norms even without clipping
+        total_norm = 0.0
+        nan_grads = False
+        inf_grads = False
+        
+        for param in model.parameters():
+            if param.grad is not None:
+                param_norm = param.grad.data.norm(2)
+                if torch.isnan(param_norm):
+                    nan_grads = True
+                if torch.isinf(param_norm):
+                    inf_grads = True
+                total_norm += param_norm.item() ** 2
+        
+        total_norm = total_norm ** (1. / 2)
+        
+        if nan_grads or inf_grads:
+            print(f"\n*** GRADIENT INSTABILITY at iter {iter_num} (no clipping) ***")
+            print(f"NaN gradients: {nan_grads}, Inf gradients: {inf_grads}")
+            print(f"Total gradient norm: {total_norm:.6f}")
+            print("*** TERMINATING TRAINING ***")
+            break
     # step the optimizer and scaler if training in fp16
     scaler.step(optimizer)
     scaler.update()
+    
+    # PARAMETER STABILITY DETECTION
+    nan_params = 0
+    inf_params = 0
+    param_names_with_issues = []
+    
+    for name, param in model.named_parameters():
+        if param.data is not None:
+            if torch.isnan(param.data).any():
+                nan_params += 1
+                param_names_with_issues.append(f"{name}(NaN)")
+            if torch.isinf(param.data).any():
+                inf_params += 1
+                param_names_with_issues.append(f"{name}(Inf)")
+    
+    if nan_params > 0 or inf_params > 0:
+        print(f"\n*** PARAMETER INSTABILITY at iter {iter_num} ***")
+        print(f"Parameters with NaN values: {nan_params}, with Inf values: {inf_params}")
+        print(f"Affected parameters: {param_names_with_issues[:10]}")  # Show first 10
+        if len(param_names_with_issues) > 10:
+            print(f"... and {len(param_names_with_issues) - 10} more")
+        print("*** TERMINATING TRAINING ***")
+        break
+    
     # flush the gradients as soon as we can, no need for this memory anymore
     optimizer.zero_grad(set_to_none=True)
 

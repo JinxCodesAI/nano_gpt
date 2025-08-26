@@ -1128,37 +1128,54 @@ def estimate_loss(model, torch_ctx, timer, training_ctx: TrainingContext):
 
         # Add model vs random comparison for validation
         if split == 'val' and model_probs:
-            avg_model_prob = sum(model_probs) / len(model_probs)
-
-            if training_ctx.training_type == 'remasking_binary':
-                # For binary classification, compare against distribution-aware random baseline
-                corruption_ratio = corrupted_positions / total_positions if total_positions > 0 else 0.0
-                # Random classifier matching the distribution would get:
-                # P(correct) = P(guess_good) * P(actual_good) + P(guess_wrong) * P(actual_wrong)
-                # With optimal random strategy: P(guess_good) = P(actual_good), P(guess_wrong) = P(actual_wrong)
-                random_accuracy = (1 - corruption_ratio) ** 2 + corruption_ratio ** 2
-                prob_ratio = avg_model_prob / random_accuracy if random_accuracy > 0 else float('inf')
-                out[f'{split}_model_vs_random'] = prob_ratio
-                out[f'{split}_avg_correct_prob'] = avg_model_prob
-                out[f'{split}_corruption_ratio'] = corruption_ratio
-                out[f'{split}_random_baseline'] = random_accuracy
-            elif training_ctx.training_type == 'remasking':
-                # For remasking, the task is corruption detection + appropriate response
-                corruption_ratio = corrupted_positions / total_positions if total_positions > 0 else 0.0
-                # Optimal random baseline: always guess the majority class
-                # With corruption_ratio=0.2: always guess "uncorrupted" → 80% accuracy
-                # General: max(corruption_ratio, 1-corruption_ratio)
-                random_accuracy = max(corruption_ratio, 1 - corruption_ratio)
-                prob_ratio = avg_model_prob / random_accuracy if random_accuracy > 0 else float('inf')
-                out[f'{split}_model_vs_random'] = prob_ratio
-                out[f'{split}_avg_correct_prob'] = avg_model_prob
-                out[f'{split}_corruption_ratio'] = corruption_ratio
-                out[f'{split}_random_baseline'] = random_accuracy
+            # VALIDATION METRICS STABILITY CHECK
+            finite_probs = [p for p in model_probs if math.isfinite(p)]
+            if len(finite_probs) == 0:
+                print(f"\n*** VALIDATION METRICS INSTABILITY ***")
+                print(f"All model probabilities are NaN/Inf (total: {len(model_probs)})")
+                print(f"Sample of problematic values: {model_probs[:5]}")
+                out[f'{split}_model_vs_random'] = float('nan')
+                out[f'{split}_avg_correct_prob'] = float('nan')
+                if training_ctx.training_type in ['remasking_binary', 'remasking']:
+                    out[f'{split}_corruption_ratio'] = corrupted_positions / total_positions if total_positions > 0 else 0.0
+                    out[f'{split}_random_baseline'] = 0.5  # Fallback value
+            elif len(finite_probs) < len(model_probs):
+                print(f"WARNING: {len(model_probs) - len(finite_probs)}/{len(model_probs)} model probabilities are NaN/Inf")
+                avg_model_prob = sum(finite_probs) / len(finite_probs)
             else:
-                # For unmasking, use uniform random baseline
-                prob_ratio = avg_model_prob / random_prob
-                out[f'{split}_model_vs_random'] = prob_ratio
-                out[f'{split}_avg_correct_prob'] = avg_model_prob
+                avg_model_prob = sum(model_probs) / len(model_probs)
+            
+            # Only proceed if we have valid probabilities
+            if len(finite_probs) > 0:
+                if training_ctx.training_type == 'remasking_binary':
+                    # For binary classification, compare against distribution-aware random baseline
+                    corruption_ratio = corrupted_positions / total_positions if total_positions > 0 else 0.0
+                    # Random classifier matching the distribution would get:
+                    # P(correct) = P(guess_good) * P(actual_good) + P(guess_wrong) * P(actual_wrong)
+                    # With optimal random strategy: P(guess_good) = P(actual_good), P(guess_wrong) = P(actual_wrong)
+                    random_accuracy = (1 - corruption_ratio) ** 2 + corruption_ratio ** 2
+                    prob_ratio = avg_model_prob / random_accuracy if random_accuracy > 0 else float('inf')
+                    out[f'{split}_model_vs_random'] = prob_ratio
+                    out[f'{split}_avg_correct_prob'] = avg_model_prob
+                    out[f'{split}_corruption_ratio'] = corruption_ratio
+                    out[f'{split}_random_baseline'] = random_accuracy
+                elif training_ctx.training_type == 'remasking':
+                    # For remasking, the task is corruption detection + appropriate response
+                    corruption_ratio = corrupted_positions / total_positions if total_positions > 0 else 0.0
+                    # Optimal random baseline: always guess the majority class
+                    # With corruption_ratio=0.2: always guess "uncorrupted" → 80% accuracy
+                    # General: max(corruption_ratio, 1-corruption_ratio)
+                    random_accuracy = max(corruption_ratio, 1 - corruption_ratio)
+                    prob_ratio = avg_model_prob / random_accuracy if random_accuracy > 0 else float('inf')
+                    out[f'{split}_model_vs_random'] = prob_ratio
+                    out[f'{split}_avg_correct_prob'] = avg_model_prob
+                    out[f'{split}_corruption_ratio'] = corruption_ratio
+                    out[f'{split}_random_baseline'] = random_accuracy
+                else:
+                    # For unmasking, use uniform random baseline
+                    prob_ratio = avg_model_prob / random_prob
+                    out[f'{split}_model_vs_random'] = prob_ratio
+                    out[f'{split}_avg_correct_prob'] = avg_model_prob
 
     model.train()
     return out
