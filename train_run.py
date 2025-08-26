@@ -325,9 +325,12 @@ while True:
             losses = estimate_loss(model, ctx, timer, training_ctx)
 
         # VALIDATION INSTABILITY DETECTION
-        if not torch.isfinite(torch.tensor(losses['train'])) or not torch.isfinite(torch.tensor(losses['val'])):
+        train_loss_finite = math.isfinite(losses['train'])
+        val_loss_finite = math.isfinite(losses['val'])
+        if not train_loss_finite or not val_loss_finite:
             print(f"\n*** VALIDATION INSTABILITY at iter {iter_num} ***")
-            print(f"Train loss: {losses['train']}, Val loss: {losses['val']}")
+            print(f"Train loss: {losses['train']} ({'finite' if train_loss_finite else 'NaN/Inf'})")
+            print(f"Val loss: {losses['val']} ({'finite' if val_loss_finite else 'NaN/Inf'})")
             print("NaN detected in validation - model has become unstable")
             print("*** TERMINATING TRAINING ***")
             break
@@ -455,9 +458,24 @@ while True:
         # Monitor gradient norms before clipping
         grad_norm = torch.nn.utils.clip_grad_norm_(model.parameters(), grad_clip)
         
+        # Check for true instability (NaN/Inf gradients)
         if not torch.isfinite(grad_norm):
-            print(f"\n*** GRADIENT INSTABILITY at iter {iter_num} ***")
-            print(f"Gradient norm is {grad_norm.item()}: {'NaN' if torch.isnan(grad_norm) else 'Inf'}")
+            # At iteration 0 with lr=0, infinite gradients indicate model/loss issues
+            if iter_num == 0:
+                print(f"\n*** INITIALIZATION PROBLEM at iter {iter_num} ***")
+                print(f"Gradient norm is {grad_norm.item()}: {'NaN' if torch.isnan(grad_norm) else 'Inf'}")
+                print(f"Learning rate: {lr:.6f}")
+                print("This suggests model initialization or loss computation issues")
+                
+                # Check a few key statistics
+                print("\nModel parameter stats:")
+                for name, param in list(model.named_parameters())[:3]:  # First 3 params
+                    print(f"  {name}: mean={param.data.mean().item():.6f}, std={param.data.std().item():.6f}")
+                    if param.grad is not None:
+                        print(f"    grad: mean={param.grad.data.mean().item():.6f}, std={param.grad.data.std().item():.6f}")
+            else:
+                print(f"\n*** GRADIENT INSTABILITY at iter {iter_num} ***")
+                print(f"Gradient norm is {grad_norm.item()}: {'NaN' if torch.isnan(grad_norm) else 'Inf'}")
             
             # Check individual parameter gradients
             nan_params = 0
@@ -472,7 +490,8 @@ while True:
             print("*** TERMINATING TRAINING ***")
             break
         
-        if grad_norm > grad_clip * 10:  # Warn if gradient norm is very large
+        # Only warn about large gradients after initial iterations (when lr > 0)
+        if iter_num > 10 and grad_norm > grad_clip * 10:
             print(f"WARNING: Large gradient norm at iter {iter_num}: {grad_norm.item():.4f} (clip threshold: {grad_clip})")
     else:
         # Still check gradient norms even without clipping
