@@ -37,7 +37,7 @@ log_interval = 20
 eval_iters = 20
 eval_only = False # if True, script exits right after the first eval
 always_save_checkpoint = True # if True, always save a checkpoint after each eval
-init_from = 'resume' # 'scratch' or 'resume' or 'gpt2*'
+init_from = 'resume' # 'scratch' or 'resume' or 'gpt2*'\
 # wandb logging
 wandb_log = False # disabled by default
 wandb_project = 'diffusion'
@@ -76,10 +76,10 @@ bias = False # do we use bias inside LayerNorm and Linear layers?
 attention_type = 'bidirectional' # 'causal' or 'bidirectional' - type of attention to use (bidirectional recommended for diffusion)
 # adamw optimizer
 learning_rate = 1e-3 # with baby networks can afford to go a bit higher
-max_iters = 25000
+max_iters = 50000
 warmup_iters = 2000 # how many steps to warm up for
-lr_decay_iters = 21000 # make equal to max_iters usually
-min_lr = 1e-4 # learning_rate / 10 usually
+lr_decay_iters = 41000 # make equal to max_iters usually
+min_lr = 3e-4 # learning_rate / 10 usually
 beta1 = 0.9
 beta2 = 0.99 # make a bit bigger because number of tokens per iter is small
 weight_decay=1e-1
@@ -217,7 +217,7 @@ if init_from == 'resume' and checkpoint_training_context is not None:
     print("Applying restored training context state...")
     training_ctx.current_stage = checkpoint_training_context.get('current_stage', 0)
     training_ctx.val_loss_stale_count = checkpoint_training_context.get('val_loss_stale_count', 0)
-    training_ctx.best_val_loss_for_stage = checkpoint_training_context.get('best_val_loss_for_stage', float('inf'))
+    training_ctx.best_val_loss_this_stage = checkpoint_training_context.get('best_val_loss_for_stage', float('inf'))
     print(f"Training context restored: stage={training_ctx.current_stage}, stale_count={training_ctx.val_loss_stale_count}")
 
 # model init
@@ -332,6 +332,62 @@ if wandb_log and master_process:
     import wandb
     wandb.init(project=wandb_project, name=wandb_run_name, config=config)
 
+# Function to reload model and optimizer from checkpoint during training
+def reload_from_checkpoint():
+    """Reload model and optimizer from the latest checkpoint"""
+    global model, optimizer, iter_num, best_val_loss, training_ctx, raw_model
+    
+    print(f"\n*** RELOADING FROM CHECKPOINT ***")
+    
+    # Find the latest checkpoint file
+    import glob
+    ckpt_pattern = os.path.join(out_dir, 'ckpt_*.pt')
+    ckpt_files = glob.glob(ckpt_pattern)
+    
+    if not ckpt_files:
+        print("No checkpoint files found for recovery - cannot continue")
+        return False
+    
+    # Extract iteration numbers and find the latest
+    def extract_iter_num(filename):
+        basename = os.path.basename(filename)
+        return int(basename.split('_')[2].split('.')[0])
+    
+    latest_ckpt = max(ckpt_files, key=extract_iter_num)
+    ckpt_path = latest_ckpt
+    print(f"Reloading from checkpoint: {os.path.basename(ckpt_path)}")
+    
+    # Load checkpoint
+    checkpoint = torch.load(ckpt_path, map_location=device)
+    
+    # Reload model state
+    model_state = checkpoint['model']
+    unwanted_prefix = '_orig_mod.'
+    for k,v in list(model_state.items()):
+        if k.startswith(unwanted_prefix):
+            model_state[k[len(unwanted_prefix):]] = model_state.pop(k)
+    
+    raw_model.load_state_dict(model_state)
+    
+    # Reload optimizer state
+    optimizer.load_state_dict(checkpoint['optimizer'])
+    
+    # Update iteration and loss tracking
+    iter_num = checkpoint['iter_num']
+    best_val_loss = checkpoint['best_val_loss']
+    
+    # Restore training context state if available
+    if 'training_context' in checkpoint and training_type == 'unmasking':
+        ctx_state = checkpoint['training_context']
+        training_ctx.current_stage = ctx_state.get('current_stage', 0)
+        training_ctx.val_loss_stale_count = ctx_state.get('val_loss_stale_count', 0)
+        training_ctx.best_val_loss_this_stage = ctx_state.get('best_val_loss_for_stage', float('inf'))
+        print(f"Training context restored: stage={training_ctx.current_stage}")
+    
+    print(f"Model and optimizer reloaded from iteration {iter_num}")
+    print("*** CHECKPOINT RELOAD COMPLETE ***\n")
+    return True
+
 # training loop
 X, Y, mask = get_batch('train', training_ctx) # fetch the very first batch
 t0 = time.time()
@@ -444,7 +500,7 @@ while True:
                     checkpoint['training_context'] = {
                         'current_stage': training_ctx.current_stage,
                         'val_loss_stale_count': training_ctx.val_loss_stale_count,
-                        'best_val_loss_for_stage': training_ctx.best_val_loss_for_stage
+                        'best_val_loss_for_stage': training_ctx.best_val_loss_this_stage
                     }
                 if training_ctx.training_type == 'remasking':
                     ckpt_filename = f'ckpt_remasking_{iter_num}.pt'
@@ -477,14 +533,32 @@ while True:
                     print(f"\n*** INSTABILITY DETECTED at iter {iter_num} ***")
                     print(f"Logits contain NaN/Inf: {torch.isnan(logits).sum().item()} NaN, {torch.isinf(logits).sum().item()} Inf")
                     print(f"Logits stats: min={logits.min().item():.6f}, max={logits.max().item():.6f}, mean={logits.mean().item():.6f}")
-                    print("*** TERMINATING TRAINING ***")
-                    break
+                    print("*** ATTEMPTING RECOVERY FROM CHECKPOINT ***")
+                    if reload_from_checkpoint():
+                        # Reset local state and continue
+                        local_iter_num = 0
+                        running_mfu = -1.0
+                        training_ctx.iter_num = iter_num
+                        X, Y, mask = get_batch('train', training_ctx)
+                        continue
+                    else:
+                        print("*** RECOVERY FAILED - TERMINATING TRAINING ***")
+                        break
                 
                 if not torch.isfinite(loss):
                     print(f"\n*** LOSS INSTABILITY at iter {iter_num} ***")
                     print(f"Loss is {loss.item()}: {'NaN' if torch.isnan(loss) else 'Inf'}")
-                    print("*** TERMINATING TRAINING ***")
-                    break
+                    print("*** ATTEMPTING RECOVERY FROM CHECKPOINT ***")
+                    if reload_from_checkpoint():
+                        # Reset local state and continue
+                        local_iter_num = 0
+                        running_mfu = -1.0
+                        training_ctx.iter_num = iter_num
+                        X, Y, mask = get_batch('train', training_ctx)
+                        continue
+                    else:
+                        print("*** RECOVERY FAILED - TERMINATING TRAINING ***")
+                        break
                 
                 # Apply masking for unmasking training only (most efficient path)
                 if training_ctx.training_type == 'unmasking' and mask.any():
@@ -508,8 +582,17 @@ while True:
                     print(f"Training type: {training_ctx.training_type}")
                     if hasattr(mask, 'float'):  # Check if mask exists
                         print(f"Mask ratio: {mask.float().mean().item():.4f}")
-                    print("*** TERMINATING TRAINING ***")
-                    break
+                    print("*** ATTEMPTING RECOVERY FROM CHECKPOINT ***")
+                    if reload_from_checkpoint():
+                        # Reset local state and continue
+                        local_iter_num = 0
+                        running_mfu = -1.0
+                        training_ctx.iter_num = iter_num
+                        X, Y, mask = get_batch('train', training_ctx)
+                        continue
+                    else:
+                        print("*** RECOVERY FAILED - TERMINATING TRAINING ***")
+                        break
                         
                 loss = loss / gradient_accumulation_steps
         # immediately async prefetch next batch while model is doing the forward pass on the GPU
@@ -556,8 +639,17 @@ while True:
                     if torch.isinf(param.grad).any():
                         inf_params += 1
             print(f"Parameters with NaN gradients: {nan_params}, with Inf gradients: {inf_params}")
-            print("*** TERMINATING TRAINING ***")
-            break
+            print("*** ATTEMPTING RECOVERY FROM CHECKPOINT ***")
+            if reload_from_checkpoint():
+                # Reset local state and continue
+                local_iter_num = 0
+                running_mfu = -1.0
+                training_ctx.iter_num = iter_num
+                X, Y, mask = get_batch('train', training_ctx)
+                continue
+            else:
+                print("*** RECOVERY FAILED - TERMINATING TRAINING ***")
+                break
         
         # Only warn about large gradients after initial iterations (when lr > 0)
         if iter_num > 10 and grad_norm > grad_clip * 10:
@@ -583,8 +675,17 @@ while True:
             print(f"\n*** GRADIENT INSTABILITY at iter {iter_num} (no clipping) ***")
             print(f"NaN gradients: {nan_grads}, Inf gradients: {inf_grads}")
             print(f"Total gradient norm: {total_norm:.6f}")
-            print("*** TERMINATING TRAINING ***")
-            break
+            print("*** ATTEMPTING RECOVERY FROM CHECKPOINT ***")
+            if reload_from_checkpoint():
+                # Reset local state and continue
+                local_iter_num = 0
+                running_mfu = -1.0
+                training_ctx.iter_num = iter_num
+                X, Y, mask = get_batch('train', training_ctx)
+                continue
+            else:
+                print("*** RECOVERY FAILED - TERMINATING TRAINING ***")
+                break
     # step the optimizer and scaler if training in fp16
     scaler.step(optimizer)
     scaler.update()
@@ -609,8 +710,17 @@ while True:
         print(f"Affected parameters: {param_names_with_issues[:10]}")  # Show first 10
         if len(param_names_with_issues) > 10:
             print(f"... and {len(param_names_with_issues) - 10} more")
-        print("*** TERMINATING TRAINING ***")
-        break
+        print("*** ATTEMPTING RECOVERY FROM CHECKPOINT ***")
+        if reload_from_checkpoint():
+            # Reset local state and continue
+            local_iter_num = 0
+            running_mfu = -1.0
+            training_ctx.iter_num = iter_num
+            X, Y, mask = get_batch('train', training_ctx)
+            continue
+        else:
+            print("*** RECOVERY FAILED - TERMINATING TRAINING ***")
+            break
     
     # flush the gradients as soon as we can, no need for this memory anymore
     optimizer.zero_grad(set_to_none=True)
