@@ -296,7 +296,7 @@ def get_unmasking_validation_batch(ctx: TrainingContext, batch_idx=None):
 
 def apply_target_driven_sticky_masking_gpu(x, target_masked_ratio, p1_probability, p2_probability, mask_token_id):
     """
-    Ultra-efficient GPU-optimized target-driven sticky masking with zero loops.
+    GPU-optimized target-driven sticky masking for unmasking training.
     
     Args:
         x: Input tokens (batch_size, seq_len)
@@ -316,113 +316,78 @@ def apply_target_driven_sticky_masking_gpu(x, target_masked_ratio, p1_probabilit
     target_masked_count = int(target_masked_ratio * seq_len)
     
     if target_masked_count == 0:
+        # No masking needed - return early
         return x.clone(), torch.zeros_like(x, dtype=torch.bool, device=device)
     
-    if target_masked_ratio >= 1.0:
-        masked_x = torch.full_like(x, mask_token_id)
-        return masked_x, torch.ones_like(x, dtype=torch.bool, device=device)
-    
-    # Step 1: Generate random noise for masking decisions
-    rand_vals = torch.rand((batch_size, seq_len), device=device, dtype=torch.float32)
-    
-    # Step 2: Create a more targeted approach
-    # Estimate effective probability to hit target ratio accounting for stickiness
-    if p2_probability > p1_probability:
-        # Sticky behavior: clusters will form, so reduce base probability
-        cluster_factor = 1.0 + (p2_probability - p1_probability) * 2.0  # Estimated cluster expansion
-        effective_prob = target_masked_ratio / cluster_factor
-        effective_prob = min(effective_prob, 0.8)  # Cap to prevent over-clustering
-    else:
-        effective_prob = target_masked_ratio
-    
-    # Step 3: Create initial seed mask
-    initial_mask = rand_vals < effective_prob
-    
-    # Step 4: Apply sticky expansion in multiple passes (vectorized)
-    current_mask = initial_mask.clone()
-    
-    if p2_probability > p1_probability and p2_probability > 0:
-        # Apply 2-3 expansion passes to create sticky behavior
-        expansion_passes = min(3, max(1, int(target_masked_count / 20)))  # Adaptive passes
-        
-        for _ in range(expansion_passes):
-            # Find neighbor positions (fully vectorized with padding)
-            padded_mask = torch.nn.functional.pad(current_mask.float(), (1, 1), mode='constant', value=0.0)
-            
-            # Vectorized neighbor detection
-            left_neighbors = padded_mask[:, :-2] > 0.5   # (batch_size, seq_len)
-            right_neighbors = padded_mask[:, 2:] > 0.5   # (batch_size, seq_len)
-            has_neighbors = left_neighbors | right_neighbors
-            
-            # Generate expansion random values
-            expand_rand = torch.rand_like(rand_vals)
-            
-            # Probability-based expansion where neighbors exist
-            expand_prob = p2_probability * 0.6  # Reduced to prevent over-expansion
-            new_expansions = (expand_rand < expand_prob) & has_neighbors & ~current_mask
-            
-            # Apply expansions
-            current_mask = current_mask | new_expansions
-            
-            # Early termination if we're close to target
-            if current_mask.sum() >= batch_size * target_masked_count * 1.2:
-                break
-    
-    # Step 5: Exact target adjustment (fully parallel where possible)
-    current_counts = current_mask.sum(dim=1)  # (batch_size,)
-    target_tensor = torch.full((batch_size,), target_masked_count, device=device, dtype=torch.long)
-    
-    # Create adjustment masks
-    need_adjustment = current_counts != target_tensor
-    need_more = current_counts < target_tensor
-    need_less = current_counts > target_tensor
-    
-    if need_adjustment.any():
-        # Generate priority values for all positions
-        priority_vals = torch.rand_like(current_mask, dtype=torch.float32)
-        
-        # Process sequences that need more masks
-        if need_more.any():
-            # Set priorities: high for unmasked positions, low for masked
-            add_priorities = priority_vals.clone()
-            add_priorities[current_mask] = -1.0  # Exclude already masked
-            
-            # Use gather/scatter operations for efficiency where possible
-            more_indices = torch.where(need_more)[0]
-            diff_needed = (target_tensor - current_counts)[more_indices]
-            
-            for i, seq_idx in enumerate(more_indices):
-                needed = diff_needed[i].item()
-                if needed > 0:
-                    seq_priorities = add_priorities[seq_idx]
-                    valid_positions = seq_priorities >= 0
-                    if valid_positions.sum() >= needed:
-                        _, top_indices = torch.topk(seq_priorities, k=needed)
-                        current_mask[seq_idx, top_indices] = True
-        
-        # Process sequences that need fewer masks  
-        if need_less.any():
-            # Set priorities: high for masked positions, low for unmasked
-            remove_priorities = priority_vals.clone()
-            remove_priorities[~current_mask] = -1.0  # Exclude unmasked
-            
-            less_indices = torch.where(need_less)[0]
-            diff_excess = (current_counts - target_tensor)[less_indices]
-            
-            for i, seq_idx in enumerate(less_indices):
-                excess = diff_excess[i].item()
-                if excess > 0:
-                    seq_priorities = remove_priorities[seq_idx]
-                    valid_positions = seq_priorities >= 0
-                    if valid_positions.sum() >= excess:
-                        _, bottom_indices = torch.topk(seq_priorities, k=excess, largest=False)
-                        current_mask[seq_idx, bottom_indices] = False
-    
-    # Apply final masking
+    # Start with no masks
     masked_x = x.clone()
-    masked_x[current_mask] = mask_token_id
     
-    return masked_x, current_mask
+    # Pre-allocate tensors to avoid repeated allocations
+    current_mask = torch.zeros_like(x, dtype=torch.bool, device=device)
+    neighbor_masked = torch.zeros_like(x, dtype=torch.bool, device=device)
+    
+    # Continue masking until we reach the target for each sequence
+    max_rounds = min(1000, target_masked_count * 10)  # Adaptive safety limit
+    target_tensor = torch.tensor(target_masked_count, device=device, dtype=torch.long)
+    
+    for round_idx in range(max_rounds):
+        # Update current mask state
+        current_mask = (masked_x == mask_token_id)
+        
+        # Check if we've reached target for all sequences (GPU-only operation)
+        current_counts = current_mask.sum(dim=1)  # (batch_size,)
+        sequences_need_more = current_counts < target_tensor
+        
+        if not sequences_need_more.any():
+            break  # All sequences reached target
+        
+        # Find neighbor positions for sticky masking (reuse buffer)
+        neighbor_masked.zero_()
+        
+        # Check left and right neighbors (vectorized)
+        neighbor_masked[:, 1:] |= current_mask[:, :-1]  # Left neighbor
+        neighbor_masked[:, :-1] |= current_mask[:, 1:]  # Right neighbor
+        
+        # Generate random values for masking decision (single GPU call)
+        rand_vals = torch.rand_like(x, dtype=torch.float, device=device)
+        
+        # Apply different probabilities based on neighbor status (vectorized)
+        mask_probs = torch.where(neighbor_masked, p2_probability, p1_probability)
+        new_masks = (rand_vals < mask_probs) & ~current_mask
+        
+        # Only mask sequences that haven't reached target yet (vectorized)
+        sequences_need_more_expanded = sequences_need_more.unsqueeze(1).expand(-1, seq_len)
+        new_masks &= sequences_need_more_expanded
+        
+        # Apply new masks (vectorized)
+        masked_x[new_masks] = mask_token_id
+    
+    # Final adjustment: remove excess masks with fully vectorized approach
+    final_mask = (masked_x == mask_token_id)
+    final_counts = final_mask.sum(dim=1)  # (batch_size,)
+    
+    # Only process sequences that exceeded target (minimize CPU-GPU sync)
+    exceeded_sequences = torch.where(final_counts > target_tensor)[0]
+    
+    if exceeded_sequences.numel() > 0:
+        # Process exceeded sequences with minimal loops
+        for batch_idx in exceeded_sequences:
+            excess = (final_counts[batch_idx] - target_tensor).item()
+            if excess > 0:
+                # Find masked positions (keep on GPU)
+                seq_mask = final_mask[batch_idx]
+                masked_positions = torch.where(seq_mask)[0]
+                
+                # Randomly select positions to unmask (single GPU operation)
+                perm_indices = torch.randperm(masked_positions.size(0), device=device)[:excess]
+                positions_to_unmask = masked_positions[perm_indices]
+                
+                # Restore original tokens (vectorized)
+                masked_x[batch_idx, positions_to_unmask] = x[batch_idx, positions_to_unmask]
+    
+    # Return final mask state
+    final_mask = (masked_x == mask_token_id)
+    return masked_x, final_mask
 
 
 
@@ -653,8 +618,8 @@ def get_batch_unmasking(split, ctx: TrainingContext, validation_sample_idx=None)
             mask = mask[perm]
             x = x[perm]  # Also permute original x to match
             
-            # Log stage distribution occasionally for training only
-            if split == 'train' and ctx.iter_num % 1000 == 0 and ctx.iter_num > 0:
+            # Log stage distribution occasionally for training only (avoid spam during validation)
+            if split == 'train' and ctx.iter_num % 1500 == 0 and ctx.iter_num > 0:
                 stage_counts = [samples_per_stage + (1 if i < remainder else 0) for i in range(num_stages)]
                 print(f"Training iter {ctx.iter_num}: Mixed batch from {num_stages} stages: {stage_counts}")
         else:

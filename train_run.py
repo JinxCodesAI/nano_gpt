@@ -761,6 +761,7 @@ while True:
             # Reset scaler state and start fresh iteration
             scaler = torch.cuda.amp.GradScaler(enabled=(dtype == 'float16'))
             optimizer.zero_grad(set_to_none=True)
+            just_recovered = True
             t0 = time.time()
             continue
         else:
