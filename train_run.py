@@ -146,6 +146,7 @@ data_dir = os.path.join('data', dataset)
 # init these up here, can override if init_from='resume' (i.e. from a checkpoint)
 iter_num = 0
 best_val_loss = 1e9
+checkpoint_training_context = None  # For restoring training context state
 
 # attempt to derive vocab_size from the dataset
 meta_path = os.path.join(data_dir, 'meta.pkl')
@@ -211,6 +212,14 @@ training_ctx = TrainingContext(
     min_lr=min_lr
 )
 
+# Apply restored training context state if resuming from checkpoint
+if init_from == 'resume' and checkpoint_training_context is not None:
+    print("Applying restored training context state...")
+    training_ctx.current_stage = checkpoint_training_context.get('current_stage', 0)
+    training_ctx.val_loss_stale_count = checkpoint_training_context.get('val_loss_stale_count', 0)
+    training_ctx.best_val_loss_for_stage = checkpoint_training_context.get('best_val_loss_for_stage', float('inf'))
+    print(f"Training context restored: stage={training_ctx.current_stage}, stale_count={training_ctx.val_loss_stale_count}")
+
 # model init
 model_args = dict(n_layer=n_layer, n_head=n_head, n_embd=n_embd, block_size=block_size,
                   bias=bias, vocab_size=None, dropout=dropout, attention_type=attention_type) # start with model_args from command line
@@ -266,6 +275,19 @@ elif init_from == 'resume':
     model.load_state_dict(state_dict)
     iter_num = checkpoint['iter_num']
     best_val_loss = checkpoint['best_val_loss']
+    
+    # Restore training context state if available
+    if 'training_context' in checkpoint and training_type == 'unmasking':
+        ctx_state = checkpoint['training_context']
+        print(f"Restoring training context state:")
+        print(f"  Stage: {ctx_state.get('current_stage', 0)}")
+        print(f"  Val loss stale count: {ctx_state.get('val_loss_stale_count', 0)}")
+        print(f"  Best val loss for stage: {ctx_state.get('best_val_loss_for_stage', float('inf'))}")
+        
+        # These will be set on the training_ctx after it's created
+        checkpoint_training_context = ctx_state
+    else:
+        checkpoint_training_context = None
 elif init_from.startswith('gpt2'):
     print(f"Initializing from OpenAI GPT-2 weights: {init_from}")
     # initialize from OpenAI GPT-2 weights
@@ -385,9 +407,7 @@ while True:
         if training_ctx.training_type == 'unmasking':
             stage_advanced = update_stage_progress(training_ctx, losses['val'])
             if stage_advanced:
-                # Clear validation cache after stage change to use new stage parameters
-                from train_utils import clear_validation_cache
-                clear_validation_cache()
+                print(f"Advanced to stage {training_ctx.current_stage} - validation set remains consistent across all stages")
         else:
             print(f"Progressive validation: {training_ctx.eval_iters * training_ctx.batch_size} samples (difficulty: 0 → {training_ctx.max_iters} iters)")
         
@@ -418,6 +438,14 @@ while True:
                     'best_val_loss': best_val_loss,
                     'config': config,
                 }
+                
+                # Save training context state for proper resumption
+                if training_ctx.training_type == 'unmasking':
+                    checkpoint['training_context'] = {
+                        'current_stage': training_ctx.current_stage,
+                        'val_loss_stale_count': training_ctx.val_loss_stale_count,
+                        'best_val_loss_for_stage': training_ctx.best_val_loss_for_stage
+                    }
                 if training_ctx.training_type == 'remasking':
                     ckpt_filename = f'ckpt_remasking_{iter_num}.pt'
                 elif training_ctx.training_type == 'remasking_binary':
