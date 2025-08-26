@@ -20,7 +20,8 @@ from model import GPTConfig, GPT
 from utils import Timer, log_masking_stats
 from train_utils import (
     get_batch, estimate_loss, get_lr, load_synthetic_model, 
-    start_prefetch, stop_prefetch, TrainingContext, UnmaskingStage, update_stage_progress
+    start_prefetch, stop_prefetch, TrainingContext, UnmaskingStage, update_stage_progress,
+    create_unmasking_validation_set
 )
 
 torch._dynamo.config.suppress_errors = True
@@ -422,8 +423,13 @@ if training_ctx.training_type == 'unmasking':
     print(f"  Val loss stale count limit: {stage_config.val_loss_stale_count}")
     print(f"Total stages configured: {len(training_ctx.unmasking_stages)}")
     print("*** STAGE INITIALIZATION COMPLETE ***\n")
+    
+    # Pre-create validation set with equal representation from all stages
+    print("Pre-creating validation set...")
+    create_unmasking_validation_set(training_ctx)
 
 print("Starting training loop...")
+just_recovered = False
 while True:
 
     # determine and set the learning rate for this iteration
@@ -432,7 +438,7 @@ while True:
         param_group['lr'] = lr
 
     # evaluate the loss on train/val sets and write checkpoints
-    if iter_num % eval_interval == 0 and master_process:
+    if iter_num % eval_interval == 0 and master_process and not just_recovered:
         print(f"\n--- Starting validation at iteration {iter_num} ---")
         with timer.time_function('validation'):
             # Update training context with current iteration
@@ -551,11 +557,15 @@ while True:
                     print(f"Logits stats: min={logits.min().item():.6f}, max={logits.max().item():.6f}, mean={logits.mean().item():.6f}")
                     print("*** ATTEMPTING RECOVERY FROM CHECKPOINT ***")
                     if reload_from_checkpoint():
-                        # Reset local state and continue
+                        # Reset local state and restart iteration completely
                         local_iter_num = 0
                         running_mfu = -1.0
                         training_ctx.iter_num = iter_num
-                        X, Y, mask = get_batch('train', training_ctx)
+                        # Reset scaler state and start fresh iteration
+                        scaler = torch.cuda.amp.GradScaler(enabled=(dtype == 'float16'))
+                        optimizer.zero_grad(set_to_none=True)
+                        just_recovered = True
+                        t0 = time.time()
                         continue
                     else:
                         print("*** RECOVERY FAILED - TERMINATING TRAINING ***")
@@ -566,11 +576,15 @@ while True:
                     print(f"Loss is {loss.item()}: {'NaN' if torch.isnan(loss) else 'Inf'}")
                     print("*** ATTEMPTING RECOVERY FROM CHECKPOINT ***")
                     if reload_from_checkpoint():
-                        # Reset local state and continue
+                        # Reset local state and restart iteration completely
                         local_iter_num = 0
                         running_mfu = -1.0
                         training_ctx.iter_num = iter_num
-                        X, Y, mask = get_batch('train', training_ctx)
+                        # Reset scaler state and start fresh iteration
+                        scaler = torch.cuda.amp.GradScaler(enabled=(dtype == 'float16'))
+                        optimizer.zero_grad(set_to_none=True)
+                        just_recovered = True
+                        t0 = time.time()
                         continue
                     else:
                         print("*** RECOVERY FAILED - TERMINATING TRAINING ***")
@@ -600,11 +614,15 @@ while True:
                         print(f"Mask ratio: {mask.float().mean().item():.4f}")
                     print("*** ATTEMPTING RECOVERY FROM CHECKPOINT ***")
                     if reload_from_checkpoint():
-                        # Reset local state and continue
+                        # Reset local state and restart iteration completely
                         local_iter_num = 0
                         running_mfu = -1.0
                         training_ctx.iter_num = iter_num
-                        X, Y, mask = get_batch('train', training_ctx)
+                        # Reset scaler state and start fresh iteration
+                        scaler = torch.cuda.amp.GradScaler(enabled=(dtype == 'float16'))
+                        optimizer.zero_grad(set_to_none=True)
+                        just_recovered = True
+                        t0 = time.time()
                         continue
                     else:
                         print("*** RECOVERY FAILED - TERMINATING TRAINING ***")
@@ -657,11 +675,15 @@ while True:
             print(f"Parameters with NaN gradients: {nan_params}, with Inf gradients: {inf_params}")
             print("*** ATTEMPTING RECOVERY FROM CHECKPOINT ***")
             if reload_from_checkpoint():
-                # Reset local state and continue
+                # Reset local state and restart iteration completely
                 local_iter_num = 0
                 running_mfu = -1.0
                 training_ctx.iter_num = iter_num
-                X, Y, mask = get_batch('train', training_ctx)
+                # Reset scaler state and start fresh iteration
+                scaler = torch.cuda.amp.GradScaler(enabled=(dtype == 'float16'))
+                optimizer.zero_grad(set_to_none=True)
+                just_recovered = True
+                t0 = time.time()
                 continue
             else:
                 print("*** RECOVERY FAILED - TERMINATING TRAINING ***")
@@ -693,11 +715,15 @@ while True:
             print(f"Total gradient norm: {total_norm:.6f}")
             print("*** ATTEMPTING RECOVERY FROM CHECKPOINT ***")
             if reload_from_checkpoint():
-                # Reset local state and continue
+                # Reset local state and restart iteration completely
                 local_iter_num = 0
                 running_mfu = -1.0
                 training_ctx.iter_num = iter_num
-                X, Y, mask = get_batch('train', training_ctx)
+                # Reset scaler state and start fresh iteration
+                scaler = torch.cuda.amp.GradScaler(enabled=(dtype == 'float16'))
+                optimizer.zero_grad(set_to_none=True)
+                just_recovered = True
+                t0 = time.time()
                 continue
             else:
                 print("*** RECOVERY FAILED - TERMINATING TRAINING ***")
@@ -728,11 +754,14 @@ while True:
             print(f"... and {len(param_names_with_issues) - 10} more")
         print("*** ATTEMPTING RECOVERY FROM CHECKPOINT ***")
         if reload_from_checkpoint():
-            # Reset local state and continue
+            # Reset local state and restart iteration completely
             local_iter_num = 0
             running_mfu = -1.0
             training_ctx.iter_num = iter_num
-            X, Y, mask = get_batch('train', training_ctx)
+            # Reset scaler state and start fresh iteration
+            scaler = torch.cuda.amp.GradScaler(enabled=(dtype == 'float16'))
+            optimizer.zero_grad(set_to_none=True)
+            t0 = time.time()
             continue
         else:
             print("*** RECOVERY FAILED - TERMINATING TRAINING ***")
@@ -792,6 +821,7 @@ while True:
             wandb.log(log_dict)
     iter_num += 1
     local_iter_num += 1
+    just_recovered = False  # Reset recovery flag after successful iteration
 
     # termination conditions
     if iter_num > max_iters:
