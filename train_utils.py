@@ -17,13 +17,14 @@ from torch.nn.parallel import DistributedDataParallel as DDP
 from torch.distributed import init_process_group, destroy_process_group
 
 from model import GPTConfig, GPT
-from utils import Timer, log_masking_stats, apply_sticky_masking
+from utils import Timer, log_masking_stats
 from dataclasses import dataclass
 
 # Global variables for data caching and prefetching
 _val_batch_cache = None
 _progressive_val_cache = {}  # Cache for progressive validation batches
 _progressive_val_full_cache = None  # Cache for full progressive validation set (all 320 samples)
+_unmasking_val_set = None  # Complete validation set for unmasking training (eval_iters * batch_size samples)
 _data_cache = {'train': None, 'val': None}
 _valid_indices_cache = {'train': None, 'val': None}
 _prefetch_enabled = True
@@ -33,6 +34,14 @@ _prefetch_active = False
 
 # Global synthetic model for remasking
 synthetic_model = None
+
+@dataclass
+class UnmaskingStage:
+    """Configuration for a single stage of unmasking training"""
+    target_masked_ratio: float
+    p1_probability: float
+    p2_probability: float
+    val_loss_stale_count: int
 
 @dataclass
 class TrainingContext:
@@ -59,21 +68,16 @@ class TrainingContext:
     remask_wrong_id: int = None
     extended_vocab_size: int = None
     
-    # Training iteration
+    # Training iteration and stage tracking
     iter_num: int = 0
+    current_stage: int = 0
+    val_loss_stale_count: int = 0
+    best_val_loss_this_stage: float = float('inf')
     
-    # Masking parameters
-    guaranteed_unmasked_max: float = 0.8  # Maximum guaranteed fraction (at start of training)
-    guaranteed_unmasked_min: float = 0.0  # Minimum guaranteed fraction (at end of training)
-    random_mask_warmup: int = 8000  # Iterations over which guaranteed_unmasked transitions from max to min
-    noise_max_ratio: float = 0.05
-    sticky_rounds: int = 10
-    sticky_p1_p2_multiplier: float = 10.0
-    sticky_p1_divisor: float = 2.0
-    sticky_transition_start: int = 500
-    sticky_transition_end: int = 12000
+    # Unmasking stages (only for unmasking training)
+    unmasking_stages: list = None
     
-    # Remasking strategy
+    # Remasking strategy (only for remasking/remasking_binary)
     remasking_corruption_strategy: str = 'mixed'
     remasking_strategy_weights: list = None
     
@@ -89,18 +93,34 @@ class TrainingContext:
     def __post_init__(self):
         if self.remasking_strategy_weights is None:
             self.remasking_strategy_weights = [0.25, 0.4, 0.25, 0.1]
+        
+        # Default unmasking stages if not provided
+        if self.training_type == 'unmasking' and self.unmasking_stages is None:
+            self.unmasking_stages = [
+                UnmaskingStage(target_masked_ratio=0.2, p1_probability=0.3, p2_probability=0.0, val_loss_stale_count=5),
+                UnmaskingStage(target_masked_ratio=0.4, p1_probability=0.2, p2_probability=0.8, val_loss_stale_count=5),
+                UnmaskingStage(target_masked_ratio=0.6, p1_probability=0.1, p2_probability=0.9, val_loss_stale_count=10),
+            ]
     
-    def get_guaranteed_unmasked(self, iter_num: int = None) -> float:
-        """Calculate guaranteed_unmasked for given iteration using centralized logic"""
-        if iter_num is None:
-            iter_num = self.iter_num
+    def get_current_stage_config(self) -> UnmaskingStage:
+        """Get configuration for current unmasking stage"""
+        if self.training_type != 'unmasking' or not self.unmasking_stages:
+            return None
         
-        # Linear transition from max to min over random_mask_warmup iterations, then stay at min
-        if iter_num >= self.random_mask_warmup:
-            return self.guaranteed_unmasked_min
+        if self.current_stage >= len(self.unmasking_stages):
+            # Return last stage if we've exceeded all stages
+            return self.unmasking_stages[-1]
         
-        progress = iter_num / self.random_mask_warmup if self.random_mask_warmup > 0 else 1.0
-        return self.guaranteed_unmasked_max + progress * (self.guaranteed_unmasked_min - self.guaranteed_unmasked_max)
+        return self.unmasking_stages[self.current_stage]
+    
+    def advance_stage(self):
+        """Advance to next unmasking stage and reset stale count"""
+        if self.current_stage < len(self.unmasking_stages) - 1:
+            self.current_stage += 1
+            self.val_loss_stale_count = 0
+            self.best_val_loss_this_stage = float('inf')
+            return True
+        return False
 
 def find_double_newline_indices(data, meta_vocab_size, block_size):
     """Find all valid starting indices that begin with double newlines (\\n\\n)"""
@@ -176,381 +196,203 @@ def stop_prefetch():
 
 def clear_validation_cache():
     """Clear progressive validation cache - useful when training parameters change"""
-    global _progressive_val_cache, _val_batch_cache, _progressive_val_full_cache
+    global _progressive_val_cache, _val_batch_cache, _progressive_val_full_cache, _unmasking_val_set
     _progressive_val_cache.clear()
     _val_batch_cache = None
     _progressive_val_full_cache = None
+    _unmasking_val_set = None
 
-def create_progressive_validation_set(training_ctx: TrainingContext):
-    """Create the full progressive validation set once - 320 samples representing training progression"""
-    global _progressive_val_full_cache
+def create_unmasking_validation_set(ctx: TrainingContext):
+    """Create complete validation set with samples evenly distributed across all stages"""
+    global _unmasking_val_set, _data_cache, _valid_indices_cache
     
-    if _progressive_val_full_cache is not None:
-        return _progressive_val_full_cache
+    if _unmasking_val_set is not None:
+        return  # Already created
     
-    print(f"\n=== CREATING PROGRESSIVE VALIDATION SET ===")
-    total_samples = training_ctx.eval_iters * training_ctx.batch_size
-    print(f"Generating {total_samples} validation samples ({training_ctx.eval_iters} batches × {training_ctx.batch_size} batch_size)")
-    print(f"Each sample will represent different training difficulty from 0 to {training_ctx.max_iters} iterations")
+    print("Creating validation set with samples from all stages...")
     
-    # Calculate which training iterations each sample represents
-    progressive_iterations = get_progressive_validation_iterations(training_ctx.eval_iters, training_ctx.max_iters)
-    print(f"Progressive iterations: {progressive_iterations}")
+    # Cache validation data if not already cached
+    if _data_cache['val'] is None:
+        _data_cache['val'] = np.memmap(os.path.join(ctx.data_dir, 'val.bin'), dtype=np.uint16, mode='r')
+        _valid_indices_cache['val'] = find_double_newline_indices(_data_cache['val'], ctx.meta_vocab_size, ctx.block_size)
     
-    # Generate all samples at once
-    all_X, all_Y, all_masks = [], [], []
+    data = _data_cache['val']
+    valid_indices = _valid_indices_cache['val']
     
-    for sample_idx in range(total_samples):
-        # Map sample index to training iteration
-        iter_idx = sample_idx % len(progressive_iterations)
-        represented_iter = progressive_iterations[iter_idx]
-        
-        if sample_idx < 10 or sample_idx >= total_samples - 5:  # Show first 10 and last 5
-            print(f"  Sample {sample_idx:3d}: iteration {represented_iter:5d} (guaranteed_unmasked: {training_ctx.get_guaranteed_unmasked(represented_iter):.3f})")
-        elif sample_idx == 10:
-            print(f"  ... (showing first 10 and last 5 samples) ...")
-        
-        # Generate single validation sample for this iteration
-        X_single, Y_single, mask_single = get_batch('val', training_ctx, validation_sample_idx=iter_idx)
-        all_X.append(X_single[0:1])  # Take first sample only
-        all_Y.append(Y_single[0:1])
-        all_masks.append(mask_single[0:1])
+    total_samples = ctx.eval_iters * ctx.batch_size
+    num_stages = len(ctx.unmasking_stages)
+    samples_per_stage = total_samples // num_stages
     
-    # Combine all samples
-    full_X = torch.cat(all_X, dim=0)  # Shape: (total_samples, block_size)
-    full_Y = torch.cat(all_Y, dim=0)  # Shape: (total_samples, block_size)
-    full_masks = torch.cat(all_masks, dim=0)  # Shape: (total_samples, block_size)
+    validation_batches = []
     
-    _progressive_val_full_cache = (full_X, full_Y, full_masks)
+    # Generate samples for each stage
+    torch.manual_seed(42)  # Fixed seed for reproducible validation set
     
-    print(f"Progressive validation set created: {full_X.shape[0]} samples, each with {full_X.shape[1]} tokens")
-    print(f"Difficulty range: iteration 0 (easy) to {training_ctx.max_iters} (hard)")
-    print(f"=== PROGRESSIVE VALIDATION SET COMPLETE ===\n")
-    
-    return _progressive_val_full_cache
-
-def apply_random_corruption_gpu(x, iter_num, guaranteed_unmasked_max, guaranteed_unmasked_min,
-                               sticky_transition_start, sticky_transition_end, meta_vocab_size, random_mask_warmup=None):
-    """GPU-optimized Strategy 1: Random token corruption with dynamic guaranteed_unmasked"""
-    device = x.device
-    vocab_size_to_use = meta_vocab_size if meta_vocab_size is not None else 50257
-
-    # Calculate dynamic guaranteed_unmasked using new warmup logic
-    # Note: This function should receive a TrainingContext, but for backward compatibility
-    # we'll create a temporary one. TODO: Refactor callers to pass TrainingContext directly
-    if random_mask_warmup is None:
-        random_mask_warmup = sticky_transition_end  # Fallback to old behavior
-    
-    if iter_num >= random_mask_warmup:
-        guaranteed_unmasked = guaranteed_unmasked_min
-    else:
-        progress = iter_num / random_mask_warmup if random_mask_warmup > 0 else 1.0
-        guaranteed_unmasked = guaranteed_unmasked_max + progress * (guaranteed_unmasked_min - guaranteed_unmasked_max)
-
-    # Generate mask on GPU - corruption probability is now (1.0 - guaranteed_unmasked)
-    corruption_prob = 1.0 - guaranteed_unmasked
-    mask = torch.rand(x.shape, device=device) < corruption_prob
-
-    # Apply corruption in-place for efficiency
-    corrupted_x = x.clone()
-    if mask.any():
-        # Generate random tokens directly on GPU
-        random_tokens = torch.randint(0, vocab_size_to_use, x.shape, device=device)
-        corrupted_x = torch.where(mask, random_tokens, corrupted_x)
-
-    return corrupted_x, mask
-
-def apply_random_corruption(x, corruption_prob, guaranteed_unmasked, meta_vocab_size):
-    """Strategy 1: Random token corruption (original method)"""
-    mask = torch.rand(x.shape) < (corruption_prob * (1.0 - guaranteed_unmasked))
-    corrupted_x = x.clone()
-    
-    if mask.sum() > 0:
-        vocab_size_to_use = meta_vocab_size if meta_vocab_size is not None else 50257
-        random_tokens = torch.randint(0, vocab_size_to_use, (mask.sum().item(),))
-        corrupted_x[mask] = random_tokens
-    
-    return corrupted_x, mask
-
-def apply_sticky_corruption_gpu(x, sticky_rounds, sticky_p1_p2_multiplier, mask_token_id, meta_vocab_size, sticky_p1_divisor=2.0):
-    """GPU-optimized Strategy 2: Sticky-style corruption without transitions"""
-    device = x.device
-    vocab_size_to_use = meta_vocab_size if meta_vocab_size is not None else 50257
-
-    # Use GPU-optimized sticky masking
-    sticky_corrupted_x, mask = apply_sticky_masking_gpu(x, sticky_rounds, mask_token_id, sticky_p1_p2_multiplier, sticky_p1_divisor)
-    
-    # Replace mask tokens with random tokens (vectorized on GPU)
-    mask_positions = (sticky_corrupted_x == mask_token_id)
-    if mask_positions.any():
-        random_tokens = torch.randint(0, vocab_size_to_use, x.shape, device=device)
-        sticky_corrupted_x = torch.where(mask_positions, random_tokens, sticky_corrupted_x)
-    
-    return sticky_corrupted_x, mask
-
-def apply_sticky_corruption(x, sticky_rounds, sticky_p1_p2_multiplier, mask_token_id, meta_vocab_size, sticky_p1_divisor=2.0):
-    """Strategy 2: Sticky-style corruption without transitions"""
-    # Use sticky masking logic but replace mask tokens with random tokens
-    sticky_corrupted_x, mask = apply_sticky_masking(x, sticky_rounds, mask_token_id, sticky_p1_p2_multiplier, sticky_p1_divisor)
-    
-    # Replace mask tokens with random tokens
-    vocab_size_to_use = meta_vocab_size if meta_vocab_size is not None else 50257
-    for batch_idx in range(sticky_corrupted_x.shape[0]):
-        for pos_idx in range(sticky_corrupted_x.shape[1]):
-            if sticky_corrupted_x[batch_idx, pos_idx] == mask_token_id:
-                sticky_corrupted_x[batch_idx, pos_idx] = torch.randint(0, vocab_size_to_use, (1,)).item()
-    
-    return sticky_corrupted_x, mask
-
-def apply_fragment_corruption_gpu(x, data, block_size, sticky_rounds, sticky_p1_p2_multiplier, mask_token_id, sticky_p1_divisor=2.0):
-    """GPU-optimized Strategy 3: Fragment-based corruption using real text segments"""
-    device = x.device
-    batch_size = x.shape[0]
-
-    # Use GPU-optimized sticky masking to get corruption patterns
-    _, mask = apply_sticky_masking_gpu(x, sticky_rounds, mask_token_id, sticky_p1_p2_multiplier, sticky_p1_divisor)
-    
-    corrupted_x = x.clone()
-    
-    # Pre-sample all fragment starts for the batch
-    fragment_starts = torch.randint(0, len(data) - block_size, (batch_size,)).numpy()
-    
-    # Load all fragments at once (vectorized)
-    fragments = np.zeros((batch_size, block_size), dtype=np.int64)
-    for i, start in enumerate(fragment_starts):
-        fragments[i] = data[start:start + block_size].astype(np.int64)
-    
-    # Convert to GPU tensor
-    fragments_gpu = torch.from_numpy(fragments).to(device)
-    
-    # Apply fragment corruption using vectorized operations
-    corrupted_x = torch.where(mask, fragments_gpu, corrupted_x)
-    
-    return corrupted_x, mask
-
-def apply_fragment_corruption(x, data, block_size, sticky_rounds, sticky_p1_p2_multiplier, mask_token_id):
-    """Strategy 3: Fragment-based corruption using real text segments"""
-    # Use sticky masking to get corruption patterns
-    _, mask = apply_sticky_masking(x, sticky_rounds, mask_token_id, sticky_p1_p2_multiplier)
-    
-    corrupted_x = x.clone()
-    
-    # For each sequence in the batch, get a different source fragment
-    for batch_idx in range(x.shape[0]):
-        batch_mask = mask[batch_idx]
-        if batch_mask.sum() > 0:
-            # Sample a random fragment from training data
-            fragment_start = torch.randint(0, len(data) - block_size, (1,)).item()
-            fragment = torch.from_numpy(data[fragment_start:fragment_start + block_size].astype(np.int64))
+    for stage_idx, stage_config in enumerate(ctx.unmasking_stages):
+        stage_samples = samples_per_stage
+        # Handle remainder samples
+        if stage_idx < (total_samples % num_stages):
+            stage_samples += 1
             
-            # Replace corrupted positions with tokens from the fragment
-            corrupted_x[batch_idx][batch_mask] = fragment[batch_mask]
-    
-    return corrupted_x, mask
-
-def get_progressive_validation_iterations(eval_iters, max_iters):
-    """Calculate iteration numbers that validation samples should represent
-    
-    For eval_iters=20, max_iters=13000: returns [0, 650, 1300, ..., 12350]
-    This ensures validation samples represent the full training difficulty progression
-    """
-    if max_iters <= 0 or eval_iters <= 0:
-        return [0] * eval_iters
-    
-    # Distribute iterations evenly across training duration
-    step_size = max_iters / eval_iters
-    iterations = [int(i * step_size) for i in range(eval_iters)]
-    return iterations
-
-def apply_gpu_masking_validation_progressive(x, mask_token_id, sticky_rounds, sticky_p1_p2_multiplier, 
-                                           guaranteed_unmasked, sticky_transition_start, sticky_transition_end, 
-                                           sticky_p1_divisor, validation_iter):
-    """GPU-optimized validation masking that represents a specific training iteration"""
-    # Use the same logic as training, but for the specific validation iteration
-    return apply_gpu_masking_training(x, validation_iter, mask_token_id, sticky_rounds, sticky_p1_p2_multiplier,
-                                    guaranteed_unmasked, sticky_transition_start, sticky_transition_end, sticky_p1_divisor)
-
-def apply_gpu_masking_training(x, iter_num, mask_token_id, sticky_rounds, sticky_p1_p2_multiplier,
-                              guaranteed_unmasked, sticky_transition_start, sticky_transition_end, sticky_p1_divisor=2.0):
-    """GPU-optimized training masking with dynamic sticky ratio"""
-    # Calculate sticky masking ratio based on current training iteration
-    if iter_num < sticky_transition_start:
-        sticky_ratio = 0.0
-    elif iter_num >= sticky_transition_end:
-        sticky_ratio = 1.0
-    else:
-        progress = (iter_num - sticky_transition_start) / (sticky_transition_end - sticky_transition_start)
-        sticky_ratio = progress
-
-    # Pre-allocate tensors on GPU
-    masked_x = x.clone()
-    mask = torch.zeros_like(x, dtype=torch.bool, device=x.device)
-
-    if sticky_ratio == 0.0:
-        # Pure independent masking with per-sample probabilities (fully vectorized)
-        batch_size = x.shape[0]
-        # Generate different masking probabilities for each sample in the batch
-        # Each sample gets a random probability in range [0, 1-guaranteed_unmasked]
-        sample_masking_probs = torch.rand(batch_size, device=x.device) * (1.0 - guaranteed_unmasked)
-        # Expand to match sequence length for broadcasting
-        sample_masking_probs = sample_masking_probs.unsqueeze(1).expand(-1, x.shape[1])
-        # Apply per-sample masking probabilities
-        mask = torch.rand(x.shape, device=x.device) < sample_masking_probs
-        masked_x[mask] = mask_token_id
-    elif sticky_ratio == 1.0:
-        # Pure sticky masking
-        masked_x, mask = apply_sticky_masking_gpu(x, sticky_rounds, mask_token_id, sticky_p1_p2_multiplier, sticky_p1_divisor)
-    else:
-        # Mixed strategy: some batches independent, some sticky
-        current_batch_size = x.shape[0]
-        num_sticky_batches = int(current_batch_size * sticky_ratio)
-
-        # Apply independent masking to first part of batch (vectorized)
-        if num_sticky_batches < current_batch_size:
-            indep_batch_size = current_batch_size - num_sticky_batches
-            # Generate different masking probabilities for each independent sample
-            # Each sample gets a random probability in range [0, 1-guaranteed_unmasked]
-            sample_masking_probs = torch.rand(indep_batch_size, device=x.device) * (1.0 - guaranteed_unmasked)
-            # Expand to match sequence length for broadcasting
-            sample_masking_probs = sample_masking_probs.unsqueeze(1).expand(-1, x.shape[1])
-            # Apply per-sample masking probabilities
-            indep_mask = torch.rand(x[:indep_batch_size].shape, device=x.device) < sample_masking_probs
-            masked_x[:indep_batch_size][indep_mask] = mask_token_id
-            mask[:indep_batch_size] = indep_mask
-
-        # Apply GPU-accelerated sticky masking to remaining part of batch
-        if num_sticky_batches > 0:
-            sticky_masked_x, sticky_mask = apply_sticky_masking_gpu(
-                x[-num_sticky_batches:], sticky_rounds, mask_token_id, sticky_p1_p2_multiplier, sticky_p1_divisor
+        print(f"  Stage {stage_idx}: {stage_samples} samples (ratio={stage_config.target_masked_ratio:.1f}, p1={stage_config.p1_probability:.1f}, p2={stage_config.p2_probability:.1f})")
+        
+        # Generate batches for this stage
+        stage_batches = []
+        samples_generated = 0
+        
+        while samples_generated < stage_samples:
+            batch_size = min(ctx.batch_size, stage_samples - samples_generated)
+            
+            # Sample data indices
+            if len(valid_indices) == 0:
+                ix_np = torch.randint(len(data) - ctx.block_size, (batch_size,)).numpy()
+            else:
+                ix_indices = torch.randint(len(valid_indices), (batch_size,)).numpy()
+                ix_np = valid_indices[ix_indices]
+            
+            # Load data
+            x_np = np.zeros((batch_size, ctx.block_size), dtype=np.int64)
+            for i, start_idx in enumerate(ix_np):
+                x_np[i] = data[start_idx:start_idx+ctx.block_size].astype(np.int64)
+            
+            # Convert to tensor
+            x = torch.from_numpy(x_np)
+            if ctx.device_type == 'cuda':
+                x = x.pin_memory().to(ctx.device, non_blocking=True)
+            else:
+                x = x.to(ctx.device)
+            
+            # Apply stage-specific masking
+            masked_x, mask = apply_target_driven_sticky_masking_gpu(
+                x, 
+                stage_config.target_masked_ratio, 
+                stage_config.p1_probability, 
+                stage_config.p2_probability,
+                ctx.mask_token_id
             )
-            masked_x[-num_sticky_batches:] = sticky_masked_x
-            mask[-num_sticky_batches:] = sticky_mask
+            
+            stage_batches.append((masked_x.clone(), x.clone(), mask.clone()))
+            samples_generated += batch_size
+        
+        validation_batches.extend(stage_batches)
     
-    return masked_x, mask
+    torch.manual_seed(1337 + ctx.seed_offset)  # Reset seed
+    _unmasking_val_set = validation_batches
+    print(f"Validation set created: {len(validation_batches)} batches, {sum(b[0].size(0) for b in validation_batches)} total samples")
 
-def apply_sticky_masking_gpu(x, sticky_rounds, mask_token_id, sticky_p1_p2_multiplier, sticky_p1_divisor=2.0):
-    """GPU-optimized sticky masking with parallel batch processing - logically equivalent to utils.py version"""
+def get_unmasking_validation_batch(ctx: TrainingContext, batch_idx=None):
+    """Get a specific batch from the pre-created validation set"""
+    global _unmasking_val_set
+    
+    if _unmasking_val_set is None:
+        create_unmasking_validation_set(ctx)
+    
+    if batch_idx is None:
+        batch_idx = 0
+    
+    # Handle batch index wrapping
+    batch_idx = batch_idx % len(_unmasking_val_set)
+    return _unmasking_val_set[batch_idx]
+
+
+def apply_target_driven_sticky_masking_gpu(x, target_masked_ratio, p1_probability, p2_probability, mask_token_id):
+    """
+    GPU-optimized target-driven sticky masking for unmasking training.
+    
+    Args:
+        x: Input tokens (batch_size, seq_len)
+        target_masked_ratio: Target fraction of tokens to mask (0.0 to 1.0)
+        p1_probability: Probability of masking when no neighbors are masked
+        p2_probability: Probability of masking when neighbors are masked
+        mask_token_id: Token ID to use for masking
+        
+    Returns:
+        masked_x: Input with masked tokens replaced by mask_token_id
+        mask: Boolean mask indicating which positions were masked
+    """
     batch_size, seq_len = x.shape
     device = x.device
-
-    # Start with no masks (same as original)
+    
+    # Calculate target number of masked tokens per sequence
+    target_masked_count = int(target_masked_ratio * seq_len)
+    
+    if target_masked_count == 0:
+        # No masking needed - return early
+        return x.clone(), torch.zeros_like(x, dtype=torch.bool, device=device)
+    
+    # Start with no masks
     masked_x = x.clone()
-
-    for round_idx in range(sticky_rounds):
-        # Dynamically sample sticky probabilities each round (same logic as original)
-        # Use CPU RNG for consistency between CPU and GPU implementations
-        p1 = torch.rand(1).item() / (sticky_rounds * sticky_p1_divisor)  # Sample from (0, 1/(rounds*divisor))
-        p2 = min(1.0, p1 * sticky_p1_p2_multiplier)  # p2 = p1 * multiplier, capped at 1
-        
-        # Current mask state
+    
+    # Pre-allocate tensors to avoid repeated allocations
+    current_mask = torch.zeros_like(x, dtype=torch.bool, device=device)
+    neighbor_masked = torch.zeros_like(x, dtype=torch.bool, device=device)
+    
+    # Continue masking until we reach the target for each sequence
+    max_rounds = min(1000, target_masked_count * 10)  # Adaptive safety limit
+    target_tensor = torch.tensor(target_masked_count, device=device, dtype=torch.long)
+    
+    for round_idx in range(max_rounds):
+        # Update current mask state
         current_mask = (masked_x == mask_token_id)
         
-        # For each position, check if neighbors are masked (vectorized version of original logic)
-        neighbor_masked = torch.zeros_like(current_mask, dtype=torch.bool, device=device)
+        # Check if we've reached target for all sequences (GPU-only operation)
+        current_counts = current_mask.sum(dim=1)  # (batch_size,)
+        sequences_need_more = current_counts < target_tensor
         
-        # Check left neighbor
-        neighbor_masked[:, 1:] |= current_mask[:, :-1]
-        # Check right neighbor  
-        neighbor_masked[:, :-1] |= current_mask[:, 1:]
+        if not sequences_need_more.any():
+            break  # All sequences reached target
         
-        # Generate random values for masking decision
-        # Use CPU RNG for consistency, then move to target device
-        rand_vals = torch.rand(batch_size, seq_len).to(device)
+        # Find neighbor positions for sticky masking (reuse buffer)
+        neighbor_masked.zero_()
         
-        # Apply p1 where neighbors not masked, p2 where neighbors masked
-        mask_probs = torch.where(neighbor_masked, p2, p1)
-        new_masks = rand_vals < mask_probs
+        # Check left and right neighbors (vectorized)
+        neighbor_masked[:, 1:] |= current_mask[:, :-1]  # Left neighbor
+        neighbor_masked[:, :-1] |= current_mask[:, 1:]  # Right neighbor
         
-        # Don't mask positions that are already masked (same as original)
-        new_masks = new_masks & ~current_mask
+        # Generate random values for masking decision (single GPU call)
+        rand_vals = torch.rand_like(x, dtype=torch.float, device=device)
         
-        # Apply new masks
+        # Apply different probabilities based on neighbor status (vectorized)
+        mask_probs = torch.where(neighbor_masked, p2_probability, p1_probability)
+        new_masks = (rand_vals < mask_probs) & ~current_mask
+        
+        # Only mask sequences that haven't reached target yet (vectorized)
+        sequences_need_more_expanded = sequences_need_more.unsqueeze(1).expand(-1, seq_len)
+        new_masks &= sequences_need_more_expanded
+        
+        # Apply new masks (vectorized)
         masked_x[new_masks] = mask_token_id
     
-    # Final mask state
+    # Final adjustment: remove excess masks with fully vectorized approach
+    final_mask = (masked_x == mask_token_id)
+    final_counts = final_mask.sum(dim=1)  # (batch_size,)
+    
+    # Only process sequences that exceeded target (minimize CPU-GPU sync)
+    exceeded_sequences = torch.where(final_counts > target_tensor)[0]
+    
+    if exceeded_sequences.numel() > 0:
+        # Process exceeded sequences with minimal loops
+        for batch_idx in exceeded_sequences:
+            excess = (final_counts[batch_idx] - target_tensor).item()
+            if excess > 0:
+                # Find masked positions (keep on GPU)
+                seq_mask = final_mask[batch_idx]
+                masked_positions = torch.where(seq_mask)[0]
+                
+                # Randomly select positions to unmask (single GPU operation)
+                perm_indices = torch.randperm(masked_positions.size(0), device=device)[:excess]
+                positions_to_unmask = masked_positions[perm_indices]
+                
+                # Restore original tokens (vectorized)
+                masked_x[batch_idx, positions_to_unmask] = x[batch_idx, positions_to_unmask]
+    
+    # Return final mask state
     final_mask = (masked_x == mask_token_id)
     return masked_x, final_mask
 
-def apply_random_noise_to_unmasked_gpu(x, mask, noise_max_ratio, meta_vocab_size, iter_num, 
-                                       sticky_transition_start, sticky_transition_end):
-    """GPU-optimized random noise application to unmasked positions"""
-    # Calculate progressive noise ratio based on training iteration
-    if iter_num < sticky_transition_start:
-        progressive_noise_ratio = 0.0
-    elif iter_num >= sticky_transition_end:
-        progressive_noise_ratio = noise_max_ratio
-    else:
-        progress = (iter_num - sticky_transition_start) / (sticky_transition_end - sticky_transition_start)
-        progressive_noise_ratio = progress * noise_max_ratio
-    
-    if progressive_noise_ratio <= 0.0:
-        return x
-    
-    vocab_size_to_use = meta_vocab_size if meta_vocab_size is not None else 50257
-    
-    # All operations on GPU, fully vectorized
-    unmasked_positions = ~mask
-    batch_size = x.shape[0]
-    
-    # Generate noise ratios for all batch elements at once
-    noise_ratios = torch.rand(batch_size, device=x.device) * progressive_noise_ratio
-    noise_ratios_expanded = noise_ratios.unsqueeze(1).expand(-1, x.shape[1])
-    
-    # Generate random probabilities for all positions at once
-    random_probs = torch.rand_like(x, dtype=torch.float, device=x.device)
-    
-    # Determine which positions to noise (fully vectorized)
-    should_noise = unmasked_positions & (random_probs < noise_ratios_expanded)
-    
-    # Apply noise in-place if any positions need noising
-    if should_noise.any():
-        random_tokens = torch.randint(0, vocab_size_to_use, x.shape, device=x.device)
-        x = torch.where(should_noise, random_tokens, x)
-    
-    return x
 
-def apply_random_noise_to_unmasked(x, mask, noise_max_ratio, meta_vocab_size, iter_num,
-                                   sticky_transition_start, sticky_transition_end):
-    """Apply random token noise to unmasked positions in input for unmasking training."""
-    # Calculate progressive noise ratio based on training iteration
-    if iter_num < sticky_transition_start:
-        # No noise during early training
-        progressive_noise_ratio = 0.0
-    elif iter_num >= sticky_transition_end:
-        # Full noise ratio after transition
-        progressive_noise_ratio = noise_max_ratio
-    else:
-        # Gradual increase from 0 to noise_max_ratio
-        progress = (iter_num - sticky_transition_start) / (sticky_transition_end - sticky_transition_start)
-        progressive_noise_ratio = progress * noise_max_ratio
-    
-    if progressive_noise_ratio <= 0.0:
-        return x
-    
-    noisy_x = x.clone()
-    vocab_size_to_use = meta_vocab_size if meta_vocab_size is not None else 50257
-    
-    # Get unmasked positions for all batch elements
-    unmasked_positions = ~mask  # Shape: (batch_size, seq_len)
-    
-    # Sample noise ratios for each batch element using progressive ratio
-    batch_size = x.shape[0]
-    noise_ratios = torch.rand(batch_size, device=x.device) * progressive_noise_ratio  # Shape: (batch_size,)
-    
-    # For each position, determine if it should be noised
-    # First, generate random values for all unmasked positions
-    random_probs = torch.rand_like(x, dtype=torch.float, device=x.device)  # Shape: (batch_size, seq_len)
-    
-    # Create noise mask: position gets noised if it's unmasked AND random_prob < noise_ratio
-    noise_ratios_expanded = noise_ratios.unsqueeze(1).expand(-1, x.shape[1])  # Shape: (batch_size, seq_len)
-    should_noise = unmasked_positions & (random_probs < noise_ratios_expanded)
-    
-    # Generate random tokens for all positions that should be noised
-    if should_noise.any():
-        random_tokens = torch.randint(0, vocab_size_to_use, x.shape, device=x.device)
-        noisy_x = torch.where(should_noise, random_tokens, noisy_x)
-    
-    return noisy_x
+
+
 
 def load_synthetic_model(checkpoint_path, device, extended_vocab_size):
     """Load the synthetic model for generating fake data in remasking training"""
@@ -596,8 +438,12 @@ def apply_synthetic_corruption(x, sticky_rounds, sticky_p1_p2_multiplier, mask_t
         print("Warning: Synthetic model not loaded, falling back to sticky corruption")
         return apply_sticky_corruption(x, sticky_rounds, sticky_p1_p2_multiplier, mask_token_id, meta_vocab_size, sticky_p1_divisor)
 
-    # Use sticky masking to get corruption patterns
-    _, mask = apply_sticky_masking(x, sticky_rounds, mask_token_id, sticky_p1_p2_multiplier, sticky_p1_divisor)
+    # Use target-driven sticky masking to get corruption patterns
+    # Convert old sticky parameters to target-driven approach
+    target_ratio = min(0.7, sticky_rounds * 0.15)  # Rough conversion from rounds to ratio
+    p1_prob = min(0.8, sticky_p1_p2_multiplier / sticky_p1_divisor)
+    p2_prob = min(0.3, sticky_p1_p2_multiplier * 0.1)
+    _, mask = apply_target_driven_sticky_masking_gpu(x, target_ratio, p1_prob, p2_prob, mask_token_id)
     
     # Create input for synthetic model: replace masked positions with mask tokens
     synthetic_input = x.clone()
@@ -650,17 +496,12 @@ def get_batch(split, ctx: TrainingContext, validation_sample_idx=None):
         return get_batch_unmasking(split, ctx, validation_sample_idx)
 
 def get_batch_unmasking(split, ctx: TrainingContext, validation_sample_idx=None):
-    """Ultra-fast unmasking implementation with aggressive caching + prefetching"""
-    global _val_batch_cache, _progressive_val_cache, _data_cache, _valid_indices_cache
+    """Stage-based unmasking with target-driven sticky masking"""
+    global _val_batch_cache, _progressive_val_cache, _data_cache, _valid_indices_cache, _unmasking_val_set
 
-    # For validation with progressive sampling
-    if split == 'val' and validation_sample_idx is not None:
-        cache_key = f"unmasking_{validation_sample_idx}"
-        if cache_key in _progressive_val_cache:
-            return _progressive_val_cache[cache_key]
-    # For validation, use legacy cached batch for backward compatibility
-    elif split == 'val' and _val_batch_cache is not None:
-        return _val_batch_cache
+    # For validation, use the pre-created validation set distributed across all stages
+    if split == 'val':
+        return get_unmasking_validation_batch(ctx, validation_sample_idx)
 
     # Cache memory-mapped data and valid indices - MAJOR SPEEDUP
     if _data_cache[split] is None:
@@ -721,49 +562,36 @@ def get_batch_unmasking(split, ctx: TrainingContext, validation_sample_idx=None)
     else:
         x = x.to(ctx.device)
 
-    # For progressive validation, calculate parameters for the specific validation iteration
-    if split == 'val' and validation_sample_idx is not None:
-        # Calculate which training iteration this validation sample represents
-        progressive_iterations = get_progressive_validation_iterations(ctx.eval_iters, ctx.max_iters)
-        validation_iter = progressive_iterations[validation_sample_idx % len(progressive_iterations)]
+    # For validation: create samples from all stages for comprehensive evaluation
+    if split == 'val':
+        torch.manual_seed(42 + (validation_sample_idx or 0))
         
-        # Calculate guaranteed_unmasked for this specific iteration
-        current_guaranteed_unmasked = ctx.get_guaranteed_unmasked(validation_iter)
-        
-        # Use deterministic seed for validation consistency
-        torch.manual_seed(42 + validation_sample_idx)
-        masked_x, mask = apply_gpu_masking_validation_progressive(x, ctx.mask_token_id, ctx.sticky_rounds, 
-                                                               ctx.sticky_p1_p2_multiplier, current_guaranteed_unmasked,
-                                                               ctx.sticky_transition_start, ctx.sticky_transition_end, 
-                                                               ctx.sticky_p1_divisor, validation_iter)
-        torch.manual_seed(1337 + ctx.seed_offset)
-        
-        # Apply progressive noise for this validation iteration
-        masked_x = apply_random_noise_to_unmasked_gpu(masked_x, mask, ctx.noise_max_ratio, ctx.meta_vocab_size, validation_iter,
-                                                      ctx.sticky_transition_start, ctx.sticky_transition_end)
-    else:
-        # Calculate dynamic guaranteed_unmasked using centralized logic
-        current_guaranteed_unmasked = ctx.get_guaranteed_unmasked()
-        
-        # GPU-accelerated masking operations (already on GPU)
-        if split == 'val':
-            torch.manual_seed(42)
-            # Legacy validation masking - use training logic with current iter_num for consistency
-            masked_x, mask = apply_gpu_masking_training(x, ctx.iter_num, ctx.mask_token_id, ctx.sticky_rounds, ctx.sticky_p1_p2_multiplier,
-                                                      current_guaranteed_unmasked, ctx.sticky_transition_start, ctx.sticky_transition_end, ctx.sticky_p1_divisor)
-            torch.manual_seed(1337 + ctx.seed_offset)
+        # Distribute validation samples across all stages
+        if ctx.unmasking_stages and len(ctx.unmasking_stages) > 1:
+            stage_idx = (validation_sample_idx or 0) % len(ctx.unmasking_stages)
+            stage_config = ctx.unmasking_stages[stage_idx]
         else:
-            masked_x, mask = apply_gpu_masking_training(x, ctx.iter_num, ctx.mask_token_id, ctx.sticky_rounds, ctx.sticky_p1_p2_multiplier,
-                                                      current_guaranteed_unmasked, ctx.sticky_transition_start, ctx.sticky_transition_end, ctx.sticky_p1_divisor)
-
-        # Apply random noise to unmasked positions (already on GPU)
-        if split == 'val' and validation_sample_idx is None:
-            # Legacy path - use current iteration for noise
-            masked_x = apply_random_noise_to_unmasked_gpu(masked_x, mask, ctx.noise_max_ratio, ctx.meta_vocab_size, ctx.iter_num,
-                                                          ctx.sticky_transition_start, ctx.sticky_transition_end)
-        elif split == 'train':
-            masked_x = apply_random_noise_to_unmasked_gpu(masked_x, mask, ctx.noise_max_ratio, ctx.meta_vocab_size, ctx.iter_num,
-                                                          ctx.sticky_transition_start, ctx.sticky_transition_end)
+            # Fallback to current stage if no stages defined
+            stage_config = ctx.get_current_stage_config()
+            if stage_config is None:
+                raise ValueError(f"No stage configuration available for {ctx.training_type} training")
+    else:
+        # For training: use current stage configuration
+        stage_config = ctx.get_current_stage_config()
+        if stage_config is None:
+            raise ValueError(f"No stage configuration available for {ctx.training_type} training")
+    
+    # Apply target-driven sticky masking using selected stage parameters
+    masked_x, mask = apply_target_driven_sticky_masking_gpu(
+        x, 
+        stage_config.target_masked_ratio, 
+        stage_config.p1_probability, 
+        stage_config.p2_probability,
+        ctx.mask_token_id
+    )
+    
+    if split == 'val':
+        torch.manual_seed(1337 + ctx.seed_offset)
 
     # Target is original x
     y = x.clone()
@@ -1019,6 +847,17 @@ def estimate_loss(model, torch_ctx, timer, training_ctx: TrainingContext):
     """Estimate loss over either split using many batches"""
     out = {}
     model.eval()
+    
+    # Add current stage information for unmasking training
+    if training_ctx.training_type == 'unmasking':
+        stage_config = training_ctx.get_current_stage_config()
+        if stage_config:
+            out['current_stage'] = training_ctx.current_stage
+            out['target_masked_ratio'] = stage_config.target_masked_ratio
+            out['p1_probability'] = stage_config.p1_probability
+            out['p2_probability'] = stage_config.p2_probability
+            out['val_loss_stale_count'] = training_ctx.val_loss_stale_count
+    
     for split in ['train', 'val']:
         losses = torch.zeros(training_ctx.eval_iters)
         # Track masked token ratios for all splits
@@ -1027,6 +866,8 @@ def estimate_loss(model, torch_ctx, timer, training_ctx: TrainingContext):
         if split == 'val':
             # For validation, also track model vs random performance
             model_probs = []
+            # Track most likely predictions for accuracy calculation
+            most_likely_correct = []
             # For binary classification and remasking, track corruption statistics
             if training_ctx.training_type in ['remasking_binary', 'remasking']:
                 total_positions = 0
@@ -1034,25 +875,15 @@ def estimate_loss(model, torch_ctx, timer, training_ctx: TrainingContext):
             else:
                 random_prob = 1.0 / training_ctx.extended_vocab_size  # Random chance probability
 
-        # For validation, create/use the progressive validation set
-        if split == 'val':
-            # Create the progressive validation set once (cached)
-            full_val_X, full_val_Y, full_val_masks = create_progressive_validation_set(training_ctx)
-            print(f"Using cached progressive validation set ({full_val_X.shape[0]} total samples)")
+        # For unmasking, use pre-created validation set with samples from all stages
+        if split == 'val' and training_ctx.training_type == 'unmasking':
+            print(f"Using validation set with samples from all {len(training_ctx.unmasking_stages)} stages")
         
         for k in range(training_ctx.eval_iters):
             with timer.time_function('validation_data_generation'):
-                if split == 'val':
-                    # Extract the k-th batch from pre-generated validation set
-                    start_idx = k * training_ctx.batch_size
-                    end_idx = start_idx + training_ctx.batch_size
-                    X = full_val_X[start_idx:end_idx]
-                    Y = full_val_Y[start_idx:end_idx]
-                    mask = full_val_masks[start_idx:end_idx]
-                    
-                    if k == 0:  # Show batch composition for first batch only
-                        progressive_iterations = get_progressive_validation_iterations(training_ctx.eval_iters, training_ctx.max_iters)
-                        print(f"  Batch {k+1}/{training_ctx.eval_iters}: samples {start_idx}-{end_idx-1} (iterations {progressive_iterations[0]} to {progressive_iterations[-1]})")
+                if split == 'val' and training_ctx.training_type == 'unmasking':
+                    # Use pre-created validation set with batch index
+                    X, Y, mask = get_batch(split, training_ctx, validation_sample_idx=k)
                 else:
                     X, Y, mask = get_batch(split, training_ctx)
 
@@ -1088,6 +919,10 @@ def estimate_loss(model, torch_ctx, timer, training_ctx: TrainingContext):
                     probs = torch.nn.functional.softmax(logits, dim=-1)  # (batch_size, seq_len, vocab_size)
                     probs_flat = probs.view(-1, probs.size(-1))  # (batch_size * seq_len, vocab_size)
                     targets_flat = Y.view(-1)  # (batch_size * seq_len,) - needed for validation stats
+                    
+                    # Calculate most likely predictions (argmax)
+                    predictions = torch.argmax(probs, dim=-1)  # (batch_size, seq_len)
+                    predictions_flat = predictions.view(-1)  # (batch_size * seq_len,)
 
                     if training_ctx.training_type == 'remasking_binary':
                         # For binary classification, compute accuracy on all positions
@@ -1098,6 +933,10 @@ def estimate_loss(model, torch_ctx, timer, training_ctx: TrainingContext):
                         # Get probabilities for correct binary classification
                         correct_token_probs = probs_flat[range(len(targets_flat)), targets_flat]
                         model_probs.extend(correct_token_probs.cpu().tolist())
+                        
+                        # Track most likely prediction accuracy for all positions
+                        correct_predictions = (predictions_flat == targets_flat).cpu().tolist()
+                        most_likely_correct.extend(correct_predictions)
                     elif training_ctx.training_type == 'remasking':
                         # For remasking, compute accuracy on ALL positions (corrupted + uncorrupted)
                         # Track corruption statistics for proper baseline
@@ -1108,6 +947,10 @@ def estimate_loss(model, torch_ctx, timer, training_ctx: TrainingContext):
                         # Get probabilities for correct predictions at ALL positions
                         correct_token_probs = probs_flat[range(len(targets_flat)), targets_flat]
                         model_probs.extend(correct_token_probs.cpu().tolist())
+                        
+                        # Track most likely prediction accuracy for all positions
+                        correct_predictions = (predictions_flat == targets_flat).cpu().tolist()
+                        most_likely_correct.extend(correct_predictions)
                     else:
                         # For unmasking, compute on masked positions only
                         mask_flat = mask.view(-1)  # (batch_size * seq_len,)
@@ -1115,6 +958,10 @@ def estimate_loss(model, torch_ctx, timer, training_ctx: TrainingContext):
                         if masked_positions.sum() > 0:  # Only if there are masked tokens
                             correct_token_probs = probs_flat[masked_positions, targets_flat[masked_positions]]
                             model_probs.extend(correct_token_probs.cpu().tolist())
+                            
+                            # Track most likely prediction accuracy for masked positions only
+                            correct_predictions = (predictions_flat[masked_positions] == targets_flat[masked_positions]).cpu().tolist()
+                            most_likely_correct.extend(correct_predictions)
 
             losses[k] = loss.item()
 
@@ -1122,7 +969,7 @@ def estimate_loss(model, torch_ctx, timer, training_ctx: TrainingContext):
         
         if split == 'val':
             total_samples = training_ctx.eval_iters * training_ctx.batch_size
-            print(f"  Validation complete: {training_ctx.eval_iters} batches processed ({total_samples} cached samples), avg loss = {out[split]:.4f}")
+            print(f"  Validation complete: {training_ctx.eval_iters} batches processed ({total_samples} samples), avg loss = {out[split]:.4f}")
 
         # Add masked token ratio statistics
         if masked_token_ratios:
@@ -1133,6 +980,11 @@ def estimate_loss(model, torch_ctx, timer, training_ctx: TrainingContext):
 
         # Add model vs random comparison for validation
         if split == 'val' and model_probs:
+            # Calculate most likely prediction accuracy percentage
+            if most_likely_correct:
+                most_likely_accuracy = (sum(most_likely_correct) / len(most_likely_correct)) * 100.0
+                out[f'{split}_most_likely_accuracy'] = most_likely_accuracy
+            
             # VALIDATION METRICS STABILITY CHECK
             finite_probs = [p for p in model_probs if math.isfinite(p)]
             if len(finite_probs) == 0:
@@ -1184,6 +1036,46 @@ def estimate_loss(model, torch_ctx, timer, training_ctx: TrainingContext):
 
     model.train()
     return out
+
+def update_stage_progress(training_ctx: TrainingContext, val_loss: float):
+    """
+    Update stage progress for unmasking training based on validation loss.
+    Returns True if stage was advanced, False otherwise.
+    """
+    if training_ctx.training_type != 'unmasking':
+        return False
+    
+    stage_config = training_ctx.get_current_stage_config()
+    if stage_config is None:
+        return False
+    
+    # Check if validation loss improved
+    if val_loss < training_ctx.best_val_loss_this_stage:
+        training_ctx.best_val_loss_this_stage = val_loss
+        training_ctx.val_loss_stale_count = 0
+        print(f"  Stage {training_ctx.current_stage}: New best val loss {val_loss:.4f}, reset stale count to 0")
+        return False
+    else:
+        training_ctx.val_loss_stale_count += 1
+        print(f"  Stage {training_ctx.current_stage}: Val loss stale count {training_ctx.val_loss_stale_count}/{stage_config.val_loss_stale_count}")
+        
+        # Check if we should advance to next stage
+        if training_ctx.val_loss_stale_count >= stage_config.val_loss_stale_count:
+            advanced = training_ctx.advance_stage()
+            if advanced:
+                new_stage_config = training_ctx.get_current_stage_config()
+                print(f"\n*** ADVANCING TO STAGE {training_ctx.current_stage} ***")
+                print(f"  Target masked ratio: {new_stage_config.target_masked_ratio}")
+                print(f"  P1 probability: {new_stage_config.p1_probability}")
+                print(f"  P2 probability: {new_stage_config.p2_probability}")
+                print(f"  Val loss stale count limit: {new_stage_config.val_loss_stale_count}")
+                print("*** STAGE ADVANCEMENT COMPLETE ***\n")
+                return True
+            else:
+                print(f"  Stage {training_ctx.current_stage}: Reached final stage, continuing training")
+                return False
+        
+        return False
 
 def get_lr(it, ctx: TrainingContext):
     """Learning rate decay scheduler (cosine with warmup)"""

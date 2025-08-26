@@ -37,61 +37,6 @@ class Timer:
         return sum(self.times[name][-last_n:]) / min(len(self.times[name]), last_n)
 
 
-def apply_sticky_masking(tokens, rounds, mask_token_id, sticky_p1_p2_multiplier, sticky_p1_divisor=2.0):
-    """
-    Apply sticky masking algorithm
-
-    Args:
-        tokens: Original token sequence (batch_size, seq_len)
-        rounds: Number of masking rounds
-        mask_token_id: ID of mask token
-        sticky_p1_p2_multiplier: Multiplier for p2 = p1 * multiplier
-        sticky_p1_divisor: Divisor for p1 calculation: p1 = rand() / (rounds * divisor)
-
-    Returns:
-        masked_tokens: Tokens with sticky masking applied
-        mask: Boolean mask showing which positions were masked
-    """
-    batch_size, seq_len = tokens.shape
-    device = tokens.device
-
-    # Start with no masks
-    masked_tokens = tokens.clone()
-
-    for round_idx in range(rounds):
-        # Dynamically sample sticky probabilities each round
-        # Use CPU RNG for consistency between CPU and GPU implementations
-        p1 = torch.rand(1).item() / (rounds * sticky_p1_divisor)  # Sample from (0, 1/(rounds*divisor))
-        p2 = min(1.0, p1 * sticky_p1_p2_multiplier)  # p2 = p1 * multiplier, capped at 1
-
-        # Current mask state
-        current_mask = (masked_tokens == mask_token_id)
-
-        # For each position, check if neighbors are masked
-        neighbor_masked = torch.zeros_like(current_mask, dtype=torch.bool, device=device)
-
-        # Check left neighbor
-        neighbor_masked[:, 1:] |= current_mask[:, :-1]
-        # Check right neighbor
-        neighbor_masked[:, :-1] |= current_mask[:, 1:]
-
-        # Generate random values for masking decision
-        # Use CPU RNG for consistency, then move to target device
-        rand_vals = torch.rand(batch_size, seq_len).to(device)
-
-        # Apply p1 where neighbors not masked, p2 where neighbors masked
-        mask_probs = torch.where(neighbor_masked, p2, p1)
-        new_masks = rand_vals < mask_probs
-
-        # Don't mask positions that are already masked
-        new_masks = new_masks & ~current_mask
-
-        # Apply new masks
-        masked_tokens[new_masks] = mask_token_id
-
-    # Final mask state
-    final_mask = (masked_tokens == mask_token_id)
-    return masked_tokens, final_mask
 
 
 def analyze_clustering(mask):

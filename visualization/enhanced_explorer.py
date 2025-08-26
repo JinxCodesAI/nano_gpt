@@ -31,10 +31,8 @@ from PyQt6.QtGui import QFont, QPalette, QColor, QTextCharFormat, QTextCursor
 
 # Import training utilities
 from train_utils import (
-    TrainingContext, apply_random_corruption_gpu, apply_sticky_corruption_gpu,
-    apply_fragment_corruption_gpu, apply_synthetic_corruption,
-    apply_gpu_masking_validation, apply_gpu_masking_training,
-    find_double_newline_indices, load_synthetic_model
+    TrainingContext, UnmaskingStage, apply_target_driven_sticky_masking_gpu,
+    find_double_newline_indices
 )
 from model import GPT, GPTConfig
 
@@ -109,13 +107,15 @@ class BatchProcessor(QThread):
         """Apply corruption based on settings"""
         strategy = self.corruption_settings['strategy']
         ratio = self.corruption_settings['ratio']
+        vocab_size = self.corruption_settings['vocab_size']
         
-        if strategy == 'random':
-            # For visualization, use simple parameters - no transition needed
-            return apply_random_corruption_gpu(x, 0, 0.0, 0.0, 0, 1, self.corruption_settings['vocab_size'])
-        else:
-            # Default to random for batch processing
-            return apply_random_corruption_gpu(x, 0, 0.0, 0.0, 0, 1, self.corruption_settings['vocab_size'])
+        # Use target-driven sticky masking for corruption
+        # Simple parameters for visualization
+        mask_token_id = vocab_size  # Use vocab_size as mask token
+        masked_x, mask = apply_target_driven_sticky_masking_gpu(
+            x, ratio, 0.3, 0.0, mask_token_id
+        )
+        return masked_x, mask
 
 
 class ComparisonTable(QWidget):
@@ -299,6 +299,13 @@ class EnhancedModelExplorer(QMainWindow):
             
     def setup_training_context(self):
         """Setup training context with default values"""
+        # Create default unmasking stages
+        default_stages = [
+            UnmaskingStage(target_masked_ratio=0.2, p1_probability=0.3, p2_probability=0.0, val_loss_stale_count=5),
+            UnmaskingStage(target_masked_ratio=0.4, p1_probability=0.3, p2_probability=0.0, val_loss_stale_count=5),
+            UnmaskingStage(target_masked_ratio=0.6, p1_probability=0.1, p2_probability=0.8, val_loss_stale_count=5),
+        ]
+        
         self.training_ctx = TrainingContext(
             training_type='unmasking',
             batch_size=1,
@@ -313,15 +320,16 @@ class EnhancedModelExplorer(QMainWindow):
             remask_good_id=self.vocab_size + 2,
             remask_wrong_id=self.vocab_size + 3,
             extended_vocab_size=self.vocab_size + 4,
-            iter_num=5000,
-            guaranteed_unmasked=0.0,
-            noise_max_ratio=0.05,
-            sticky_rounds=10,
-            sticky_p1_p2_multiplier=10.0,
-            sticky_transition_start=500,
-            sticky_transition_end=12000,
+            iter_num=0,
+            current_stage=0,
+            unmasking_stages=default_stages,
             remasking_corruption_strategy='mixed',
-            remasking_strategy_weights=[0.25, 0.4, 0.25, 0.1]
+            remasking_strategy_weights=[0.25, 0.4, 0.25, 0.1],
+            eval_iters=20,
+            warmup_iters=2000,
+            lr_decay_iters=8000,
+            learning_rate=1e-4,
+            min_lr=1e-5
         )
         
     def init_ui(self):

@@ -17,10 +17,10 @@ from torch.nn.parallel import DistributedDataParallel as DDP
 from torch.distributed import init_process_group, destroy_process_group
 
 from model import GPTConfig, GPT
-from utils import Timer, log_masking_stats, apply_sticky_masking
+from utils import Timer, log_masking_stats
 from train_utils import (
     get_batch, estimate_loss, get_lr, load_synthetic_model, 
-    start_prefetch, stop_prefetch, TrainingContext
+    start_prefetch, stop_prefetch, TrainingContext, UnmaskingStage, update_stage_progress
 )
 
 torch._dynamo.config.suppress_errors = True
@@ -32,12 +32,12 @@ timer = Timer()
 # default config values designed to train a gpt2 (124M) on OpenWebText
 # I/O
 out_dir = 'out'
-eval_interval = 100
+eval_interval = 500
 log_interval = 20
 eval_iters = 20
 eval_only = False # if True, script exits right after the first eval
-always_save_checkpoint = False # if True, always save a checkpoint after each eval
-init_from = 'scratch' # 'scratch' or 'resume' or 'gpt2*'
+always_save_checkpoint = True # if True, always save a checkpoint after each eval
+init_from = 'resume' # 'scratch' or 'resume' or 'gpt2*'
 # wandb logging
 wandb_log = False # disabled by default
 wandb_project = 'diffusion'
@@ -48,21 +48,25 @@ gradient_accumulation_steps = 1 # used to simulate larger batch sizes
 batch_size = 16 # if gradient_accumulation_steps > 1, this is the micro-batch size
 block_size = 1024
 # diffusion training config
-training_type = 'remasking'  # 'unmasking', 'remasking', or 'remasking_binary' - type of training
+training_type = 'unmasking'  # 'unmasking', 'remasking', or 'remasking_binary' - type of training
+
+# For unmasking: stage-based training with direct probability control
+unmasking_stages = [
+    {'target_masked_ratio': 0.2, 'p1_probability': 0.3, 'p2_probability': 0.0, 'val_loss_stale_count': 2},
+    {'target_masked_ratio': 0.4, 'p1_probability': 0.3, 'p2_probability': 0.0, 'val_loss_stale_count': 2},
+    {'target_masked_ratio': 0.4, 'p1_probability': 0.1, 'p2_probability': 0.5, 'val_loss_stale_count': 2},
+    {'target_masked_ratio': 0.6, 'p1_probability': 0.3, 'p2_probability': 0.1, 'val_loss_stale_count': 4},
+    {'target_masked_ratio': 0.6, 'p1_probability': 0.1, 'p2_probability': 0.8, 'val_loss_stale_count': 4},
+    {'target_masked_ratio': 0.7, 'p1_probability': 0.2, 'p2_probability': 0.4, 'val_loss_stale_count': 4},
+    {'target_masked_ratio': 0.8, 'p1_probability': 0.2, 'p2_probability': 0.4, 'val_loss_stale_count': 6},
+    {'target_masked_ratio': 0.8, 'p1_probability': 0.1, 'p2_probability': 0.9, 'val_loss_stale_count': 6},
+    {'target_masked_ratio': 0.9, 'p1_probability': 0.1, 'p2_probability': 0.9, 'val_loss_stale_count': 6},
+]
+
+# For remasking/remasking_binary: corruption strategy configuration
 remasking_corruption_strategy = 'mixed'  # 'random', 'sticky', 'fragment', 'mixed', 'synthetic' - corruption strategy for remasking
 remasking_strategy_weights = [0.25, 0.4, 0.25, 0.1]  # weights for [random, sticky, fragment, synthetic] when using 'mixed'
 synthetic_checkpoint_name = '32.08_0.0.pt'  # Path to unmasking model checkpoint for synthetic data generation (only for 'synthetic' strategy)
-guaranteed_unmasked_max = 0.8   # Maximum guaranteed fraction of tokens to keep unmasked (at start of training)
-guaranteed_unmasked_min = 0.2   # Minimum guaranteed fraction of tokens to keep unmasked (at end of training)
-random_mask_warmup = 13000       # Iterations over which guaranteed_unmasked transitions from max to min (then stays at min)
-noise_max_ratio = 0.2           # Maximum ratio of unmasked tokens to corrupt with random noise (0.0 to 1.0) - only for unmasking training
-
-# sticky masking configuration - gradual transition from independent to sticky
-sticky_transition_start = 8000   # When to start introducing sticky masking
-sticky_transition_end = 20000     # When to reach full sticky masking
-sticky_rounds = 30                # Number of sticky masking rounds
-sticky_p1_p2_multiplier = 20.0    # Multiplier for sticky_p2 = sticky_p1 * multiplier
-sticky_p1_divisor = 3.0           # Divisor for p1 calculation: p1 = rand() / (sticky_rounds * divisor)
 # model
 n_layer = 6
 n_head = 6
@@ -169,6 +173,18 @@ else:
     extended_vocab_size = 50308
 
 # Create training context with all parameters
+# Convert unmasking_stages dict to UnmaskingStage objects
+unmasking_stage_objects = None
+if training_type == 'unmasking':
+    unmasking_stage_objects = [
+        UnmaskingStage(
+            target_masked_ratio=stage['target_masked_ratio'],
+            p1_probability=stage['p1_probability'],
+            p2_probability=stage['p2_probability'],
+            val_loss_stale_count=stage['val_loss_stale_count']
+        ) for stage in unmasking_stages
+    ]
+
 training_ctx = TrainingContext(
     training_type=training_type,
     batch_size=batch_size,
@@ -185,15 +201,7 @@ training_ctx = TrainingContext(
     remask_wrong_id=remask_wrong_id,
     extended_vocab_size=extended_vocab_size,
     iter_num=iter_num,
-    guaranteed_unmasked_max=guaranteed_unmasked_max,
-    guaranteed_unmasked_min=guaranteed_unmasked_min,
-    random_mask_warmup=random_mask_warmup,
-    noise_max_ratio=noise_max_ratio,
-    sticky_rounds=sticky_rounds,
-    sticky_p1_p2_multiplier=sticky_p1_p2_multiplier,
-    sticky_p1_divisor=sticky_p1_divisor,
-    sticky_transition_start=sticky_transition_start,
-    sticky_transition_end=sticky_transition_end,
+    unmasking_stages=unmasking_stage_objects,
     remasking_corruption_strategy=remasking_corruption_strategy,
     remasking_strategy_weights=remasking_strategy_weights,
     eval_iters=eval_iters,
@@ -308,6 +316,19 @@ t0 = time.time()
 local_iter_num = 0 # number of iterations in the lifetime of this process
 raw_model = model.module if ddp else model # unwrap DDP container if needed
 running_mfu = -1.0
+
+# Show initial stage configuration for unmasking training
+if training_ctx.training_type == 'unmasking':
+    stage_config = training_ctx.get_current_stage_config()
+    print(f"\n*** STAGE-BASED UNMASKING TRAINING INITIALIZED ***")
+    print(f"Starting at Stage {training_ctx.current_stage}:")
+    print(f"  Target masked ratio: {stage_config.target_masked_ratio}")
+    print(f"  P1 probability: {stage_config.p1_probability}")
+    print(f"  P2 probability: {stage_config.p2_probability}")
+    print(f"  Val loss stale count limit: {stage_config.val_loss_stale_count}")
+    print(f"Total stages configured: {len(training_ctx.unmasking_stages)}")
+    print("*** STAGE INITIALIZATION COMPLETE ***\n")
+
 print("Starting training loop...")
 while True:
 
@@ -338,7 +359,13 @@ while True:
         # Print basic losses
         print(f"--- Validation complete ---")
         print(f"step {iter_num}: train loss {losses['train']:.4f}, val loss {losses['val']:.4f}, lr {lr:.6f}")
-        print(f"Progressive validation used {training_ctx.eval_iters * training_ctx.batch_size} samples representing full training difficulty range")
+        
+        # Print stage information for unmasking training
+        if training_ctx.training_type == 'unmasking':
+            if 'current_stage' in losses:
+                print(f"Stage {losses['current_stage']}: masked_ratio={losses.get('target_masked_ratio', 0.0):.1f}, p1={losses.get('p1_probability', 0.0):.1f}, p2={losses.get('p2_probability', 0.0):.1f}, stale_count={losses.get('val_loss_stale_count', 0)}")
+        else:
+            print(f"Progressive validation used {training_ctx.eval_iters * training_ctx.batch_size} samples representing full training difficulty range")
 
         # Print model vs random statistics if available
         if 'val_model_vs_random' in losses:
@@ -346,10 +373,24 @@ while True:
                 print(f"  val model vs random: {losses['val_model_vs_random']:.2f}x better")
                 print(f"  val accuracy: {losses['val_avg_correct_prob']:.4f} (random baseline: {losses.get('val_random_baseline', 0.0):.4f})")
                 print(f"  val corruption ratio: {losses.get('val_corruption_ratio', 0.0):.4f}")
+                if 'val_most_likely_accuracy' in losses:
+                    print(f"  Most likely guess correct P %: {losses['val_most_likely_accuracy']:.1f}%")
             else:
                 print(f"  val model vs random: {losses['val_model_vs_random']:.2f}x better")
                 print(f"  val avg correct prob: {losses['val_avg_correct_prob']:.4f} (random: {1.0/training_ctx.extended_vocab_size:.4f})")
-        print(f"Progressive validation: {training_ctx.eval_iters * training_ctx.batch_size} samples (difficulty: 0 → {training_ctx.max_iters} iters)")
+                if 'val_most_likely_accuracy' in losses:
+                    print(f"  Most likely guess correct P %: {losses['val_most_likely_accuracy']:.1f}%")
+        
+        # Update stage progress for unmasking training
+        if training_ctx.training_type == 'unmasking':
+            stage_advanced = update_stage_progress(training_ctx, losses['val'])
+            if stage_advanced:
+                # Clear validation cache after stage change to use new stage parameters
+                from train_utils import clear_validation_cache
+                clear_validation_cache()
+        else:
+            print(f"Progressive validation: {training_ctx.eval_iters * training_ctx.batch_size} samples (difficulty: 0 → {training_ctx.max_iters} iters)")
+        
         print()  # Add blank line for readability
 
         if wandb_log:
@@ -575,8 +616,16 @@ while True:
             val_loss_time = timer.get_average('validation_loss_computation') * 1000
             print(f"  validation: {val_time:.2f}ms (data: {val_data_time:.2f}ms, forward: {val_forward_time:.2f}ms, loss: {val_loss_time:.2f}ms)")
 
-        # Add masking statistics logging with transition tracking
-        log_masking_stats(mask, iter_num, log_interval, sticky_transition_start, sticky_transition_end)
+        # Add masking statistics logging
+        if training_ctx.training_type == 'unmasking':
+            # For stage-based unmasking, show current stage info
+            stage_config = training_ctx.get_current_stage_config()
+            if stage_config and iter_num % (log_interval * 10) == 0:
+                mask_ratio = mask.float().mean().item()
+                print(f"Masking: stage={training_ctx.current_stage}, actual_ratio={mask_ratio:.3f}, target={stage_config.target_masked_ratio:.1f}, p1={stage_config.p1_probability:.1f}, p2={stage_config.p2_probability:.1f}")
+        else:
+            # For remasking types, use simple masking stats
+            log_masking_stats(mask, iter_num, log_interval)
         
         if wandb_log:
             log_dict = {
