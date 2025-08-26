@@ -778,12 +778,17 @@ def get_batch_unmasking(split, ctx: TrainingContext, validation_sample_idx=None)
 
     return masked_x, y, mask
 
-def get_batch_remasking(split, ctx: TrainingContext):
+def get_batch_remasking(split, ctx: TrainingContext, validation_sample_idx=None):
     """Ultra-fast remasking implementation with aggressive caching + prefetching"""
-    global _val_batch_cache, _data_cache, _valid_indices_cache
+    global _val_batch_cache, _progressive_val_cache, _data_cache, _valid_indices_cache
 
-    # For validation, use cached batch to ensure consistency
-    if split == 'val' and _val_batch_cache is not None:
+    # For validation with progressive sampling
+    if split == 'val' and validation_sample_idx is not None:
+        cache_key = f"remasking_{validation_sample_idx}"
+        if cache_key in _progressive_val_cache:
+            return _progressive_val_cache[cache_key]
+    # For validation, use legacy cached batch for backward compatibility
+    elif split == 'val' and _val_batch_cache is not None:
         return _val_batch_cache
 
     # Cache memory-mapped data and valid indices - MAJOR SPEEDUP (same as unmasking)

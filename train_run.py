@@ -48,10 +48,10 @@ gradient_accumulation_steps = 1 # used to simulate larger batch sizes
 batch_size = 16 # if gradient_accumulation_steps > 1, this is the micro-batch size
 block_size = 1024
 # diffusion training config
-training_type = 'remasking_binary'  # 'unmasking', 'remasking', or 'remasking_binary' - type of training
+training_type = 'remasking'  # 'unmasking', 'remasking', or 'remasking_binary' - type of training
 remasking_corruption_strategy = 'mixed'  # 'random', 'sticky', 'fragment', 'mixed', 'synthetic' - corruption strategy for remasking
 remasking_strategy_weights = [0.25, 0.4, 0.25, 0.1]  # weights for [random, sticky, fragment, synthetic] when using 'mixed'
-synthetic_checkpoint_name = '42.6_unmask_noise_0.2.pt'  # Path to unmasking model checkpoint for synthetic data generation (only for 'synthetic' strategy)
+synthetic_checkpoint_name = '32.08_0.0.pt'  # Path to unmasking model checkpoint for synthetic data generation (only for 'synthetic' strategy)
 guaranteed_unmasked_max = 0.8   # Maximum guaranteed fraction of tokens to keep unmasked (at start of training)
 guaranteed_unmasked_min = 0.2   # Minimum guaranteed fraction of tokens to keep unmasked (at end of training)
 random_mask_warmup = 13000       # Iterations over which guaranteed_unmasked transitions from max to min (then stays at min)
