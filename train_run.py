@@ -214,12 +214,15 @@ training_ctx = TrainingContext(
 )
 
 # Apply restored training context state if resuming from checkpoint
+print(f"DEBUG: init_from='{init_from}', checkpoint_training_context={checkpoint_training_context}")
 if init_from == 'resume' and checkpoint_training_context is not None:
     print("Applying restored training context state...")
     training_ctx.current_stage = checkpoint_training_context.get('current_stage', 0)
     training_ctx.val_loss_stale_count = checkpoint_training_context.get('val_loss_stale_count', 0)
     training_ctx.best_val_loss_this_stage = checkpoint_training_context.get('best_val_loss_for_stage', float('inf'))
     print(f"Training context restored: stage={training_ctx.current_stage}, stale_count={training_ctx.val_loss_stale_count}")
+else:
+    print(f"DEBUG: NOT applying training context. init_from='{init_from}', checkpoint_training_context={checkpoint_training_context is not None}")
 
 # model init
 model_args = dict(n_layer=n_layer, n_head=n_head, n_embd=n_embd, block_size=block_size,
