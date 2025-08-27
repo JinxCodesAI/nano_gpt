@@ -40,7 +40,7 @@ eval_only = False # if True, script exits right after the first eval
 always_save_checkpoint = True # if True, always save a checkpoint after each eval
 init_from = 'resume' # 'scratch' or 'resume' or 'gpt2*'\
 # wandb logging
-wandb_log = False # disabled by default
+wandb_log = True # disabled by default
 wandb_project = 'diffusion'
 wandb_run_name = '13k_UN_noise_0.2' # 'run' + str(time.time())
 # data
@@ -106,6 +106,46 @@ elif training_type == 'remasking_binary':
     wandb_run_name = f'{wandb_run_name}_remasking_binary'
 
 config = {k: globals()[k] for k in config_keys} # will be useful for logging
+
+# Print source code and global variables on startup
+print("=" * 80)
+print("SOURCE CODE:")
+print("=" * 80)
+
+import sys
+import os
+
+# Get all local Python files that are imported
+local_files = set()
+for module_name, module in sys.modules.items():
+    if hasattr(module, '__file__') and module.__file__:
+        file_path = module.__file__
+        # Only include .py files in current directory (not packages/libraries)
+        if file_path.endswith('.py') and os.path.dirname(file_path) == os.getcwd():
+            local_files.add(os.path.basename(file_path))
+
+# Always include the main script
+local_files.add('train_run.py')
+
+# Convert to sorted list for consistent output
+local_files = sorted(local_files)
+
+for filename in local_files:
+    print(f"\n--- {filename} ---")
+    try:
+        with open(filename, 'r') as f:
+            print(f.read())
+    except FileNotFoundError:
+        print(f"File {filename} not found")
+
+print("\n" + "=" * 80)
+print("GLOBAL VARIABLES:")
+print("=" * 80)
+for name, value in sorted(globals().items()):
+    if not name.startswith('_') and not callable(value):
+        print(f"{name} = {value}")
+
+print("\n" + "=" * 80)
 # -----------------------------------------------------------------------------
 
 # various inits, derived attributes, I/O setup
