@@ -1025,16 +1025,31 @@ def estimate_loss(model, torch_ctx, timer, training_ctx: TrainingContext):
                 random_prob = 1.0 / training_ctx.extended_vocab_size  # Random chance probability
 
         # For unmasking, use pre-created validation set with samples from all stages
+        # Track per-stage losses for detailed analysis
+        stage_losses = {}
+        stage_sample_counts = {}
         if split == 'val' and training_ctx.training_type == 'unmasking':
             print(f"Using validation set with samples from all {len(training_ctx.unmasking_stages)} stages")
+            # Initialize per-stage tracking
+            for stage_idx in range(len(training_ctx.unmasking_stages)):
+                stage_losses[stage_idx] = []
+                stage_sample_counts[stage_idx] = 0
         
         for k in range(training_ctx.eval_iters):
             with timer.time_function('validation_data_generation'):
                 if split == 'val' and training_ctx.training_type == 'unmasking':
                     # Use pre-created validation set with batch index
                     X, Y, mask = get_batch(split, training_ctx, validation_sample_idx=k)
+                    # Determine which stage this batch belongs to based on validation set structure
+                    # The validation set distributes samples evenly across stages
+                    total_samples = training_ctx.eval_iters * training_ctx.batch_size
+                    num_stages = len(training_ctx.unmasking_stages)
+                    samples_per_stage = total_samples // num_stages
+                    current_sample_idx = k * training_ctx.batch_size
+                    current_stage_idx = min(current_sample_idx // samples_per_stage, num_stages - 1)
                 else:
                     X, Y, mask = get_batch(split, training_ctx)
+                    current_stage_idx = None
 
             # Calculate masked token ratio for this batch
             # Get per-sample ratios to capture the full range of masking rates
@@ -1114,12 +1129,44 @@ def estimate_loss(model, torch_ctx, timer, training_ctx: TrainingContext):
                             most_likely_correct.extend(correct_predictions)
 
             losses[k] = loss.item()
+            
+            # Track per-stage losses for unmasking validation
+            if split == 'val' and training_ctx.training_type == 'unmasking' and current_stage_idx is not None:
+                stage_losses[current_stage_idx].append(loss.item())
+                stage_sample_counts[current_stage_idx] += X.size(0)  # Add batch size
 
         out[split] = losses.mean()
+        
+        # Add per-stage validation losses for unmasking
+        if split == 'val' and training_ctx.training_type == 'unmasking' and stage_losses:
+            for stage_idx, stage_loss_list in stage_losses.items():
+                if stage_loss_list:  # Only if we have samples for this stage
+                    avg_stage_loss = sum(stage_loss_list) / len(stage_loss_list)
+                    out[f'val_stage_{stage_idx}_loss'] = avg_stage_loss
+                    out[f'val_stage_{stage_idx}_samples'] = stage_sample_counts[stage_idx]
         
         if split == 'val':
             total_samples = training_ctx.eval_iters * training_ctx.batch_size
             print(f"  Validation complete: {training_ctx.eval_iters} batches processed ({total_samples} samples), avg loss = {out[split]:.4f}")
+            
+            # Print per-stage validation losses for unmasking
+            if training_ctx.training_type == 'unmasking' and stage_losses:
+                print("  Per-stage validation losses:")
+                for stage_idx in range(len(training_ctx.unmasking_stages)):
+                    if stage_idx in stage_losses and stage_losses[stage_idx]:
+                        stage_config = training_ctx.unmasking_stages[stage_idx]
+                        stage_type = stage_config.get_stage_type()
+                        avg_loss = sum(stage_losses[stage_idx]) / len(stage_losses[stage_idx])
+                        sample_count = stage_sample_counts[stage_idx]
+                        
+                        stage_info = f"    Stage {stage_idx} ({stage_type.value}): {avg_loss:.4f} ({sample_count} samples)"
+                        if stage_type == UnmaskingStageType.STICKY:
+                            config = stage_config.config
+                            stage_info += f" - ratio={config.target_masked_ratio:.1f}"
+                        elif stage_type == UnmaskingStageType.RANDOM:
+                            config = stage_config.config
+                            stage_info += f" - max_ratio={config.max_masked_ratio:.1f}"
+                        print(stage_info)
 
         # Add masked token ratio statistics
         if masked_token_ratios:

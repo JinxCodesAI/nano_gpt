@@ -73,19 +73,19 @@ synthetic_checkpoint_name = '32.08_0.0.pt'  # Path to unmasking model checkpoint
 n_layer = 6
 n_head = 6
 n_embd = 384
-dropout = 0.2 # for pretraining 0 is good, for finetuning try 0.1+
+dropout = 0.01 # for pretraining 0 is good, for finetuning try 0.1+
 bias = False # do we use bias inside LayerNorm and Linear layers?
 attention_type = 'bidirectional' # 'causal' or 'bidirectional' - type of attention to use (bidirectional recommended for diffusion)
 use_rope = True # use Rotary Position Embeddings instead of absolute position embeddings
 # adamw optimizer
-learning_rate = 1e-3 # with baby networks can afford to go a bit higher
+learning_rate = 5e-4 # with baby networks can afford to go a bit higher
 max_iters = 50000
 warmup_iters = 2000 # how many steps to warm up for
 lr_decay_iters = 41000 # make equal to max_iters usually
-min_lr = 3e-4 # learning_rate / 10 usually
+min_lr = 1e-4 # learning_rate / 10 usually
 beta1 = 0.9
 beta2 = 0.99 # make a bit bigger because number of tokens per iter is small
-weight_decay=1e-1
+weight_decay=1e-3
 
 grad_clip = 1.0 # clip gradients at this value, or disable if == 0.0
 # learning rate decay settings
@@ -313,7 +313,7 @@ elif init_from == 'resume':
         ckpt_path = latest_ckpt
         print(f"Loading latest checkpoint: {os.path.basename(ckpt_path)}")
 
-    checkpoint = torch.load(ckpt_path, map_location=device)
+    checkpoint = torch.load(ckpt_path, map_location=device, weights_only=False)
     checkpoint_model_args = checkpoint['model_args']
     # force these config attributes to be equal otherwise we can't even resume training
     # the rest of the attributes (e.g. dropout) can stay as desired from command line
@@ -420,7 +420,7 @@ def reload_from_checkpoint():
     print(f"Reloading from checkpoint: {os.path.basename(ckpt_path)}")
     
     # Load checkpoint
-    checkpoint = torch.load(ckpt_path, map_location=device)
+    checkpoint = torch.load(ckpt_path, map_location=device, weights_only=False)
     
     # Reload model state - handle compiled vs non-compiled model mismatches
     model_state = checkpoint['model']
@@ -582,6 +582,15 @@ while True:
                 "min_masked_token_ratio": losses.get('train_min_masked_token_ratio', 0.0),
                 "max_masked_token_ratio": losses.get('train_max_masked_token_ratio', 0.0),
             }
+            
+            # Add per-stage validation losses for unmasking training
+            if training_ctx.training_type == 'unmasking':
+                for stage_idx in range(len(training_ctx.unmasking_stages)):
+                    stage_loss_key = f'val_stage_{stage_idx}_loss'
+                    stage_samples_key = f'val_stage_{stage_idx}_samples'
+                    if stage_loss_key in losses:
+                        log_dict[f'val/stage_{stage_idx}_loss'] = losses[stage_loss_key]
+                        log_dict[f'val/stage_{stage_idx}_samples'] = losses[stage_samples_key]
 
             wandb.log(log_dict)
         if losses['val'] < best_val_loss or always_save_checkpoint:
