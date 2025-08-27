@@ -21,7 +21,7 @@ from utils import Timer, log_masking_stats
 from train_utils import (
     get_batch, estimate_loss, get_lr, load_synthetic_model, 
     start_prefetch, stop_prefetch, TrainingContext, UnmaskingStage, update_stage_progress,
-    create_unmasking_validation_set
+    create_unmasking_validation_set, UnmaskingStageType, StickyStageConfig, RandomStageConfig
 )
 
 torch._dynamo.config.suppress_errors = True
@@ -38,7 +38,7 @@ log_interval = 20
 eval_iters = 20
 eval_only = False # if True, script exits right after the first eval
 always_save_checkpoint = True # if True, always save a checkpoint after each eval
-init_from = 'resume' # 'scratch' or 'resume' or 'gpt2*'\
+init_from = 'scratch' # 'scratch' or 'resume' or 'gpt2*'\
 # wandb logging
 wandb_log = True # disabled by default
 wandb_project = 'diffusion'
@@ -53,15 +53,16 @@ training_type = 'unmasking'  # 'unmasking', 'remasking', or 'remasking_binary' -
 
 # For unmasking: stage-based training with direct probability control
 unmasking_stages = [
-    {'target_masked_ratio': 0.2, 'p1_probability': 0.3, 'p2_probability': 0.0, 'val_loss_stale_count': 2},
-    {'target_masked_ratio': 0.4, 'p1_probability': 0.3, 'p2_probability': 0.0, 'val_loss_stale_count': 2},
-    {'target_masked_ratio': 0.4, 'p1_probability': 0.1, 'p2_probability': 0.5, 'val_loss_stale_count': 2},
-    {'target_masked_ratio': 0.6, 'p1_probability': 0.3, 'p2_probability': 0.1, 'val_loss_stale_count': 4},
-    {'target_masked_ratio': 0.6, 'p1_probability': 0.1, 'p2_probability': 0.8, 'val_loss_stale_count': 4},
-    {'target_masked_ratio': 0.7, 'p1_probability': 0.2, 'p2_probability': 0.4, 'val_loss_stale_count': 4},
-    {'target_masked_ratio': 0.8, 'p1_probability': 0.2, 'p2_probability': 0.4, 'val_loss_stale_count': 6},
-    {'target_masked_ratio': 0.8, 'p1_probability': 0.1, 'p2_probability': 0.9, 'val_loss_stale_count': 6},
-    {'target_masked_ratio': 0.9, 'p1_probability': 0.1, 'p2_probability': 0.9, 'val_loss_stale_count': 6},
+    {'type':'random','max_masked_ratio': 0.2, 'val_loss_stale_count': 2},
+    {'type':'sticky','target_masked_ratio': 0.2, 'p1_probability': 0.3, 'p2_probability': 0.0, 'val_loss_stale_count': 2},
+    {'type':'sticky','target_masked_ratio': 0.4, 'p1_probability': 0.3, 'p2_probability': 0.0, 'val_loss_stale_count': 2},
+    {'type':'sticky','target_masked_ratio': 0.4, 'p1_probability': 0.1, 'p2_probability': 0.5, 'val_loss_stale_count': 2},
+    {'type':'sticky','target_masked_ratio': 0.6, 'p1_probability': 0.3, 'p2_probability': 0.1, 'val_loss_stale_count': 4},
+    {'type':'sticky','target_masked_ratio': 0.6, 'p1_probability': 0.1, 'p2_probability': 0.8, 'val_loss_stale_count': 4},
+    {'type':'sticky','target_masked_ratio': 0.7, 'p1_probability': 0.2, 'p2_probability': 0.4, 'val_loss_stale_count': 4},
+    {'type':'sticky','target_masked_ratio': 0.8, 'p1_probability': 0.2, 'p2_probability': 0.4, 'val_loss_stale_count': 6},
+    {'type':'sticky','target_masked_ratio': 0.8, 'p1_probability': 0.1, 'p2_probability': 0.9, 'val_loss_stale_count': 6},
+    {'type':'sticky','target_masked_ratio': 0.9, 'p1_probability': 0.1, 'p2_probability': 0.9, 'val_loss_stale_count': 6},
 ]
 
 # For remasking/remasking_binary: corruption strategy configuration
@@ -218,14 +219,25 @@ else:
 # Convert unmasking_stages dict to UnmaskingStage objects
 unmasking_stage_objects = None
 if training_type == 'unmasking':
-    unmasking_stage_objects = [
-        UnmaskingStage(
-            target_masked_ratio=stage['target_masked_ratio'],
-            p1_probability=stage['p1_probability'],
-            p2_probability=stage['p2_probability'],
-            val_loss_stale_count=stage['val_loss_stale_count']
-        ) for stage in unmasking_stages
-    ]
+    unmasking_stage_objects = []
+    for stage in unmasking_stages:
+        stage_type = stage['type']
+        if stage_type == 'sticky':
+            config = StickyStageConfig(
+                target_masked_ratio=stage['target_masked_ratio'],
+                p1_probability=stage['p1_probability'],
+                p2_probability=stage['p2_probability'],
+                val_loss_stale_count=stage['val_loss_stale_count']
+            )
+        elif stage_type == 'random':
+            config = RandomStageConfig(
+                max_masked_ratio=stage['max_masked_ratio'],
+                val_loss_stale_count=stage['val_loss_stale_count']
+            )
+        else:
+            raise ValueError(f"Unknown stage type: {stage_type}")
+        
+        unmasking_stage_objects.append(UnmaskingStage(config))
 
 training_ctx = TrainingContext(
     training_type=training_type,
@@ -461,10 +473,17 @@ if training_ctx.training_type == 'unmasking':
     stage_config = training_ctx.get_current_stage_config()
     print(f"\n*** STAGE-BASED UNMASKING TRAINING INITIALIZED ***")
     print(f"Starting at Stage {training_ctx.current_stage}:")
-    print(f"  Target masked ratio: {stage_config.target_masked_ratio}")
-    print(f"  P1 probability: {stage_config.p1_probability}")
-    print(f"  P2 probability: {stage_config.p2_probability}")
-    print(f"  Val loss stale count limit: {stage_config.val_loss_stale_count}")
+    stage_type = stage_config.get_stage_type()
+    print(f"  Stage type: {stage_type.value}")
+    if stage_type == UnmaskingStageType.STICKY:
+        config = stage_config.config
+        print(f"  Target masked ratio: {config.target_masked_ratio}")
+        print(f"  P1 probability: {config.p1_probability}")
+        print(f"  P2 probability: {config.p2_probability}")
+    elif stage_type == UnmaskingStageType.RANDOM:
+        config = stage_config.config
+        print(f"  Max masked ratio: {config.max_masked_ratio}")
+    print(f"  Val loss stale count limit: {stage_config.get_val_loss_stale_count()}")
     print(f"Total stages configured: {len(training_ctx.unmasking_stages)}")
     print("*** STAGE INITIALIZATION COMPLETE ***\n")
     
@@ -507,7 +526,17 @@ while True:
         # Print stage information for unmasking training
         if training_ctx.training_type == 'unmasking':
             if 'current_stage' in losses:
-                print(f"Stage {losses['current_stage']}: masked_ratio={losses.get('target_masked_ratio', 0.0):.1f}, p1={losses.get('p1_probability', 0.0):.1f}, p2={losses.get('p2_probability', 0.0):.1f}, stale_count={losses.get('val_loss_stale_count', 0)}")
+                stage_config = training_ctx.get_current_stage_config()
+                stage_type = stage_config.get_stage_type()
+                stage_info = f"Stage {losses['current_stage']} ({stage_type.value}): "
+                if stage_type == UnmaskingStageType.STICKY:
+                    config = stage_config.config
+                    stage_info += f"target_ratio={config.target_masked_ratio:.1f}, p1={config.p1_probability:.1f}, p2={config.p2_probability:.1f}"
+                elif stage_type == UnmaskingStageType.RANDOM:
+                    config = stage_config.config
+                    stage_info += f"max_ratio={config.max_masked_ratio:.1f}"
+                stage_info += f", stale_count={losses.get('val_loss_stale_count', 0)}"
+                print(stage_info)
         else:
             print(f"Progressive validation used {training_ctx.eval_iters * training_ctx.batch_size} samples representing full training difficulty range")
 
@@ -862,7 +891,15 @@ while True:
             stage_config = training_ctx.get_current_stage_config()
             if stage_config and iter_num % (log_interval * 10) == 0:
                 mask_ratio = mask.float().mean().item()
-                print(f"Masking: stage={training_ctx.current_stage}, actual_ratio={mask_ratio:.3f}, target={stage_config.target_masked_ratio:.1f}, p1={stage_config.p1_probability:.1f}, p2={stage_config.p2_probability:.1f}")
+                stage_type = stage_config.get_stage_type()
+                stage_info = f"Masking: stage={training_ctx.current_stage} ({stage_type.value}), actual_ratio={mask_ratio:.3f}"
+                if stage_type == UnmaskingStageType.STICKY:
+                    config = stage_config.config
+                    stage_info += f", target={config.target_masked_ratio:.1f}, p1={config.p1_probability:.1f}, p2={config.p2_probability:.1f}"
+                elif stage_type == UnmaskingStageType.RANDOM:
+                    config = stage_config.config
+                    stage_info += f", max={config.max_masked_ratio:.1f}"
+                print(stage_info)
         else:
             # For remasking types, use simple masking stats
             log_masking_stats(mask, iter_num, log_interval)

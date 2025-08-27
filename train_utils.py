@@ -10,6 +10,9 @@ import pickle
 import threading
 from queue import Queue
 from contextlib import nullcontext
+from enum import Enum
+from abc import ABC, abstractmethod
+from typing import Union
 
 import numpy as np
 import torch
@@ -35,13 +38,49 @@ _prefetch_active = False
 # Global synthetic model for remasking
 synthetic_model = None
 
+class UnmaskingStageType(Enum):
+    """Enumeration of available unmasking stage types"""
+    STICKY = "sticky"
+    RANDOM = "random"
+
 @dataclass
-class UnmaskingStage:
-    """Configuration for a single stage of unmasking training"""
+class BaseStageConfig(ABC):
+    """Base class for stage-specific configuration"""
+    val_loss_stale_count: int
+    
+    @abstractmethod
+    def get_stage_type(self) -> UnmaskingStageType:
+        """Return the stage type"""
+        pass
+
+@dataclass
+class StickyStageConfig(BaseStageConfig):
+    """Configuration for sticky masking stages"""
     target_masked_ratio: float
     p1_probability: float
     p2_probability: float
-    val_loss_stale_count: int
+    
+    def get_stage_type(self) -> UnmaskingStageType:
+        return UnmaskingStageType.STICKY
+
+@dataclass
+class RandomStageConfig(BaseStageConfig):
+    """Configuration for random masking stages"""
+    max_masked_ratio: float
+    
+    def get_stage_type(self) -> UnmaskingStageType:
+        return UnmaskingStageType.RANDOM
+
+@dataclass
+class UnmaskingStage:
+    """Configuration for a single stage of unmasking training"""
+    config: Union[StickyStageConfig, RandomStageConfig]
+    
+    def get_stage_type(self) -> UnmaskingStageType:
+        return self.config.get_stage_type()
+    
+    def get_val_loss_stale_count(self) -> int:
+        return self.config.val_loss_stale_count
 
 @dataclass
 class TrainingContext:
@@ -97,9 +136,9 @@ class TrainingContext:
         # Default unmasking stages if not provided
         if self.training_type == 'unmasking' and self.unmasking_stages is None:
             self.unmasking_stages = [
-                UnmaskingStage(target_masked_ratio=0.2, p1_probability=0.3, p2_probability=0.0, val_loss_stale_count=5),
-                UnmaskingStage(target_masked_ratio=0.4, p1_probability=0.2, p2_probability=0.8, val_loss_stale_count=5),
-                UnmaskingStage(target_masked_ratio=0.6, p1_probability=0.1, p2_probability=0.9, val_loss_stale_count=10),
+                UnmaskingStage(StickyStageConfig(target_masked_ratio=0.2, p1_probability=0.3, p2_probability=0.0, val_loss_stale_count=5)),
+                UnmaskingStage(StickyStageConfig(target_masked_ratio=0.4, p1_probability=0.2, p2_probability=0.8, val_loss_stale_count=5)),
+                UnmaskingStage(StickyStageConfig(target_masked_ratio=0.6, p1_probability=0.1, p2_probability=0.9, val_loss_stale_count=10)),
             ]
     
     def get_current_stage_config(self) -> UnmaskingStage:
@@ -234,7 +273,15 @@ def create_unmasking_validation_set(ctx: TrainingContext):
         if stage_idx < (total_samples % num_stages):
             stage_samples += 1
             
-        print(f"  Stage {stage_idx}: {stage_samples} samples (ratio={stage_config.target_masked_ratio:.1f}, p1={stage_config.p1_probability:.1f}, p2={stage_config.p2_probability:.1f})")
+        stage_type = stage_config.get_stage_type()
+        stage_info = f"  Stage {stage_idx} ({stage_type.value}): {stage_samples} samples"
+        if stage_type == UnmaskingStageType.STICKY:
+            config = stage_config.config
+            stage_info += f" (target_ratio={config.target_masked_ratio:.1f}, p1={config.p1_probability:.1f}, p2={config.p2_probability:.1f})"
+        elif stage_type == UnmaskingStageType.RANDOM:
+            config = stage_config.config
+            stage_info += f" (max_ratio={config.max_masked_ratio:.1f})"
+        print(stage_info)
         
         # Generate batches for this stage
         stage_batches = []
@@ -262,13 +309,7 @@ def create_unmasking_validation_set(ctx: TrainingContext):
                 x = x.to(ctx.device)
             
             # Apply stage-specific masking
-            masked_x, mask = apply_target_driven_sticky_masking_gpu(
-                x, 
-                stage_config.target_masked_ratio, 
-                stage_config.p1_probability, 
-                stage_config.p2_probability,
-                ctx.mask_token_id
-            )
+            masked_x, mask = apply_stage_masking(x, stage_config, ctx.mask_token_id)
             
             stage_batches.append((masked_x.clone(), x.clone(), mask.clone()))
             samples_generated += batch_size
@@ -293,6 +334,68 @@ def get_unmasking_validation_batch(ctx: TrainingContext, batch_idx=None):
     batch_idx = batch_idx % len(_unmasking_val_set)
     return _unmasking_val_set[batch_idx]
 
+
+def apply_random_masking_gpu(x, max_masked_ratio, mask_token_id):
+    """
+    GPU-optimized random masking for unmasking training.
+    Each sample in the batch gets a different random masking probability.
+    
+    Args:
+        x: Input tokens (batch_size, seq_len)
+        max_masked_ratio: Maximum fraction of tokens to mask (0.0 to 1.0)
+        mask_token_id: Token ID to use for masking
+        
+    Returns:
+        masked_x: Input with masked tokens replaced by mask_token_id
+        mask: Boolean mask indicating which positions were masked
+    """
+    batch_size, seq_len = x.shape
+    device = x.device
+    
+    # Generate different masking probability for each sample in the batch
+    mask_probs = torch.rand(batch_size, device=device) * max_masked_ratio  # Shape: (batch_size,)
+    
+    # Generate random values for each token position
+    rand_vals = torch.rand_like(x, dtype=torch.float, device=device)  # Shape: (batch_size, seq_len)
+    
+    # Expand mask probabilities to match token dimensions
+    mask_probs_expanded = mask_probs.unsqueeze(1).expand(-1, seq_len)  # Shape: (batch_size, seq_len)
+    
+    # Create mask: True where random value is less than the sample's masking probability
+    mask = rand_vals < mask_probs_expanded
+    
+    # Apply masking
+    masked_x = x.clone()
+    masked_x[mask] = mask_token_id
+    
+    return masked_x, mask
+
+def apply_stage_masking(x, stage_config: UnmaskingStage, mask_token_id):
+    """
+    Apply masking based on stage configuration type.
+    
+    Args:
+        x: Input tokens (batch_size, seq_len)
+        stage_config: UnmaskingStage configuration
+        mask_token_id: Token ID to use for masking
+        
+    Returns:
+        masked_x: Input with masked tokens replaced by mask_token_id
+        mask: Boolean mask indicating which positions were masked
+    """
+    stage_type = stage_config.get_stage_type()
+    
+    if stage_type == UnmaskingStageType.RANDOM:
+        config = stage_config.config
+        return apply_random_masking_gpu(x, config.max_masked_ratio, mask_token_id)
+    elif stage_type == UnmaskingStageType.STICKY:
+        config = stage_config.config
+        return apply_target_driven_sticky_masking_gpu(
+            x, config.target_masked_ratio, config.p1_probability, 
+            config.p2_probability, mask_token_id
+        )
+    else:
+        raise ValueError(f"Unknown stage type: {stage_type}")
 
 def apply_target_driven_sticky_masking_gpu(x, target_masked_ratio, p1_probability, p2_probability, mask_token_id):
     """
@@ -568,11 +671,15 @@ def get_batch_unmasking(split, ctx: TrainingContext, validation_sample_idx=None)
         if ctx.unmasking_stages and len(ctx.unmasking_stages) > 1:
             stage_idx = (validation_sample_idx or 0) % len(ctx.unmasking_stages)
             stage_config = ctx.unmasking_stages[stage_idx]
+            # Apply stage-specific masking
+            masked_x, mask = apply_stage_masking(x, stage_config, ctx.mask_token_id)
         else:
             # Fallback to current stage if no stages defined
             stage_config = ctx.get_current_stage_config()
             if stage_config is None:
                 raise ValueError(f"No stage configuration available for {ctx.training_type} training")
+            # Apply stage-specific masking
+            masked_x, mask = apply_stage_masking(x, stage_config, ctx.mask_token_id)
     else:
         # For training: distribute batch samples across all stages up to current stage (inclusive)
         if ctx.unmasking_stages and ctx.current_stage >= 0:
@@ -599,13 +706,7 @@ def get_batch_unmasking(split, ctx: TrainingContext, validation_sample_idx=None)
                     start_idx += stage_samples
                     
                     # Apply masking for this stage
-                    stage_masked_x, stage_mask = apply_target_driven_sticky_masking_gpu(
-                        stage_x,
-                        stage_config.target_masked_ratio,
-                        stage_config.p1_probability,
-                        stage_config.p2_probability,
-                        ctx.mask_token_id
-                    )
+                    stage_masked_x, stage_mask = apply_stage_masking(stage_x, stage_config, ctx.mask_token_id)
                     
                     all_masked_x.append(stage_masked_x)
                     all_masks.append(stage_mask)
@@ -631,13 +732,7 @@ def get_batch_unmasking(split, ctx: TrainingContext, validation_sample_idx=None)
                 raise ValueError(f"No stage configuration available for {ctx.training_type} training")
             
             # Apply single stage masking (fallback case)
-            masked_x, mask = apply_target_driven_sticky_masking_gpu(
-                x, 
-                stage_config.target_masked_ratio, 
-                stage_config.p1_probability, 
-                stage_config.p2_probability,
-                ctx.mask_token_id
-            )
+            masked_x, mask = apply_stage_masking(x, stage_config, ctx.mask_token_id)
     
     if split == 'val':
         torch.manual_seed(1337 + ctx.seed_offset)
@@ -900,9 +995,16 @@ def estimate_loss(model, torch_ctx, timer, training_ctx: TrainingContext):
         stage_config = training_ctx.get_current_stage_config()
         if stage_config:
             out['current_stage'] = training_ctx.current_stage
-            out['target_masked_ratio'] = stage_config.target_masked_ratio
-            out['p1_probability'] = stage_config.p1_probability
-            out['p2_probability'] = stage_config.p2_probability
+            stage_type = stage_config.get_stage_type()
+            out['stage_type'] = stage_type.value
+            if stage_type == UnmaskingStageType.STICKY:
+                config = stage_config.config
+                out['target_masked_ratio'] = config.target_masked_ratio
+                out['p1_probability'] = config.p1_probability
+                out['p2_probability'] = config.p2_probability
+            elif stage_type == UnmaskingStageType.RANDOM:
+                config = stage_config.config
+                out['max_masked_ratio'] = config.max_masked_ratio
             out['val_loss_stale_count'] = training_ctx.val_loss_stale_count
     
     for split in ['train', 'val']:
@@ -1104,18 +1206,24 @@ def update_stage_progress(training_ctx: TrainingContext, val_loss: float):
         return False
     else:
         training_ctx.val_loss_stale_count += 1
-        print(f"  Stage {training_ctx.current_stage}: Val loss stale count {training_ctx.val_loss_stale_count}/{stage_config.val_loss_stale_count}")
+        print(f"  Stage {training_ctx.current_stage}: Val loss stale count {training_ctx.val_loss_stale_count}/{stage_config.get_val_loss_stale_count()}")
         
         # Check if we should advance to next stage
-        if training_ctx.val_loss_stale_count >= stage_config.val_loss_stale_count:
+        if training_ctx.val_loss_stale_count >= stage_config.get_val_loss_stale_count():
             advanced = training_ctx.advance_stage()
             if advanced:
                 new_stage_config = training_ctx.get_current_stage_config()
-                print(f"\n*** ADVANCING TO STAGE {training_ctx.current_stage} ***")
-                print(f"  Target masked ratio: {new_stage_config.target_masked_ratio}")
-                print(f"  P1 probability: {new_stage_config.p1_probability}")
-                print(f"  P2 probability: {new_stage_config.p2_probability}")
-                print(f"  Val loss stale count limit: {new_stage_config.val_loss_stale_count}")
+                stage_type = new_stage_config.get_stage_type()
+                print(f"\n*** ADVANCING TO STAGE {training_ctx.current_stage} ({stage_type.value}) ***")
+                if stage_type == UnmaskingStageType.STICKY:
+                    config = new_stage_config.config
+                    print(f"  Target masked ratio: {config.target_masked_ratio}")
+                    print(f"  P1 probability: {config.p1_probability}")
+                    print(f"  P2 probability: {config.p2_probability}")
+                elif stage_type == UnmaskingStageType.RANDOM:
+                    config = new_stage_config.config
+                    print(f"  Max masked ratio: {config.max_masked_ratio}")
+                print(f"  Val loss stale count limit: {new_stage_config.get_val_loss_stale_count()}")
                 print("*** STAGE ADVANCEMENT COMPLETE ***\n")
                 return True
             else:

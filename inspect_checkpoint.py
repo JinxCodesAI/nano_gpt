@@ -41,7 +41,7 @@ def inspect_checkpoint():
     import subprocess
     
     # Try different python commands
-    python_cmds = ['python3', 'python', '/usr/bin/python3', '/usr/bin/python']
+    python_cmds = [ 'python', '/usr/bin/python', 'python3','/usr/bin/python3']
     
     for cmd in python_cmds:
         try:
