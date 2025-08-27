@@ -1037,8 +1037,9 @@ def estimate_loss(model, torch_ctx, timer, training_ctx: TrainingContext):
                     X, Y, mask = get_batch(split, training_ctx)
 
             # Calculate masked token ratio for this batch
-            mask_ratio = mask.float().mean().item()
-            masked_token_ratios.append(mask_ratio)
+            # Get per-sample ratios to capture the full range of masking rates
+            sample_ratios = mask.float().mean(dim=1)  # Shape: (batch_size,) - ratio per sample
+            masked_token_ratios.extend(sample_ratios.cpu().tolist())  # Add all individual sample ratios
 
             with torch_ctx:
                 with timer.time_function('validation_forward_pass'):

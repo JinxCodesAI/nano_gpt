@@ -76,6 +76,7 @@ n_embd = 384
 dropout = 0.2 # for pretraining 0 is good, for finetuning try 0.1+
 bias = False # do we use bias inside LayerNorm and Linear layers?
 attention_type = 'bidirectional' # 'causal' or 'bidirectional' - type of attention to use (bidirectional recommended for diffusion)
+use_rope = True # use Rotary Position Embeddings instead of absolute position embeddings
 # adamw optimizer
 learning_rate = 1e-3 # with baby networks can afford to go a bit higher
 max_iters = 50000
@@ -278,7 +279,7 @@ else:
 
 # model init
 model_args = dict(n_layer=n_layer, n_head=n_head, n_embd=n_embd, block_size=block_size,
-                  bias=bias, vocab_size=None, dropout=dropout, attention_type=attention_type) # start with model_args from command line
+                  bias=bias, vocab_size=None, dropout=dropout, attention_type=attention_type, use_rope=use_rope) # start with model_args from command line
 if init_from == 'scratch':
     # init a new model from scratch
     print("Initializing a new model from scratch")
@@ -318,6 +319,9 @@ elif init_from == 'resume':
     # the rest of the attributes (e.g. dropout) can stay as desired from command line
     for k in ['n_layer', 'n_head', 'n_embd', 'block_size', 'bias', 'vocab_size']:
         model_args[k] = checkpoint_model_args[k]
+    # Also restore use_rope setting if it exists in checkpoint
+    if 'use_rope' in checkpoint_model_args:
+        model_args['use_rope'] = checkpoint_model_args['use_rope']
     # create the model
     gptconf = GPTConfig(**model_args)
     model = GPT(gptconf)
@@ -352,6 +356,8 @@ elif init_from.startswith('gpt2'):
     # read off the created config params, so we can store them into checkpoint correctly
     for k in ['n_layer', 'n_head', 'n_embd', 'block_size', 'bias', 'vocab_size']:
         model_args[k] = getattr(model.config, k)
+    # Also save use_rope setting for proper checkpoint restoration
+    model_args['use_rope'] = getattr(model.config, 'use_rope', True)
 # crop down the model block size if desired, using model surgery
 if block_size < model.config.block_size:
     model.crop_block_size(block_size)
