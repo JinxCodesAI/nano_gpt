@@ -52,7 +52,7 @@ def inspect_checkpoint():
                 # Try to run a simple torch test
                 test_script = '''
 import torch
-ckpt = torch.load("out/ckpt_unmasking_14500.pt", map_location="cpu")
+ckpt = torch.load("out/ckpt_unmasking_7000.pt", map_location="cpu", weights_only=False)
 print("Checkpoint keys:", list(ckpt.keys()))
 if "training_context" in ckpt:
     ctx = ckpt["training_context"]

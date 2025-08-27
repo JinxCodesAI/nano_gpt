@@ -99,6 +99,7 @@ class TrainingContext:
     # Data configuration
     data_dir: str = 'data/shakespeare_char'
     meta_vocab_size: int = None
+    use_paragraph_boundaries: bool = True  # If True, start samples at paragraph boundaries (double newlines)
     
     # Token IDs
     mask_token_id: int = None
@@ -253,7 +254,10 @@ def create_unmasking_validation_set(ctx: TrainingContext):
     # Cache validation data if not already cached
     if _data_cache['val'] is None:
         _data_cache['val'] = np.memmap(os.path.join(ctx.data_dir, 'val.bin'), dtype=np.uint16, mode='r')
-        _valid_indices_cache['val'] = find_double_newline_indices(_data_cache['val'], ctx.meta_vocab_size, ctx.block_size)
+        if ctx.use_paragraph_boundaries:
+            _valid_indices_cache['val'] = find_double_newline_indices(_data_cache['val'], ctx.meta_vocab_size, ctx.block_size)
+        else:
+            _valid_indices_cache['val'] = np.array([])
     
     data = _data_cache['val']
     valid_indices = _valid_indices_cache['val']
@@ -613,8 +617,12 @@ def get_batch_unmasking(split, ctx: TrainingContext, validation_sample_idx=None)
             _data_cache[split] = np.memmap(os.path.join(ctx.data_dir, 'val.bin'), dtype=np.uint16, mode='r')
         
         # Cache the expensive valid indices computation
-        print(f"Computing valid indices for {split}... (one-time cost)")
-        _valid_indices_cache[split] = find_double_newline_indices(_data_cache[split], ctx.meta_vocab_size, ctx.block_size)
+        if ctx.use_paragraph_boundaries:
+            print(f"Computing valid indices for {split} (paragraph boundaries)... (one-time cost)")
+            _valid_indices_cache[split] = find_double_newline_indices(_data_cache[split], ctx.meta_vocab_size, ctx.block_size)
+        else:
+            print(f"Using random sampling for {split} (no paragraph boundaries)")
+            _valid_indices_cache[split] = np.array([])  # Empty array indicates random sampling
         print(f"Found {len(_valid_indices_cache[split])} valid indices for {split}")
         
         # Start prefetching for training data
@@ -771,8 +779,12 @@ def get_batch_remasking(split, ctx: TrainingContext, validation_sample_idx=None)
             _data_cache[split] = np.memmap(os.path.join(ctx.data_dir, 'val.bin'), dtype=np.uint16, mode='r')
         
         # Cache the expensive valid indices computation
-        print(f"Computing valid indices for {split}... (one-time cost)")
-        _valid_indices_cache[split] = find_double_newline_indices(_data_cache[split], ctx.meta_vocab_size, ctx.block_size)
+        if ctx.use_paragraph_boundaries:
+            print(f"Computing valid indices for {split} (paragraph boundaries)... (one-time cost)")
+            _valid_indices_cache[split] = find_double_newline_indices(_data_cache[split], ctx.meta_vocab_size, ctx.block_size)
+        else:
+            print(f"Using random sampling for {split} (no paragraph boundaries)")
+            _valid_indices_cache[split] = np.array([])  # Empty array indicates random sampling
         print(f"Found {len(_valid_indices_cache[split])} valid indices for {split}")
         
         # Start prefetching for training data
@@ -884,8 +896,12 @@ def get_batch_remasking_binary(split, ctx: TrainingContext, validation_sample_id
         else:
             _data_cache[split] = np.memmap(os.path.join(ctx.data_dir, 'val.bin'), dtype=np.uint16, mode='r')
         
-        print(f"Computing valid indices for {split}... (one-time cost)")
-        _valid_indices_cache[split] = find_double_newline_indices(_data_cache[split], ctx.meta_vocab_size, ctx.block_size)
+        if ctx.use_paragraph_boundaries:
+            print(f"Computing valid indices for {split} (paragraph boundaries)... (one-time cost)")
+            _valid_indices_cache[split] = find_double_newline_indices(_data_cache[split], ctx.meta_vocab_size, ctx.block_size)
+        else:
+            print(f"Using random sampling for {split} (no paragraph boundaries)")
+            _valid_indices_cache[split] = np.array([])  # Empty array indicates random sampling
         print(f"Found {len(_valid_indices_cache[split])} valid indices for {split}")
         
         if split == 'train':

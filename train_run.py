@@ -38,7 +38,7 @@ log_interval = 20
 eval_iters = 20
 eval_only = False # if True, script exits right after the first eval
 always_save_checkpoint = True # if True, always save a checkpoint after each eval
-init_from = 'scratch' # 'scratch' or 'resume' or 'gpt2*'\
+init_from = 'resume' # 'scratch' or 'resume' or 'gpt2*'\
 # wandb logging
 wandb_log = True # disabled by default
 wandb_project = 'diffusion'
@@ -48,6 +48,7 @@ dataset = 'shakespeare_char'
 gradient_accumulation_steps = 1 # used to simulate larger batch sizes
 batch_size = 16 # if gradient_accumulation_steps > 1, this is the micro-batch size
 block_size = 1024
+use_paragraph_boundaries = False # if True, start samples at paragraph boundaries (double newlines)
 # diffusion training config
 training_type = 'unmasking'  # 'unmasking', 'remasking', or 'remasking_binary' - type of training
 
@@ -56,9 +57,9 @@ unmasking_stages = [
     {'type':'random','max_masked_ratio': 0.2, 'val_loss_stale_count': 2},
     {'type':'sticky','target_masked_ratio': 0.2, 'p1_probability': 0.3, 'p2_probability': 0.0, 'val_loss_stale_count': 2},
     {'type':'sticky','target_masked_ratio': 0.4, 'p1_probability': 0.3, 'p2_probability': 0.0, 'val_loss_stale_count': 2},
-    {'type':'sticky','target_masked_ratio': 0.4, 'p1_probability': 0.1, 'p2_probability': 0.5, 'val_loss_stale_count': 2},
+    {'type':'sticky','target_masked_ratio': 0.4, 'p1_probability': 0.15, 'p2_probability': 0.3, 'val_loss_stale_count': 2},
     {'type':'sticky','target_masked_ratio': 0.6, 'p1_probability': 0.3, 'p2_probability': 0.1, 'val_loss_stale_count': 4},
-    {'type':'sticky','target_masked_ratio': 0.6, 'p1_probability': 0.1, 'p2_probability': 0.8, 'val_loss_stale_count': 4},
+    {'type':'sticky','target_masked_ratio': 0.55, 'p1_probability': 0.1, 'p2_probability': 0.6, 'val_loss_stale_count': 4},
     {'type':'sticky','target_masked_ratio': 0.7, 'p1_probability': 0.2, 'p2_probability': 0.4, 'val_loss_stale_count': 4},
     {'type':'sticky','target_masked_ratio': 0.8, 'p1_probability': 0.2, 'p2_probability': 0.4, 'val_loss_stale_count': 6},
     {'type':'sticky','target_masked_ratio': 0.8, 'p1_probability': 0.1, 'p2_probability': 0.9, 'val_loss_stale_count': 6},
@@ -263,7 +264,8 @@ training_ctx = TrainingContext(
     warmup_iters=warmup_iters,
     lr_decay_iters=lr_decay_iters,
     learning_rate=learning_rate,
-    min_lr=min_lr
+    min_lr=min_lr,
+    use_paragraph_boundaries=use_paragraph_boundaries
 )
 
 # Apply restored training context state if resuming from checkpoint
@@ -276,7 +278,7 @@ if init_from == 'resume' and checkpoint_training_context is not None:
     print(f"Training context restored: stage={training_ctx.current_stage}, stale_count={training_ctx.val_loss_stale_count}")
 else:
     print(f"DEBUG: NOT applying training context. init_from='{init_from}', checkpoint_training_context={checkpoint_training_context is not None}")
-
+training_ctx.current_stage = 1
 # model init
 model_args = dict(n_layer=n_layer, n_head=n_head, n_embd=n_embd, block_size=block_size,
                   bias=bias, vocab_size=None, dropout=dropout, attention_type=attention_type, use_rope=use_rope) # start with model_args from command line
@@ -462,6 +464,7 @@ def reload_from_checkpoint():
         training_ctx.val_loss_stale_count = ctx_state.get('val_loss_stale_count', 0)
         training_ctx.best_val_loss_this_stage = ctx_state.get('best_val_loss_for_stage', float('inf'))
         print(f"Training context restored: stage={training_ctx.current_stage}")
+    
     
     print(f"Model and optimizer reloaded from iteration {iter_num}")
     print("*** CHECKPOINT RELOAD COMPLETE ***\n")
