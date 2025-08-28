@@ -17,8 +17,8 @@ A comprehensive experiment runner for running multiple diffusion training experi
 ### Basic Usage
 
 ```bash
-# Run all configs in a directory
-python run_experiments.py --configs config/shkspr_char_diff/*.py --batch_size 8
+# Run all configs in a directory (use "cuda" not "gpu" for GPU)
+python run_experiments.py --configs config/shkspr_char_diff/*.py --device cuda --batch_size 8
 
 # Run specific configs
 python run_experiments.py --configs easy_first.py moderate_first.py --batch_size 16
@@ -32,7 +32,7 @@ python run_experiments.py --configs *.py --device cpu --wandb_enabled false --ba
 - `--batch_size INT`: Override batch size for all configs
 - `--wandb_project STR`: Override wandb project name  
 - `--wandb_enabled true/false`: Enable/disable wandb logging
-- `--device STR`: Override device (cuda, cpu, mps, cuda:0, etc.)
+- `--device STR`: Override device (cuda, cpu, mps, cuda:0, etc.) - Use "cuda" not "gpu"
 - `--compile true/false`: Enable/disable torch.compile
 - `--max_iters INT`: Override maximum training iterations
 - `--learning_rate FLOAT`: Override learning rate

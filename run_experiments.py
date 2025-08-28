@@ -204,77 +204,89 @@ class ExperimentRunner:
                 
                 self.logger.info(f"Process started with PID: {process.pid}")
                 
-                # Real-time log streaming with proper flushing
-                import select
-                import sys
+                # Real-time log streaming with threading for immediate output
+                import threading
+                import queue
                 
-                # Use select for non-blocking I/O on Unix-like systems
-                use_select = hasattr(select, 'select') and sys.platform != 'win32'
+                def stream_reader(pipe, pipe_name, output_queue):
+                    """Read from pipe and put lines in queue"""
+                    try:
+                        for line in iter(pipe.readline, ''):
+                            if line:
+                                output_queue.put((pipe_name, line.rstrip()))
+                        pipe.close()
+                    except Exception as e:
+                        output_queue.put((pipe_name, f"ERROR reading {pipe_name}: {e}"))
                 
+                # Create queue for collecting output from both streams
+                output_queue = queue.Queue()
+                
+                # Start reader threads for both stdout and stderr
+                stdout_thread = threading.Thread(
+                    target=stream_reader,
+                    args=(process.stdout, 'stdout', output_queue),
+                    daemon=True
+                )
+                stderr_thread = threading.Thread(
+                    target=stream_reader,
+                    args=(process.stderr, 'stderr', output_queue),
+                    daemon=True
+                )
+                
+                stdout_thread.start()
+                stderr_thread.start()
+                
+                # Process output from both streams in real-time
                 while True:
                     # Check if process has terminated
-                    if process.poll() is not None:
-                        break
+                    process_finished = process.poll() is not None
                     
-                    lines_read = False
-                    
-                    # Read stdout (non-blocking on Unix, blocking with timeout on Windows)
-                    if use_select:
-                        # Unix: use select for non-blocking I/O
-                        ready, _, _ = select.select([process.stdout, process.stderr], [], [], 0.1)
+                    try:
+                        # Get output with a short timeout
+                        pipe_name, line = output_queue.get(timeout=0.1)
                         
-                        if process.stdout in ready:
-                            stdout_line = process.stdout.readline()
-                            if stdout_line:
-                                lines_read = True
-                                stdout_line = stdout_line.rstrip()
-                                stdout_f.write(stdout_line + '\n')
-                                combined_f.write(f"[STDOUT] {stdout_line}\n")
-                                stdout_f.flush()
-                                combined_f.flush()
-                                # Also log to master log (with prefix to avoid spam)
-                                if any(keyword in stdout_line.lower() for keyword in 
-                                       ['step', 'iter', 'loss', 'validation', 'stage', 'error', 'warning']):
-                                    self.logger.info(f"[{config_name}] {stdout_line}")
-                        
-                        if process.stderr in ready:
-                            stderr_line = process.stderr.readline()
-                            if stderr_line:
-                                lines_read = True
-                                stderr_line = stderr_line.rstrip()
-                                stderr_f.write(stderr_line + '\n')
-                                combined_f.write(f"[STDERR] {stderr_line}\n")
-                                stderr_f.flush()
-                                combined_f.flush()
-                                self.logger.warning(f"[{config_name}] STDERR: {stderr_line}")
-                    else:
-                        # Windows: use blocking readline (child process should flush stdout)
-                        stdout_line = process.stdout.readline()
-                        if stdout_line:
-                            lines_read = True
-                            stdout_line = stdout_line.rstrip()
-                            stdout_f.write(stdout_line + '\n')
-                            combined_f.write(f"[STDOUT] {stdout_line}\n")
+                        if pipe_name == 'stdout':
+                            stdout_f.write(line + '\n')
+                            combined_f.write(f"[STDOUT] {line}\n")
                             stdout_f.flush()
                             combined_f.flush()
                             # Also log to master log (with prefix to avoid spam)
-                            if any(keyword in stdout_line.lower() for keyword in 
+                            if any(keyword in line.lower() for keyword in 
                                    ['step', 'iter', 'loss', 'validation', 'stage', 'error', 'warning']):
-                                self.logger.info(f"[{config_name}] {stdout_line}")
+                                self.logger.info(f"[{config_name}] {line}")
                         
-                        stderr_line = process.stderr.readline()
-                        if stderr_line:
-                            lines_read = True
-                            stderr_line = stderr_line.rstrip()
-                            stderr_f.write(stderr_line + '\n')
-                            combined_f.write(f"[STDERR] {stderr_line}\n")
+                        elif pipe_name == 'stderr':
+                            stderr_f.write(line + '\n')
+                            combined_f.write(f"[STDERR] {line}\n")
                             stderr_f.flush()
                             combined_f.flush()
-                            self.logger.warning(f"[{config_name}] STDERR: {stderr_line}")
+                            self.logger.warning(f"[{config_name}] STDERR: {line}")
                     
-                    # Small sleep to prevent busy waiting when no data is available
-                    if not lines_read:
-                        time.sleep(0.01)
+                    except queue.Empty:
+                        # No output available, check if process is done
+                        if process_finished:
+                            # Process is done, collect any remaining output
+                            remaining_items = []
+                            try:
+                                while True:
+                                    remaining_items.append(output_queue.get_nowait())
+                            except queue.Empty:
+                                pass
+                            
+                            # Process remaining items
+                            for pipe_name, line in remaining_items:
+                                if pipe_name == 'stdout':
+                                    stdout_f.write(line + '\n')
+                                    combined_f.write(f"[STDOUT] {line}\n")
+                                elif pipe_name == 'stderr':
+                                    stderr_f.write(line + '\n')
+                                    combined_f.write(f"[STDERR] {line}\n")
+                            
+                            break
+                
+                # Wait for reader threads to finish
+                stdout_thread.join(timeout=1.0)
+                stderr_thread.join(timeout=1.0)
                 
                 # Get final output and flush everything
                 remaining_stdout, remaining_stderr = process.communicate()
@@ -467,7 +479,7 @@ Examples:
     parser.add_argument('--wandb_enabled', type=lambda x: x.lower() in ['true', '1', 'yes'],
                        help='Enable/disable wandb logging (true/false)')
     parser.add_argument('--device', type=str,
-                       help='Override device (cuda, cpu, mps, cuda:0, etc.)')
+                       help='Override device (cuda, cpu, mps, cuda:0, etc.). Note: use "cuda" not "gpu"')
     parser.add_argument('--compile', type=lambda x: x.lower() in ['true', '1', 'yes'],
                        help='Enable/disable torch.compile (true/false)')
     parser.add_argument('--max_iters', type=int,
