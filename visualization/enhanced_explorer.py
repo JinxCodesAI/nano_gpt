@@ -32,7 +32,7 @@ from PyQt6.QtGui import QFont, QPalette, QColor, QTextCharFormat, QTextCursor
 # Import training utilities
 from train_utils import (
     TrainingContext, UnmaskingStage, apply_target_driven_sticky_masking_gpu,
-    find_double_newline_indices
+    find_double_newline_indices, StickyStageConfig
 )
 from model import GPT, GPTConfig
 
@@ -110,7 +110,6 @@ class BatchProcessor(QThread):
         vocab_size = self.corruption_settings['vocab_size']
         
         # Use target-driven sticky masking for corruption
-        # Simple parameters for visualization
         mask_token_id = vocab_size  # Use vocab_size as mask token
         masked_x, mask = apply_target_driven_sticky_masking_gpu(
             x, ratio, 0.3, 0.0, mask_token_id
@@ -301,9 +300,9 @@ class EnhancedModelExplorer(QMainWindow):
         """Setup training context with default values"""
         # Create default unmasking stages
         default_stages = [
-            UnmaskingStage(target_masked_ratio=0.2, p1_probability=0.3, p2_probability=0.0, val_loss_stale_count=5),
-            UnmaskingStage(target_masked_ratio=0.4, p1_probability=0.3, p2_probability=0.0, val_loss_stale_count=5),
-            UnmaskingStage(target_masked_ratio=0.6, p1_probability=0.1, p2_probability=0.8, val_loss_stale_count=5),
+            UnmaskingStage(StickyStageConfig(target_masked_ratio=0.2, p1_probability=0.3, p2_probability=0.0, val_loss_stale_count=5)),
+            UnmaskingStage(StickyStageConfig(target_masked_ratio=0.4, p1_probability=0.3, p2_probability=0.0, val_loss_stale_count=5)),
+            UnmaskingStage(StickyStageConfig(target_masked_ratio=0.6, p1_probability=0.1, p2_probability=0.8, val_loss_stale_count=5)),
         ]
         
         self.training_ctx = TrainingContext(
@@ -558,8 +557,7 @@ class EnhancedModelExplorer(QMainWindow):
         
     # Include the original methods from model_explorer.py
     def create_control_panel(self):
-        """Create the control panel (from original)"""
-        # [Copy the create_control_panel method from model_explorer.py]
+        """Create the control panel"""
         panel = QWidget()
         panel.setMaximumWidth(400)
         layout = QVBoxLayout()
@@ -569,15 +567,15 @@ class EnhancedModelExplorer(QMainWindow):
         model_layout = QVBoxLayout()
         
         self.load_unmasking_btn = QPushButton("Load Unmasking Model")
-        self.load_unmasking_btn.clicked.connect(lambda: self.load_model("../out/14.6_unmasking_no_noise.pt"))
+        self.load_unmasking_btn.clicked.connect(lambda: self.load_model("../out/14.6_unmasking_no_noise.pt", "unmasking"))
         model_layout.addWidget(self.load_unmasking_btn)
         
         self.load_remasking_bin_btn = QPushButton("Load Remasking Binary Model")
-        self.load_remasking_bin_btn.clicked.connect(lambda: self.load_model("../out/1.23_remasking_bin.pt"))
+        self.load_remasking_bin_btn.clicked.connect(lambda: self.load_model("../out/1.23_remasking_bin.pt", "remasking_binary"))
         model_layout.addWidget(self.load_remasking_bin_btn)
         
         self.load_remasking_btn = QPushButton("Load Remasking Model")
-        self.load_remasking_btn.clicked.connect(lambda: self.load_model("../out/1.35_remask.pt"))
+        self.load_remasking_btn.clicked.connect(lambda: self.load_model("../out/1.35_remask.pt", "remasking"))
         model_layout.addWidget(self.load_remasking_btn)
         
         # Progress bar
@@ -593,24 +591,130 @@ class EnhancedModelExplorer(QMainWindow):
         model_group.setLayout(model_layout)
         layout.addWidget(model_group)
         
-        # [Continue with rest of control panel...]
-        # Sample Generation, Corruption Settings, Actions sections
-        # (Copy remaining sections from original create_control_panel method)
+        # Sample Generation Section
+        sample_group = QGroupBox("Sample Generation")
+        sample_layout = QVBoxLayout()
+        
+        self.generate_sample_btn = QPushButton("Generate Random Sample")
+        self.generate_sample_btn.clicked.connect(self.generate_sample)
+        sample_layout.addWidget(self.generate_sample_btn)
+        
+        sample_group.setLayout(sample_layout)
+        layout.addWidget(sample_group)
         
         layout.addStretch()
         panel.setLayout(layout)
         return panel
         
     def create_visualization_panel(self):
-        """Create visualization panel (from original)"""
-        # [Copy from model_explorer.py]
-        pass
+        """Create visualization panel"""
+        panel = QWidget()
+        layout = QVBoxLayout()
         
-    def load_model(self, model_path):
+        # Text display area
+        self.text_display = QTextEdit()
+        self.text_display.setReadOnly(True)
+        self.text_display.setMinimumHeight(400)
+        layout.addWidget(self.text_display)
+        
+        # Status label
+        self.status_label = QLabel("Ready to load data")
+        layout.addWidget(self.status_label)
+        
+        panel.setLayout(layout)
+        return panel
+        
+    def load_model(self, model_path, model_type):
         """Load model and update batch processing options"""
-        # [Include original load_model logic]
-        # Plus update batch processing model checkboxes
-        pass
+        try:
+            self.progress_bar.setVisible(True)
+            self.progress_bar.setValue(25)
+            
+            # Load checkpoint
+            checkpoint = torch.load(model_path, map_location=device, weights_only=False)
+            self.progress_bar.setValue(50)
+            
+            # Create model
+            model_args = checkpoint['model_args']
+            gptconf = GPTConfig(**model_args)
+            model = GPT(gptconf)
+            
+            # Load state dict
+            state_dict = checkpoint['model']
+            unwanted_prefix = '_orig_mod.'
+            for k, v in list(state_dict.items()):
+                if k.startswith(unwanted_prefix):
+                    state_dict[k[len(unwanted_prefix):]] = state_dict.pop(k)
+            
+            model.load_state_dict(state_dict)
+            model.to(self.device)
+            model.eval()
+            
+            self.progress_bar.setValue(100)
+            
+            # Store model
+            model_name = f"{model_type}_{Path(model_path).stem}"
+            self.models[model_name] = model
+            
+            # Update UI
+            self.update_model_status()
+            self.update_batch_model_checkboxes()
+            
+            self.progress_bar.setVisible(False)
+            QMessageBox.information(self, "Success", f"Model loaded: {model_name}")
+            
+        except Exception as e:
+            self.progress_bar.setVisible(False)
+            QMessageBox.critical(self, "Error", f"Failed to load model: {str(e)}")
+            
+    def generate_sample(self):
+        """Generate a random sample from the dataset"""
+        if self.data is None or self.vocab is None:
+            QMessageBox.warning(self, "Warning", "No data loaded")
+            return
+            
+        try:
+            # Generate sample
+            sample_length = 256
+            if len(self.valid_indices) > 0:
+                start_idx = np.random.choice(self.valid_indices)
+            else:
+                start_idx = np.random.randint(0, len(self.data) - sample_length)
+                
+            sample = self.data[start_idx:start_idx + sample_length]
+            
+            # Convert to text
+            text = ''.join([self.vocab[int(token)] for token in sample])
+            self.text_display.setText(text)
+            self.status_label.setText(f"Generated sample starting at index {start_idx}")
+            
+        except Exception as e:
+            QMessageBox.critical(self, "Error", f"Failed to generate sample: {str(e)}")
+            
+    def update_model_status(self):
+        """Update model status label"""
+        if self.models:
+            status = f"Loaded models: {', '.join(self.models.keys())}"
+        else:
+            status = "No models loaded"
+        self.model_status.setText(status)
+        
+    def update_batch_model_checkboxes(self):
+        """Update the checkboxes for batch processing model selection"""
+        # Clear existing checkboxes
+        for checkbox in self.batch_model_checkboxes.values():
+            checkbox.setParent(None)
+        self.batch_model_checkboxes.clear()
+        
+        # Add checkboxes for each loaded model
+        for model_name in self.models.keys():
+            checkbox = QCheckBox(model_name)
+            checkbox.setChecked(True)  # Default to checked
+            self.batch_model_checkboxes[model_name] = checkbox
+            self.batch_models_layout.addWidget(checkbox)
+            
+        # Enable batch processing if we have models
+        self.start_batch_btn.setEnabled(len(self.models) > 0)
         
     def start_batch_processing(self):
         """Start batch processing of multiple samples"""
@@ -724,13 +828,9 @@ def main():
         sys.exit(app.exec())
     except Exception as e:
         print(f"Error starting enhanced application: {e}")
-        print("Falling back to basic model explorer...")
-        
-        # Fallback to basic version
-        from model_explorer import ModelExplorerApp
-        window = ModelExplorerApp()
-        window.show()
-        sys.exit(app.exec())
+        import traceback
+        traceback.print_exc()
+        sys.exit(1)
 
 
 if __name__ == "__main__":

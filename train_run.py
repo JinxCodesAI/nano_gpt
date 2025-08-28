@@ -30,15 +30,24 @@ torch._dynamo.config.suppress_errors = True
 timer = Timer()
 
 # -----------------------------------------------------------------------------
-# default config values designed to train a gpt2 (124M) on OpenWebText
+# default config values 
 # I/O
 out_dir = 'out'
-eval_interval = 500
+training_type = 'unmasking'  
+eval_interval = 200
 log_interval = 20
 eval_iters = 20
 eval_only = False # if True, script exits right after the first eval
 always_save_checkpoint = True # if True, always save a checkpoint after each eval
-init_from = 'resume' # 'scratch' or 'resume' or 'gpt2*'\
+init_from = 'scratch' # 'scratch' or 'resume'
+# model
+n_layer = 6
+n_head = 6
+n_embd = 384
+dropout = 0.01 # for pretraining 0 is good, for finetuning try 0.1+
+bias = False # do we use bias inside LayerNorm and Linear layers?
+attention_type = 'bidirectional' # 'causal' or 'bidirectional' - type of attention to use (bidirectional recommended for diffusion)
+use_rope = True # use Rotary Position Embeddings instead of absolute position embeddings
 # wandb logging
 wandb_log = True # disabled by default
 wandb_project = 'diffusion'
@@ -50,36 +59,16 @@ batch_size = 16 # if gradient_accumulation_steps > 1, this is the micro-batch si
 block_size = 1024
 use_paragraph_boundaries = False # if True, start samples at paragraph boundaries (double newlines)
 # diffusion training config
-training_type = 'unmasking'  # 'unmasking', 'remasking', or 'remasking_binary' - type of training
+# 'unmasking', 'remasking', or 'remasking_binary' - type of training
 
-# For unmasking: stage-based training with direct probability control
-unmasking_stages = [
-    {'type':'random','max_masked_ratio': 0.2, 'val_loss_stale_count': 2},
-    {'type':'sticky','target_masked_ratio': 0.2, 'p1_probability': 0.3, 'p2_probability': 0.0, 'val_loss_stale_count': 2},
-    {'type':'sticky','target_masked_ratio': 0.4, 'p1_probability': 0.3, 'p2_probability': 0.0, 'val_loss_stale_count': 2},
-    {'type':'sticky','target_masked_ratio': 0.4, 'p1_probability': 0.15, 'p2_probability': 0.3, 'val_loss_stale_count': 2},
-    {'type':'sticky','target_masked_ratio': 0.6, 'p1_probability': 0.3, 'p2_probability': 0.1, 'val_loss_stale_count': 4},
-    {'type':'sticky','target_masked_ratio': 0.55, 'p1_probability': 0.1, 'p2_probability': 0.6, 'val_loss_stale_count': 4},
-    {'type':'sticky','target_masked_ratio': 0.7, 'p1_probability': 0.2, 'p2_probability': 0.4, 'val_loss_stale_count': 4},
-    {'type':'sticky','target_masked_ratio': 0.8, 'p1_probability': 0.2, 'p2_probability': 0.4, 'val_loss_stale_count': 6},
-    {'type':'sticky','target_masked_ratio': 0.8, 'p1_probability': 0.1, 'p2_probability': 0.9, 'val_loss_stale_count': 6},
-    {'type':'sticky','target_masked_ratio': 0.9, 'p1_probability': 0.1, 'p2_probability': 0.9, 'val_loss_stale_count': 6},
-]
-
+unmasking_stages = []
 # For remasking/remasking_binary: corruption strategy configuration
 remasking_corruption_strategy = 'mixed'  # 'random', 'sticky', 'fragment', 'mixed', 'synthetic' - corruption strategy for remasking
 remasking_strategy_weights = [0.25, 0.4, 0.25, 0.1]  # weights for [random, sticky, fragment, synthetic] when using 'mixed'
 synthetic_checkpoint_name = '32.08_0.0.pt'  # Path to unmasking model checkpoint for synthetic data generation (only for 'synthetic' strategy)
-# model
-n_layer = 6
-n_head = 6
-n_embd = 384
-dropout = 0.01 # for pretraining 0 is good, for finetuning try 0.1+
-bias = False # do we use bias inside LayerNorm and Linear layers?
-attention_type = 'bidirectional' # 'causal' or 'bidirectional' - type of attention to use (bidirectional recommended for diffusion)
-use_rope = True # use Rotary Position Embeddings instead of absolute position embeddings
+
 # adamw optimizer
-learning_rate = 5e-4 # with baby networks can afford to go a bit higher
+learning_rate = 1e-3 # with baby networks can afford to go a bit higher
 max_iters = 50000
 warmup_iters = 2000 # how many steps to warm up for
 lr_decay_iters = 41000 # make equal to max_iters usually
@@ -101,6 +90,10 @@ compile = True # use PyTorch 2.0 to compile the model to be faster
 # -----------------------------------------------------------------------------
 config_keys = [k for k,v in globals().items() if not k.startswith('_') and isinstance(v, (int, float, bool, str))]
 exec(open('configurator.py').read()) # overrides from command line or config file
+
+if len(unmasking_stages) == 0 or unmasking_stages is None:
+    print("No unmasking stages defined, exiting...")
+    return
 
 # Update wandb run name after configuration is loaded
 if training_type == 'remasking':
@@ -278,7 +271,7 @@ if init_from == 'resume' and checkpoint_training_context is not None:
     print(f"Training context restored: stage={training_ctx.current_stage}, stale_count={training_ctx.val_loss_stale_count}")
 else:
     print(f"DEBUG: NOT applying training context. init_from='{init_from}', checkpoint_training_context={checkpoint_training_context is not None}")
-training_ctx.current_stage = 1
+
 # model init
 model_args = dict(n_layer=n_layer, n_head=n_head, n_embd=n_embd, block_size=block_size,
                   bias=bias, vocab_size=None, dropout=dropout, attention_type=attention_type, use_rope=use_rope) # start with model_args from command line
@@ -350,16 +343,7 @@ elif init_from == 'resume':
         checkpoint_training_context = ctx_state
     else:
         checkpoint_training_context = None
-elif init_from.startswith('gpt2'):
-    print(f"Initializing from OpenAI GPT-2 weights: {init_from}")
-    # initialize from OpenAI GPT-2 weights
-    override_args = dict(dropout=dropout)
-    model = GPT.from_pretrained(init_from, override_args)
-    # read off the created config params, so we can store them into checkpoint correctly
-    for k in ['n_layer', 'n_head', 'n_embd', 'block_size', 'bias', 'vocab_size']:
-        model_args[k] = getattr(model.config, k)
-    # Also save use_rope setting for proper checkpoint restoration
-    model_args['use_rope'] = getattr(model.config, 'use_rope', True)
+
 # crop down the model block size if desired, using model surgery
 if block_size < model.config.block_size:
     model.crop_block_size(block_size)

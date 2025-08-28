@@ -12,7 +12,7 @@ from model import GPTConfig, GPT
 # Configuration
 init_from = 'resume'
 out_dir = 'out'
-checkpoint_name = '42.6_unmask_noise_0.2.pt'  # Specific checkpoint to load
+checkpoint_name = '35.75_58.2_UM.pt'  # Specific checkpoint to load
 remasking_checkpoint_name = '1.23_remasking_bin.pt'  # Optional: checkpoint for remasking model, if None uses random remasking
 remasking_model_type = 'auto'  # 'remasking', 'remasking_binary', or 'auto' to detect from checkpoint
 num_samples = 1  # Number of samples to generate
@@ -33,7 +33,7 @@ use_intelligent_remasking = False
 use_mixed_remasking = False
 remasking_confidence_threshold = 0.58
 remasking_schedule = 'linear'
-diffusion_iterations = 100
+diffusion_iterations = 20
 min_random_ratio = 0.9
 start_ratio = 0.99
 end_ratio = 0.05
@@ -421,7 +421,7 @@ ctx = nullcontext() if device_type == 'cpu' else torch.amp.autocast(device_type=
 # Load trained diffusion model
 print(f"Loading model from {checkpoint_name}...")
 ckpt_path = os.path.join(out_dir, checkpoint_name)
-checkpoint = torch.load(ckpt_path, map_location=device)
+checkpoint = torch.load(ckpt_path, map_location=device, weights_only=False)
 
 # Handle backward compatibility for attention_type
 model_args = checkpoint['model_args']
@@ -454,7 +454,7 @@ if use_intelligent_remasking and remasking_checkpoint_name is not None:
     remasking_ckpt_path = os.path.join(out_dir, remasking_checkpoint_name)
     
     if os.path.exists(remasking_ckpt_path):
-        remasking_checkpoint = torch.load(remasking_ckpt_path, map_location=device)
+        remasking_checkpoint = torch.load(remasking_ckpt_path, map_location=device, weights_only=False)
         
         # Handle backward compatibility for attention_type
         remasking_model_args = remasking_checkpoint['model_args']
@@ -502,55 +502,80 @@ elif use_intelligent_remasking:
     use_intelligent_remasking = False
 
 # Load vocabulary and setup encoding/decoding
-if 'config' in checkpoint and 'dataset' in checkpoint['config']:
-    dataset_name = checkpoint['config']['dataset']
-    meta_path = os.path.join('data', dataset_name, 'meta.pkl')
+dataset_name = None
 
-    if os.path.exists(meta_path):
-        print(f"Loading vocabulary from {meta_path}...")
-        with open(meta_path, 'rb') as f:
-            meta = pickle.load(f)
+# Try to extract dataset name from checkpoint config
+if 'config' in checkpoint:
+    config = checkpoint['config']
+    # Handle case where config might be a complex object or dictionary
+    if hasattr(config, 'get') and callable(getattr(config, 'get')):
+        # config is a dictionary-like object
+        dataset_name = config.get('dataset')
+    elif hasattr(config, '__getitem__'):
+        # config supports indexing but might not be a dict
+        try:
+            dataset_name = config['dataset']
+        except (KeyError, TypeError):
+            pass
+    elif hasattr(config, 'dataset'):
+        # config is an object with dataset attribute
+        dataset_name = getattr(config, 'dataset', None)
 
-        # Setup encoding/decoding functions
-        stoi, itos = meta['stoi'], meta['itos']
-        vocab_size = meta['vocab_size']
-        mask_token_id = vocab_size  # Mask token is next ID after vocabulary
-        wrong_token_id = vocab_size + 1  # Wrong token is next ID after mask (for remasking models)
-        remask_good_id = vocab_size + 2  # Good token for binary remasking models
-        remask_wrong_id = vocab_size + 3  # Wrong token for binary remasking models
-
-        def encode(text):
-            return [stoi[c] for c in text]
-
-        def decode(token_ids):
-            # Handle mask tokens by replacing them with a placeholder
-            result = []
-            for token_id in token_ids:
-                if token_id == mask_token_id:
-                    result.append('[MASK]')
-                elif token_id < len(itos):
-                    result.append(itos[token_id])
-                else:
-                    result.append('[UNK]')
-            return ''.join(result)
-
-        def decode_with_mask_char(token_ids, mask_char='#'):
-            # Decode tokens using specified mask character for masked positions
-            result = []
-            for token_id in token_ids:
-                if token_id == mask_token_id:
-                    result.append(mask_char)
-                elif token_id < len(itos):
-                    result.append(itos[token_id])
-                else:
-                    result.append('[UNK]')
-            return ''.join(result)
-
-        print(f"Vocabulary size: {vocab_size}, mask_token_id: {mask_token_id}")
+# Fallback: try to infer from checkpoint filename or use default
+if not dataset_name:
+    print("Warning: Could not extract dataset from checkpoint config")
+    if 'shakespeare' in checkpoint_name.lower():
+        dataset_name = 'shakespeare_char'
+        print(f"Inferred dataset from filename: {dataset_name}")
     else:
-        raise FileNotFoundError(f"Meta file not found: {meta_path}")
+        dataset_name = 'shakespeare_char'  # Default fallback
+        print(f"Using default dataset: {dataset_name}")
+
+meta_path = os.path.join('data', dataset_name, 'meta.pkl')
+
+if os.path.exists(meta_path):
+    print(f"Loading vocabulary from {meta_path}...")
+    with open(meta_path, 'rb') as f:
+        meta = pickle.load(f)
+
+    # Setup encoding/decoding functions
+    stoi, itos = meta['stoi'], meta['itos']
+    vocab_size = meta['vocab_size']
+    mask_token_id = vocab_size  # Mask token is next ID after vocabulary
+    wrong_token_id = vocab_size + 1  # Wrong token is next ID after mask (for remasking models)
+    remask_good_id = vocab_size + 2  # Good token for binary remasking models
+    remask_wrong_id = vocab_size + 3  # Wrong token for binary remasking models
+
+    def encode(text):
+        return [stoi[c] for c in text]
+
+    def decode(token_ids):
+        # Handle mask tokens by replacing them with a placeholder
+        result = []
+        for token_id in token_ids:
+            if token_id == mask_token_id:
+                result.append('[MASK]')
+            elif token_id < len(itos):
+                result.append(itos[token_id])
+            else:
+                result.append('[UNK]')
+        return ''.join(result)
+
+    def decode_with_mask_char(token_ids, mask_char='#'):
+        # Decode tokens using specified mask character for masked positions
+        result = []
+        for token_id in token_ids:
+            if token_id == mask_token_id:
+                result.append(mask_char)
+            elif token_id < len(itos):
+                result.append(itos[token_id])
+            else:
+                result.append('[UNK]')
+        return ''.join(result)
+
+    print(f"Vocabulary size: {vocab_size}, mask_token_id: {mask_token_id}")
 else:
-    raise ValueError("Checkpoint does not contain dataset configuration")
+    raise FileNotFoundError(f"Meta file not found: {meta_path}. Please ensure the dataset '{dataset_name}' exists in the data directory.")
 
 # Run diffusion generation with batching
 with torch.no_grad():

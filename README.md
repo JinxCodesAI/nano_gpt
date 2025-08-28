@@ -1,227 +1,539 @@
 
-# nanoGPT
+# Discrete Diffusion LLM Training - Unmasking Framework
 
-![nanoGPT](assets/nanogpt.jpg)
+A training framework for discrete diffusion-based language models using **unmasking training**, derived from [nanoGPT](https://github.com/karpathy/nanoGPT). This repository implements progressive unmasking with stage-based curriculum learning for character-level language modeling.
 
-The simplest, fastest repository for training/finetuning medium-sized GPTs. It is a rewrite of [minGPT](https://github.com/karpathy/minGPT) that prioritizes teeth over education. Still under active development, but currently the file `train.py` reproduces GPT-2 (124M) on OpenWebText, running on a single 8XA100 40GB node in about 4 days of training. The code itself is plain and readable: `train.py` is a ~300-line boilerplate training loop and `model.py` a ~300-line GPT model definition, which can optionally load the GPT-2 weights from OpenAI. That's it.
+**Unmasking Training** uses a curriculum learning approach where the model learns to predict masked tokens, starting with easier masking patterns and progressively advancing to more challenging ones. The model uses bidirectional attention (unlike autoregressive models) and learns through stages that automatically advance based on validation performance.
 
-![repro124m](assets/gpt2_124M_loss.png)
-
-Because the code is so simple, it is very easy to hack to your needs, train new models from scratch, or finetune pretrained checkpoints (e.g. biggest one currently available as a starting point would be the GPT-2 1.3B model from OpenAI).
+The framework is designed exclusively for character-level tokenization and implements sophisticated masking strategies, validation systems, and automatic stage progression.
 
 ## install
 
 ```
-pip install torch numpy transformers datasets tiktoken wandb tqdm
+pip install torch numpy wandb
 ```
 
 Dependencies:
 
-- [pytorch](https://pytorch.org) <3
-- [numpy](https://numpy.org/install/) <3
--  `transformers` for huggingface transformers <3 (to load GPT-2 checkpoints)
--  `datasets` for huggingface datasets <3 (if you want to download + preprocess OpenWebText)
--  `tiktoken` for OpenAI's fast BPE code <3
--  `wandb` for optional logging <3
--  `tqdm` for progress bars <3
+- [pytorch](https://pytorch.org) - Core deep learning framework
+- [numpy](https://numpy.org/install/) - Numerical computations
+- `wandb` - Optional logging and experiment tracking
+
+Note: This framework is designed specifically for character-level tokenization and does not require transformers, datasets, or tiktoken packages.
 
 ## quick start
 
-If you are not a deep learning professional and you just want to feel the magic and get your feet wet, the fastest way to get started is to train a character-level GPT on the works of Shakespeare. First, we download it as a single (1MB) file and turn it from raw text into one large stream of integers:
+To get started with discrete diffusion LLM training, first prepare your character-level dataset. For Shakespeare:
 
 ```sh
 python data/shakespeare_char/prepare.py
 ```
 
-This creates a `train.bin` and `val.bin` in that data directory. Now it is time to train your GPT. The size of it very much depends on the computational resources of your system:
+This creates `train.bin` and `val.bin` with character-level tokenization. 
 
-**I have a GPU**. Great, we can quickly train a baby GPT with the settings provided in the [config/train_shakespeare_char.py](config/train_shakespeare_char.py) config file:
+## Unmasking Training Overview
 
-```sh
-python train.py config/train_shakespeare_char.py
-```
+**Unmasking training** is a curriculum learning approach where:
 
-If you peek inside it, you'll see that we're training a GPT with a context size of up to 256 characters, 384 feature channels, and it is a 6-layer Transformer with 6 heads in each layer. On one A100 GPU this training run takes about 3 minutes and the best validation loss is 1.4697. Based on the configuration, the model checkpoints are being written into the `--out_dir` directory `out-shakespeare-char`. So once the training finishes we can sample from the best model by pointing the sampling script at this directory:
+1. **Masking**: Random tokens in the input are replaced with a special `<MASK>` token
+2. **Prediction**: The model learns to predict the original tokens at masked positions
+3. **Bidirectional Context**: Unlike autoregressive models, the model can attend to both past and future tokens
+4. **Stage Progression**: Training automatically advances through stages with increasing difficulty
+5. **Curriculum Learning**: Starts with easy masking patterns, progresses to harder ones
 
-```sh
-python sample.py --out_dir=out-shakespeare-char
-```
+### Masking Strategies
 
-This generates a few samples, for example:
+**Sticky Masking** (Recommended):
+- Uses neighboring token context to create coherent masked regions
+- `p1_probability`: Chance of masking when no neighbors are masked
+- `p2_probability`: Chance of masking when neighbors are already masked
+- `target_masked_ratio`: Target fraction of tokens to mask
 
-```
-ANGELO:
-And cowards it be strawn to my bed,
-And thrust the gates of my threats,
-Because he that ale away, and hang'd
-An one with him.
+**Random Masking**:
+- Uniformly random token masking
+- `max_masked_ratio`: Maximum fraction of tokens to mask
+- Each sample gets a different random masking ratio (0 to max)
 
-DUKE VINCENTIO:
-I thank your eyes against it.
+### Stage-Based Learning
 
-DUKE VINCENTIO:
-Then will answer him to save the malm:
-And what have you tyrannous shall do this?
+Training progresses through predefined stages automatically:
+- Each stage has its own masking configuration
+- Stages advance when validation loss stops improving
+- `val_loss_stale_count`: How many evaluations to wait before advancing
+- Validation uses samples from ALL stages for consistent evaluation
 
-DUKE VINCENTIO:
-If you have done evils of all disposition
-To end his power, the day of thrust for a common men
-That I leave, to fight with over-liking
-Hasting in a roseman.
-```
+## Model Architecture
 
-lol  `¯\_(ツ)_/¯`. Not bad for a character-level model after 3 minutes of training on a GPU. Better results are quite likely obtainable by instead finetuning a pretrained GPT-2 model on this dataset (see finetuning section later).
+The models use bidirectional attention with Rotary Position Embeddings (RoPE):
+- **Attention**: Bidirectional self-attention (no causal masking)
+- **Position**: RoPE instead of absolute position embeddings
+- **Vocabulary**: Extended with special tokens for masking/corruption
 
-**I only have a macbook** (or other cheap computer). No worries, we can still train a GPT but we want to dial things down a notch. I recommend getting the bleeding edge PyTorch nightly ([select it here](https://pytorch.org/get-started/locally/) when installing) as it is currently quite likely to make your code more efficient. But even without it, a simple train run could look as follows:
+## Quick Start Examples
 
-```sh
-python train.py config/train_shakespeare_char.py --device=cpu --compile=False --eval_iters=20 --log_interval=1 --block_size=64 --batch_size=12 --n_layer=4 --n_head=4 --n_embd=128 --max_iters=2000 --lr_decay_iters=2000 --dropout=0.0
-```
-
-Here, since we are running on CPU instead of GPU we must set both `--device=cpu` and also turn off PyTorch 2.0 compile with `--compile=False`. Then when we evaluate we get a bit more noisy but faster estimate (`--eval_iters=20`, down from 200), our context size is only 64 characters instead of 256, and the batch size only 12 examples per iteration, not 64. We'll also use a much smaller Transformer (4 layers, 4 heads, 128 embedding size), and decrease the number of iterations to 2000 (and correspondingly usually decay the learning rate to around max_iters with `--lr_decay_iters`). Because our network is so small we also ease down on regularization (`--dropout=0.0`). This still runs in about ~3 minutes, but gets us a loss of only 1.88 and therefore also worse samples, but it's still good fun:
+### GPU Training (Recommended)
 
 ```sh
-python sample.py --out_dir=out-shakespeare-char --device=cpu
+python train_run.py \
+  --training_type=unmasking \
+  --batch_size=16 \
+  --block_size=1024 \
+  --n_layer=6 \
+  --n_head=6 \
+  --n_embd=384 \
+  --max_iters=50000 \
+  --use_paragraph_boundaries=True \
+  --learning_rate=1e-3
 ```
-Generates samples like this:
 
-```
-GLEORKEN VINGHARD III:
-Whell's the couse, the came light gacks,
-And the for mought you in Aut fries the not high shee
-bot thou the sought bechive in that to doth groan you,
-No relving thee post mose the wear
-```
-
-Not bad for ~3 minutes on a CPU, for a hint of the right character gestalt. If you're willing to wait longer, feel free to tune the hyperparameters, increase the size of the network, the context length (`--block_size`), the length of training, etc.
-
-Finally, on Apple Silicon Macbooks and with a recent PyTorch version make sure to add `--device=mps` (short for "Metal Performance Shaders"); PyTorch then uses the on-chip GPU that can *significantly* accelerate training (2-3X) and allow you to use larger networks. See [Issue 28](https://github.com/karpathy/nanoGPT/issues/28) for more.
-
-## reproducing GPT-2
-
-A more serious deep learning professional may be more interested in reproducing GPT-2 results. So here we go - we first tokenize the dataset, in this case the [OpenWebText](https://openwebtext2.readthedocs.io/en/latest/), an open reproduction of OpenAI's (private) WebText:
+### CPU Training (Reduced Model)
 
 ```sh
-python data/openwebtext/prepare.py
+python train_run.py \
+  --training_type=unmasking \
+  --device=cpu \
+  --compile=False \
+  --batch_size=8 \
+  --block_size=256 \
+  --n_layer=4 \
+  --n_head=4 \
+  --n_embd=128 \
+  --max_iters=10000 \
+  --learning_rate=5e-4
 ```
 
-This downloads and tokenizes the [OpenWebText](https://huggingface.co/datasets/openwebtext) dataset. It will create a `train.bin` and `val.bin` which holds the GPT2 BPE token ids in one sequence, stored as raw uint16 bytes. Then we're ready to kick off training. To reproduce GPT-2 (124M) you'll want at least an 8X A100 40GB node and run:
+### Apple Silicon (MPS)
 
 ```sh
-torchrun --standalone --nproc_per_node=8 train.py config/train_gpt2.py
+python train_run.py \
+  --training_type=unmasking \
+  --device=mps \
+  --batch_size=12 \
+  --block_size=512 \
+  --max_iters=25000
 ```
 
-This will run for about 4 days using PyTorch Distributed Data Parallel (DDP) and go down to loss of ~2.85. Now, a GPT-2 model just evaluated on OWT gets a val loss of about 3.11, but if you finetune it it will come down to ~2.85 territory (due to an apparent domain gap), making the two models ~match.
+## Detailed Configuration Guide
 
-If you're in a cluster environment and you are blessed with multiple GPU nodes you can make GPU go brrrr e.g. across 2 nodes like:
+### Unmasking Stage Configuration
+
+Stages are defined in `train_run.py` around line 64. Each stage is a dictionary with:
+
+#### Sticky Masking Stages
+```python
+unmasking_stages = [
+    {
+        "type": "sticky",
+        "target_masked_ratio": 0.2,      # 20% of tokens masked
+        "p1_probability": 0.3,           # 30% chance to start new masked region
+        "p2_probability": 0.0,           # 0% chance to extend (no stickiness yet)
+        "val_loss_stale_count": 5        # Advance after 5 evals without improvement
+    },
+    {
+        "type": "sticky",
+        "target_masked_ratio": 0.4,      # 40% of tokens masked
+        "p1_probability": 0.2,           # 20% chance to start new regions
+        "p2_probability": 0.8,           # 80% chance to extend existing regions
+        "val_loss_stale_count": 5
+    },
+    {
+        "type": "sticky", 
+        "target_masked_ratio": 0.6,      # 60% of tokens masked (hardest)
+        "p1_probability": 0.1,           # 10% chance for new regions
+        "p2_probability": 0.9,           # 90% chance to extend (very sticky)
+        "val_loss_stale_count": 10       # More patience for final stage
+    }
+]
+```
+
+#### Random Masking Stages
+```python
+unmasking_stages = [
+    {
+        "type": "random",
+        "max_masked_ratio": 0.3,         # Up to 30% tokens masked randomly
+        "val_loss_stale_count": 5
+    },
+    {
+        "type": "random",
+        "max_masked_ratio": 0.7,         # Up to 70% tokens masked
+        "val_loss_stale_count": 8
+    }
+]
+```
+
+### General LLM Training Parameters
+
+#### Model Architecture
+```python
+# Model size (adjust based on compute/memory)
+n_layer = 6           # Number of transformer layers (4-12 typical)
+n_head = 6            # Number of attention heads (usually same as n_layer)
+n_embd = 384          # Embedding dimension (128, 256, 384, 512, 768)
+dropout = 0.01        # Dropout rate (0.0-0.1, lower for small models)
+bias = False          # Use bias in Linear/LayerNorm (False often better)
+
+# Context and batch
+block_size = 1024     # Sequence length (256, 512, 1024, 2048)
+batch_size = 16       # Batch size (adjust for GPU memory)
+```
+
+#### Training Schedule
+```python
+# Learning rate schedule
+learning_rate = 1e-3  # Peak learning rate (1e-4 to 5e-3)
+warmup_iters = 2000   # Warmup steps (usually 10-20% of total)
+lr_decay_iters = 41000 # Decay until this iteration (usually 80-90% of max_iters)
+min_lr = 1e-4         # Minimum LR (usually learning_rate/10)
+max_iters = 50000     # Total training iterations
+
+# Optimizer
+beta1 = 0.9           # Adam beta1 (momentum)
+beta2 = 0.99          # Adam beta2 (RMSprop-like)
+weight_decay = 1e-3   # L2 regularization (1e-4 to 1e-2)
+grad_clip = 1.0       # Gradient clipping (0.5 to 2.0)
+```
+
+#### Data Configuration
+```python
+# Data handling
+use_paragraph_boundaries = True  # Start sequences at paragraph breaks (recommended)
+dataset = 'shakespeare_char'     # Character-level dataset
+eval_interval = 200             # How often to evaluate (iterations)
+eval_iters = 20                 # Number of batches for evaluation
+```
+
+### Hardware-Specific Settings
+
+#### For GPU Training
+```python
+device = 'cuda'              # Use GPU
+compile = True               # Use torch.compile (PyTorch 2.0+)
+dtype = 'float16'           # Mixed precision (faster, less memory)
+batch_size = 16             # Larger batches
+block_size = 1024           # Longer sequences
+```
+
+#### For CPU Training
+```python
+device = 'cpu'              # Use CPU
+compile = False             # Disable compilation
+dtype = 'float32'           # Full precision
+batch_size = 4              # Smaller batches
+block_size = 256            # Shorter sequences
+n_layer = 4                 # Smaller model
+n_embd = 128
+```
+
+#### Memory Optimization
+```python
+# If running out of memory, try:
+batch_size = 8              # Reduce batch size
+block_size = 512            # Reduce sequence length
+n_layer = 4                 # Reduce model size
+n_embd = 256
+gradient_accumulation_steps = 2  # Simulate larger batches
+```
+
+## Validation and Monitoring
+
+### Validation Strategy
+
+Unmasking training uses a sophisticated validation approach:
+
+**Pre-created Validation Sets**:
+- Generated once at training start
+- Contains samples from ALL stages (not just current)
+- Ensures consistent evaluation throughout training
+- Distributed evenly across difficulty levels
+
+**Per-Stage Validation**:
+- Tracks performance on each stage separately
+- Shows which difficulty levels are improving
+- Helps identify training issues
+
+### Key Metrics to Monitor
+
+**Loss Metrics**:
+- `val_loss`: Overall validation loss
+- `val_stage_X_loss`: Loss on each specific stage
+- `train_loss`: Training loss (should be lower than validation)
+
+**Performance Metrics**:
+- `val_model_vs_random`: How much better than random guessing
+- `val_most_likely_accuracy`: Percentage of correct top-1 predictions
+- `val_masked_token_ratio`: Actual masking ratios achieved
+
+**Stage Progression**:
+- Current stage number
+- Validation loss stale count (resets when loss improves)
+- Best validation loss for current stage
+
+### Training Logs Example
+```
+step 4000: train loss 2.1234, val loss 2.3456, lr 0.000800
+Stage 1 (sticky): target_ratio=0.4, p1=0.2, p2=0.8, stale_count=2
+  val model vs random: 3.45x better
+  val accuracy: 0.3421 (random baseline: 0.0154)
+  Most likely guess correct P %: 34.2%
+Per-stage validation losses:
+  Stage 0 (sticky): 2.1234 (320 samples) - ratio=0.2
+  Stage 1 (sticky): 2.4567 (320 samples) - ratio=0.4
+  Stage 2 (sticky): 2.8901 (320 samples) - ratio=0.6
+```
+
+### When to Worry
+
+**Bad Signs**:
+- Validation loss not decreasing after many iterations
+- Model vs random ratio < 2x (model not learning)
+- NaN/Inf in losses (training instability)
+- Stage never advancing (stale count keeps growing)
+
+**Good Signs**:
+- Validation loss steadily decreasing
+- Model vs random ratio > 5x
+- Stages advancing automatically
+- Per-stage losses improving across all stages
+
+## Advanced Usage
+
+### Resuming Training
+
+Training automatically saves checkpoints and can be resumed:
 
 ```sh
-# Run on the first (master) node with example IP 123.456.123.456:
-torchrun --nproc_per_node=8 --nnodes=2 --node_rank=0 --master_addr=123.456.123.456 --master_port=1234 train.py
-# Run on the worker node:
-torchrun --nproc_per_node=8 --nnodes=2 --node_rank=1 --master_addr=123.456.123.456 --master_port=1234 train.py
+python train_run.py --init_from=resume --out_dir=your_checkpoint_dir
 ```
 
-It is a good idea to benchmark your interconnect (e.g. iperf3). In particular, if you don't have Infiniband then also prepend `NCCL_IB_DISABLE=1` to the above launches. Your multinode training will work, but most likely _crawl_. By default checkpoints are periodically written to the `--out_dir`. We can sample from the model by simply `python sample.py`.
+Checkpoints preserve:
+- Model and optimizer state
+- Training iteration count
+- Current stage and stage progression
+- Best validation loss for current stage
+- Validation loss stale count
 
-Finally, to train on a single GPU simply run the `python train.py` script. Have a look at all of its args, the script tries to be very readable, hackable and transparent. You'll most likely want to tune a number of those variables depending on your needs.
+The framework automatically finds the latest checkpoint (`ckpt_unmasking_XXXXX.pt`).
 
-## baselines
+### Custom Stage Configurations
 
-OpenAI GPT-2 checkpoints allow us to get some baselines in place for openwebtext. We can get the numbers as follows:
-
-```sh
-$ python train.py config/eval_gpt2.py
-$ python train.py config/eval_gpt2_medium.py
-$ python train.py config/eval_gpt2_large.py
-$ python train.py config/eval_gpt2_xl.py
+**Progressive Difficulty Example**:
+```python
+unmasking_stages = [
+    # Stage 0: Very easy - scattered 15% masking
+    {"type": "sticky", "target_masked_ratio": 0.15, "p1_probability": 0.4, "p2_probability": 0.1, "val_loss_stale_count": 3},
+    
+    # Stage 1: Easy - small regions, 30% masking  
+    {"type": "sticky", "target_masked_ratio": 0.30, "p1_probability": 0.3, "p2_probability": 0.6, "val_loss_stale_count": 5},
+    
+    # Stage 2: Medium - larger regions, 50% masking
+    {"type": "sticky", "target_masked_ratio": 0.50, "p1_probability": 0.2, "p2_probability": 0.8, "val_loss_stale_count": 5},
+    
+    # Stage 3: Hard - very large regions, 70% masking
+    {"type": "sticky", "target_masked_ratio": 0.70, "p1_probability": 0.1, "p2_probability": 0.9, "val_loss_stale_count": 8},
+]
 ```
 
-and observe the following losses on train and val:
-
-| model | params | train loss | val loss |
-| ------| ------ | ---------- | -------- |
-| gpt2 | 124M         | 3.11  | 3.12     |
-| gpt2-medium | 350M  | 2.85  | 2.84     |
-| gpt2-large | 774M   | 2.66  | 2.67     |
-| gpt2-xl | 1558M     | 2.56  | 2.54     |
-
-However, we have to note that GPT-2 was trained on (closed, never released) WebText, while OpenWebText is just a best-effort open reproduction of this dataset. This means there is a dataset domain gap. Indeed, taking the GPT-2 (124M) checkpoint and finetuning on OWT directly for a while reaches loss down to ~2.85. This then becomes the more appropriate baseline w.r.t. reproduction.
-
-## finetuning
-
-Finetuning is no different than training, we just make sure to initialize from a pretrained model and train with a smaller learning rate. For an example of how to finetune a GPT on new text go to `data/shakespeare` and run `prepare.py` to download the tiny shakespeare dataset and render it into a `train.bin` and `val.bin`, using the OpenAI BPE tokenizer from GPT-2. Unlike OpenWebText this will run in seconds. Finetuning can take very little time, e.g. on a single GPU just a few minutes. Run an example finetuning like:
-
-```sh
-python train.py config/finetune_shakespeare.py
+**Mixed Strategy Example**:
+```python
+unmasking_stages = [
+    # Start with random masking
+    {"type": "random", "max_masked_ratio": 0.2, "val_loss_stale_count": 3},
+    
+    # Progress to sticky masking
+    {"type": "sticky", "target_masked_ratio": 0.3, "p1_probability": 0.3, "p2_probability": 0.7, "val_loss_stale_count": 5},
+    {"type": "sticky", "target_masked_ratio": 0.5, "p1_probability": 0.2, "p2_probability": 0.8, "val_loss_stale_count": 8},
+]
 ```
 
-This will load the config parameter overrides in `config/finetune_shakespeare.py` (I didn't tune them much though). Basically, we initialize from a GPT2 checkpoint with `init_from` and train as normal, except shorter and with a small learning rate. If you're running out of memory try decreasing the model size (they are `{'gpt2', 'gpt2-medium', 'gpt2-large', 'gpt2-xl'}`) or possibly decreasing the `block_size` (context length). The best checkpoint (lowest validation loss) will be in the `out_dir` directory, e.g. in `out-shakespeare` by default, per the config file. You can then run the code in `sample.py --out_dir=out-shakespeare`:
+### Hyperparameter Tuning Guidelines
 
-```
-THEODORE:
-Thou shalt sell me to the highest bidder: if I die,
-I sell thee to the first; if I go mad,
-I sell thee to the second; if I
-lie, I sell thee to the third; if I slay,
-I sell thee to the fourth: so buy or sell,
-I tell thee again, thou shalt not sell my
-possession.
+**Start with these safe defaults**:
+```python
+# Model (for Shakespeare-sized datasets)
+n_layer = 6
+n_head = 6  
+n_embd = 384
+block_size = 1024
+batch_size = 16
 
-JULIET:
-And if thou steal, thou shalt not sell thyself.
-
-THEODORE:
-I do not steal; I sell the stolen goods.
-
-THEODORE:
-Thou know'st not what thou sell'st; thou, a woman,
-Thou art ever a victim, a thing of no worth:
-Thou hast no right, no right, but to be sold.
+# Learning
+learning_rate = 1e-3
+warmup_iters = 2000
+weight_decay = 1e-3
 ```
 
-Whoa there, GPT, entering some dark place over there. I didn't really tune the hyperparameters in the config too much, feel free to try!
+**Scale up gradually**:
+1. **More data**: Increase `max_iters`, `batch_size`
+2. **More compute**: Increase `n_layer`, `n_embd`  
+3. **Longer sequences**: Increase `block_size`
+4. **Harder masking**: Higher `target_masked_ratio`, more stages
 
-## sampling / inference
+**Signs you can scale up**:
+- Training loss still decreasing
+- Model vs random ratio > 5x
+- Stages advancing smoothly
+- No memory issues
 
-Use the script `sample.py` to sample either from pre-trained GPT-2 models released by OpenAI, or from a model you trained yourself. For example, here is a way to sample from the largest available `gpt2-xl` model:
+**Signs to scale down**:
+- Out of memory errors
+- Training loss plateauing quickly  
+- Poor model vs random performance
+- Stages not advancing
 
-```sh
-python sample.py \
-    --init_from=gpt2-xl \
-    --start="What is the answer to life, the universe, and everything?" \
-    --num_samples=5 --max_new_tokens=100
+## Understanding Unmasking Training
+
+### How It Differs from Autoregressive Training
+
+**Traditional Autoregressive (GPT-style)**:
+- Predicts next token given previous tokens only
+- Causal attention (can't see future)
+- Left-to-right generation
+- Loss on all positions
+
+**Unmasking Training**:
+- Predicts masked tokens given all other tokens
+- Bidirectional attention (can see past and future)
+- Fill-in-the-blank style learning
+- Loss only on masked positions
+- Curriculum learning through masking difficulty
+
+### Why Stage-Based Learning?
+
+1. **Easy → Hard Progression**: Start with few masks, increase difficulty
+2. **Stable Training**: Avoid overwhelming the model early
+3. **Better Convergence**: Each stage builds on previous learning
+4. **Automatic Advancement**: No manual intervention needed
+
+### Masking Strategy Details
+
+**Sticky Masking Benefits**:
+- Creates coherent masked regions (words, phrases)
+- More realistic than random masking
+- Encourages understanding of context
+- `p2_probability > p1_probability` creates "sticky" regions
+
+**Example Progression**:
+- **Stage 1**: 20% masked, no stickiness (scattered masks)
+- **Stage 2**: 40% masked, some stickiness (small regions)
+- **Stage 3**: 60% masked, very sticky (large regions)
+
+### Character-Level Benefits
+
+- **Fine-grained control**: Can mask individual characters
+- **Spelling/morphology**: Learns character patterns
+- **No tokenization issues**: No out-of-vocabulary problems
+- **Language agnostic**: Works for any script
+
+### Training Monitoring
+
+Key metrics to watch:
+- **Validation loss per stage**: Should decrease over time
+- **Stage progression**: Automatic advancement when loss plateaus
+- **Masked token ratio**: Should match target ratios
+- **Model vs random**: Should improve significantly above random chance
+
+## Performance Notes
+
+The framework includes several optimizations for efficient unmasking training:
+
+**Data Optimizations**:
+- **Background prefetching**: Training batches prepared in parallel
+- **Memory mapping**: Efficient data loading with numpy memmap
+- **Vectorized masking**: GPU-optimized masking operations
+- **Cached validation sets**: Pre-created validation data (no runtime generation)
+- **Paragraph boundaries**: Optional alignment with text structure
+
+**Model Optimizations**:
+- **Flash Attention**: Automatic use when available (PyTorch 2.0+)
+- **PyTorch compilation**: `torch.compile()` for ~2x speedup
+- **Mixed precision**: `float16` training when using CUDA
+- **Bidirectional attention**: Optimized for non-causal attention patterns
+
+**Training Optimizations**:
+- **Gradient accumulation**: Simulate larger batches
+- **Automatic recovery**: Handles NaN/Inf without manual intervention
+- **Stage caching**: Efficient validation across all difficulty levels
+
+**Hardware-Specific Tips**:
+- **CUDA**: Use `--dtype=float16`, `--compile=True`
+- **CPU**: Use `--compile=False`, reduce model size
+- **Apple Silicon**: Use `--device=mps` for GPU acceleration
+- **Multi-GPU**: Framework supports DDP (set environment variables)
+
+## Origin and Acknowledgements
+
+This repository is derived from [nanoGPT](https://github.com/karpathy/nanoGPT) by Andrej Karpathy. The original nanoGPT provides an excellent foundation for transformer training, which has been extensively modified here to support unmasking-based discrete diffusion training.
+
+Key modifications from the original:
+- **Bidirectional attention**: Allows attending to future tokens (essential for unmasking)
+- **Stage-based curriculum learning**: Automatic progression through difficulty levels
+- **Sophisticated masking strategies**: Sticky and random masking with fine-grained control
+- **Advanced validation systems**: Pre-created validation sets with per-stage evaluation
+- **Character-level focus**: Optimized for character-based tokenization
+- **Instability detection**: Automatic recovery from training issues
+- **Comprehensive monitoring**: Detailed metrics and logging
+
+This work explores a different paradigm from autoregressive language modeling, building upon nanoGPT's clean, readable foundation while implementing curriculum learning approaches to discrete diffusion.
+
+## Troubleshooting
+
+### Common Issues
+
+**Training Not Starting**:
 ```
+No unmasking stages defined, exiting...
+```
+- Solution: Define `unmasking_stages` list in `train_run.py` around line 64
 
-If you'd like to sample from a model you trained, use the `--out_dir` to point the code appropriately. You can also prompt the model with some text from a file, e.g. ```python sample.py --start=FILE:prompt.txt```.
+**Memory Issues**:
+```
+CUDA out of memory
+```
+- Reduce `batch_size` (try 8, 4, 2)
+- Reduce `block_size` (try 512, 256)
+- Reduce model size (`n_layer=4, n_embd=256`)
+- Use `gradient_accumulation_steps=2` to simulate larger batches
 
-## efficiency notes
+**Compilation Errors**:
+```
+torch.compile() not supported
+```
+- Add `--compile=False` flag
+- More common on older PyTorch versions or CPU training
 
-For simple model benchmarking and profiling, `bench.py` might be useful. It's identical to what happens in the meat of the training loop of `train.py`, but omits much of the other complexities.
+**Training Instability**:
+```
+NaN detected in validation
+```
+- Lower learning rate (try 5e-4 instead of 1e-3)
+- Increase warmup iterations
+- Check for exploding gradients (reduce `grad_clip`)
+- Framework includes automatic recovery from checkpoints
 
-Note that the code by default uses [PyTorch 2.0](https://pytorch.org/get-started/pytorch-2.0/). At the time of writing (Dec 29, 2022) this makes `torch.compile()` available in the nightly release. The improvement from the one line of code is noticeable, e.g. cutting down iteration time from ~250ms / iter to 135ms / iter. Nice work PyTorch team!
+**Stage Not Advancing**:
+- Check `val_loss_stale_count` - may need to be lower
+- Validation loss may have plateaued naturally
+- Try different masking ratios or probabilities
 
-## todos
+**Poor Performance**:
+- Model vs random ratio < 2x means model isn't learning well
+- Try longer training, different learning rate
+- Check if data is properly formatted (character-level)
+- Ensure `use_paragraph_boundaries=True` for better samples
 
-- Investigate and add FSDP instead of DDP
-- Eval zero-shot perplexities on standard evals (e.g. LAMBADA? HELM? etc.)
-- Finetune the finetuning script, I think the hyperparams are not great
-- Schedule for linear batch size increase during training
-- Incorporate other embeddings (rotary, alibi)
-- Separate out the optim buffers from model params in checkpoints I think
-- Additional logging around network health (e.g. gradient clip events, magnitudes)
-- Few more investigations around better init etc.
+### Performance Tuning Tips
 
-## troubleshooting
+**For Better Results**:
+- Use sticky masking (more realistic than random)
+- Start with lower masking ratios (0.1-0.2)
+- Use paragraph boundaries for cleaner samples
+- Train longer (50k+ iterations)
+- Monitor per-stage validation losses
 
-Note that by default this repo uses PyTorch 2.0 (i.e. `torch.compile`). This is fairly new and experimental, and not yet available on all platforms (e.g. Windows). If you're running into related error messages try to disable this by adding `--compile=False` flag. This will slow down the code but at least it will run.
+**For Faster Training**:
+- Enable compilation: `--compile=True`
+- Use mixed precision: `--dtype=float16`
+- Larger batch sizes if memory allows
+- Use `--device=mps` on Apple Silicon
 
-For some context on this repository, GPT, and language modeling it might be helpful to watch my [Zero To Hero series](https://karpathy.ai/zero-to-hero.html). Specifically, the [GPT video](https://www.youtube.com/watch?v=kCc8FmEb1nY) is popular if you have some prior language modeling context.
-
-For more questions/discussions feel free to stop by **#nanoGPT** on Discord:
-
-[![](https://dcbadge.vercel.app/api/server/3zy8kqD9Cp?compact=true&style=flat)](https://discord.gg/3zy8kqD9Cp)
-
-## acknowledgements
-
-All nanoGPT experiments are powered by GPUs on [Lambda labs](https://lambdalabs.com), my favorite Cloud GPU provider. Thank you Lambda labs for sponsoring nanoGPT!
