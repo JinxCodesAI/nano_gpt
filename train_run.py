@@ -4,6 +4,7 @@ Uses train_utils.py for all function definitions.
 """
 
 import os
+import sys
 import time
 import math
 import pickle
@@ -28,6 +29,11 @@ torch._dynamo.config.suppress_errors = True
 
 # Global timer instance
 timer = Timer()
+
+def print_and_flush(msg):
+    """Print message and immediately flush stdout for real-time logging"""
+    print(msg)
+    sys.stdout.flush()
 
 # -----------------------------------------------------------------------------
 # default config values 
@@ -92,7 +98,7 @@ config_keys = [k for k,v in globals().items() if not k.startswith('_') and isins
 exec(open('configurator.py').read()) # overrides from command line or config file
 
 if len(unmasking_stages) == 0 or unmasking_stages is None:
-    print("No unmasking stages defined, exiting...")
+    print_and_flush("No unmasking stages defined, exiting...")
     exit()
 
 # Update wandb run name after configuration is loaded
@@ -165,7 +171,7 @@ else:
     seed_offset = 0
     ddp_world_size = 1
 tokens_per_iter = gradient_accumulation_steps * ddp_world_size * batch_size * block_size
-print(f"tokens per iteration will be: {tokens_per_iter:,}")
+print_and_flush(f"tokens per iteration will be: {tokens_per_iter:,}")
 
 if master_process:
     os.makedirs(out_dir, exist_ok=True)
@@ -192,7 +198,7 @@ if os.path.exists(meta_path):
     with open(meta_path, 'rb') as f:
         meta = pickle.load(f)
     meta_vocab_size = meta['vocab_size']
-    print(f"found vocab_size = {meta_vocab_size} (inside {meta_path})")
+    print_and_flush(f"found vocab_size = {meta_vocab_size} (inside {meta_path})")
     
     # Set special token IDs for different training types
     mask_token_id = meta_vocab_size
@@ -200,10 +206,10 @@ if os.path.exists(meta_path):
     remask_good_id = meta_vocab_size + 2  # For remasking_binary: uncorrupted positions  
     remask_wrong_id = meta_vocab_size + 3  # For remasking_binary: corrupted positions
     extended_vocab_size = meta_vocab_size + 4  # Add 4 special tokens
-    print(f"mask_token_id = {mask_token_id}, wrong_token_id = {wrong_token_id}")
-    print(f"remask_good_id = {remask_good_id}, remask_wrong_id = {remask_wrong_id}, extended_vocab_size = {extended_vocab_size}")
+    print_and_flush(f"mask_token_id = {mask_token_id}, wrong_token_id = {wrong_token_id}")
+    print_and_flush(f"remask_good_id = {remask_good_id}, remask_wrong_id = {remask_wrong_id}, extended_vocab_size = {extended_vocab_size}")
 else:
-    print("No meta.pkl found, using default GPT-2 vocab")
+    print_and_flush("No meta.pkl found, using default GPT-2 vocab")
     mask_token_id = 50304
     wrong_token_id = 50305
     remask_good_id = 50306
@@ -277,15 +283,15 @@ model_args = dict(n_layer=n_layer, n_head=n_head, n_embd=n_embd, block_size=bloc
                   bias=bias, vocab_size=None, dropout=dropout, attention_type=attention_type, use_rope=use_rope) # start with model_args from command line
 if init_from == 'scratch':
     # init a new model from scratch
-    print("Initializing a new model from scratch")
+    print_and_flush("Initializing a new model from scratch")
     # determine the vocab size we'll use for from-scratch training
     if meta_vocab_size is None:
-        print("defaulting to vocab_size of GPT-2 to 50304 (50257 rounded up for efficiency)")
+        print_and_flush("defaulting to vocab_size of GPT-2 to 50304 (50257 rounded up for efficiency)")
     model_args['vocab_size'] = extended_vocab_size if meta_vocab_size is not None else 50305
     gptconf = GPTConfig(**model_args)
     model = GPT(gptconf)
 elif init_from == 'resume':
-    print(f"Resuming training from {out_dir}")
+    print_and_flush(f"Resuming training from {out_dir}")
     # resume training from a checkpoint.
     # Find the latest checkpoint file
     import glob
@@ -306,7 +312,7 @@ elif init_from == 'resume':
 
         latest_ckpt = max(ckpt_files, key=extract_iter_num)
         ckpt_path = latest_ckpt
-        print(f"Loading latest checkpoint: {os.path.basename(ckpt_path)}")
+        print_and_flush(f"Loading latest checkpoint: {os.path.basename(ckpt_path)}")
 
     checkpoint = torch.load(ckpt_path, map_location=device, weights_only=False)
     checkpoint_model_args = checkpoint['model_args']
@@ -334,10 +340,10 @@ elif init_from == 'resume':
     # Restore training context state if available
     if 'training_context' in checkpoint and training_type == 'unmasking':
         ctx_state = checkpoint['training_context']
-        print(f"Restoring training context state:")
-        print(f"  Stage: {ctx_state.get('current_stage', 0)}")
-        print(f"  Val loss stale count: {ctx_state.get('val_loss_stale_count', 0)}")
-        print(f"  Best val loss for stage: {ctx_state.get('best_val_loss_for_stage', float('inf'))}")
+        print_and_flush(f"Restoring training context state:")
+        print_and_flush(f"  Stage: {ctx_state.get('current_stage', 0)}")
+        print_and_flush(f"  Val loss stale count: {ctx_state.get('val_loss_stale_count', 0)}")
+        print_and_flush(f"  Best val loss for stage: {ctx_state.get('best_val_loss_for_stage', float('inf'))}")
         
         # These will be set on the training_ctx after it's created
         checkpoint_training_context = ctx_state
@@ -367,7 +373,7 @@ checkpoint = None # free up memory
 
 # compile the model
 if compile:
-    print("compiling the model... (takes a ~minute)")
+    print_and_flush("compiling the model... (takes a ~minute)")
     unoptimized_model = model
     model = torch.compile(model) # requires PyTorch 2.0
 
@@ -484,7 +490,7 @@ if training_ctx.training_type == 'unmasking':
     print("Pre-creating validation set...")
     create_unmasking_validation_set(training_ctx)
 
-print("Starting training loop...")
+print_and_flush("Starting training loop...")
 just_recovered = False
 while True:
 
@@ -495,7 +501,7 @@ while True:
 
     # evaluate the loss on train/val sets and write checkpoints
     if iter_num % eval_interval == 0 and master_process and not just_recovered:
-        print(f"\n--- Starting validation at iteration {iter_num} ---")
+        print_and_flush(f"\n--- Starting validation at iteration {iter_num} ---")
         with timer.time_function('validation'):
             # Update training context with current iteration
             training_ctx.iter_num = iter_num
@@ -505,16 +511,16 @@ while True:
         train_loss_finite = math.isfinite(losses['train'])
         val_loss_finite = math.isfinite(losses['val'])
         if not train_loss_finite or not val_loss_finite:
-            print(f"\n*** VALIDATION INSTABILITY at iter {iter_num} ***")
-            print(f"Train loss: {losses['train']} ({'finite' if train_loss_finite else 'NaN/Inf'})")
-            print(f"Val loss: {losses['val']} ({'finite' if val_loss_finite else 'NaN/Inf'})")
-            print("NaN detected in validation - model has become unstable")
-            print("*** TERMINATING TRAINING ***")
+            print_and_flush(f"\n*** VALIDATION INSTABILITY at iter {iter_num} ***")
+            print_and_flush(f"Train loss: {losses['train']} ({'finite' if train_loss_finite else 'NaN/Inf'})")
+            print_and_flush(f"Val loss: {losses['val']} ({'finite' if val_loss_finite else 'NaN/Inf'})")
+            print_and_flush("NaN detected in validation - model has become unstable")
+            print_and_flush("*** TERMINATING TRAINING ***")
             break
         
         # Print basic losses
-        print(f"--- Validation complete ---")
-        print(f"step {iter_num}: train loss {losses['train']:.4f}, val loss {losses['val']:.4f}, lr {lr:.6f}")
+        print_and_flush(f"--- Validation complete ---")
+        print_and_flush(f"step {iter_num}: train loss {losses['train']:.4f}, val loss {losses['val']:.4f}, lr {lr:.6f}")
         
         # Print stage information for unmasking training
         if training_ctx.training_type == 'unmasking':
@@ -529,9 +535,9 @@ while True:
                     config = stage_config.config
                     stage_info += f"max_ratio={config.max_masked_ratio:.1f}"
                 stage_info += f", stale_count={losses.get('val_loss_stale_count', 0)}"
-                print(stage_info)
+                print_and_flush(stage_info)
         else:
-            print(f"Progressive validation used {training_ctx.eval_iters * training_ctx.batch_size} samples representing full training difficulty range")
+            print_and_flush(f"Progressive validation used {training_ctx.eval_iters * training_ctx.batch_size} samples representing full training difficulty range")
 
         # Print model vs random statistics if available
         if 'val_model_vs_random' in losses:

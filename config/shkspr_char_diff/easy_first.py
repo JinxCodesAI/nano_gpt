@@ -11,7 +11,7 @@ use_paragraph_boundaries = False # if True, start samples at paragraph boundarie
 training_type = 'unmasking'  # 'unmasking', 'remasking', or 'remasking_binary' - type of training
 
 # For unmasking: stage-based training with direct probability control
-unmasking_stages_original = [
+unmasking_stages = [
     {'type':'random','max_masked_ratio': 0.2, 'val_loss_stale_count': 10},
     {'type':'sticky','target_masked_ratio': 0.4, 'p1_probability': 0.15, 'p2_probability': 0.3, 'val_loss_stale_count': 6},
     {'type':'sticky','target_masked_ratio': 0.2, 'p1_probability': 0.3, 'p2_probability': 0.0, 'val_loss_stale_count': 2},
