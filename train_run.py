@@ -93,7 +93,7 @@ exec(open('configurator.py').read()) # overrides from command line or config fil
 
 if len(unmasking_stages) == 0 or unmasking_stages is None:
     print("No unmasking stages defined, exiting...")
-    return
+    exit()
 
 # Update wandb run name after configuration is loaded
 if training_type == 'remasking':

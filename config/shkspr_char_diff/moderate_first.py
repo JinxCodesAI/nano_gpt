@@ -1,3 +1,5 @@
+out_dir = 'out_exp'
+init_from = 'scratch' # 'scratch' or 'resume'
 wandb_log = True # disabled by default
 wandb_project = 'experiments_diffusion'
 wandb_run_name = 'shkspr_char_diff_easy_first' # 'run' + str(time.time())
