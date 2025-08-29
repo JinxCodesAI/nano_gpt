@@ -1,5 +1,5 @@
 out_dir = 'out_exp'
-init_from = 'scratch' # 'scratch' or 'resume'
+init_from = 'resume' # 'scratch' or 'resume'
 wandb_log = True # disabled by default
 wandb_project = 'experiments_diffusion'
 wandb_run_name = 'shkspr_char_diff_moderate_first' # 'run' + str(time.time())
@@ -13,6 +13,7 @@ training_type = 'unmasking'  # 'unmasking', 'remasking', or 'remasking_binary' -
 
 unmasking_stages = [
     {'type':'sticky','target_masked_ratio': 0.4, 'p1_probability': 0.15, 'p2_probability': 0.3, 'val_loss_stale_count': 6},
+    {'type':'sticky','target_masked_ratio': 0.6, 'p1_probability': 0.1, 'p2_probability': 0.5, 'val_loss_stale_count': 8},
     {'type':'random','max_masked_ratio': 0.5, 'val_loss_stale_count': 10},
     {'type':'sticky','target_masked_ratio': 0.6, 'p1_probability': 0.3, 'p2_probability': 0.1, 'val_loss_stale_count': 8},
     {'type':'sticky','target_masked_ratio': 0.6, 'p1_probability': 0.1, 'p2_probability': 0.5, 'val_loss_stale_count': 8},
@@ -28,8 +29,8 @@ unmasking_stages = [
 ]
 
 # adamw optimizer
-learning_rate = 1e-3 # with baby networks can afford to go a bit higher
-max_iters = 5000
+learning_rate = 5e-4 # with baby networks can afford to go a bit higher
+max_iters = 50000
 warmup_iters = 1000 # how many steps to warm up for
 lr_decay_iters = 50000 # it's just experiment, no need to decay
 min_lr = 1e-4 # learning_rate / 10 usually
