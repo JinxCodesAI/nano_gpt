@@ -267,6 +267,7 @@ class GPTConfig:
     bias: bool = True # True: bias in Linears and LayerNorms, like GPT-2. False: a bit better and faster
     attention_type: str = 'causal' # 'causal' or 'bidirectional' - type of attention to use
     use_rope: bool = True # Use Rotary Position Embeddings instead of absolute position embeddings
+    binary_classification: bool = False # True: use binary classification head (2 outputs), False: use language model head (vocab_size outputs)
 
 class GPT(nn.Module):
 
@@ -289,12 +290,17 @@ class GPT(nn.Module):
             transformer_components['wpe'] = nn.Embedding(config.block_size, config.n_embd)
         
         self.transformer = nn.ModuleDict(transformer_components)
-        self.lm_head = nn.Linear(config.n_embd, config.vocab_size, bias=False)
-        # with weight tying when using torch.compile() some warnings get generated:
-        # "UserWarning: functional_call was passed multiple values for tied weights.
-        # This behavior is deprecated and will be an error in future versions"
-        # not 100% sure what this is, so far seems to be harmless. TODO investigate
-        self.transformer.wte.weight = self.lm_head.weight # https://paperswithcode.com/method/weight-tying
+        
+        # Choose between language model head and binary classification head
+        if config.binary_classification:
+            self.lm_head = nn.Linear(config.n_embd, 2, bias=False)  # Binary classifier: 2 outputs
+        else:
+            self.lm_head = nn.Linear(config.n_embd, config.vocab_size, bias=False)
+            # with weight tying when using torch.compile() some warnings get generated:
+            # "UserWarning: functional_call was passed multiple values for tied weights.
+            # This behavior is deprecated and will be an error in future versions"
+            # not 100% sure what this is, so far seems to be harmless. TODO investigate
+            self.transformer.wte.weight = self.lm_head.weight # https://paperswithcode.com/method/weight-tying
 
         # init all weights
         self.apply(self._init_weights)
@@ -302,6 +308,11 @@ class GPT(nn.Module):
         for pn, p in self.named_parameters():
             if pn.endswith('c_proj.weight'):
                 torch.nn.init.normal_(p, mean=0.0, std=0.02/math.sqrt(2 * config.n_layer))
+        
+        # Special initialization for binary classification head (after general init)
+        if config.binary_classification:
+            # Initialize with much smaller weights to prevent gradient explosion
+            torch.nn.init.normal_(self.lm_head.weight, mean=0.0, std=0.002)  # Very small std
 
         # report number of parameters
         print("number of parameters: %.2fM" % (self.get_num_params()/1e6,))
@@ -350,16 +361,47 @@ class GPT(nn.Module):
         if targets is not None:
             # Training: always compute logits for all positions
             logits = self.lm_head(x)
-            loss = F.cross_entropy(logits.view(-1, logits.size(-1)), targets.view(-1), ignore_index=-1)
-        else:
-            # Inference: behavior depends on attention type
-            attention_type = getattr(self.config, 'attention_type', 'causal')
-            if attention_type == 'causal':
-                # For causal attention (autoregressive), optimize by only computing last position
-                logits = self.lm_head(x[:, [-1], :]) # note: using list [-1] to preserve the time dim
+            
+            if self.config.binary_classification:
+                # For binary classification, targets should be 0 or 1
+                # Flatten to (batch_size * seq_len, 2) and (batch_size * seq_len,)
+                
+                # Calculate dynamic class weights to handle class imbalance
+                flattened_targets = targets.view(-1)
+                valid_targets = flattened_targets[flattened_targets != -1]  # exclude ignore_index
+                
+                if len(valid_targets) > 0:
+                    unique, counts = torch.unique(valid_targets, return_counts=True)
+                    n_samples = len(valid_targets)
+                    n_classes = 2
+                    
+                    # Create balanced class weights: n_samples / (n_classes * class_count)
+                    class_weights = torch.zeros(2, device=targets.device, dtype=logits.dtype)
+                    for cls, count in zip(unique, counts):
+                        class_weights[cls] = n_samples / (n_classes * count)
+                    
+                    loss = F.cross_entropy(logits.view(-1, 2), flattened_targets, 
+                                         weight=class_weights, ignore_index=-1)
+                else:
+                    # Fallback if no valid targets (shouldn't happen in practice)
+                    print(f"WARNING: No valid targets found for class weighting, using unweighted loss")
+                    loss = F.cross_entropy(logits.view(-1, 2), flattened_targets, ignore_index=-1)
             else:
-                # For bidirectional attention (diffusion), we need logits for all positions
-                logits = self.lm_head(x)  # Compute logits for all positions
+                # For language modeling, targets are token IDs
+                loss = F.cross_entropy(logits.view(-1, logits.size(-1)), targets.view(-1), ignore_index=-1)
+        else:
+            # Inference: behavior depends on attention type and classification mode
+            if self.config.binary_classification:
+                # For binary classification, always compute all positions
+                logits = self.lm_head(x)
+            else:
+                attention_type = getattr(self.config, 'attention_type', 'causal')
+                if attention_type == 'causal':
+                    # For causal attention (autoregressive), optimize by only computing last position
+                    logits = self.lm_head(x[:, [-1], :]) # note: using list [-1] to preserve the time dim
+                else:
+                    # For bidirectional attention (diffusion), we need logits for all positions
+                    logits = self.lm_head(x)  # Compute logits for all positions
             loss = None
 
         return logits, loss

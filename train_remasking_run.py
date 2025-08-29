@@ -1,6 +1,6 @@
 """
-Main training script runner for diffusion training.
-Uses train_utils.py for all function definitions.
+Remasking training script runner for binary classification of tokens to remask.
+Uses train_utils.py for all function definitions and focuses specifically on remasking training.
 """
 
 import os
@@ -20,9 +20,8 @@ from torch.distributed import init_process_group, destroy_process_group
 from model import GPTConfig, GPT
 from utils import Timer, log_masking_stats
 from train_utils import (
-    get_batch, estimate_loss, get_lr, load_synthetic_model, 
-    start_prefetch, stop_prefetch, TrainingContext, UnmaskingStage, update_stage_progress,
-    create_unmasking_validation_set, UnmaskingStageType, StickyStageConfig, RandomStageConfig
+    get_batch, estimate_loss, get_lr, 
+    start_prefetch, stop_prefetch, TrainingContext, create_remasking_validation_set
 )
 
 torch._dynamo.config.suppress_errors = True
@@ -38,14 +37,15 @@ def print_and_flush(msg):
 # -----------------------------------------------------------------------------
 # default config values 
 # I/O
-out_dir = 'out'
-training_type = 'unmasking'  
+out_dir = 'out_remasking'
+training_type = 'remasking_binary'  # Focus on remasking binary classification
 eval_interval = 200
 log_interval = 20
 eval_iters = 20
 eval_only = False # if True, script exits right after the first eval
 always_save_checkpoint = True # if True, always save a checkpoint after each eval
 init_from = 'scratch' # 'scratch' or 'resume'
+
 # model
 n_layer = 6
 n_head = 6
@@ -54,30 +54,39 @@ dropout = 0.01 # for pretraining 0 is good, for finetuning try 0.1+
 bias = False # do we use bias inside LayerNorm and Linear layers?
 attention_type = 'bidirectional' # 'causal' or 'bidirectional' - type of attention to use (bidirectional recommended for diffusion)
 use_rope = True # use Rotary Position Embeddings instead of absolute position embeddings
+binary_classification = True # Use binary classification head (2 outputs instead of full vocab)
+
 # wandb logging
 wandb_log = True # disabled by default
-wandb_project = 'diffusion'
-wandb_run_name = '13k_UN_noise_0.2' # 'run' + str(time.time())
+wandb_project = 'diffusion_remasking'
+wandb_run_name = 'remasking_binary' # 'run' + str(time.time())
+
 # data
 dataset = 'shakespeare_char'
-gradient_accumulation_steps = 1 # used to simulate larger batch sizes
+gradient_accumulation_steps = 16 # used to simulate larger batch sizes
 batch_size = 16 # if gradient_accumulation_steps > 1, this is the micro-batch size
 block_size = 1024
 use_paragraph_boundaries = False # if True, start samples at paragraph boundaries (double newlines)
-# unmasking training config
-unmasking_stages = [] # override in config file
+
+# remasking configuration - random and sticky corruption supported
+guaranteed_unmasked_max = 0.9  # At start: 10% of tokens corrupted
+guaranteed_unmasked_min = 0.6   # At end: 40% of tokens corrupted
+random_mask_warmup = 7000  # Warmup iterations for mask probability
+sticky_transition_start = 1000  # Start of transition (unused but needed for compatibility)  
+sticky_transition_end = 6000    # End of transition (unused but needed for compatibility)
+p1_p2_ratio = 1.0  # If 1.0: random masking, if != 1.0: sticky masking with p1/p2 ratio
 
 # adamw optimizer
-learning_rate = 1e-3 # with baby networks can afford to go a bit higher
-max_iters = 50000
+learning_rate = 1e-5 # Lower learning rate for binary classification to prevent gradient explosion
+max_iters = 10000
 warmup_iters = 2000 # how many steps to warm up for
 lr_decay_iters = 41000 # make equal to max_iters usually
-min_lr = 1e-4 # learning_rate / 10 usually
+min_lr = 1e-6 # learning_rate / 10 usually
 beta1 = 0.9
 beta2 = 0.99 # make a bit bigger because number of tokens per iter is small
 weight_decay=1e-3
 
-grad_clip = 1.0 # clip gradients at this value, or disable if == 0.0
+grad_clip = 100.0 # clip gradients at this value, or disable if == 0.0
 # learning rate decay settings
 decay_lr = True # whether to decay the learning rat
 # DDP settings
@@ -91,56 +100,15 @@ compile = True # use PyTorch 2.0 to compile the model to be faster
 config_keys = [k for k,v in globals().items() if not k.startswith('_') and isinstance(v, (int, float, bool, str))]
 exec(open('configurator.py').read()) # overrides from command line or config file
 
-if len(unmasking_stages) == 0 or unmasking_stages is None:
-    print_and_flush("No unmasking stages defined, exiting...")
-    exit()
-
 # Update wandb run name after configuration is loaded
-if training_type == 'unmasking':
-    wandb_run_name = f'{wandb_run_name}_unmasking'
+wandb_run_name = f'{wandb_run_name}_binary_remasking'
 
 config = {k: globals()[k] for k in config_keys} # will be useful for logging
 
 # Print source code and global variables on startup
 print("=" * 80)
-print("SOURCE CODE:")
+print("REMASKING BINARY CLASSIFICATION TRAINING")
 print("=" * 80)
-
-import sys
-import os
-
-# Get all local Python files that are imported
-local_files = set()
-for module_name, module in sys.modules.items():
-    if hasattr(module, '__file__') and module.__file__:
-        file_path = module.__file__
-        # Only include .py files in current directory (not packages/libraries)
-        if file_path.endswith('.py') and os.path.dirname(file_path) == os.getcwd():
-            local_files.add(os.path.basename(file_path))
-
-# Always include the main script
-local_files.add('train_run.py')
-
-# Convert to sorted list for consistent output
-local_files = sorted(local_files)
-
-for filename in local_files:
-    print(f"\n--- {filename} ---")
-    try:
-        with open(filename, 'r') as f:
-            print(f.read())
-    except FileNotFoundError:
-        print(f"File {filename} not found")
-
-print("\n" + "=" * 80)
-print("GLOBAL VARIABLES:")
-print("=" * 80)
-for name, value in sorted(globals().items()):
-    if not name.startswith('_') and not callable(value):
-        print(f"{name} = {value}")
-
-print("\n" + "=" * 80)
-# -----------------------------------------------------------------------------
 
 # various inits, derived attributes, I/O setup
 ddp = int(os.environ.get('RANK', -1)) != -1 # is this a ddp run?
@@ -181,7 +149,6 @@ data_dir = os.path.join('data', dataset)
 # init these up here, can override if init_from='resume' (i.e. from a checkpoint)
 iter_num = 0
 best_val_loss = 1e9
-checkpoint_training_context = None  # For restoring training context state
 
 # attempt to derive vocab_size from the dataset
 meta_path = os.path.join(data_dir, 'meta.pkl')
@@ -192,39 +159,16 @@ if os.path.exists(meta_path):
     meta_vocab_size = meta['vocab_size']
     print_and_flush(f"found vocab_size = {meta_vocab_size} (inside {meta_path})")
     
-    # Set special token ID for unmasking training
+    # For binary classification, we only need mask_token_id and don't need the other special tokens
     mask_token_id = meta_vocab_size
-    extended_vocab_size = meta_vocab_size + 1  # Only need mask token for unmasking
+    extended_vocab_size = meta_vocab_size + 1  # Only need mask token for input
     print_and_flush(f"mask_token_id = {mask_token_id}, extended_vocab_size = {extended_vocab_size}")
 else:
     print_and_flush("No meta.pkl found, using default GPT-2 vocab")
     mask_token_id = 50304
     extended_vocab_size = 50305
 
-# Create training context with all parameters
-# Convert unmasking_stages dict to UnmaskingStage objects
-unmasking_stage_objects = None
-if training_type == 'unmasking':
-    unmasking_stage_objects = []
-    for stage in unmasking_stages:
-        stage_type = stage['type']
-        if stage_type == 'sticky':
-            config = StickyStageConfig(
-                target_masked_ratio=stage['target_masked_ratio'],
-                p1_probability=stage['p1_probability'],
-                p2_probability=stage['p2_probability'],
-                val_loss_stale_count=stage['val_loss_stale_count']
-            )
-        elif stage_type == 'random':
-            config = RandomStageConfig(
-                max_masked_ratio=stage['max_masked_ratio'],
-                val_loss_stale_count=stage['val_loss_stale_count']
-            )
-        else:
-            raise ValueError(f"Unknown stage type: {stage_type}")
-        
-        unmasking_stage_objects.append(UnmaskingStage(config))
-
+# Create training context with remasking parameters
 training_ctx = TrainingContext(
     training_type=training_type,
     batch_size=batch_size,
@@ -234,60 +178,55 @@ training_ctx = TrainingContext(
     device_type=device_type,
     seed_offset=seed_offset,
     data_dir=data_dir,
+    guaranteed_unmasked_max=guaranteed_unmasked_max,
+    guaranteed_unmasked_min=guaranteed_unmasked_min,
+    random_mask_warmup=random_mask_warmup,
+    sticky_transition_start=sticky_transition_start,
+    sticky_transition_end=sticky_transition_end,
     meta_vocab_size=meta_vocab_size,
     mask_token_id=mask_token_id,
-    extended_vocab_size=extended_vocab_size,
+    wrong_token_id=mask_token_id + 1,  # For remasking: corrupted positions
+    remask_good_id=0,  # Binary: 0 = keep token
+    remask_wrong_id=1,  # Binary: 1 = remask token  
+    extended_vocab_size=extended_vocab_size,  # Only mask token needed for input
     iter_num=iter_num,
-    unmasking_stages=unmasking_stage_objects,
     eval_iters=eval_iters,
     warmup_iters=warmup_iters,
     lr_decay_iters=lr_decay_iters,
     learning_rate=learning_rate,
     min_lr=min_lr,
-    use_paragraph_boundaries=use_paragraph_boundaries
+    use_paragraph_boundaries=use_paragraph_boundaries,
+    p1_p2_ratio=p1_p2_ratio  # For sticky masking configuration
 )
-
-# Apply restored training context state if resuming from checkpoint
-print(f"DEBUG: init_from='{init_from}', checkpoint_training_context={checkpoint_training_context}")
-if init_from == 'resume' and checkpoint_training_context is not None:
-    print("Applying restored training context state...")
-    training_ctx.current_stage = checkpoint_training_context.get('current_stage', 0)
-    training_ctx.val_loss_stale_count = checkpoint_training_context.get('val_loss_stale_count', 0)
-    training_ctx.best_val_loss_this_stage = checkpoint_training_context.get('best_val_loss_for_stage', float('inf'))
-    print(f"Training context restored: stage={training_ctx.current_stage}, stale_count={training_ctx.val_loss_stale_count}")
-else:
-    print(f"DEBUG: NOT applying training context. init_from='{init_from}', checkpoint_training_context={checkpoint_training_context is not None}")
 
 # model init
 model_args = dict(n_layer=n_layer, n_head=n_head, n_embd=n_embd, block_size=block_size,
-                  bias=bias, vocab_size=None, dropout=dropout, attention_type=attention_type, use_rope=use_rope) # start with model_args from command line
+                  bias=bias, vocab_size=None, dropout=dropout, attention_type=attention_type, 
+                  use_rope=use_rope, binary_classification=binary_classification)
 if init_from == 'scratch':
     # init a new model from scratch
-    print_and_flush("Initializing a new model from scratch")
-    # determine the vocab size we'll use for from-scratch training
-    if meta_vocab_size is None:
-        print_and_flush("defaulting to vocab_size of GPT-2 to 50304 (50257 rounded up for efficiency)")
+    print_and_flush("Initializing a new binary classification model from scratch")
     model_args['vocab_size'] = extended_vocab_size if meta_vocab_size is not None else 50305
     gptconf = GPTConfig(**model_args)
     model = GPT(gptconf)
 elif init_from == 'resume':
-    print_and_flush(f"Resuming unmasking training from {out_dir}")
+    print_and_flush(f"Resuming training from {out_dir}")
     # resume training from a checkpoint.
-    # Find the latest unmasking checkpoint file
+    # Find the latest checkpoint file
     import glob
-    ckpt_pattern = os.path.join(out_dir, 'ckpt_*unmasking*.pt')
+    ckpt_pattern = os.path.join(out_dir, 'ckpt_*remasking*.pt')
     ckpt_files = glob.glob(ckpt_pattern)
 
     if not ckpt_files:
         # Fallback to old naming convention
         ckpt_path = os.path.join(out_dir, 'ckpt.pt')
         if not os.path.exists(ckpt_path):
-            raise FileNotFoundError(f"No unmasking checkpoint files found in {out_dir}")
+            raise FileNotFoundError(f"No remasking checkpoint files found in {out_dir}")
     else:
         # Extract iteration numbers and find the latest
         def extract_iter_num(filename):
             basename = os.path.basename(filename)
-            # Extract number from ckpt_unmasking_XXX.pt
+            # Extract number from ckpt_remasking_XXX.pt
             parts = basename.split('_')
             for part in parts:
                 if part.replace('.pt', '').isdigit():
@@ -296,7 +235,7 @@ elif init_from == 'resume':
 
         latest_ckpt = max(ckpt_files, key=extract_iter_num)
         ckpt_path = latest_ckpt
-        print_and_flush(f"Loading latest checkpoint: {os.path.basename(ckpt_path)}")
+        print_and_flush(f"Loading latest remasking checkpoint: {os.path.basename(ckpt_path)}")
 
     checkpoint = torch.load(ckpt_path, map_location=device, weights_only=False)
     checkpoint_model_args = checkpoint['model_args']
@@ -304,15 +243,16 @@ elif init_from == 'resume':
     # the rest of the attributes (e.g. dropout) can stay as desired from command line
     for k in ['n_layer', 'n_head', 'n_embd', 'block_size', 'bias', 'vocab_size']:
         model_args[k] = checkpoint_model_args[k]
-    # Also restore use_rope setting if it exists in checkpoint
+    # Also restore use_rope and binary_classification settings if they exist in checkpoint
     if 'use_rope' in checkpoint_model_args:
         model_args['use_rope'] = checkpoint_model_args['use_rope']
+    if 'binary_classification' in checkpoint_model_args:
+        model_args['binary_classification'] = checkpoint_model_args['binary_classification']
     # create the model
     gptconf = GPTConfig(**model_args)
     model = GPT(gptconf)
     state_dict = checkpoint['model']
     # fix the keys of the state dictionary :(
-    # honestly no idea how checkpoints sometimes get this prefix, have to debug more
     unwanted_prefix = '_orig_mod.'
     for k,v in list(state_dict.items()):
         if k.startswith(unwanted_prefix):
@@ -320,19 +260,6 @@ elif init_from == 'resume':
     model.load_state_dict(state_dict)
     iter_num = checkpoint['iter_num']
     best_val_loss = checkpoint['best_val_loss']
-    
-    # Restore training context state if available
-    if 'training_context' in checkpoint:
-        ctx_state = checkpoint['training_context']
-        print_and_flush(f"Restoring training context state:")
-        print_and_flush(f"  Stage: {ctx_state.get('current_stage', 0)}")
-        print_and_flush(f"  Val loss stale count: {ctx_state.get('val_loss_stale_count', 0)}")
-        print_and_flush(f"  Best val loss for stage: {ctx_state.get('best_val_loss_for_stage', float('inf'))}")
-        
-        # These will be set on the training_ctx after it's created
-        checkpoint_training_context = ctx_state
-    else:
-        checkpoint_training_context = None
 
 # crop down the model block size if desired, using model surgery
 if block_size < model.config.block_size:
@@ -340,7 +267,7 @@ if block_size < model.config.block_size:
     model_args['block_size'] = block_size # so that the checkpoint will have the right value
 model.to(device)
 
-# No synthetic model loading needed for unmasking training
+# No synthetic model needed for remasking (supports both random and sticky masking)
 
 # initialize a GradScaler. If enabled=False scaler is a no-op
 scaler = torch.cuda.amp.GradScaler(enabled=(dtype == 'float16'))
@@ -366,6 +293,8 @@ if wandb_log and master_process:
     import wandb
     wandb.init(project=wandb_project, name=wandb_run_name, config=config)
 
+# Remove the custom batch generation function - use standard get_batch instead
+
 # Function to reload model and optimizer from checkpoint during training
 def reload_from_checkpoint():
     """Reload model and optimizer from the latest checkpoint"""
@@ -373,19 +302,18 @@ def reload_from_checkpoint():
     
     print(f"\n*** RELOADING FROM CHECKPOINT ***")
     
-    # Find the latest unmasking checkpoint file
+    # Find the latest checkpoint file
     import glob
-    ckpt_pattern = os.path.join(out_dir, 'ckpt_*unmasking*.pt')
+    ckpt_pattern = os.path.join(out_dir, 'ckpt_*remasking*.pt')
     ckpt_files = glob.glob(ckpt_pattern)
     
     if not ckpt_files:
-        print("No unmasking checkpoint files found for recovery - cannot continue")
+        print("No remasking checkpoint files found for recovery - cannot continue")
         return False
     
     # Extract iteration numbers and find the latest
     def extract_iter_num(filename):
         basename = os.path.basename(filename)
-        # Extract number from ckpt_unmasking_XXX.pt
         parts = basename.split('_')
         for part in parts:
             if part.replace('.pt', '').isdigit():
@@ -399,23 +327,20 @@ def reload_from_checkpoint():
     # Load checkpoint
     checkpoint = torch.load(ckpt_path, map_location=device, weights_only=False)
     
-    # Reload model state - handle compiled vs non-compiled model mismatches
+    # Reload model state
     model_state = checkpoint['model']
     
-    # Check if current model expects _orig_mod prefix but checkpoint doesn't have it
+    # Handle compiled vs non-compiled model mismatches
     current_keys = set(raw_model.state_dict().keys())
     checkpoint_keys = set(model_state.keys())
     
-    # Determine if we need to add or remove _orig_mod prefix
     if any(k.startswith('_orig_mod.') for k in current_keys) and not any(k.startswith('_orig_mod.') for k in checkpoint_keys):
-        # Current model is compiled (has _orig_mod prefix), but checkpoint doesn't - add prefix
         print("Adding _orig_mod prefix to checkpoint keys for compiled model")
         new_state = {}
         for k, v in model_state.items():
             new_state[f'_orig_mod.{k}'] = v
         model_state = new_state
     elif not any(k.startswith('_orig_mod.') for k in current_keys) and any(k.startswith('_orig_mod.') for k in checkpoint_keys):
-        # Current model is not compiled, but checkpoint has _orig_mod prefix - remove prefix
         print("Removing _orig_mod prefix from checkpoint keys for non-compiled model")
         unwanted_prefix = '_orig_mod.'
         for k, v in list(model_state.items()):
@@ -428,54 +353,31 @@ def reload_from_checkpoint():
     optimizer.load_state_dict(checkpoint['optimizer'])
     
     # Update iteration and loss tracking
-    # Step back iteration to avoid immediately hitting the same problematic iteration
     iter_num = checkpoint['iter_num'] - 1
     best_val_loss = checkpoint['best_val_loss']
-    
-    # Restore training context state if available
-    if 'training_context' in checkpoint:
-        ctx_state = checkpoint['training_context']
-        training_ctx.current_stage = ctx_state.get('current_stage', 0)
-        training_ctx.val_loss_stale_count = ctx_state.get('val_loss_stale_count', 0)
-        training_ctx.best_val_loss_this_stage = ctx_state.get('best_val_loss_for_stage', float('inf'))
-        print(f"Training context restored: stage={training_ctx.current_stage}")
-    
     
     print(f"Model and optimizer reloaded from iteration {iter_num}")
     print("*** CHECKPOINT RELOAD COMPLETE ***\n")
     return True
 
-# training loop
+# training loop - use standard batch generation
 X, Y, mask = get_batch('train', training_ctx) # fetch the very first batch
 t0 = time.time()
 local_iter_num = 0 # number of iterations in the lifetime of this process
 raw_model = model.module if ddp else model # unwrap DDP container if needed
 running_mfu = -1.0
 
-# Show initial stage configuration for unmasking training
-if training_ctx.training_type == 'unmasking':
-    stage_config = training_ctx.get_current_stage_config()
-    print(f"\n*** STAGE-BASED UNMASKING TRAINING INITIALIZED ***")
-    print(f"Starting at Stage {training_ctx.current_stage}:")
-    stage_type = stage_config.get_stage_type()
-    print(f"  Stage type: {stage_type.value}")
-    if stage_type == UnmaskingStageType.STICKY:
-        config = stage_config.config
-        print(f"  Target masked ratio: {config.target_masked_ratio}")
-        print(f"  P1 probability: {config.p1_probability}")
-        print(f"  P2 probability: {config.p2_probability}")
-    elif stage_type == UnmaskingStageType.RANDOM:
-        config = stage_config.config
-        print(f"  Max masked ratio: {config.max_masked_ratio}")
-    print(f"  Val loss stale count limit: {stage_config.get_val_loss_stale_count()}")
-    print(f"Total stages configured: {len(training_ctx.unmasking_stages)}")
-    print("*** STAGE INITIALIZATION COMPLETE ***\n")
-    
-    # Pre-create validation set with equal representation from all stages
-    print("Pre-creating validation set...")
-    create_unmasking_validation_set(training_ctx)
+# Pre-create validation set for consistent validation
+print("Pre-creating validation set...")
+create_remasking_validation_set(training_ctx, force_recreate=True)
 
-print_and_flush("Starting training loop...")
+print_and_flush("Starting binary remasking training loop...")
+print_and_flush(f"Binary classification mode: {model.config.binary_classification}")
+print_and_flush(f"LM head output size: {model.lm_head.out_features}")
+print_and_flush(f"Masking strategy: {'sticky' if p1_p2_ratio != 1.0 else 'random'} (p1_p2_ratio={p1_p2_ratio})")
+if p1_p2_ratio != 1.0:
+    print_and_flush(f"Sticky masking will use dynamic p1/p2 probabilities based on corruption schedule")
+
 just_recovered = False
 while True:
 
@@ -490,6 +392,8 @@ while True:
         with timer.time_function('validation'):
             # Update training context with current iteration
             training_ctx.iter_num = iter_num
+            # For binary classification validation, we need to modify estimate_loss
+            # For now, use the existing estimate_loss which should work with binary targets
             losses = estimate_loss(model, ctx, timer, training_ctx)
 
         # VALIDATION INSTABILITY DETECTION
@@ -507,31 +411,12 @@ while True:
         print_and_flush(f"--- Validation complete ---")
         print_and_flush(f"step {iter_num}: train loss {losses['train']:.4f}, val loss {losses['val']:.4f}, lr {lr:.6f}")
         
-        # Print stage information for unmasking training
-        if 'current_stage' in losses:
-            stage_config = training_ctx.get_current_stage_config()
-            stage_type = stage_config.get_stage_type()
-            stage_info = f"Stage {losses['current_stage']} ({stage_type.value}): "
-            if stage_type == UnmaskingStageType.STICKY:
-                config = stage_config.config
-                stage_info += f"target_ratio={config.target_masked_ratio:.1f}, p1={config.p1_probability:.1f}, p2={config.p2_probability:.1f}"
-            elif stage_type == UnmaskingStageType.RANDOM:
-                config = stage_config.config
-                stage_info += f"max_ratio={config.max_masked_ratio:.1f}"
-            stage_info += f", stale_count={losses.get('val_loss_stale_count', 0)}"
-            print_and_flush(stage_info)
-
         # Print model vs random statistics if available
         if 'val_model_vs_random' in losses:
             print(f"  val model vs random: {losses['val_model_vs_random']:.2f}x better")
-            print(f"  val avg correct prob: {losses['val_avg_correct_prob']:.4f} (random: {1.0/training_ctx.extended_vocab_size:.4f})")
+            print(f"  val accuracy: {losses['val_avg_correct_prob']:.4f}")
             if 'val_most_likely_accuracy' in losses:
-                print(f"  Most likely guess correct P %: {losses['val_most_likely_accuracy']:.1f}%")
-        
-        # Update stage progress for unmasking training
-        stage_advanced = update_stage_progress(training_ctx, losses['val'])
-        if stage_advanced:
-            print(f"Advanced to stage {training_ctx.current_stage} - validation set remains consistent across all stages")
+                print(f"  Binary classification accuracy: {losses['val_most_likely_accuracy']:.1f}%")
         
         print()  # Add blank line for readability
 
@@ -541,22 +426,28 @@ while True:
                 "train/loss": losses['train'],
                 "val/loss": losses['val'],
                 "lr": lr,
-                "model vs random": losses.get('val_model_vs_random', 0.0),
+                "val/model_vs_random": losses.get('val_model_vs_random', 0.0),
+                "val/avg_correct_prob": losses.get('val_avg_correct_prob', 0.0),
                 "mfu": running_mfu*100, # convert to percentage
                 "masked_token_ratio": losses.get('train_masked_token_ratio', 0.0),
-                "min_masked_token_ratio": losses.get('train_min_masked_token_ratio', 0.0),
-                "max_masked_token_ratio": losses.get('train_max_masked_token_ratio', 0.0),
+                "val/binary_accuracy": losses.get('val_most_likely_accuracy', 0.0),
             }
             
-            # Add per-stage validation losses for unmasking training
-            for stage_idx in range(len(training_ctx.unmasking_stages)):
-                stage_loss_key = f'val_stage_{stage_idx}_loss'
-                stage_samples_key = f'val_stage_{stage_idx}_samples'
-                if stage_loss_key in losses:
-                    log_dict[f'val/stage_{stage_idx}_loss'] = losses[stage_loss_key]
-                    log_dict[f'val/stage_{stage_idx}_samples'] = losses[stage_samples_key]
-
+            # Add detailed per-class validation metrics for remasking_binary
+            if training_ctx.training_type == 'remasking_binary':
+                log_dict.update({
+                    "val/corruption_ratio": losses.get('val_corruption_ratio', 0.0),
+                    "val/random_baseline": losses.get('val_random_baseline', 0.0),
+                    "val/accuracy_no_mask": losses.get('val_accuracy_no_mask', 0.0),
+                    "val/accuracy_mask": losses.get('val_accuracy_mask', 0.0),
+                    "val/class_dist_no_mask": losses.get('val_class_dist_no_mask', 0.0),
+                    "val/class_dist_mask": losses.get('val_class_dist_mask', 0.0),
+                    "val/avg_prob_right_p0": losses.get('val_avg_prob_right_p0', 0.0),
+                    "val/avg_prob_right_p1": losses.get('val_avg_prob_right_p1', 0.0),
+                })
+            
             wandb.log(log_dict)
+            
         if losses['val'] < best_val_loss or always_save_checkpoint:
             best_val_loss = losses['val']
             if iter_num > 0:
@@ -569,14 +460,7 @@ while True:
                     'config': config,
                 }
                 
-                # Save training context state for proper resumption
-                checkpoint['training_context'] = {
-                    'current_stage': training_ctx.current_stage,
-                    'val_loss_stale_count': training_ctx.val_loss_stale_count,
-                    'best_val_loss_for_stage': training_ctx.best_val_loss_this_stage
-                }
-                ckpt_filename = f'ckpt_unmasking_{iter_num}.pt'
-                    
+                ckpt_filename = f'ckpt_remasking_binary_{iter_num}.pt'
                 print(f"saving checkpoint to {out_dir}/{ckpt_filename}")
                 torch.save(checkpoint, os.path.join(out_dir, ckpt_filename))
     if iter_num == 0 and eval_only:
@@ -587,13 +471,10 @@ while True:
     for micro_step in range(gradient_accumulation_steps):
         if ddp:
             # in DDP training we only need to sync gradients at the last micro step.
-            # the official way to do this is with model.no_sync() context manager, but
-            # I really dislike that this bloats the code and forces us to repeat code
-            # looking at the source of that context manager, it just toggles this variable
             model.require_backward_grad_sync = (micro_step == gradient_accumulation_steps - 1)
         with ctx:
             with timer.time_function('forward_pass'):
-                # Combined forward pass and loss computation for efficiency
+                # Binary classification forward pass
                 logits, loss = model(X, Y)
                 
                 # TRAINING INSTABILITY DETECTION
@@ -603,13 +484,10 @@ while True:
                     print(f"Logits stats: min={logits.min().item():.6f}, max={logits.max().item():.6f}, mean={logits.mean().item():.6f}")
                     print("*** ATTEMPTING RECOVERY FROM CHECKPOINT ***")
                     if reload_from_checkpoint():
-                        # Reset local state and restart iteration completely
                         local_iter_num = 0
                         running_mfu = -1.0
                         training_ctx.iter_num = iter_num
-                        # Generate new batch to avoid same problematic data
                         X, Y, mask = get_batch('train', training_ctx)
-                        # Reset scaler state and start fresh iteration
                         scaler = torch.cuda.amp.GradScaler(enabled=(dtype == 'float16'))
                         optimizer.zero_grad(set_to_none=True)
                         just_recovered = True
@@ -624,53 +502,10 @@ while True:
                     print(f"Loss is {loss.item()}: {'NaN' if torch.isnan(loss) else 'Inf'}")
                     print("*** ATTEMPTING RECOVERY FROM CHECKPOINT ***")
                     if reload_from_checkpoint():
-                        # Reset local state and restart iteration completely
                         local_iter_num = 0
                         running_mfu = -1.0
                         training_ctx.iter_num = iter_num
-                        # Generate new batch to avoid same problematic data
                         X, Y, mask = get_batch('train', training_ctx)
-                        # Reset scaler state and start fresh iteration
-                        scaler = torch.cuda.amp.GradScaler(enabled=(dtype == 'float16'))
-                        optimizer.zero_grad(set_to_none=True)
-                        just_recovered = True
-                        t0 = time.time()
-                        continue
-                    else:
-                        print("*** RECOVERY FAILED - TERMINATING TRAINING ***")
-                        break
-                
-                # Apply masking for unmasking training only (most efficient path)
-                if training_ctx.training_type == 'unmasking' and mask.any():
-                    # Fast path: reshape once and use boolean indexing
-                    logits_reshaped = logits.view(-1, logits.size(-1))
-                    targets_reshaped = Y.view(-1)
-                    mask_reshaped = mask.view(-1)
-                    
-                    # Use boolean mask directly - most efficient
-                    loss = torch.nn.functional.cross_entropy(
-                        logits_reshaped[mask_reshaped], 
-                        targets_reshaped[mask_reshaped], 
-                        reduction='mean'
-                    )
-                # For remasking variants, model's internal loss is already correct
-                
-                # UNIVERSAL: Check final loss after any training-type-specific processing
-                if not torch.isfinite(loss):
-                    print(f"\n*** FINAL LOSS INSTABILITY at iter {iter_num} ***")
-                    print(f"Final loss is {loss.item()}: {'NaN' if torch.isnan(loss) else 'Inf'}")
-                    print(f"Training type: {training_ctx.training_type}")
-                    if hasattr(mask, 'float'):  # Check if mask exists
-                        print(f"Mask ratio: {mask.float().mean().item():.4f}")
-                    print("*** ATTEMPTING RECOVERY FROM CHECKPOINT ***")
-                    if reload_from_checkpoint():
-                        # Reset local state and restart iteration completely
-                        local_iter_num = 0
-                        running_mfu = -1.0
-                        training_ctx.iter_num = iter_num
-                        # Generate new batch to avoid same problematic data
-                        X, Y, mask = get_batch('train', training_ctx)
-                        # Reset scaler state and start fresh iteration
                         scaler = torch.cuda.amp.GradScaler(enabled=(dtype == 'float16'))
                         optimizer.zero_grad(set_to_none=True)
                         just_recovered = True
@@ -693,19 +528,15 @@ while True:
     # GRADIENT INSTABILITY DETECTION
     if grad_clip != 0.0:
         scaler.unscale_(optimizer)
-        # Monitor gradient norms before clipping
         grad_norm = torch.nn.utils.clip_grad_norm_(model.parameters(), grad_clip)
         
-        # Check for true instability (NaN/Inf gradients)
         if not torch.isfinite(grad_norm):
-            # At iteration 0 with lr=0, infinite gradients indicate model/loss issues
             if iter_num == 0:
                 print(f"\n*** INITIALIZATION PROBLEM at iter {iter_num} ***")
-                print(f"Gradient norm is {grad_norm.item()}: {'NaN' if torch.isnan(grad_norm) else 'Inf'}")
+                print(f"Gradient norm is {grad_norm.item()}: {'NaN' if torch.isnan(grad_norm) else grad_norm.item()}")
                 print(f"Learning rate: {lr:.6f}")
                 print("This suggests model initialization or loss computation issues")
                 
-                # Check a few key statistics
                 print("\nModel parameter stats:")
                 for name, param in list(model.named_parameters())[:3]:  # First 3 params
                     print(f"  {name}: mean={param.data.mean().item():.6f}, std={param.data.std().item():.6f}")
@@ -713,7 +544,7 @@ while True:
                         print(f"    grad: mean={param.grad.data.mean().item():.6f}, std={param.grad.data.std().item():.6f}")
             else:
                 print(f"\n*** GRADIENT INSTABILITY at iter {iter_num} ***")
-                print(f"Gradient norm is {grad_norm.item()}: {'NaN' if torch.isnan(grad_norm) else 'Inf'}")
+                print(f"Gradient norm is {grad_norm.item()}: {'NaN' if torch.isnan(grad_norm) else grad_norm.item()}")
             
             # Check individual parameter gradients
             nan_params = 0
@@ -727,13 +558,10 @@ while True:
             print(f"Parameters with NaN gradients: {nan_params}, with Inf gradients: {inf_params}")
             print("*** ATTEMPTING RECOVERY FROM CHECKPOINT ***")
             if reload_from_checkpoint():
-                # Reset local state and restart iteration completely
                 local_iter_num = 0
                 running_mfu = -1.0
                 training_ctx.iter_num = iter_num
-                # Generate new batch to avoid same problematic data
                 X, Y, mask = get_batch('train', training_ctx)
-                # Reset scaler state and start fresh iteration
                 scaler = torch.cuda.amp.GradScaler(enabled=(dtype == 'float16'))
                 optimizer.zero_grad(set_to_none=True)
                 just_recovered = True
@@ -743,7 +571,6 @@ while True:
                 print("*** RECOVERY FAILED - TERMINATING TRAINING ***")
                 break
         
-        # Only warn about large gradients after initial iterations (when lr > 0)
         if iter_num > 10 and grad_norm > grad_clip * 10:
             print(f"WARNING: Large gradient norm at iter {iter_num}: {grad_norm.item():.4f} (clip threshold: {grad_clip})")
     else:
@@ -769,13 +596,10 @@ while True:
             print(f"Total gradient norm: {total_norm:.6f}")
             print("*** ATTEMPTING RECOVERY FROM CHECKPOINT ***")
             if reload_from_checkpoint():
-                # Reset local state and restart iteration completely
                 local_iter_num = 0
                 running_mfu = -1.0
                 training_ctx.iter_num = iter_num
-                # Generate new batch to avoid same problematic data
                 X, Y, mask = get_batch('train', training_ctx)
-                # Reset scaler state and start fresh iteration
                 scaler = torch.cuda.amp.GradScaler(enabled=(dtype == 'float16'))
                 optimizer.zero_grad(set_to_none=True)
                 just_recovered = True
@@ -784,6 +608,7 @@ while True:
             else:
                 print("*** RECOVERY FAILED - TERMINATING TRAINING ***")
                 break
+                
     # step the optimizer and scaler if training in fp16
     scaler.step(optimizer)
     scaler.update()
@@ -810,13 +635,10 @@ while True:
             print(f"... and {len(param_names_with_issues) - 10} more")
         print("*** ATTEMPTING RECOVERY FROM CHECKPOINT ***")
         if reload_from_checkpoint():
-            # Reset local state and restart iteration completely
             local_iter_num = 0
             running_mfu = -1.0
             training_ctx.iter_num = iter_num
-            # Generate new batch to avoid same problematic data
             X, Y, mask = get_batch('train', training_ctx)
-            # Reset scaler state and start fresh iteration
             scaler = torch.cuda.amp.GradScaler(enabled=(dtype == 'float16'))
             optimizer.zero_grad(set_to_none=True)
             just_recovered = True
@@ -844,11 +666,10 @@ while True:
         # Enhanced logging with detailed timing
         data_time = timer.get_average('data_generation') * 1000
         forward_time = timer.get_average('forward_pass') * 1000
-        loss_time = timer.get_average('loss_computation') * 1000
         backward_time = timer.get_average('backward_pass') * 1000
 
         print(f"iter {iter_num}: loss {lossf:.4f}, time {dt*1000:.2f}ms, mfu {running_mfu*100:.2f}%")
-        print(f"  data: {data_time:.2f}ms, forward: {forward_time:.2f}ms, loss: {loss_time:.2f}ms, backward: {backward_time:.2f}ms")
+        print(f"  data: {data_time:.2f}ms, forward: {forward_time:.2f}ms, backward: {backward_time:.2f}ms")
 
         # Validation timing (when applicable)
         if iter_num % eval_interval == 0:
@@ -858,19 +679,101 @@ while True:
             val_loss_time = timer.get_average('validation_loss_computation') * 1000
             print(f"  validation: {val_time:.2f}ms (data: {val_data_time:.2f}ms, forward: {val_forward_time:.2f}ms, loss: {val_loss_time:.2f}ms)")
 
-        # Add masking statistics logging for unmasking
-        stage_config = training_ctx.get_current_stage_config()
-        if stage_config and iter_num % (log_interval * 10) == 0:
-            mask_ratio = mask.float().mean().item()
-            stage_type = stage_config.get_stage_type()
-            stage_info = f"Masking: stage={training_ctx.current_stage} ({stage_type.value}), actual_ratio={mask_ratio:.3f}"
-            if stage_type == UnmaskingStageType.STICKY:
-                config = stage_config.config
-                stage_info += f", target={config.target_masked_ratio:.1f}, p1={config.p1_probability:.1f}, p2={config.p2_probability:.1f}"
-            elif stage_type == UnmaskingStageType.RANDOM:
-                config = stage_config.config
-                stage_info += f", max={config.max_masked_ratio:.1f}"
-            print(stage_info)
+        # Add masking statistics and accuracy logging for remasking
+        log_masking_stats(mask, iter_num, log_interval)
+        
+        # Calculate and log per-class accuracy for remasking_binary every log_interval
+        if training_ctx.training_type == 'remasking_binary':
+            with torch.no_grad():
+                # Get predictions from current batch
+                logits, _ = model(X, Y)
+                
+                # Calculate average probabilities for correct predictions by class
+                probs = torch.softmax(logits, dim=-1)  # (batch_size, seq_len, 2)
+                probs_flat = probs.view(-1, 2)  # (batch_size * seq_len, 2)
+                targets_flat = Y.view(-1)  # (batch_size * seq_len,)
+                
+                # Get probabilities for correct predictions separated by class
+                class_0_mask = (targets_flat == 0)  # no-mask targets
+                class_1_mask = (targets_flat == 1)  # mask targets
+                
+                # Average probability of correct answer for class 0 positions
+                if class_0_mask.sum() > 0:
+                    class_0_correct_probs = probs_flat[class_0_mask, 0]  # P(class=0) where target=0
+                    avg_p_right_p0 = class_0_correct_probs.mean().item()
+                else:
+                    avg_p_right_p0 = 0.0
+                
+                # Average probability of correct answer for class 1 positions  
+                if class_1_mask.sum() > 0:
+                    class_1_correct_probs = probs_flat[class_1_mask, 1]  # P(class=1) where target=1
+                    avg_p_right_p1 = class_1_correct_probs.mean().item()
+                else:
+                    avg_p_right_p1 = 0.0
+                
+                
+                predictions = torch.argmax(logits, dim=-1)  # (batch_size, seq_len)
+                predictions_flat = predictions.view(-1)
+                targets_flat = Y.view(-1)
+                
+                # Calculate relative prediction bias vs actual class distribution
+                pred_0_count = (predictions_flat == 0).sum().item()
+                pred_1_count = (predictions_flat == 1).sum().item()
+                total_preds = predictions_flat.numel()
+                pred_0_pct = (pred_0_count / total_preds) * 100
+                pred_1_pct = (pred_1_count / total_preds) * 100
+                
+                # Calculate relative bias: prediction_rate / actual_rate
+                pred_bias_0 = pred_0_pct / class_0_pct if class_0_pct > 0 else 0.0
+                pred_bias_1 = pred_1_pct / class_1_pct if class_1_pct > 0 else 0.0
+                
+                # Calculate per-class accuracy
+                class_0_mask = (targets_flat == 0)  # no-mask targets
+                class_1_mask = (targets_flat == 1)  # mask targets
+                
+                if class_0_mask.sum() > 0:
+                    class_0_correct = ((predictions_flat == 0) & class_0_mask).sum().item()
+                    class_0_total = class_0_mask.sum().item()
+                    class_0_acc = (class_0_correct / class_0_total) * 100
+                else:
+                    class_0_acc = 0.0
+                
+                if class_1_mask.sum() > 0:
+                    class_1_correct = ((predictions_flat == 1) & class_1_mask).sum().item()
+                    class_1_total = class_1_mask.sum().item()
+                    class_1_acc = (class_1_correct / class_1_total) * 100
+                else:
+                    class_1_acc = 0.0
+                
+                # Overall accuracy
+                total_correct = (predictions_flat == targets_flat).sum().item()
+                total_samples = targets_flat.numel()
+                overall_acc = (total_correct / total_samples) * 100
+                
+                # Class distribution
+                class_0_pct = (class_0_total / total_samples) * 100
+                class_1_pct = (class_1_total / total_samples) * 100
+                
+                print(f"  Training batch accuracy: no-mask {class_0_acc:.1f}%, mask {class_1_acc:.1f}%, overall {overall_acc:.1f}%")
+                print(f"  Training class dist: no-mask {class_0_pct:.1f}%, mask {class_1_pct:.1f}%")
+                print(f"  Training corruption rate: {class_1_pct:.1f}% (target progression: 10% -> 40%)")
+                print(f"  Model probabilities: avg_p_right_p0={avg_p_right_p0:.3f}, avg_p_right_p1={avg_p_right_p1:.3f}")
+                print(f"  Prediction bias: {pred_bias_0:.2f}x class0, {pred_bias_1:.2f}x class1 (1.0 = unbiased)")
+                
+                # Store for wandb logging below
+                train_class_0_acc = class_0_acc
+                train_class_1_acc = class_1_acc
+                train_overall_acc = overall_acc
+                train_class_0_pct = class_0_pct
+                train_class_1_pct = class_1_pct
+                train_avg_p_right_p0 = avg_p_right_p0
+                train_avg_p_right_p1 = avg_p_right_p1
+        else:
+            # For non-remasking_binary training types, no per-class accuracy
+            train_class_0_acc = None
+            train_class_1_acc = None
+            train_avg_p_right_p0 = None
+            train_avg_p_right_p1 = None
         
         if wandb_log:
             log_dict = {
@@ -879,6 +782,21 @@ while True:
                 "lr": lr,
                 "mfu": running_mfu*100 # convert to percentage
             }
+            
+            # Add per-class accuracy for remasking_binary
+            if training_ctx.training_type == 'remasking_binary' and train_class_0_acc is not None:
+                log_dict.update({
+                    "train/accuracy_no_mask": train_class_0_acc,
+                    "train/accuracy_mask": train_class_1_acc,
+                    "train/accuracy_overall": train_overall_acc,
+                    "train/class_dist_no_mask": train_class_0_pct,
+                    "train/class_dist_mask": train_class_1_pct,
+                    "train/corruption_rate": train_class_1_pct,
+                    "train/avg_prob_right_p0": train_avg_p_right_p0,
+                    "train/avg_prob_right_p1": train_avg_p_right_p1,
+                    "train/pred_bias_0": pred_bias_0,
+                    "train/pred_bias_1": pred_bias_1,
+                })
 
             wandb.log(log_dict)
     iter_num += 1
