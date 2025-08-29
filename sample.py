@@ -29,7 +29,7 @@ start_ratio = 0.99  # Initial ratio of tokens to remask (99%)
 end_ratio = 0.05   # Final ratio of tokens to remask (5%)
 
 # Remasking parameters (only used if remasking model is available)
-randomness_strength = 1 # Balance between random (1.0) and model-guided (0.0) remasking
+randomness_strength = 0.8 # Balance between random (1.0) and model-guided (0.0) remasking
 
 if seed == -1:
     seed = int.from_bytes(os.urandom(4), byteorder='little')

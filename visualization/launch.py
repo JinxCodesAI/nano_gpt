@@ -1,10 +1,11 @@
 #!/usr/bin/env python3
 """
-Launch script for Model Explorer
-Checks dependencies and launches the application
+Launch script for Diffusion Inference Visualizer
+Checks dependencies and launches the new inference visualization application
 """
 
 import sys
+import os
 import subprocess
 from pathlib import Path
 
@@ -36,7 +37,7 @@ def check_dependencies():
 
 def main():
     """Main launcher"""
-    print("🚀 Diffusion Model Explorer - Launcher")
+    print("🚀 Diffusion Inference Visualizer - Launcher")
     print("=" * 50)
     
     # Check dependencies
@@ -46,18 +47,32 @@ def main():
         return 1
         
     print("✅ All dependencies satisfied!")
-    print("🚀 Starting Model Explorer...")
+    print("🚀 Starting Inference Visualizer...")
     
-    # Import and run the model explorer
+    # Import and run the inference visualizer
     try:
-        from model_explorer import main as run_basic
-        run_basic()
+        # Change to parent directory so sample.py imports work correctly
+        import os
+        original_cwd = os.getcwd()
+        parent_dir = Path(__file__).parent.parent
+        os.chdir(parent_dir)
+        
+        # Add visualization directory to path
+        sys.path.insert(0, str(Path(__file__).parent))
+        
+        try:
+            from inference_visualizer import main as run_visualizer
+            run_visualizer()
+        finally:
+            # Restore original working directory
+            os.chdir(original_cwd)
     except Exception as e:
         print(f"❌ Error starting application: {e}")
         print("\n💡 Troubleshooting:")
         print("- Ensure model files exist in ../out/ directory")
         print("- Check that data files exist in ../data/shakespeare_char/")
         print("- Try running: pip install PyQt6 torch numpy")
+        print("- For old explorer, use: python model_explorer.py")
         return 1
         
     return 0
