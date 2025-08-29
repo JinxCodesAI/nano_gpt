@@ -1,0 +1,92 @@
+iter 580: loss 0.6931, time 292.75ms, mfu 1.91%
+  data: 0.44ms, forward: 74.96ms, backward: 158.91ms
+
+--- Starting validation at iteration 600 ---
+  Validation complete: 20 batches processed (320 samples), avg loss = 0.6914
+  Class distribution: no-mask 129260 (39.4%), mask 198420 (60.6%)
+  Model predictions: no-mask 78160 (23.9%), mask 249520 (76.1%)
+  Accuracy by class: no-mask 60.5%, mask 100.0%
+--- Validation complete ---
+step 600: train loss 0.6926, val loss 0.6914, lr 0.000015
+  val model vs random: 0.96x better
+  val accuracy: 0.5010
+  Binary classification accuracy: 84.4%
+
+saving checkpoint to out/ckpt_remasking_binary_600.pt
+iter 600: loss 0.6932, time 3496.99ms, mfu 1.73%
+
+...........................
+
+iter 980: loss 0.6932, time 281.45ms, mfu 1.68%
+  data: 0.55ms, forward: 81.18ms, backward: 173.22ms
+
+--- Starting validation at iteration 1000 ---
+  Validation complete: 20 batches processed (320 samples), avg loss = 0.6932
+  Class distribution: no-mask 129260 (39.4%), mask 198420 (60.6%)
+  Model predictions: no-mask 12940 (3.9%), mask 314740 (96.1%)
+  Accuracy by class: no-mask 10.0%, mask 100.0%
+--- Validation complete ---
+step 1000: train loss 0.6939, val loss 0.6932, lr 0.000025
+  val model vs random: 0.96x better
+  val accuracy: 0.5003
+  Binary classification accuracy: 64.5%
+
+saving checkpoint to out/ckpt_remasking_binary_1000.pt
+iter 1000: loss 0.6931, time 3611.85ms, mfu 1.53%
+
+............................
+
+iter 1180: loss 0.6932, time 282.00ms, mfu 1.63%
+  data: 0.51ms, forward: 84.91ms, backward: 176.20ms
+
+--- Starting validation at iteration 1200 ---
+  Validation complete: 20 batches processed (320 samples), avg loss = 0.6930
+  Class distribution: no-mask 129260 (39.4%), mask 198420 (60.6%)
+  Model predictions: no-mask 263920 (80.5%), mask 63760 (19.5%)
+  Accuracy by class: no-mask 67.3%, mask 10.8%
+--- Validation complete ---
+step 1200: train loss 0.6929, val loss 0.6930, lr 0.000030
+  val model vs random: 0.96x better
+  val accuracy: 0.5001
+  Binary classification accuracy: 33.1%
+
+saving checkpoint to out/ckpt_remasking_binary_1200.pt
+iter 1200: loss 0.6931, time 3732.57ms, mfu 1.48%
+
+...........
+
+iter 1380: loss 0.6931, time 261.57ms, mfu 1.62%
+  data: 0.49ms, forward: 84.48ms, backward: 176.18ms
+
+--- Starting validation at iteration 1400 ---
+  Validation complete: 20 batches processed (320 samples), avg loss = 0.6931
+  Class distribution: no-mask 129260 (39.4%), mask 198420 (60.6%)
+  Model predictions: no-mask 14160 (4.3%), mask 313520 (95.7%)
+  Accuracy by class: no-mask 11.0%, mask 100.0%
+--- Validation complete ---
+step 1400: train loss 0.6931, val loss 0.6931, lr 0.000035
+  val model vs random: 0.96x better
+  val accuracy: 0.5002
+  Binary classification accuracy: 64.9%
+
+saving checkpoint to out/ckpt_remasking_binary_1400.pt
+iter 1400: loss 0.6932, time 3757.10ms, mfu 1.47%
+
+.................
+
+iter 1580: loss 0.6931, time 279.56ms, mfu 1.61%
+  data: 0.52ms, forward: 85.80ms, backward: 171.47ms
+
+--- Starting validation at iteration 1600 ---
+  Validation complete: 20 batches processed (320 samples), avg loss = 0.6939
+  Class distribution: no-mask 129260 (39.4%), mask 198420 (60.6%)
+  Model predictions: no-mask 284560 (86.8%), mask 43120 (13.2%)
+  Accuracy by class: no-mask 66.6%, mask 0.0%
+--- Validation complete ---
+step 1600: train loss 0.6934, val loss 0.6939, lr 0.000040
+  val model vs random: 0.96x better
+  val accuracy: 0.4995
+  Binary classification accuracy: 26.3%
+
+saving checkpoint to out/ckpt_remasking_binary_1600.pt
+iter 1600: loss 0.6932, time 3720.58ms, mfu 1.46%

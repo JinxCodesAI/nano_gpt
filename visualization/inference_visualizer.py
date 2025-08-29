@@ -31,7 +31,7 @@ from diffusion_utils import linear_remasking_schedule, apply_remasking
 
 class InferenceRunner(QThread):
     """Background thread for running diffusion inference"""
-    step_complete = pyqtSignal(int, object)  # step_num, tokens
+    substep_complete = pyqtSignal(int, str, object, bool)  # step_num, substep_type, tokens, is_editable
     progress_update = pyqtSignal(int, str)  # progress, status
     error_signal = pyqtSignal(str)
     generation_complete = pyqtSignal()
@@ -63,7 +63,7 @@ class InferenceRunner(QThread):
             
             # Store step 0 (initial state)
             if self.start_step == 0:
-                self.step_complete.emit(0, tokens.clone())
+                self.substep_complete.emit(0, "initial", tokens.clone(), True)
             
             # Run diffusion iterations starting from start_step
             for iteration in range(self.start_step, self.settings['diffusion_iterations']):
@@ -100,6 +100,9 @@ class InferenceRunner(QThread):
                             new_tokens = torch.multinomial(probs, num_samples=1).squeeze(-1)
                             tokens[0, mask_indices] = new_tokens
                 
+                # Emit ACTUAL prediction results (after prediction, before remasking)
+                self.substep_complete.emit(iteration + 1, "prediction", tokens.clone(), False)
+                
                 # Step 2: Remask tokens for next iteration (except final iteration)
                 if iteration < self.settings['diffusion_iterations'] - 1:
                     # Set global variables for the function
@@ -114,9 +117,12 @@ class InferenceRunner(QThread):
                         tokens, remask_ratio, None, self.settings['randomness_strength'],
                         mask_token_id, self.device, self.model, True, False  # intelligent_remasking=True
                     )
-                
-                # Emit step completion
-                self.step_complete.emit(iteration + 1, tokens.clone())
+                    
+                    # Emit remasking substep (editable)
+                    self.substep_complete.emit(iteration + 1, "remasking", tokens.clone(), True)
+                else:
+                    # Final iteration - no remasking, just emit final result as editable
+                    self.substep_complete.emit(iteration + 1, "final", tokens.clone(), True)
             
             self.generation_complete.emit()
             
@@ -137,14 +143,17 @@ class EditableTextWidget(QTextEdit):
         self.vocab = None
         self.mask_token_id = None
         self.current_tokens = None
+        self.is_editable = True
         
     def set_vocab(self, vocab, mask_token_id):
         self.vocab = vocab
         self.mask_token_id = mask_token_id
         
-    def display_tokens(self, tokens, show_mask_char=True):
+    def display_tokens(self, tokens, show_mask_char=True, is_editable=True):
         """Display tokens with proper formatting and coloring"""
         self.current_tokens = tokens.clone() if isinstance(tokens, torch.Tensor) else torch.tensor(tokens)
+        self.is_editable = is_editable
+        self.setReadOnly(not is_editable)
         
         html = "<div style='font-family: Consolas, monospace; font-size: 12px;'>"
         
@@ -181,6 +190,31 @@ class EditableTextWidget(QTextEdit):
         """Convert current text back to tokens (placeholder for now)"""
         # For now, return current tokens - full editing implementation would go here
         return self.current_tokens
+        
+    def get_token_legend(self):
+        """Get legend showing token ID mappings"""
+        if not self.vocab or not self.mask_token_id:
+            return ""
+            
+        legend_html = "<div style='font-family: Arial; font-size: 9px;'>"
+        legend_html += "<b>Token Legend:</b><br/>"
+        
+        # Base vocabulary info
+        legend_html += "<span style='color: #000000;'>Letters: black</span> | "
+        legend_html += "<span style='color: #008000; font-weight: bold;'>Digits: green</span> | "
+        legend_html += "<span style='color: #800080; font-weight: bold;'>Punctuation: purple</span><br/>"
+        legend_html += "<span style='background-color: #E6E6FA; color: #800080; font-weight: bold; padding: 1px;'>Space: · </span> | "
+        legend_html += "<span style='background-color: #F0F8FF; color: #4169E1; font-weight: bold; padding: 1px;'>Newline: ↵ </span><br/>"
+        
+        # Extended tokens
+        legend_html += "<b>Extended Tokens:</b><br/>"
+        legend_html += f"<span style='background-color: #87CEEB; color: black; font-weight: bold; padding: 1px;'>█ = Mask (ID: {self.mask_token_id})</span> | "
+        legend_html += f"<span style='background-color: #FFB6C1; color: black; font-weight: bold; padding: 1px;'>‰ = Wrong (ID: {self.mask_token_id + 1})</span><br/>"
+        legend_html += f"<span style='background-color: #FFB6C1; color: black; font-weight: bold; padding: 1px;'>§ = RemaskGood (ID: {self.mask_token_id + 2})</span> | "
+        legend_html += f"<span style='background-color: #FFB6C1; color: black; font-weight: bold; padding: 1px;'>¶ = RemaskWrong (ID: {self.mask_token_id + 3})</span>"
+        legend_html += "</div>"
+        
+        return legend_html
 
 
 class MainPanel(QWidget):
@@ -198,6 +232,20 @@ class MainPanel(QWidget):
         self.header_label.setFont(QFont("Arial", 14, QFont.Weight.Bold))
         self.header_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         layout.addWidget(self.header_label)
+        
+        # Substep info
+        self.substep_label = QLabel("Initial State")
+        self.substep_label.setFont(QFont("Arial", 12))
+        self.substep_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.substep_label.setStyleSheet("color: #888888;")
+        layout.addWidget(self.substep_label)
+        
+        # Token statistics
+        self.stats_label = QLabel("")
+        self.stats_label.setFont(QFont("Arial", 10))
+        self.stats_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.stats_label.setStyleSheet("color: #CCCCCC; background-color: #2b2b2b; padding: 5px;")
+        layout.addWidget(self.stats_label)
         
         # Text display/edit area
         self.text_widget = EditableTextWidget()
@@ -219,13 +267,107 @@ class MainPanel(QWidget):
         edit_group.setLayout(edit_layout)
         layout.addWidget(edit_group)
         
+        # Legend for token visualization
+        self.legend_label = QLabel("")
+        self.legend_label.setFont(QFont("Arial", 9))
+        self.legend_label.setWordWrap(True)
+        self.legend_label.setStyleSheet("background-color: #3c3c3c; padding: 5px; border-radius: 3px; margin-top: 5px;")
+        layout.addWidget(self.legend_label)
+        
         self.setLayout(layout)
         
-    def update_step(self, step_num, total_steps, tokens, vocab, mask_token_id):
-        """Update display for a specific step"""
+    def update_substep(self, step_num, total_steps, substep_type, tokens, vocab, mask_token_id, is_editable):
+        """Update display for a specific substep"""
         self.header_label.setText(f"Step {step_num} / {total_steps}")
+        
+        # Update substep label with appropriate styling
+        substep_names = {
+            "initial": "Initial State",
+            "prediction": "After Prediction", 
+            "remasking": "After Remasking",
+            "final": "Final Result"
+        }
+        substep_text = substep_names.get(substep_type, substep_type)
+        
+        if is_editable:
+            self.substep_label.setText(f"{substep_text} (Editable)")
+            self.substep_label.setStyleSheet("color: #90EE90; font-weight: bold;")
+        else:
+            self.substep_label.setText(f"{substep_text} (Read-only)")
+            self.substep_label.setStyleSheet("color: #FFB366; font-weight: bold;")
+        
         self.text_widget.set_vocab(vocab, mask_token_id)
-        self.text_widget.display_tokens(tokens)
+        self.text_widget.display_tokens(tokens, True, is_editable)
+        
+        # Calculate token statistics
+        token_stats = self.calculate_token_stats(tokens, vocab, mask_token_id)
+        self.stats_label.setText(token_stats)
+        
+        # Debug output to console with clear context - ONLY for new substeps
+        if not hasattr(self, '_last_logged_substep') or self._last_logged_substep != f"{step_num}_{substep_type}":
+            substep_display = substep_names.get(substep_type, substep_type)
+            print(f"\n=== Step {step_num}/{total_steps} - {substep_display} ===")
+            print(token_stats)
+            if substep_type == "prediction":
+                tokens_np = tokens.cpu().numpy() if isinstance(tokens, torch.Tensor) else tokens
+                mask_count = np.sum(tokens_np == mask_token_id)
+                if mask_count > 0:
+                    print(f"⚠️  Model predicted {mask_count} mask tokens during prediction!")
+                    # Show first few positions where masks were predicted
+                    mask_positions = np.where(tokens_np == mask_token_id)[0][:10]
+                    print(f"Mask positions (first 10): {mask_positions}")
+            print("=" * 50)
+            self._last_logged_substep = f"{step_num}_{substep_type}"
+        
+        # Update legend
+        legend_html = self.text_widget.get_token_legend()
+        if legend_html:
+            self.legend_label.setText(legend_html)
+            self.legend_label.setVisible(True)
+        else:
+            self.legend_label.setVisible(False)
+        
+        # Update edit controls based on editability
+        self.mask_btn.setEnabled(is_editable)
+        self.unmask_btn.setEnabled(is_editable)
+        self.replace_btn.setEnabled(is_editable)
+        
+    def calculate_token_stats(self, tokens, vocab, mask_token_id):
+        """Calculate and format token statistics"""
+        if isinstance(tokens, torch.Tensor):
+            tokens = tokens.cpu().numpy()
+        
+        total_tokens = len(tokens)
+        mask_count = np.sum(tokens == mask_token_id)
+        wrong_token_count = np.sum(tokens == mask_token_id + 1)
+        remask_good_count = np.sum(tokens == mask_token_id + 2)
+        remask_wrong_count = np.sum(tokens == mask_token_id + 3)
+        
+        # Count regular vocab tokens
+        vocab_count = np.sum(tokens < len(vocab))
+        unknown_count = np.sum(tokens >= mask_token_id + 4)
+        
+        stats = [
+            f"Total: {total_tokens}",
+            f"Vocab: {vocab_count}",
+            f"Masks: {mask_count}",
+        ]
+        
+        if wrong_token_count > 0:
+            stats.append(f"Wrong: {wrong_token_count}")
+        if remask_good_count > 0:
+            stats.append(f"RemaskGood: {remask_good_count}")
+        if remask_wrong_count > 0:
+            stats.append(f"RemaskWrong: {remask_wrong_count}")
+        if unknown_count > 0:
+            stats.append(f"Unknown: {unknown_count}")
+            
+        # Add percentages for masks if significant
+        if mask_count > 0:
+            mask_pct = (mask_count / total_tokens) * 100
+            stats.append(f"({mask_pct:.1f}% masks)")
+            
+        return " | ".join(stats)
 
 
 class LeftPanel(QWidget):
@@ -366,12 +508,14 @@ class LeftPanel(QWidget):
 
 
 class BottomPanel(QWidget):
-    """Bottom panel with step navigation controls"""
-    step_changed = pyqtSignal(int)
+    """Bottom panel with substep navigation controls"""
+    substep_changed = pyqtSignal(str)  # substep_key (e.g., "1_prediction", "1_remasking")
     
     def __init__(self):
         super().__init__()
         self.total_steps = 100
+        self.substep_keys = []  # List of available substep keys
+        self.current_index = 0
         self.init_ui()
         
     def init_ui(self):
@@ -381,17 +525,17 @@ class BottomPanel(QWidget):
         # Step slider
         slider_layout = QHBoxLayout()
         
-        self.step_slider = QSlider(Qt.Orientation.Horizontal)
-        self.step_slider.setRange(0, self.total_steps)
-        self.step_slider.setValue(0)
-        self.step_slider.valueChanged.connect(self.on_slider_changed)
+        self.substep_slider = QSlider(Qt.Orientation.Horizontal)
+        self.substep_slider.setRange(0, 0)
+        self.substep_slider.setValue(0)
+        self.substep_slider.valueChanged.connect(self.on_slider_changed)
         
-        self.step_label = QLabel("0 / 100")
-        self.step_label.setMinimumWidth(80)
+        self.substep_label = QLabel("No steps")
+        self.substep_label.setMinimumWidth(120)
         
-        slider_layout.addWidget(QLabel("Step:"))
-        slider_layout.addWidget(self.step_slider)
-        slider_layout.addWidget(self.step_label)
+        slider_layout.addWidget(QLabel("Substep:"))
+        slider_layout.addWidget(self.substep_slider)
+        slider_layout.addWidget(self.substep_label)
         
         layout.addLayout(slider_layout)
         
@@ -412,40 +556,48 @@ class BottomPanel(QWidget):
         
         self.setLayout(layout)
         
-    def set_total_steps(self, total_steps):
-        """Update the total number of steps"""
-        self.total_steps = total_steps
-        self.step_slider.setRange(0, total_steps)
+    def set_substep_keys(self, substep_keys):
+        """Update the available substep keys"""
+        self.substep_keys = substep_keys
+        self.substep_slider.setRange(0, len(substep_keys) - 1 if substep_keys else 0)
+        self.current_index = 0
+        self.substep_slider.setValue(0)
         self.update_label()
         
-    def set_current_step(self, step):
-        """Set the current step without emitting signal"""
-        self.step_slider.blockSignals(True)
-        self.step_slider.setValue(step)
-        self.step_slider.blockSignals(False)
-        self.update_label()
+    def set_current_substep(self, substep_key):
+        """Set the current substep without emitting signal"""
+        if substep_key in self.substep_keys:
+            index = self.substep_keys.index(substep_key)
+            self.current_index = index
+            self.substep_slider.blockSignals(True)
+            self.substep_slider.setValue(index)
+            self.substep_slider.blockSignals(False)
+            self.update_label()
         
     def on_slider_changed(self, value):
         """Handle slider value change"""
+        self.current_index = value
         self.update_label()
-        self.step_changed.emit(value)
+        if 0 <= value < len(self.substep_keys):
+            self.substep_changed.emit(self.substep_keys[value])
         
     def update_label(self):
-        """Update the step label"""
-        current = self.step_slider.value()
-        self.step_label.setText(f"{current} / {self.total_steps}")
+        """Update the substep label"""
+        if self.substep_keys:
+            current_key = self.substep_keys[self.current_index] if 0 <= self.current_index < len(self.substep_keys) else "?"
+            self.substep_label.setText(f"{current_key} ({self.current_index + 1}/{len(self.substep_keys)})")
+        else:
+            self.substep_label.setText("No substeps")
         
     def prev_step(self):
-        """Go to previous step"""
-        current = self.step_slider.value()
-        if current > 0:
-            self.step_slider.setValue(current - 1)
+        """Go to previous substep"""
+        if self.current_index > 0:
+            self.substep_slider.setValue(self.current_index - 1)
             
     def next_step(self):
-        """Go to next step"""
-        current = self.step_slider.value()
-        if current < self.total_steps:
-            self.step_slider.setValue(current + 1)
+        """Go to next substep"""
+        if self.current_index < len(self.substep_keys) - 1:
+            self.substep_slider.setValue(self.current_index + 1)
 
 
 class InferenceVisualizerApp(QMainWindow):
@@ -457,8 +609,8 @@ class InferenceVisualizerApp(QMainWindow):
         self.model = None
         self.vocab = None
         self.vocab_size = None
-        self.generation_steps = {}  # step_num -> tokens
-        self.current_step = 0
+        self.generation_substeps = {}  # substep_key -> {tokens, substep_type, is_editable}
+        self.current_substep_key = None
         self.inference_runner = None
         
         self.load_vocab()
@@ -590,7 +742,7 @@ class InferenceVisualizerApp(QMainWindow):
         
         # Bottom panel
         self.bottom_panel = BottomPanel()
-        self.bottom_panel.step_changed.connect(self.on_step_changed)
+        self.bottom_panel.substep_changed.connect(self.on_substep_changed)
         main_layout.addWidget(self.bottom_panel)
         
         main_widget.setLayout(main_layout)
@@ -651,22 +803,18 @@ class InferenceVisualizerApp(QMainWindow):
             QMessageBox.warning(self, "Warning", "Please load a model first")
             return
             
-        # Clear previous steps
-        self.generation_steps.clear()
-        self.current_step = 0
+        # Clear previous substeps
+        self.generation_substeps.clear()
+        self.current_substep_key = None
         
         # Get settings
         settings = self.left_panel.get_settings()
-        
-        # Update bottom panel
-        self.bottom_panel.set_total_steps(settings['diffusion_iterations'])
-        self.bottom_panel.set_current_step(0)
         
         # Start inference runner
         self.inference_runner = InferenceRunner(
             self.model, settings, self.vocab, self.device
         )
-        self.inference_runner.step_complete.connect(self.on_step_complete)
+        self.inference_runner.substep_complete.connect(self.on_substep_complete)
         self.inference_runner.progress_update.connect(self.on_progress_update)
         self.inference_runner.error_signal.connect(self.on_inference_error)
         self.inference_runner.generation_complete.connect(self.on_generation_complete)
@@ -688,12 +836,19 @@ class InferenceVisualizerApp(QMainWindow):
         
     def restart_from_current(self):
         """Restart generation from current step"""
-        if self.model is None or self.current_step not in self.generation_steps:
-            QMessageBox.warning(self, "Warning", "No valid step to restart from")
+        if self.model is None or not self.current_substep_key or self.current_substep_key not in self.generation_substeps:
+            QMessageBox.warning(self, "Warning", "No valid substep to restart from")
             return
             
-        # Get current step tokens (potentially edited)
+        # Get current substep tokens (potentially edited)
         current_tokens = self.main_panel.text_widget.get_edited_tokens()
+        
+        # Extract step number from substep key (e.g., "3_remasking" -> 3)
+        try:
+            step_num = int(self.current_substep_key.split('_')[0])
+        except (ValueError, IndexError):
+            QMessageBox.warning(self, "Warning", "Invalid substep key")
+            return
         
         # Get settings
         settings = self.left_panel.get_settings()
@@ -701,9 +856,9 @@ class InferenceVisualizerApp(QMainWindow):
         # Start inference runner from current step
         self.inference_runner = InferenceRunner(
             self.model, settings, self.vocab, self.device, 
-            self.current_step, current_tokens.unsqueeze(0).to(self.device)
+            step_num, current_tokens.unsqueeze(0).to(self.device)
         )
-        self.inference_runner.step_complete.connect(self.on_step_complete)
+        self.inference_runner.substep_complete.connect(self.on_substep_complete)
         self.inference_runner.progress_update.connect(self.on_progress_update)
         self.inference_runner.error_signal.connect(self.on_inference_error)
         self.inference_runner.generation_complete.connect(self.on_generation_complete)
@@ -716,29 +871,56 @@ class InferenceVisualizerApp(QMainWindow):
         
         self.inference_runner.start()
         
-    def on_step_complete(self, step_num, tokens):
-        """Handle completion of a generation step"""
-        self.generation_steps[step_num] = tokens.clone()
+    def on_substep_complete(self, step_num, substep_type, tokens, is_editable):
+        """Handle completion of a generation substep"""
+        substep_key = f"{step_num}_{substep_type}"
+        self.generation_substeps[substep_key] = {
+            'tokens': tokens.clone(),
+            'substep_type': substep_type,
+            'is_editable': is_editable,
+            'step_num': step_num
+        }
         
-        # Update display if this is the current step
-        if step_num == self.current_step:
+        # Update bottom panel with new substep keys
+        substep_keys = sorted(self.generation_substeps.keys(), key=lambda x: (int(x.split('_')[0]), x.split('_')[1]))
+        self.bottom_panel.set_substep_keys(substep_keys)
+        
+        # If this is the latest substep, switch to it
+        if not self.current_substep_key or self.should_show_latest_substep(substep_key):
+            self.current_substep_key = substep_key
+            self.bottom_panel.set_current_substep(substep_key)
             self.update_main_panel()
             
-    def on_step_changed(self, step_num):
-        """Handle step change from bottom panel"""
-        if step_num in self.generation_steps:
-            self.current_step = step_num
+    def should_show_latest_substep(self, new_substep_key):
+        """Determine if we should automatically switch to the new substep"""
+        if not self.current_substep_key:
+            return True
+        
+        # Extract step numbers
+        try:
+            new_step = int(new_substep_key.split('_')[0])
+            current_step = int(self.current_substep_key.split('_')[0])
+            return new_step >= current_step
+        except (ValueError, IndexError):
+            return True
+            
+    def on_substep_changed(self, substep_key):
+        """Handle substep change from bottom panel"""
+        if substep_key in self.generation_substeps:
+            self.current_substep_key = substep_key
             self.update_main_panel()
             
     def update_main_panel(self):
         """Update the main panel display"""
-        if self.current_step in self.generation_steps:
-            tokens = self.generation_steps[self.current_step]
+        if self.current_substep_key and self.current_substep_key in self.generation_substeps:
+            substep_data = self.generation_substeps[self.current_substep_key]
+            tokens = substep_data['tokens']
             total_steps = self.left_panel.get_settings()['diffusion_iterations']
             mask_token_id = len(self.vocab)
             
-            self.main_panel.update_step(
-                self.current_step, total_steps, tokens[0], self.vocab, mask_token_id
+            self.main_panel.update_substep(
+                substep_data['step_num'], total_steps, substep_data['substep_type'],
+                tokens[0], self.vocab, mask_token_id, substep_data['is_editable']
             )
             
     def on_progress_update(self, progress, status):
@@ -756,7 +938,7 @@ class InferenceVisualizerApp(QMainWindow):
         # Update UI state
         self.left_panel.start_btn.setEnabled(True)
         self.left_panel.stop_btn.setEnabled(False)
-        self.left_panel.restart_btn.setEnabled(len(self.generation_steps) > 0)
+        self.left_panel.restart_btn.setEnabled(len(self.generation_substeps) > 0 and self.current_substep_key is not None)
         self.progress_bar.setVisible(False)
         
         self.statusBar().showMessage("Generation complete")
