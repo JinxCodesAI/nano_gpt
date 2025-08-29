@@ -28,13 +28,30 @@ diffusion_iterations = 100  # Number of demasking iterations
 start_ratio = 0.99  # Initial ratio of tokens to remask (99%)
 end_ratio = 0.05   # Final ratio of tokens to remask (5%)
 
+# Schedule parameters
+schedule_type = 'custom'  # 'linear' or 'custom' - type of masking schedule to use
+#masking_ratios = [0.85,0.75,0.65,0.55,0.45000000000000007,0.3500000000000001,0.2500000000000001,0.1500000000000001,0.0500000000000001,0.85,0.7999999999999999,0.7499999999999999,0.6999999999999998,0.6499999999999998,0.5999999999999998,0.5499999999999997,0.4999999999999997,0.44999999999999973,0.39999999999999974,0.34999999999999976,0.29999999999999977,0.24999999999999978,0.1999999999999998,0.1499999999999998,0.0999999999999998]    # Array of masking ratios for 'custom' schedule (overrides diffusion_iterations)
+masking_ratios = [0.85,0.816,0.7819999999999999,0.7479999999999999,0.7139999999999999,0.6799999999999998,0.6459999999999998,0.6119999999999998,0.5779999999999997,0.5439999999999997,0.5099999999999997,0.47599999999999965,0.4419999999999996,0.4079999999999996,0.37399999999999956,0.3399999999999995,0.3059999999999995,0.27199999999999946,0.23799999999999946,0.20399999999999946,0.16999999999999946,0.13599999999999945,0.10199999999999945,0.06799999999999945,0.03399999999999945]   # Array of masking ratios for 'custom' schedule (overrides diffusion_iterations)
+
 # Remasking parameters (only used if remasking model is available)
-randomness_strength = 0.8 # Balance between random (1.0) and model-guided (0.0) remasking
+randomness_strength = 2# Balance between random (1.0) and model-guided (0.0) remasking
 
 if seed == -1:
     seed = int.from_bytes(os.urandom(4), byteorder='little')
 
 exec(open('configurator.py').read()) # overrides from command line or config file
+
+# Validate schedule parameters
+if schedule_type not in ['linear', 'custom']:
+    raise ValueError(f"schedule_type must be 'linear' or 'custom', got '{schedule_type}'")
+
+if schedule_type == 'custom':
+    if masking_ratios is None or len(masking_ratios) == 0:
+        raise ValueError("masking_ratios cannot be None or empty when schedule_type='custom'")
+    # Override diffusion_iterations with length of masking_ratios
+    diffusion_iterations = len(masking_ratios)
+    print(f"Using custom schedule with {diffusion_iterations} iterations from masking_ratios")
+
 # -----------------------------------------------------------------------------
 
 def linear_remasking_schedule(total_iterations, current_iteration):
@@ -140,11 +157,12 @@ def apply_remasking(tokens, remask_ratio, remasking_model, randomness_strength, 
     
     return tokens
 
-def diffusion_generate(model, batch_size, total_length, iterations, remasking_model, mask_token_id, 
-                      randomness_strength, decode_fn, decode_mask_fn, verbose=True, temperature=1.0):
+def diffusion_generate(model, batch_size, total_length, iterations, remasking_model, mask_token_id,
+                      randomness_strength, decode_fn, decode_mask_fn, verbose=True, temperature=1.0,
+                      schedule_type='linear', masking_ratios=None):
     """
     Generate text samples using diffusion-based iterative demasking
-    
+
     Args:
         model: Trained diffusion model
         batch_size: Number of samples to generate
@@ -157,7 +175,9 @@ def diffusion_generate(model, batch_size, total_length, iterations, remasking_mo
         decode_mask_fn: Function to decode with mask characters
         verbose: Whether to print progress
         temperature: Temperature for sampling
-    
+        schedule_type: 'linear' or 'custom' - type of masking schedule to use
+        masking_ratios: Array of masking ratios for 'custom' schedule (overrides iterations)
+
     Returns:
         Generated tokens (batch_size, total_length)
     """
@@ -244,7 +264,12 @@ def diffusion_generate(model, batch_size, total_length, iterations, remasking_mo
         
         # Step 2: Remask tokens for next iteration (except final iteration)
         if iteration < iterations - 1:
-            remask_ratio = linear_remasking_schedule(iterations, iteration + 1)
+            if schedule_type == 'custom':
+                # Use the next ratio from the custom schedule
+                remask_ratio = masking_ratios[iteration + 1]
+            else:
+                # Use linear schedule
+                remask_ratio = linear_remasking_schedule(iterations, iteration + 1)
             
             # Debug: Track masks before remasking (using actual prediction results)
             masks_before = (prediction_tokens == mask_token_id).sum().item()
@@ -420,7 +445,9 @@ with torch.no_grad():
             decode_fn=decode,
             decode_mask_fn=decode_with_mask_char,
             verbose=True,
-            temperature=temperature
+            temperature=temperature,
+            schedule_type=schedule_type,
+            masking_ratios=masking_ratios
         )
         
         # Display results

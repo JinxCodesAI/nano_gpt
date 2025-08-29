@@ -145,6 +145,21 @@ class EditableTextWidget(QTextEdit):
         self.current_tokens = None
         self.is_editable = True
         
+        # Connect text changes to signal with delay to avoid spam
+        self.save_timer = QTimer()
+        self.save_timer.setSingleShot(True)
+        self.save_timer.timeout.connect(self.emit_text_edited)
+        self.textChanged.connect(self.on_text_changed)
+        
+    def on_text_changed(self):
+        """Schedule emit signal when text is edited (with delay to avoid spam)"""
+        if self.is_editable:
+            self.save_timer.start(500)  # 500ms delay
+            
+    def emit_text_edited(self):
+        """Actually emit the signal after delay"""
+        self.text_edited.emit()
+        
     def set_vocab(self, vocab, mask_token_id):
         self.vocab = vocab
         self.mask_token_id = mask_token_id
@@ -187,34 +202,65 @@ class EditableTextWidget(QTextEdit):
         self.setHtml(html)
     
     def get_edited_tokens(self):
-        """Convert current text back to tokens (placeholder for now)"""
-        # For now, return current tokens - full editing implementation would go here
-        return self.current_tokens
+        """Convert current displayed text back to tokens"""
+        print(f"DEBUG: get_edited_tokens - vocab: {type(self.vocab)}, mask_token_id: {self.mask_token_id}")
         
-    def get_token_legend(self):
-        """Get legend showing token ID mappings"""
         if not self.vocab or not self.mask_token_id:
-            return ""
+            print("DEBUG: get_edited_tokens - falling back to current_tokens")
+            return self.current_tokens
+        
+        # Get the plain text content (not HTML)
+        plain_text = self.toPlainText()
+        print(f"DEBUG: get_edited_tokens - plain text length: {len(plain_text)}")
+        print(f"DEBUG: get_edited_tokens - first 100 chars: {repr(plain_text[:100])}")
+        
+        # Convert string/char vocab to integer mapping if needed
+        if isinstance(list(self.vocab.keys())[0], str):
+            # This is a char-level vocab like {'a': 0, 'b': 1, ...}
+            char_to_id = self.vocab
+        else:
+            # This might be id-to-char, flip it
+            char_to_id = {v: k for k, v in self.vocab.items() if isinstance(v, str)}
+        
+        tokens = []
+        for char in plain_text:
+            if char == '█':  # Mask character
+                tokens.append(self.mask_token_id)
+            elif char in char_to_id:
+                tokens.append(char_to_id[char])
+            else:
+                # Unknown character - mask it
+                print(f"DEBUG: Unknown character '{char}' (ord={ord(char)}), masking")
+                tokens.append(self.mask_token_id)
+        
+        print(f"DEBUG: get_edited_tokens - parsed {len(tokens)} tokens from plain text")
+        
+        # Ensure correct sequence length - pad with masks or trim
+        expected_length = len(self.current_tokens)
+        
+        if len(tokens) < expected_length:
+            # Pad with mask tokens at the end
+            tokens.extend([self.mask_token_id] * (expected_length - len(tokens)))
+            print(f"DEBUG: get_edited_tokens - padded to {len(tokens)} tokens")
+        elif len(tokens) > expected_length:
+            # Trim to expected length
+            tokens = tokens[:expected_length]
+            print(f"DEBUG: get_edited_tokens - trimmed to {len(tokens)} tokens")
             
-        legend_html = "<div style='font-family: Arial; font-size: 9px;'>"
-        legend_html += "<b>Token Legend:</b><br/>"
+        result = torch.tensor(tokens, dtype=torch.long)
+        print(f"DEBUG: get_edited_tokens - returning tensor shape: {result.shape}")
+        print(f"DEBUG: get_edited_tokens - first 20 tokens: {result[:20]}")
+        return result
         
-        # Base vocabulary info
-        legend_html += "<span style='color: #000000;'>Letters: black</span> | "
-        legend_html += "<span style='color: #008000; font-weight: bold;'>Digits: green</span> | "
-        legend_html += "<span style='color: #800080; font-weight: bold;'>Punctuation: purple</span><br/>"
-        legend_html += "<span style='background-color: #E6E6FA; color: #800080; font-weight: bold; padding: 1px;'>Space: · </span> | "
-        legend_html += "<span style='background-color: #F0F8FF; color: #4169E1; font-weight: bold; padding: 1px;'>Newline: ↵ </span><br/>"
+    def mask_selected_text(self):
+        """Replace selected text with mask characters"""
+        cursor = self.textCursor()
+        if cursor.hasSelection():
+            # Replace selected text with mask characters
+            selected_text = cursor.selectedText()
+            mask_text = '█' * len(selected_text)
+            cursor.insertText(mask_text)
         
-        # Extended tokens
-        legend_html += "<b>Extended Tokens:</b><br/>"
-        legend_html += f"<span style='background-color: #87CEEB; color: black; font-weight: bold; padding: 1px;'>█ = Mask (ID: {self.mask_token_id})</span> | "
-        legend_html += f"<span style='background-color: #FFB6C1; color: black; font-weight: bold; padding: 1px;'>‰ = Wrong (ID: {self.mask_token_id + 1})</span><br/>"
-        legend_html += f"<span style='background-color: #FFB6C1; color: black; font-weight: bold; padding: 1px;'>§ = RemaskGood (ID: {self.mask_token_id + 2})</span> | "
-        legend_html += f"<span style='background-color: #FFB6C1; color: black; font-weight: bold; padding: 1px;'>¶ = RemaskWrong (ID: {self.mask_token_id + 3})</span>"
-        legend_html += "</div>"
-        
-        return legend_html
 
 
 class MainPanel(QWidget):
@@ -251,28 +297,6 @@ class MainPanel(QWidget):
         self.text_widget = EditableTextWidget()
         layout.addWidget(self.text_widget)
         
-        # Edit controls
-        edit_group = QGroupBox("Edit Controls")
-        edit_layout = QHBoxLayout()
-        
-        self.mask_btn = QPushButton("Mask Selected")
-        self.unmask_btn = QPushButton("Unmask Selected")
-        self.replace_btn = QPushButton("Replace Selected")
-        
-        edit_layout.addWidget(self.mask_btn)
-        edit_layout.addWidget(self.unmask_btn)
-        edit_layout.addWidget(self.replace_btn)
-        edit_layout.addStretch()
-        
-        edit_group.setLayout(edit_layout)
-        layout.addWidget(edit_group)
-        
-        # Legend for token visualization
-        self.legend_label = QLabel("")
-        self.legend_label.setFont(QFont("Arial", 9))
-        self.legend_label.setWordWrap(True)
-        self.legend_label.setStyleSheet("background-color: #3c3c3c; padding: 5px; border-radius: 3px; margin-top: 5px;")
-        layout.addWidget(self.legend_label)
         
         self.setLayout(layout)
         
@@ -319,23 +343,21 @@ class MainPanel(QWidget):
             print("=" * 50)
             self._last_logged_substep = f"{step_num}_{substep_type}"
         
-        # Update legend
-        legend_html = self.text_widget.get_token_legend()
-        if legend_html:
-            self.legend_label.setText(legend_html)
-            self.legend_label.setVisible(True)
-        else:
-            self.legend_label.setVisible(False)
-        
-        # Update edit controls based on editability
-        self.mask_btn.setEnabled(is_editable)
-        self.unmask_btn.setEnabled(is_editable)
-        self.replace_btn.setEnabled(is_editable)
-        
     def calculate_token_stats(self, tokens, vocab, mask_token_id):
         """Calculate and format token statistics"""
+        # Debug print to see what we're getting
+        print(f"DEBUG: calculate_token_stats received tokens type: {type(tokens)}")
+        print(f"DEBUG: tokens value: {tokens}")
+        
         if isinstance(tokens, torch.Tensor):
             tokens = tokens.cpu().numpy()
+        elif isinstance(tokens, (list, tuple)):
+            tokens = np.array(tokens)
+        elif isinstance(tokens, np.ndarray):
+            pass  # Already numpy array
+        else:
+            print(f"ERROR: Invalid tokens type: {type(tokens)}")
+            return "Error: Invalid token data"
         
         total_tokens = len(tokens)
         mask_count = np.sum(tokens == mask_token_id)
@@ -427,7 +449,7 @@ class LeftPanel(QWidget):
         gen_layout.addWidget(QLabel("Length:"), 2, 0)
         self.length_spin = QSpinBox()
         self.length_spin.setRange(50, 1024)
-        self.length_spin.setValue(256)
+        self.length_spin.setValue(1024)
         self.length_spin.valueChanged.connect(self.settings_changed)
         gen_layout.addWidget(self.length_spin, 2, 1)
         
@@ -479,6 +501,17 @@ class LeftPanel(QWidget):
         
         control_group.setLayout(control_layout)
         layout.addWidget(control_group)
+        
+        # Edit controls
+        edit_group = QGroupBox("Edit Controls")
+        edit_layout = QVBoxLayout()
+        
+        self.mask_btn = QPushButton("Mask Selected")
+        self.mask_btn.setEnabled(False)
+        edit_layout.addWidget(self.mask_btn)
+        
+        edit_group.setLayout(edit_layout)
+        layout.addWidget(edit_group)
         
         layout.addStretch()
         self.setLayout(layout)
@@ -729,10 +762,12 @@ class InferenceVisualizerApp(QMainWindow):
         self.left_panel.start_btn.clicked.connect(self.start_generation)
         self.left_panel.stop_btn.clicked.connect(self.stop_generation)
         self.left_panel.restart_btn.clicked.connect(self.restart_from_current)
+        self.left_panel.mask_btn.clicked.connect(self.mask_selected)
         top_splitter.addWidget(self.left_panel)
         
         # Main panel
         self.main_panel = MainPanel()
+        self.main_panel.text_widget.text_edited.connect(self.on_text_edited)
         top_splitter.addWidget(self.main_panel)
         
         # Set splitter proportions
@@ -843,9 +878,15 @@ class InferenceVisualizerApp(QMainWindow):
         # Get current substep tokens (potentially edited)
         current_tokens = self.main_panel.text_widget.get_edited_tokens()
         
+        # Debug: Print what we got from edited tokens
+        print(f"DEBUG: restart_from_current - edited tokens type: {type(current_tokens)}")
+        print(f"DEBUG: restart_from_current - edited tokens shape: {current_tokens.shape if hasattr(current_tokens, 'shape') else 'no shape'}")
+        print(f"DEBUG: restart_from_current - first 20 tokens: {current_tokens[:20] if hasattr(current_tokens, '__getitem__') else 'not indexable'}")
+        
         # Extract step number from substep key (e.g., "3_remasking" -> 3)
         try:
             step_num = int(self.current_substep_key.split('_')[0])
+            print(f"DEBUG: restart_from_current - starting from step: {step_num}")
         except (ValueError, IndexError):
             QMessageBox.warning(self, "Warning", "Invalid substep key")
             return
@@ -923,6 +964,9 @@ class InferenceVisualizerApp(QMainWindow):
                 tokens[0], self.vocab, mask_token_id, substep_data['is_editable']
             )
             
+            # Update edit controls based on editability
+            self.left_panel.mask_btn.setEnabled(substep_data['is_editable'])
+            
     def on_progress_update(self, progress, status):
         """Handle progress update"""
         self.progress_bar.setValue(progress)
@@ -942,6 +986,52 @@ class InferenceVisualizerApp(QMainWindow):
         self.progress_bar.setVisible(False)
         
         self.statusBar().showMessage("Generation complete")
+        
+    def mask_selected(self):
+        """Mask selected tokens in current substep"""
+        if not self.current_substep_key or self.current_substep_key not in self.generation_substeps:
+            return
+            
+        # Get selected text range from main panel
+        selection = self.main_panel.text_widget.textCursor().selectedText()
+        if not selection:
+            QMessageBox.information(self, "Info", "Please select text to mask")
+            return
+            
+        # Apply masking to selected text
+        self.main_panel.text_widget.mask_selected_text()
+        
+        # Update the stored substep data with modified tokens
+        substep_data = self.generation_substeps[self.current_substep_key]
+        modified_tokens = self.main_panel.text_widget.get_edited_tokens()
+        substep_data['tokens'] = modified_tokens.clone()
+        self.generation_substeps[self.current_substep_key] = substep_data
+        
+    def on_text_edited(self):
+        """Handle immediate text edits - save changes to current substep"""
+        if not self.current_substep_key or self.current_substep_key not in self.generation_substeps:
+            return
+            
+        # Get current substep data
+        substep_data = self.generation_substeps[self.current_substep_key]
+        
+        # Only save edits for editable substeps
+        if not substep_data['is_editable']:
+            return
+            
+        # Get the edited tokens and save them
+        try:
+            modified_tokens = self.main_panel.text_widget.get_edited_tokens()
+            
+            # Ensure proper tensor format (add batch dimension if needed)
+            if len(modified_tokens.shape) == 1:
+                modified_tokens = modified_tokens.unsqueeze(0)  # Add batch dimension
+                
+            substep_data['tokens'] = modified_tokens
+            self.generation_substeps[self.current_substep_key] = substep_data
+            print(f"DEBUG: on_text_edited - saved edits to {self.current_substep_key}, shape: {modified_tokens.shape}")
+        except Exception as e:
+            print(f"DEBUG: on_text_edited - error saving edits: {e}")
 
 
 def main():
