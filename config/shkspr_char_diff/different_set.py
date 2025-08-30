@@ -3,6 +3,8 @@ init_from = 'resume' # 'scratch' or 'resume'
 wandb_log = True # disabled by default
 wandb_project = 'experiments_diffusion'
 wandb_run_name = 'shkspr_char_diff_moderate_first' # 'run' + str(time.time())
+batch_size = 64
+gradient_accumulation_steps = 4
 # data
 dataset = 'shakespeare_char'
 use_paragraph_boundaries = False # if True, start samples at paragraph boundaries (double newlines)
@@ -12,8 +14,8 @@ training_type = 'unmasking'  # 'unmasking', 'remasking', or 'remasking_binary' -
 # For unmasking: stage-based training with direct probability control
 
 unmasking_stages = [
-    {'type':'sticky','target_masked_ratio': 0.4, 'p1_probability': 0.15, 'p2_probability': 0.3, 'val_loss_stale_count': 6},
     {'type':'sticky','target_masked_ratio': 0.6, 'p1_probability': 0.1, 'p2_probability': 0.5, 'val_loss_stale_count': 8},
+    {'type':'sticky','target_masked_ratio': 0.4, 'p1_probability': 0.15, 'p2_probability': 0.3, 'val_loss_stale_count': 6},
     {'type':'sticky','target_masked_ratio': 0.6, 'p1_probability': 0.2, 'p2_probability': 0.1, 'val_loss_stale_count': 8},
     {'type':'random','max_masked_ratio': 0.7, 'val_loss_stale_count': 10}
 ]
