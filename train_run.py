@@ -22,7 +22,8 @@ from utils import Timer, log_masking_stats
 from train_utils import (
     get_batch, estimate_loss, get_lr, load_synthetic_model, 
     start_prefetch, stop_prefetch, TrainingContext, UnmaskingStage, update_stage_progress,
-    create_unmasking_validation_set, UnmaskingStageType, StickyStageConfig, RandomStageConfig
+    create_unmasking_validation_set, UnmaskingStageType, StickyStageConfig, RandomStageConfig,
+    calculate_wrong_answer_entropy, get_current_entropy_penalty, update_entropy_multiplier_ema
 )
 
 torch._dynamo.config.suppress_errors = True
@@ -43,7 +44,7 @@ training_type = 'unmasking'
 eval_interval = 200
 log_interval = 20
 eval_iters = 20
-eval_only = True # if True, script exits right after the first eval
+eval_only = False # if True, script exits right after the first eval
 always_save_checkpoint = True # if True, always save a checkpoint after each eval
 init_from = 'resume' # 'scratch' or 'resume'
 ckpt_filename = '34.5_58.4_UM.pt' # Specific checkpoint to load (if not latest)
@@ -70,6 +71,9 @@ unmasking_stages = [] # override in config file
 validation_stages = [] # override in config file
 use_all_stages_for_training = False # if True, generate training batches from all stages like validation
 weight_loss_by_mask_ratio = False # if True, weight loss by sqrt(1.0 / mask_ratio) to balance gradient magnitude across masking ratios
+enable_entropy_penalty = False # if True, apply entropy penalty to incentivize uniform wrong answer distributions
+max_entropy_penalty = 0.5 # maximum entropy penalty multiplier (penalizes concentrated wrong answers)
+entropy_penalty_start_iter = 6000 # iteration to start applying entropy penalty
 
 # adamw optimizer
 learning_rate = 1e-3 # with baby networks can afford to go a bit higher
@@ -275,7 +279,10 @@ training_ctx = TrainingContext(
     min_lr=min_lr,
     use_paragraph_boundaries=use_paragraph_boundaries,
     use_all_stages_for_training=use_all_stages_for_training,
-    weight_loss_by_mask_ratio=weight_loss_by_mask_ratio
+    weight_loss_by_mask_ratio=weight_loss_by_mask_ratio,
+    enable_entropy_penalty=enable_entropy_penalty,
+    max_entropy_penalty=max_entropy_penalty,
+    entropy_penalty_start_iter=entropy_penalty_start_iter
 )
 
 # Apply restored training context state if resuming from checkpoint
@@ -285,7 +292,8 @@ if init_from == 'resume' and checkpoint_training_context is not None:
     training_ctx.current_stage = checkpoint_training_context.get('current_stage', 0)
     training_ctx.val_loss_stale_count = checkpoint_training_context.get('val_loss_stale_count', 0)
     training_ctx.best_val_loss_this_stage = checkpoint_training_context.get('best_val_loss_for_stage', float('inf'))
-    print(f"Training context restored: stage={training_ctx.current_stage}, stale_count={training_ctx.val_loss_stale_count}")
+    training_ctx.entropy_multiplier_ema = checkpoint_training_context.get('entropy_multiplier_ema', 1.0)
+    print(f"Training context restored: stage={training_ctx.current_stage}, stale_count={training_ctx.val_loss_stale_count}, entropy_ema={training_ctx.entropy_multiplier_ema:.4f}")
 else:
     print(f"DEBUG: NOT applying training context. init_from='{init_from}', checkpoint_training_context={checkpoint_training_context is not None}")
 
@@ -474,7 +482,8 @@ def reload_from_checkpoint():
         training_ctx.current_stage = ctx_state.get('current_stage', 0)
         training_ctx.val_loss_stale_count = ctx_state.get('val_loss_stale_count', 0)
         training_ctx.best_val_loss_this_stage = ctx_state.get('best_val_loss_for_stage', float('inf'))
-        print(f"Training context restored: stage={training_ctx.current_stage}")
+        training_ctx.entropy_multiplier_ema = ctx_state.get('entropy_multiplier_ema', 1.0)
+        print(f"Training context restored: stage={training_ctx.current_stage}, entropy_ema={training_ctx.entropy_multiplier_ema:.4f}")
     
     
     print(f"Model and optimizer reloaded from iteration {iter_num}")
@@ -547,6 +556,11 @@ while True:
         print_and_flush(f"--- Validation complete ---")
         print_and_flush(f"step {iter_num}: train loss {losses['train']:.4f}, val loss {losses['val']:.4f}, lr {lr:.6f}")
         
+        # Print entropy penalty information if enabled
+        if training_ctx.enable_entropy_penalty:
+            current_entropy_penalty = get_current_entropy_penalty(iter_num, training_ctx)
+            print_and_flush(f"entropy penalty: {current_entropy_penalty:.4f}, multiplier EMA: {training_ctx.entropy_multiplier_ema:.4f}")
+        
         # Print stage information for unmasking training
         if 'current_stage' in losses:
             stage_config = training_ctx.get_current_stage_config()
@@ -592,6 +606,12 @@ while True:
                 "max_masked_token_ratio": losses.get('train_max_masked_token_ratio', 0.0),
             }
             
+            # Add entropy penalty to validation wandb logging if enabled
+            if training_ctx.enable_entropy_penalty:
+                current_entropy_penalty = get_current_entropy_penalty(iter_num, training_ctx)
+                log_dict["entropy_penalty"] = current_entropy_penalty
+                log_dict["entropy_multiplier_ema"] = training_ctx.entropy_multiplier_ema
+            
             # Add per-stage validation losses for unmasking training
             for stage_idx in range(len(training_ctx.validation_stages or [])):
                 stage_loss_key = f'val_stage_{stage_idx}_loss'
@@ -617,7 +637,8 @@ while True:
                 checkpoint['training_context'] = {
                     'current_stage': training_ctx.current_stage,
                     'val_loss_stale_count': training_ctx.val_loss_stale_count,
-                    'best_val_loss_for_stage': training_ctx.best_val_loss_this_stage
+                    'best_val_loss_for_stage': training_ctx.best_val_loss_this_stage,
+                    'entropy_multiplier_ema': training_ctx.entropy_multiplier_ema
                 }
                 ckpt_filename = f'ckpt_unmasking_{iter_num}.pt'
                     
@@ -705,6 +726,30 @@ while True:
                         if mask_ratio > 0:
                             weight = (1.0 / mask_ratio) ** 0.5  # sqrt(1.0 / mask_ratio)
                             loss = loss * weight
+                
+                # Apply entropy penalty if enabled (works for all training types)
+                if training_ctx.enable_entropy_penalty:
+                    current_entropy_penalty = get_current_entropy_penalty(iter_num, training_ctx)
+                    if current_entropy_penalty > 0:
+                        # Calculate entropy of wrong answer distributions
+                        wrong_answer_entropy = calculate_wrong_answer_entropy(logits, Y, training_ctx.extended_vocab_size)
+                        
+                        # Calculate max possible entropy for wrong answers: log(vocab_size - 1)
+                        max_wrong_entropy = math.log(training_ctx.extended_vocab_size - 1)
+                        
+                        # Penalty for LOW entropy (concentrated wrong answers)
+                        # When entropy is low (bad) -> high penalty
+                        # When entropy is high (good) -> low penalty  
+                        entropy_penalty_factor = (max_wrong_entropy - wrong_answer_entropy) / max_wrong_entropy
+                        entropy_multiplier = 1.0 + current_entropy_penalty * entropy_penalty_factor
+                        loss = loss * entropy_multiplier
+                        
+                        # Update EMA of entropy multiplier
+                        update_entropy_multiplier_ema(training_ctx, entropy_multiplier)
+                    else:
+                        # No penalty applied, multiplier is 1.0
+                        update_entropy_multiplier_ema(training_ctx, 1.0)
+                
                 # For remasking variants, model's internal loss is already correct
                 
                 # UNIVERSAL: Check final loss after any training-type-specific processing
@@ -901,6 +946,12 @@ while True:
 
         print(f"iter {iter_num}: loss {lossf:.4f}, time {dt*1000:.2f}ms, mfu {running_mfu*100:.2f}%")
         print(f"  data: {data_time:.2f}ms, forward: {forward_time:.2f}ms, loss: {loss_time:.2f}ms, backward: {backward_time:.2f}ms")
+        
+        # Add entropy penalty logging if enabled
+        if training_ctx.enable_entropy_penalty:
+            current_entropy_penalty = get_current_entropy_penalty(iter_num, training_ctx)
+            if current_entropy_penalty > 0:
+                print(f"  entropy_penalty: {current_entropy_penalty:.4f}, multiplier_ema: {training_ctx.entropy_multiplier_ema:.4f} (max: {training_ctx.max_entropy_penalty})")
 
         # Validation timing (when applicable)
         if iter_num % eval_interval == 0:
@@ -931,6 +982,12 @@ while True:
                 "lr": lr,
                 "mfu": running_mfu*100 # convert to percentage
             }
+            
+            # Add entropy penalty to wandb logging if enabled
+            if training_ctx.enable_entropy_penalty:
+                current_entropy_penalty = get_current_entropy_penalty(iter_num, training_ctx)
+                log_dict["entropy_penalty"] = current_entropy_penalty
+                log_dict["entropy_multiplier_ema"] = training_ctx.entropy_multiplier_ema
 
             wandb.log(log_dict)
     iter_num += 1

@@ -1,9 +1,10 @@
 out_dir = 'out'
-init_from = 'resume' # 'scratch' or 'resume'
-wandb_log = True # disabled by default
+init_from = 'scratch' # 'scratch' or 'resume'
+wandb_log = False # disabled by default
 wandb_project = 'experiments_diffusion'
 wandb_run_name = 'shkspr_char_diff_moderate_first' # 'run' + str(time.time())
 batch_size = 16
+gradient_accumulation_steps = 16
 # data
 dataset = 'shakespeare_char'
 use_paragraph_boundaries = False # if True, start samples at paragraph boundaries (double newlines)
@@ -63,6 +64,6 @@ grad_clip = 1.0 # clip gradients at this value, or disable if == 0.0
 # learning rate decay settings
 decay_lr = True # it's just experiment, no need to decay
 
-max_entropy_penalty = 0.5 # loss = loss * (1 + current_entropy_penalty * wrong_answers_entropy)
+max_entropy_penalty = 3 # loss = loss * (1 + current_entropy_penalty * wrong_answers_entropy)
 
-entropy_penalty_start_iter = 6000 # start increasing entropy penalty after this many iterations
+entropy_penalty_start_iter = 1000 # start increasing entropy penalty after this many iterations

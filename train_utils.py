@@ -146,6 +146,15 @@ class TrainingContext:
     learning_rate: float = 1e-4
     min_lr: float = 1e-5
     
+    # Entropy penalty parameters (incentivize uniform wrong answer distributions)
+    enable_entropy_penalty: bool = False
+    max_entropy_penalty: float = 0.5  # Penalty for concentrated wrong answers
+    entropy_penalty_start_iter: int = 6000
+    
+    # Entropy multiplier tracking
+    entropy_multiplier_ema: float = 1.0  # Exponential moving average of entropy multiplier
+    entropy_multiplier_ema_factor: float = 0.99  # EMA decay factor
+    
     def __post_init__(self):
         # Default unmasking stages if not provided
         if self.training_type == 'unmasking' and self.unmasking_stages is None:
@@ -1607,3 +1616,84 @@ def get_lr(it, ctx: TrainingContext):
     assert 0 <= decay_ratio <= 1
     coeff = 0.5 * (1.0 + math.cos(math.pi * decay_ratio)) # coeff ranges 0..1
     return ctx.min_lr + coeff * (ctx.learning_rate - ctx.min_lr)
+
+def calculate_wrong_answer_entropy(logits, targets, vocab_size):
+    """
+    Calculate entropy of wrong answer distributions for entropy penalty.
+    
+    HIGH entropy (uniform wrong answers) = GOOD (high signal-to-noise ratio)
+    LOW entropy (concentrated wrong answers) = BAD (low signal-to-noise ratio)
+    
+    Args:
+        logits: Model logits (batch_size, seq_len, vocab_size)
+        targets: Target tokens (batch_size, seq_len)
+        vocab_size: Size of vocabulary
+        
+    Returns:
+        avg_entropy: Average entropy of wrong answer distributions across all positions
+    """
+    batch_size, seq_len, vocab_size = logits.shape
+    device = logits.device
+    
+    # Get probabilities from logits
+    probs = torch.nn.functional.softmax(logits, dim=-1)  # (batch_size, seq_len, vocab_size)
+    
+    # Flatten for easier processing
+    probs_flat = probs.view(-1, vocab_size)  # (batch_size * seq_len, vocab_size)
+    targets_flat = targets.view(-1)  # (batch_size * seq_len,)
+    
+    # Create a mask for wrong answers (avoid in-place modification)
+    correct_mask = torch.zeros_like(probs_flat, dtype=torch.bool)
+    correct_mask[range(len(targets_flat)), targets_flat] = True
+    
+    # Zero out correct answer probabilities (create new tensor, don't modify in-place)
+    wrong_probs = probs_flat.clone()
+    wrong_probs[correct_mask] = 0.0
+    
+    # Calculate entropy directly on the wrong answer probabilities: -sum(p * log(p))
+    # Add small epsilon to avoid log(0)
+    epsilon = 1e-8
+    log_probs = torch.log(wrong_probs + epsilon)
+    entropies = -(wrong_probs * log_probs).sum(dim=1)  # (batch_size * seq_len,)
+    
+    # Return average entropy across all positions
+    return entropies.mean()
+
+def get_current_entropy_penalty(iter_num, ctx: TrainingContext):
+    """
+    Calculate current entropy penalty based on iteration number.
+    
+    Args:
+        iter_num: Current iteration number
+        ctx: Training context with penalty parameters
+        
+    Returns:
+        current_penalty: Current entropy penalty multiplier (0 to max_entropy_penalty)
+    """
+    if not ctx.enable_entropy_penalty:
+        return 0.0
+    
+    if iter_num < ctx.entropy_penalty_start_iter:
+        return 0.0
+    
+    if iter_num >= ctx.max_iters:
+        return ctx.max_entropy_penalty
+    
+    # Linear increase from start_iter to max_iters
+    progress = (iter_num - ctx.entropy_penalty_start_iter) / (ctx.max_iters - ctx.entropy_penalty_start_iter)
+    progress = max(0.0, min(1.0, progress))  # Clamp to [0, 1]
+    
+    return progress * ctx.max_entropy_penalty
+
+def update_entropy_multiplier_ema(ctx: TrainingContext, current_multiplier: float):
+    """
+    Update the exponential moving average of entropy multiplier.
+    
+    Args:
+        ctx: Training context
+        current_multiplier: Current entropy multiplier value
+    """
+    if ctx.enable_entropy_penalty:
+        # EMA update: ema = alpha * ema + (1-alpha) * current_value
+        alpha = ctx.entropy_multiplier_ema_factor
+        ctx.entropy_multiplier_ema = alpha * ctx.entropy_multiplier_ema + (1 - alpha) * current_multiplier
