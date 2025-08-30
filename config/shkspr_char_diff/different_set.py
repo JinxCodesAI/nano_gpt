@@ -24,9 +24,9 @@ max_iters = 50000
 warmup_iters = 1000 # how many steps to warm up for
 lr_decay_iters = 50000 # it's just experiment, no need to decay
 min_lr = 1e-4 # learning_rate / 10 usually
-weight_decay=1e-3
-dropout = 0.01 # for pretraining 0 is good, for finetuning try 0.1+
+weight_decay=1e-5
+dropout = 0.0 # for pretraining 0 is good, for finetuning try 0.1+
 
 grad_clip = 1.0 # clip gradients at this value, or disable if == 0.0
 # learning rate decay settings
-decay_lr = False # it's just experiment, no need to decay
+decay_lr = True # it's just experiment, no need to decay
