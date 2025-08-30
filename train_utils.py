@@ -532,40 +532,28 @@ def get_remasking_validation_batch(ctx: TrainingContext, batch_idx=None):
     return _remasking_val_set[batch_idx]
 
 
-def apply_random_masking_gpu(x, max_masked_ratio, mask_token_id):
+# In train_utils.py, modify this function
+def apply_random_masking_gpu(x, max_masked_ratio, mask_token_id, vocab_size):
     """
     GPU-optimized random masking for unmasking training.
     Each sample in the batch gets a different random masking probability.
-    
-    Args:
-        x: Input tokens (batch_size, seq_len)
-        max_masked_ratio: Maximum fraction of tokens to mask (0.0 to 1.0)
-        mask_token_id: Token ID to use for masking
-        
-    Returns:
-        masked_x: Input with masked tokens replaced by mask_token_id
-        mask: Boolean mask indicating which positions were masked
     """
     batch_size, seq_len = x.shape
     device = x.device
     
-    # Generate different masking probability for each sample in the batch
-    mask_probs = torch.rand(batch_size, device=device) * max_masked_ratio  # Shape: (batch_size,)
+    mask_probs = torch.rand(batch_size, device=device) * max_masked_ratio
+    rand_vals = torch.rand_like(x, dtype=torch.float, device=device)
+    mask_probs_expanded = mask_probs.unsqueeze(1).expand(-1, seq_len)
     
-    # Generate random values for each token position
-    rand_vals = torch.rand_like(x, dtype=torch.float, device=device)  # Shape: (batch_size, seq_len)
-    
-    # Expand mask probabilities to match token dimensions
-    mask_probs_expanded = mask_probs.unsqueeze(1).expand(-1, seq_len)  # Shape: (batch_size, seq_len)
-    
-    # Create mask: True where random value is less than the sample's masking probability
+    # Step 1: Generate the boolean mask of positions to predict (this logic is unchanged)
     mask = rand_vals < mask_probs_expanded
     
-    # Apply masking
-    masked_x = x.clone()
-    masked_x[mask] = mask_token_id
+    # Step 2: Apply the 80/10/10 corruption using the new function
+    # NOTE: You'll need to pass vocab_size to this function. Your TrainingContext
+    # has `meta_vocab_size`, which is what you should use.
+    corrupted_x = apply_bert_style_corruption_gpu(x, mask, mask_token_id, vocab_size)
     
-    return masked_x, mask
+    return corrupted_x, mask
 
 def apply_stage_masking(x, stage_config: UnmaskingStage, mask_token_id):
     """
@@ -1619,6 +1607,45 @@ def get_lr(it, ctx: TrainingContext):
 
 # In train_utils.py
 
+# Add this new function to train_utils.py
+def apply_bert_style_corruption_gpu(x, mask, mask_token_id, vocab_size):
+    """
+    Applies the 80/10/10 corruption strategy from BERT to the selected positions.
+    
+    Args:
+        x: Original input tokens (batch_size, seq_len)
+        mask: Boolean mask of positions selected for prediction (batch_size, seq_len)
+        mask_token_id: The ID of the [MASK] token.
+        vocab_size: The size of the vocabulary for generating random tokens.
+        
+    Returns:
+        corrupted_x: The input tokens after applying the 80/10/10 rule.
+    """
+    corrupted_x = x.clone()
+    
+    # Generate random numbers to decide on the corruption type for each masked position
+    rand = torch.rand(x.shape, device=x.device)
+    
+    # Determine the positions for each case based on the main mask
+    # 80% of the time, we replace with [MASK]
+    mask_token_positions = mask & (rand < 0.8)
+    
+    # 10% of the time, we replace with a random token (0.8 <= rand < 0.9)
+    random_token_positions = mask & (rand >= 0.8) & (rand < 0.9)
+    
+    # 10% of the time, we keep the original token (rand >= 0.9) - no action needed for these
+    
+    # Apply the [MASK] tokens
+    corrupted_x[mask_token_positions] = mask_token_id
+    
+    # Apply the random tokens
+    num_random = random_token_positions.sum()
+    if num_random > 0:
+        random_tokens = torch.randint(0, vocab_size, (num_random,), device=x.device)
+        corrupted_x[random_token_positions] = random_tokens
+        
+    return corrupted_x
+
 def calculate_wrong_answer_entropy(logits, targets, vocab_size):
     """
     Calculate entropy of wrong answer distributions for entropy penalty.
@@ -1676,7 +1703,7 @@ def calculate_wrong_answer_entropy(logits, targets, vocab_size):
     
     # Return average entropy across all valid positions
     return entropies.mean()
-    
+
 def get_current_entropy_penalty(iter_num, ctx: TrainingContext):
     """
     Calculate current entropy penalty based on iteration number.
