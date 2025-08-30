@@ -22,7 +22,7 @@ from utils import Timer, log_masking_stats
 from train_utils import (
     get_batch, estimate_loss, get_lr, load_synthetic_model, 
     start_prefetch, stop_prefetch, TrainingContext, UnmaskingStage, update_stage_progress,
-    create_unmasking_validation_set, create_unmasking_training_set, UnmaskingStageType, StickyStageConfig, RandomStageConfig
+    create_unmasking_validation_set, UnmaskingStageType, StickyStageConfig, RandomStageConfig
 )
 
 torch._dynamo.config.suppress_errors = True
@@ -502,10 +502,9 @@ if training_ctx.training_type == 'unmasking':
     print("Pre-creating validation set...")
     create_unmasking_validation_set(training_ctx)
     
-    # Pre-create training set if flag is enabled
+    # Training batches will be generated fresh each time from all stages when flag is enabled
     if training_ctx.use_all_stages_for_training:
-        print("Pre-creating training set with all stages...")
-        create_unmasking_training_set(training_ctx)
+        print("Training will generate fresh batches from all stages each iteration")
 
 print_and_flush("Starting training loop...")
 just_recovered = False
