@@ -22,7 +22,7 @@ from utils import Timer, log_masking_stats
 from train_utils import (
     get_batch, estimate_loss, get_lr, load_synthetic_model, 
     start_prefetch, stop_prefetch, TrainingContext, UnmaskingStage, update_stage_progress,
-    create_unmasking_validation_set, UnmaskingStageType, StickyStageConfig, RandomStageConfig
+    create_unmasking_validation_set, create_unmasking_training_set, UnmaskingStageType, StickyStageConfig, RandomStageConfig
 )
 
 torch._dynamo.config.suppress_errors = True
@@ -67,6 +67,7 @@ use_paragraph_boundaries = False # if True, start samples at paragraph boundarie
 # unmasking training config
 unmasking_stages = [] # override in config file
 validation_stages = [] # override in config file
+use_all_stages_for_training = False # if True, generate training batches from all stages like validation
 
 # adamw optimizer
 learning_rate = 1e-3 # with baby networks can afford to go a bit higher
@@ -269,7 +270,8 @@ training_ctx = TrainingContext(
     lr_decay_iters=lr_decay_iters,
     learning_rate=learning_rate,
     min_lr=min_lr,
-    use_paragraph_boundaries=use_paragraph_boundaries
+    use_paragraph_boundaries=use_paragraph_boundaries,
+    use_all_stages_for_training=use_all_stages_for_training
 )
 
 # Apply restored training context state if resuming from checkpoint
@@ -499,6 +501,11 @@ if training_ctx.training_type == 'unmasking':
     # Pre-create validation set with equal representation from all stages
     print("Pre-creating validation set...")
     create_unmasking_validation_set(training_ctx)
+    
+    # Pre-create training set if flag is enabled
+    if training_ctx.use_all_stages_for_training:
+        print("Pre-creating training set with all stages...")
+        create_unmasking_training_set(training_ctx)
 
 print_and_flush("Starting training loop...")
 just_recovered = False

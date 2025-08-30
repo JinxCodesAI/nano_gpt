@@ -9,6 +9,7 @@ dataset = 'shakespeare_char'
 use_paragraph_boundaries = False # if True, start samples at paragraph boundaries (double newlines)
 # diffusion training config
 training_type = 'unmasking'  # 'unmasking', 'remasking', or 'remasking_binary' - type of training
+use_all_stages_for_training = True
 
 # For unmasking: stage-based training with direct probability control
 

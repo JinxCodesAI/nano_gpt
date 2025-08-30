@@ -29,6 +29,7 @@ _progressive_val_cache = {}  # Cache for progressive validation batches
 _progressive_val_full_cache = None  # Cache for full progressive validation set (all 320 samples)
 _unmasking_val_set = None  # Complete validation set for unmasking training (eval_iters * batch_size samples)
 _remasking_val_set = None  # Complete validation set for remasking training (eval_iters * batch_size samples)
+_unmasking_train_set = None  # Complete training set for unmasking training with all stages
 _data_cache = {'train': None, 'val': None}
 _valid_indices_cache = {'train': None, 'val': None}
 _prefetch_enabled = True
@@ -101,6 +102,7 @@ class TrainingContext:
     data_dir: str = 'data/shakespeare_char'
     meta_vocab_size: int = None
     use_paragraph_boundaries: bool = True  # If True, start samples at paragraph boundaries (double newlines)
+    use_all_stages_for_training: bool = False  # If True, generate training batches from all stages like validation
     
     # Token IDs
     mask_token_id: int = None
@@ -250,12 +252,13 @@ def stop_prefetch():
 
 def clear_validation_cache():
     """Clear progressive validation cache - useful when training parameters change"""
-    global _progressive_val_cache, _val_batch_cache, _progressive_val_full_cache, _unmasking_val_set, _remasking_val_set
+    global _progressive_val_cache, _val_batch_cache, _progressive_val_full_cache, _unmasking_val_set, _remasking_val_set, _unmasking_train_set
     _progressive_val_cache.clear()
     _val_batch_cache = None
     _progressive_val_full_cache = None
     _unmasking_val_set = None
     _remasking_val_set = None
+    _unmasking_train_set = None
 
 def create_unmasking_validation_set(ctx: TrainingContext):
     """Create complete validation set with samples evenly distributed across all stages"""
@@ -353,6 +356,105 @@ def get_unmasking_validation_batch(ctx: TrainingContext, batch_idx=None):
     # Handle batch index wrapping
     batch_idx = batch_idx % len(_unmasking_val_set)
     return _unmasking_val_set[batch_idx]
+
+def create_unmasking_training_set(ctx: TrainingContext):
+    """Create complete training set with samples evenly distributed across all stages"""
+    global _unmasking_train_set, _data_cache, _valid_indices_cache
+    
+    if _unmasking_train_set is not None:
+        print("Using existing training set from cache")
+        return  # Already created
+    
+    print("Creating training set with samples from all stages...")
+    
+    # Cache training data if not already cached
+    if _data_cache['train'] is None:
+        _data_cache['train'] = np.memmap(os.path.join(ctx.data_dir, 'train.bin'), dtype=np.uint16, mode='r')
+        if ctx.use_paragraph_boundaries:
+            _valid_indices_cache['train'] = find_double_newline_indices(_data_cache['train'], ctx.meta_vocab_size, ctx.block_size)
+        else:
+            _valid_indices_cache['train'] = np.array([])
+    
+    data = _data_cache['train']
+    valid_indices = _valid_indices_cache['train']
+    
+    # Use same batch count as validation for consistency
+    total_samples = ctx.eval_iters * ctx.batch_size
+    # Use unmasking_stages instead of validation_stages
+    num_stages = len(ctx.unmasking_stages)
+    samples_per_stage = total_samples // num_stages
+    
+    training_batches = []
+    
+    # Generate samples for each stage
+    torch.manual_seed(1337 + ctx.seed_offset)  # Different seed from validation (42)
+    
+    for stage_idx, stage_config in enumerate(ctx.unmasking_stages):
+        stage_samples = samples_per_stage
+        # Handle remainder samples
+        if stage_idx < (total_samples % num_stages):
+            stage_samples += 1
+            
+        stage_type = stage_config.get_stage_type()
+        stage_info = f"  Stage {stage_idx} ({stage_type.value}): {stage_samples} samples"
+        if stage_type == UnmaskingStageType.STICKY:
+            config = stage_config.config
+            stage_info += f" (target_ratio={config.target_masked_ratio:.1f}, p1={config.p1_probability:.1f}, p2={config.p2_probability:.1f})"
+        elif stage_type == UnmaskingStageType.RANDOM:
+            config = stage_config.config
+            stage_info += f" (max_ratio={config.max_masked_ratio:.1f})"
+        print(stage_info)
+        
+        # Generate batches for this stage
+        stage_batches = []
+        samples_generated = 0
+        
+        while samples_generated < stage_samples:
+            batch_size = min(ctx.batch_size, stage_samples - samples_generated)
+            
+            # Sample data indices
+            if len(valid_indices) == 0:
+                ix_np = torch.randint(len(data) - ctx.block_size, (batch_size,)).numpy()
+            else:
+                ix_indices = torch.randint(len(valid_indices), (batch_size,)).numpy()
+                ix_np = valid_indices[ix_indices]
+            
+            # Load data with vectorized indexing
+            ix_expanded = ix_np[:, None] + np.arange(ctx.block_size)[None, :]  # (batch_size, block_size)
+            x_np = data[ix_expanded].astype(np.int64)
+            
+            # Convert to tensor
+            x = torch.from_numpy(x_np)
+            if ctx.device_type == 'cuda':
+                x = x.pin_memory().to(ctx.device, non_blocking=True)
+            else:
+                x = x.to(ctx.device)
+            
+            # Apply stage-specific masking
+            masked_x, mask = apply_stage_masking(x, stage_config, ctx.mask_token_id)
+            
+            stage_batches.append((masked_x.clone(), x.clone(), mask.clone()))
+            samples_generated += batch_size
+        
+        training_batches.extend(stage_batches)
+    
+    torch.manual_seed(1337 + ctx.seed_offset)  # Reset seed
+    _unmasking_train_set = training_batches
+    print(f"Training set created: {len(training_batches)} batches, {sum(b[0].size(0) for b in training_batches)} total samples")
+
+def get_unmasking_training_batch(ctx: TrainingContext, batch_idx=None):
+    """Get a specific batch from the pre-created training set"""
+    global _unmasking_train_set
+    
+    if _unmasking_train_set is None:
+        create_unmasking_training_set(ctx)
+    
+    if batch_idx is None:
+        batch_idx = 0
+    
+    # Handle batch index wrapping
+    batch_idx = batch_idx % len(_unmasking_train_set)
+    return _unmasking_train_set[batch_idx]
 
 def create_remasking_validation_set(ctx: TrainingContext, force_recreate=False):
     """Create complete validation set for remasking training with progressive corruption intensities"""
@@ -852,11 +954,15 @@ def get_batch(split, ctx: TrainingContext, validation_sample_idx=None):
 
 def get_batch_unmasking(split, ctx: TrainingContext, validation_sample_idx=None):
     """Stage-based unmasking with target-driven sticky masking"""
-    global _val_batch_cache, _progressive_val_cache, _data_cache, _valid_indices_cache, _unmasking_val_set
+    global _val_batch_cache, _progressive_val_cache, _data_cache, _valid_indices_cache, _unmasking_val_set, _unmasking_train_set
 
     # For validation, use the pre-created validation set distributed across all stages
     if split == 'val':
         return get_unmasking_validation_batch(ctx, validation_sample_idx)
+    
+    # For training, check if we should use pre-created training set with all stages
+    if split == 'train' and ctx.use_all_stages_for_training:
+        return get_unmasking_training_batch(ctx, validation_sample_idx)
 
     # Cache memory-mapped data and valid indices - MAJOR SPEEDUP
     if _data_cache[split] is None:
