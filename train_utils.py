@@ -1617,6 +1617,8 @@ def get_lr(it, ctx: TrainingContext):
     coeff = 0.5 * (1.0 + math.cos(math.pi * decay_ratio)) # coeff ranges 0..1
     return ctx.min_lr + coeff * (ctx.learning_rate - ctx.min_lr)
 
+# In train_utils.py
+
 def calculate_wrong_answer_entropy(logits, targets, vocab_size):
     """
     Calculate entropy of wrong answer distributions for entropy penalty.
@@ -1634,31 +1636,47 @@ def calculate_wrong_answer_entropy(logits, targets, vocab_size):
     """
     batch_size, seq_len, vocab_size = logits.shape
     device = logits.device
+    epsilon = 1e-9 # Use a slightly larger epsilon for stability
     
     # Get probabilities from logits
-    probs = torch.nn.functional.softmax(logits, dim=-1)  # (batch_size, seq_len, vocab_size)
+    probs = torch.nn.functional.softmax(logits, dim=-1)
     
     # Flatten for easier processing
-    probs_flat = probs.view(-1, vocab_size)  # (batch_size * seq_len, vocab_size)
-    targets_flat = targets.view(-1)  # (batch_size * seq_len,)
+    probs_flat = probs.view(-1, vocab_size)
+    targets_flat = targets.view(-1)
     
-    # Create a mask for wrong answers (avoid in-place modification)
-    correct_mask = torch.zeros_like(probs_flat, dtype=torch.bool)
-    correct_mask[range(len(targets_flat)), targets_flat] = True
+    # --- START FIX ---
     
-    # Zero out correct answer probabilities (create new tensor, don't modify in-place)
+    # Create a mask to zero out the correct answer probabilities
     wrong_probs = probs_flat.clone()
-    wrong_probs[correct_mask] = 0.0
+    wrong_probs[range(len(targets_flat)), targets_flat] = 0.0
     
-    # Calculate entropy directly on the wrong answer probabilities: -sum(p * log(p))
-    # Add small epsilon to avoid log(0)
-    epsilon = 1e-8
-    log_probs = torch.log(wrong_probs + epsilon)
-    entropies = -(wrong_probs * log_probs).sum(dim=1)  # (batch_size * seq_len,)
+    # Calculate the sum of the remaining "wrong" probabilities
+    # This sum is (1.0 - p_correct)
+    sum_wrong_probs = wrong_probs.sum(dim=1, keepdim=True)
     
-    # Return average entropy across all positions
+    # Avoid division by zero for positions where p_correct was close to 1.0
+    # If sum_wrong_probs is near zero, entropy is also zero, so we can ignore these.
+    # We create a mask for safe normalization.
+    safe_mask = sum_wrong_probs.squeeze() > epsilon
+    
+    if not safe_mask.any():
+        # Handle the edge case where no positions have significant wrong probabilities
+        return torch.tensor(0.0, device=device)
+        
+    # Re-normalize the wrong probabilities so they sum to 1
+    # This creates a true probability distribution over the incorrect tokens
+    normalized_wrong_probs = wrong_probs[safe_mask] / sum_wrong_probs[safe_mask]
+    
+    # Calculate entropy on the properly normalized distribution
+    log_probs = torch.log(normalized_wrong_probs + epsilon)
+    entropies = -(normalized_wrong_probs * log_probs).sum(dim=1)
+    
+    # --- END FIX ---
+    
+    # Return average entropy across all valid positions
     return entropies.mean()
-
+    
 def get_current_entropy_penalty(iter_num, ctx: TrainingContext):
     """
     Calculate current entropy penalty based on iteration number.

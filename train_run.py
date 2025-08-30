@@ -726,6 +726,9 @@ while True:
                         if mask_ratio > 0:
                             weight = (1.0 / mask_ratio) ** 0.5  # sqrt(1.0 / mask_ratio)
                             loss = loss * weight
+                else:
+                    if training_ctx.training_type == 'unmasking':
+                        loss = torch.tensor(0.0, device=loss.device, requires_grad=True)
                 
                 # Apply entropy penalty if enabled (works for all training types)
                 if training_ctx.enable_entropy_penalty:
@@ -749,7 +752,7 @@ while True:
                     else:
                         # No penalty applied, multiplier is 1.0
                         update_entropy_multiplier_ema(training_ctx, 1.0)
-                
+
                 # For remasking variants, model's internal loss is already correct
                 
                 # UNIVERSAL: Check final loss after any training-type-specific processing
