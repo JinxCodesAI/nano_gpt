@@ -43,9 +43,10 @@ training_type = 'unmasking'
 eval_interval = 200
 log_interval = 20
 eval_iters = 20
-eval_only = False # if True, script exits right after the first eval
+eval_only = True # if True, script exits right after the first eval
 always_save_checkpoint = True # if True, always save a checkpoint after each eval
-init_from = 'scratch' # 'scratch' or 'resume'
+init_from = 'resume' # 'scratch' or 'resume'
+ckpt_filename = '34.5_58.4_UM.pt' # Specific checkpoint to load (if not latest)
 # model
 n_layer = 6
 n_head = 6
@@ -68,6 +69,7 @@ use_paragraph_boundaries = False # if True, start samples at paragraph boundarie
 unmasking_stages = [] # override in config file
 validation_stages = [] # override in config file
 use_all_stages_for_training = False # if True, generate training batches from all stages like validation
+weight_loss_by_mask_ratio = False # if True, weight loss by sqrt(1.0 / mask_ratio) to balance gradient magnitude across masking ratios
 
 # adamw optimizer
 learning_rate = 1e-3 # with baby networks can afford to go a bit higher
@@ -88,6 +90,7 @@ backend = 'nccl' # 'nccl', 'gloo', etc.
 device = 'cuda' # examples: 'cpu', 'cuda', 'cuda:0', 'cuda:1' etc., or try 'mps' on macbooks
 dtype = 'float16'
 compile = True # use PyTorch 2.0 to compile the model to be faster
+start_iter_num = 0
 
 # -----------------------------------------------------------------------------
 config_keys = [k for k,v in globals().items() if not k.startswith('_') and isinstance(v, (int, float, bool, str))]
@@ -271,7 +274,8 @@ training_ctx = TrainingContext(
     learning_rate=learning_rate,
     min_lr=min_lr,
     use_paragraph_boundaries=use_paragraph_boundaries,
-    use_all_stages_for_training=use_all_stages_for_training
+    use_all_stages_for_training=use_all_stages_for_training,
+    weight_loss_by_mask_ratio=weight_loss_by_mask_ratio
 )
 
 # Apply restored training context state if resuming from checkpoint
@@ -301,29 +305,33 @@ elif init_from == 'resume':
     print_and_flush(f"Resuming unmasking training from {out_dir}")
     # resume training from a checkpoint.
     # Find the latest unmasking checkpoint file
-    import glob
-    ckpt_pattern = os.path.join(out_dir, 'ckpt_*unmasking*.pt')
-    ckpt_files = glob.glob(ckpt_pattern)
+    if ckpt_filename is None:
+        import glob
+        ckpt_pattern = os.path.join(out_dir, 'ckpt_*unmasking*.pt')
+        ckpt_files = glob.glob(ckpt_pattern)
+        if not ckpt_files:
+            # Fallback to old naming convention
+            ckpt_path = os.path.join(out_dir, 'ckpt.pt')
+            if not os.path.exists(ckpt_path):
+                raise FileNotFoundError(f"No unmasking checkpoint files found in {out_dir}")
+        else:
+            # Extract iteration numbers and find the latest
+            def extract_iter_num(filename):
+                basename = os.path.basename(filename)
+                # Extract number from ckpt_unmasking_XXX.pt
+                parts = basename.split('_')
+                for part in parts:
+                    if part.replace('.pt', '').isdigit():
+                        return int(part.replace('.pt', ''))
+                return 0
 
-    if not ckpt_files:
-        # Fallback to old naming convention
-        ckpt_path = os.path.join(out_dir, 'ckpt.pt')
-        if not os.path.exists(ckpt_path):
-            raise FileNotFoundError(f"No unmasking checkpoint files found in {out_dir}")
-    else:
-        # Extract iteration numbers and find the latest
-        def extract_iter_num(filename):
-            basename = os.path.basename(filename)
-            # Extract number from ckpt_unmasking_XXX.pt
-            parts = basename.split('_')
-            for part in parts:
-                if part.replace('.pt', '').isdigit():
-                    return int(part.replace('.pt', ''))
-            return 0
-
-        latest_ckpt = max(ckpt_files, key=extract_iter_num)
-        ckpt_path = latest_ckpt
+            latest_ckpt = max(ckpt_files, key=extract_iter_num)
+            ckpt_path = latest_ckpt
         print_and_flush(f"Loading latest checkpoint: {os.path.basename(ckpt_path)}")
+    else:
+        ckpt_path = os.path.join(out_dir, ckpt_filename)
+        if not os.path.exists(ckpt_path):
+            raise FileNotFoundError(f"Checkpoint file {ckpt_path} not found")
 
     checkpoint = torch.load(ckpt_path, map_location=device, weights_only=False)
     checkpoint_model_args = checkpoint['model_args']
@@ -346,6 +354,7 @@ elif init_from == 'resume':
             state_dict[k[len(unwanted_prefix):]] = state_dict.pop(k)
     model.load_state_dict(state_dict)
     iter_num = checkpoint['iter_num']
+    start_iter_num = iter_num
     best_val_loss = checkpoint['best_val_loss']
     
     # Restore training context state if available
@@ -389,7 +398,7 @@ if ddp:
     model = DDP(model, device_ids=[ddp_local_rank])
 
 # logging
-if wandb_log and master_process:
+if wandb_log and master_process and not eval_only:
     import wandb
     wandb.init(project=wandb_project, name=wandb_run_name, config=config)
 
@@ -516,7 +525,7 @@ while True:
         param_group['lr'] = lr
 
     # evaluate the loss on train/val sets and write checkpoints
-    if iter_num % eval_interval == 0 and master_process and not just_recovered:
+    if (iter_num % eval_interval == 0 and master_process and not just_recovered) or eval_only:
         print_and_flush(f"\n--- Starting validation at iteration {iter_num} ---")
         with timer.time_function('validation'):
             # Update training context with current iteration
@@ -556,6 +565,8 @@ while True:
         if 'val_model_vs_random' in losses:
             print(f"  val model vs random: {losses['val_model_vs_random']:.2f}x better")
             print(f"  val avg correct prob: {losses['val_avg_correct_prob']:.4f} (random: {1.0/training_ctx.extended_vocab_size:.4f})")
+            if 'val_signal_to_noise' in losses:
+                print(f"  val signal to noise: {losses['val_signal_to_noise']:.2f} (median: {losses.get('val_signal_to_noise_median', 0.0):.2f})")
             if 'val_most_likely_accuracy' in losses:
                 print(f"  Most likely guess correct P %: {losses['val_most_likely_accuracy']:.1f}%")
         
@@ -566,13 +577,15 @@ while True:
         
         print()  # Add blank line for readability
 
-        if wandb_log:
+        if wandb_log and master_process and not eval_only:
             log_dict = {
                 "iter": iter_num,
                 "train/loss": losses['train'],
                 "val/loss": losses['val'],
                 "lr": lr,
                 "model vs random": losses.get('val_model_vs_random', 0.0),
+                "signal to noise": losses.get('val_signal_to_noise', 0.0),
+                "signal to noise median": losses.get('val_signal_to_noise_median', 0.0),
                 "mfu": running_mfu*100, # convert to percentage
                 "masked_token_ratio": losses.get('train_masked_token_ratio', 0.0),
                 "min_masked_token_ratio": losses.get('train_min_masked_token_ratio', 0.0),
@@ -608,9 +621,10 @@ while True:
                 }
                 ckpt_filename = f'ckpt_unmasking_{iter_num}.pt'
                     
-                print(f"saving checkpoint to {out_dir}/{ckpt_filename}")
-                torch.save(checkpoint, os.path.join(out_dir, ckpt_filename))
-    if iter_num == 0 and eval_only:
+                if start_iter_num != iter_num:
+                    print(f"saving checkpoint to {out_dir}/{ckpt_filename}")
+                    torch.save(checkpoint, os.path.join(out_dir, ckpt_filename))
+    if eval_only:
         break
 
     # forward backward update, with optional gradient accumulation to simulate larger batch size
@@ -684,6 +698,13 @@ while True:
                         targets_reshaped[mask_reshaped], 
                         reduction='mean'
                     )
+                    
+                    # Apply mask ratio weighting if enabled
+                    if training_ctx.weight_loss_by_mask_ratio:
+                        mask_ratio = mask.float().mean().item()
+                        if mask_ratio > 0:
+                            weight = (1.0 / mask_ratio) ** 0.5  # sqrt(1.0 / mask_ratio)
+                            loss = loss * weight
                 # For remasking variants, model's internal loss is already correct
                 
                 # UNIVERSAL: Check final loss after any training-type-specific processing
@@ -903,7 +924,7 @@ while True:
                 stage_info += f", max={config.max_masked_ratio:.1f}"
             print(stage_info)
         
-        if wandb_log:
+        if wandb_log and master_process and not eval_only:
             log_dict = {
                 "iter": iter_num,
                 "train/loss": lossf,

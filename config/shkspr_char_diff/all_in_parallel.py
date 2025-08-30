@@ -1,5 +1,5 @@
-out_dir = 'out_exp'
-init_from = 'scratch' # 'scratch' or 'resume'
+out_dir = 'out'
+init_from = 'resume' # 'scratch' or 'resume'
 wandb_log = True # disabled by default
 wandb_project = 'experiments_diffusion'
 wandb_run_name = 'shkspr_char_diff_moderate_first' # 'run' + str(time.time())
@@ -10,6 +10,8 @@ use_paragraph_boundaries = False # if True, start samples at paragraph boundarie
 # diffusion training config
 training_type = 'unmasking'  # 'unmasking', 'remasking', or 'remasking_binary' - type of training
 use_all_stages_for_training = True
+weight_loss_by_mask_ratio = True
+enable_entropy_penalty = True
 
 # For unmasking: stage-based training with direct probability control
 
@@ -50,13 +52,17 @@ validation_stages = [
 
 # adamw optimizer
 learning_rate = 5e-4 # with baby networks can afford to go a bit higher
-max_iters = 50000
+max_iters = 15000
 warmup_iters = 1000 # how many steps to warm up for
-lr_decay_iters = 50000 # it's just experiment, no need to decay
+lr_decay_iters = 15000 # make equal to max_iters usually
 min_lr = 1e-4 # learning_rate / 10 usually
 weight_decay=1e-3
 dropout = 0.01 # for pretraining 0 is good, for finetuning try 0.1+
 
 grad_clip = 1.0 # clip gradients at this value, or disable if == 0.0
 # learning rate decay settings
-decay_lr = False # it's just experiment, no need to decay
+decay_lr = True # it's just experiment, no need to decay
+
+max_entropy_penalty = 0.5 # loss = loss * (1 + current_entropy_penalty * wrong_answers_entropy)
+
+entropy_penalty_start_iter = 6000 # start increasing entropy penalty after this many iterations

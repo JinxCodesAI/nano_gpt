@@ -102,6 +102,7 @@ class TrainingContext:
     meta_vocab_size: int = None
     use_paragraph_boundaries: bool = True  # If True, start samples at paragraph boundaries (double newlines)
     use_all_stages_for_training: bool = False  # If True, generate training batches from all stages like validation
+    weight_loss_by_mask_ratio: bool = False  # If True, weight loss by sqrt(1.0 / mask_ratio) to balance gradient magnitude
     
     # Token IDs
     mask_token_id: int = None
@@ -1196,6 +1197,8 @@ def estimate_loss(model, torch_ctx, timer, training_ctx: TrainingContext):
         if split == 'val':
             # For validation, also track model vs random performance
             model_probs = []
+            # Track signal to noise ratio (correct prob vs most probable incorrect prob)
+            signal_to_noise_ratios = []
             # Track detailed probability breakdown for binary classification by class
             right_probs_p0 = []  # Probabilities for correct predictions where target=0
             right_probs_p1 = []  # Probabilities for correct predictions where target=1
@@ -1263,6 +1266,13 @@ def estimate_loss(model, torch_ctx, timer, training_ctx: TrainingContext):
                             targets_reshaped[mask_reshaped],
                             reduction='mean'
                         )
+                        
+                        # Apply mask ratio weighting if enabled (same as training)
+                        if training_ctx.weight_loss_by_mask_ratio:
+                            mask_ratio = mask.float().mean().item()
+                            if mask_ratio > 0:
+                                weight = (1.0 / mask_ratio) ** 0.5  # sqrt(1.0 / mask_ratio)
+                                loss = loss * weight
                     # For remasking variants, model's internal loss is correct
 
                 # For validation, compute model vs random statistics
@@ -1312,6 +1322,13 @@ def estimate_loss(model, torch_ctx, timer, training_ctx: TrainingContext):
                         correct_token_probs = probs_flat[range(len(targets_flat)), targets_flat]
                         model_probs.extend(correct_token_probs.cpu().tolist())
                         
+                        # Calculate signal to noise ratio for binary classification
+                        # For each position, find the most probable incorrect class
+                        incorrect_probs = torch.where(targets_flat == 0, probs_flat[:, 1], probs_flat[:, 0])
+                        # Calculate signal to noise ratio, capped at 100
+                        sn_ratios = torch.clamp(correct_token_probs / (incorrect_probs + 1e-10), max=100.0)
+                        signal_to_noise_ratios.extend(sn_ratios.cpu().tolist())
+                        
                         # Track detailed probability breakdown by class
                         class_0_mask = (targets_flat == 0)
                         class_1_mask = (targets_flat == 1)
@@ -1339,6 +1356,15 @@ def estimate_loss(model, torch_ctx, timer, training_ctx: TrainingContext):
                         correct_token_probs = probs_flat[range(len(targets_flat)), targets_flat]
                         model_probs.extend(correct_token_probs.cpu().tolist())
                         
+                        # Calculate signal to noise ratio for remasking
+                        # Create a copy of probabilities and zero out the correct class to find max incorrect
+                        probs_masked = probs_flat.clone()
+                        probs_masked[range(len(targets_flat)), targets_flat] = 0.0
+                        max_incorrect_probs = torch.max(probs_masked, dim=1)[0]
+                        # Calculate signal to noise ratio, capped at 100
+                        sn_ratios = torch.clamp(correct_token_probs / (max_incorrect_probs + 1e-10), max=100.0)
+                        signal_to_noise_ratios.extend(sn_ratios.cpu().tolist())
+                        
                         # Track most likely prediction accuracy for all positions
                         correct_predictions = (predictions_flat == targets_flat).cpu().tolist()
                         most_likely_correct.extend(correct_predictions)
@@ -1349,6 +1375,17 @@ def estimate_loss(model, torch_ctx, timer, training_ctx: TrainingContext):
                         if masked_positions.sum() > 0:  # Only if there are masked tokens
                             correct_token_probs = probs_flat[masked_positions, targets_flat[masked_positions]]
                             model_probs.extend(correct_token_probs.cpu().tolist())
+                            
+                            # Calculate signal to noise ratio for unmasking (masked positions only)
+                            masked_probs = probs_flat[masked_positions]
+                            masked_targets = targets_flat[masked_positions]
+                            # Create a copy and zero out correct probabilities to find max incorrect
+                            probs_masked = masked_probs.clone()
+                            probs_masked[range(len(masked_targets)), masked_targets] = 0.0
+                            max_incorrect_probs = torch.max(probs_masked, dim=1)[0]
+                            # Calculate signal to noise ratio, capped at 100
+                            sn_ratios = torch.clamp(correct_token_probs / (max_incorrect_probs + 1e-10), max=100.0)
+                            signal_to_noise_ratios.extend(sn_ratios.cpu().tolist())
                             
                             # Track most likely prediction accuracy for masked positions only
                             correct_predictions = (predictions_flat[masked_positions] == targets_flat[masked_positions]).cpu().tolist()
@@ -1436,6 +1473,23 @@ def estimate_loss(model, torch_ctx, timer, training_ctx: TrainingContext):
 
         # Add model vs random comparison for validation
         if split == 'val' and model_probs:
+            # Add signal to noise ratio
+            if signal_to_noise_ratios:
+                finite_sn_ratios = [r for r in signal_to_noise_ratios if math.isfinite(r)]
+                if finite_sn_ratios:
+                    avg_signal_to_noise = sum(finite_sn_ratios) / len(finite_sn_ratios)
+                    out[f'{split}_signal_to_noise'] = avg_signal_to_noise
+                    # Add median signal to noise ratio
+                    finite_sn_ratios_sorted = sorted(finite_sn_ratios)
+                    n = len(finite_sn_ratios_sorted)
+                    if n % 2 == 0:
+                        median_sn = (finite_sn_ratios_sorted[n//2 - 1] + finite_sn_ratios_sorted[n//2]) / 2.0
+                    else:
+                        median_sn = finite_sn_ratios_sorted[n//2]
+                    out[f'{split}_signal_to_noise_median'] = median_sn
+                else:
+                    out[f'{split}_signal_to_noise'] = float('nan')
+                    out[f'{split}_signal_to_noise_median'] = float('nan')
             # Calculate most likely prediction accuracy percentage
             if most_likely_correct:
                 most_likely_accuracy = (sum(most_likely_correct) / len(most_likely_correct)) * 100.0
