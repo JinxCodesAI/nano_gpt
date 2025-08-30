@@ -117,6 +117,7 @@ class TrainingContext:
     
     # Unmasking stages (only for unmasking training)
     unmasking_stages: list = None
+    validation_stages: list = None  # Separate stages for validation set creation
     
     # Remasking strategy - only random supported
     
@@ -151,6 +152,10 @@ class TrainingContext:
                 UnmaskingStage(StickyStageConfig(target_masked_ratio=0.4, p1_probability=0.2, p2_probability=0.8, val_loss_stale_count=5)),
                 UnmaskingStage(StickyStageConfig(target_masked_ratio=0.6, p1_probability=0.1, p2_probability=0.9, val_loss_stale_count=10)),
             ]
+        
+        # Default validation stages if not provided (same as training stages by default)
+        if self.training_type == 'unmasking' and self.validation_stages is None:
+            self.validation_stages = self.unmasking_stages
     
     def get_current_stage_config(self) -> UnmaskingStage:
         """Get configuration for current unmasking stage"""
@@ -274,7 +279,7 @@ def create_unmasking_validation_set(ctx: TrainingContext):
     valid_indices = _valid_indices_cache['val']
     
     total_samples = ctx.eval_iters * ctx.batch_size
-    num_stages = len(ctx.unmasking_stages)
+    num_stages = len(ctx.validation_stages)
     samples_per_stage = total_samples // num_stages
     
     validation_batches = []
@@ -282,7 +287,7 @@ def create_unmasking_validation_set(ctx: TrainingContext):
     # Generate samples for each stage
     torch.manual_seed(42)  # Fixed seed for reproducible validation set
     
-    for stage_idx, stage_config in enumerate(ctx.unmasking_stages):
+    for stage_idx, stage_config in enumerate(ctx.validation_stages):
         stage_samples = samples_per_stage
         # Handle remainder samples
         if stage_idx < (total_samples % num_stages):
@@ -919,10 +924,10 @@ def get_batch_unmasking(split, ctx: TrainingContext, validation_sample_idx=None)
     if split == 'val':
         torch.manual_seed(42 + (validation_sample_idx or 0))
         
-        # Distribute validation samples across all stages
-        if ctx.unmasking_stages and len(ctx.unmasking_stages) > 1:
-            stage_idx = (validation_sample_idx or 0) % len(ctx.unmasking_stages)
-            stage_config = ctx.unmasking_stages[stage_idx]
+        # Distribute validation samples across all validation stages
+        if ctx.validation_stages and len(ctx.validation_stages) > 1:
+            stage_idx = (validation_sample_idx or 0) % len(ctx.validation_stages)
+            stage_config = ctx.validation_stages[stage_idx]
             # Apply stage-specific masking
             masked_x, mask = apply_stage_masking(x, stage_config, ctx.mask_token_id)
         else:
@@ -1136,9 +1141,9 @@ def estimate_loss(model, torch_ctx, timer, training_ctx: TrainingContext):
         stage_losses = {}
         stage_sample_counts = {}
         if split == 'val' and training_ctx.training_type == 'unmasking':
-            print(f"Using validation set with samples from all {len(training_ctx.unmasking_stages)} stages")
+            print(f"Using validation set with samples from all {len(training_ctx.validation_stages)} stages")
             # Initialize per-stage tracking
-            for stage_idx in range(len(training_ctx.unmasking_stages)):
+            for stage_idx in range(len(training_ctx.validation_stages)):
                 stage_losses[stage_idx] = []
                 stage_sample_counts[stage_idx] = 0
         
@@ -1149,7 +1154,7 @@ def estimate_loss(model, torch_ctx, timer, training_ctx: TrainingContext):
                     X, Y, mask = get_batch(split, training_ctx, validation_sample_idx=k)
                     # Determine which stage this batch belongs to based on validation set structure
                     total_samples = training_ctx.eval_iters * training_ctx.batch_size
-                    num_stages = len(training_ctx.unmasking_stages)
+                    num_stages = len(training_ctx.validation_stages)
                     samples_per_stage = total_samples // num_stages
                     current_sample_idx = k * training_ctx.batch_size
                     current_stage_idx = min(current_sample_idx // samples_per_stage, num_stages - 1)
@@ -1334,9 +1339,9 @@ def estimate_loss(model, torch_ctx, timer, training_ctx: TrainingContext):
             # Print per-stage validation losses for unmasking
             if training_ctx.training_type == 'unmasking' and stage_losses:
                 print("  Per-stage validation losses:")
-                for stage_idx in range(len(training_ctx.unmasking_stages)):
+                for stage_idx in range(len(training_ctx.validation_stages)):
                     if stage_idx in stage_losses and stage_losses[stage_idx]:
-                        stage_config = training_ctx.unmasking_stages[stage_idx]
+                        stage_config = training_ctx.validation_stages[stage_idx]
                         stage_type = stage_config.get_stage_type()
                         avg_loss = sum(stage_losses[stage_idx]) / len(stage_losses[stage_idx])
                         sample_count = stage_sample_counts[stage_idx]

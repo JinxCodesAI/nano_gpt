@@ -66,6 +66,7 @@ block_size = 1024
 use_paragraph_boundaries = False # if True, start samples at paragraph boundaries (double newlines)
 # unmasking training config
 unmasking_stages = [] # override in config file
+validation_stages = [] # override in config file
 
 # adamw optimizer
 learning_rate = 1e-3 # with baby networks can afford to go a bit higher
@@ -225,6 +226,29 @@ if training_type == 'unmasking':
         
         unmasking_stage_objects.append(UnmaskingStage(config))
 
+# Convert validation_stages dict to UnmaskingStage objects (if different from training stages)
+validation_stage_objects = None
+if training_type == 'unmasking' and len(validation_stages) > 0:
+    validation_stage_objects = []
+    for stage in validation_stages:
+        stage_type = stage['type']
+        if stage_type == 'sticky':
+            config = StickyStageConfig(
+                target_masked_ratio=stage['target_masked_ratio'],
+                p1_probability=stage['p1_probability'],
+                p2_probability=stage['p2_probability'],
+                val_loss_stale_count=stage['val_loss_stale_count']
+            )
+        elif stage_type == 'random':
+            config = RandomStageConfig(
+                max_masked_ratio=stage['max_masked_ratio'],
+                val_loss_stale_count=stage['val_loss_stale_count']
+            )
+        else:
+            raise ValueError(f"Unknown stage type: {stage_type}")
+        
+        validation_stage_objects.append(UnmaskingStage(config))
+
 training_ctx = TrainingContext(
     training_type=training_type,
     batch_size=batch_size,
@@ -239,6 +263,7 @@ training_ctx = TrainingContext(
     extended_vocab_size=extended_vocab_size,
     iter_num=iter_num,
     unmasking_stages=unmasking_stage_objects,
+    validation_stages=validation_stage_objects,
     eval_iters=eval_iters,
     warmup_iters=warmup_iters,
     lr_decay_iters=lr_decay_iters,
@@ -549,7 +574,7 @@ while True:
             }
             
             # Add per-stage validation losses for unmasking training
-            for stage_idx in range(len(training_ctx.unmasking_stages)):
+            for stage_idx in range(len(training_ctx.validation_stages or [])):
                 stage_loss_key = f'val_stage_{stage_idx}_loss'
                 stage_samples_key = f'val_stage_{stage_idx}_samples'
                 if stage_loss_key in losses:
