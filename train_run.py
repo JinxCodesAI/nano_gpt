@@ -343,6 +343,8 @@ elif init_from == 'resume':
 
     checkpoint = torch.load(ckpt_path, map_location=device, weights_only=False)
     checkpoint_model_args = checkpoint['model_args']
+    training_ctx.extended_vocab_size = checkpoint_model_args['vocab_size']
+    print_and_flush(f"Checkpoint vocab size: {training_ctx.extended_vocab_size}")
     # force these config attributes to be equal otherwise we can't even resume training
     # the rest of the attributes (e.g. dropout) can stay as desired from command line
     for k in ['n_layer', 'n_head', 'n_embd', 'block_size', 'bias', 'vocab_size']:

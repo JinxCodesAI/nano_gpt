@@ -13,7 +13,7 @@ from model import GPTConfig, GPT
 # Configuration
 init_from = 'resume'
 out_dir = 'out'
-checkpoint_name = '34.5_32.7_58.1_UM.pt' #'35.75_58.2_UM.pt'
+checkpoint_name = 'optimal2_3400.pt' #'35.75_58.2_UM.pt'
 remasking_checkpoint_name = None #'ckpt_remasking_binary_600.pt'  # Optional: remasking_binary model checkpoint
 num_samples = 1  # Number of samples to generate
 sequence_length = 1024  # Total length of generated sequence
@@ -34,7 +34,7 @@ schedule_type = 'custom'  # 'linear' or 'custom' - type of masking schedule to u
 masking_ratios = [0.85,0.816,0.782,0.748,0.714,0.68,0.646,0.612,0.578,0.544,0.51,0.476,0.442,0.408,0.374,0.34,0.306,0.272,0.238,0.204,0.17,0.136,0.102,0.068,0.034]   # Array of masking ratios for 'custom' schedule (overrides diffusion_iterations)
 
 # Remasking parameters (only used if remasking model is available)
-randomness_strength = 0 # Balance between random (1.0) and model-guided (0.0) remasking
+randomness_strength = 0.4 # Balance between random (1.0) and model-guided (0.0) remasking
 
 if seed == -1:
     seed = int.from_bytes(os.urandom(4), byteorder='little')
