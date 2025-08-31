@@ -9,11 +9,10 @@ from contextlib import nullcontext
 import torch
 from model import GPTConfig, GPT
 
-# -----------------------------------------------------------------------------
 # Configuration
 init_from = 'resume'
 out_dir = 'out'
-checkpoint_name = 'optimal2_7400.pt' #'35.75_58.2_UM.pt'
+checkpoint_name = 'optimal3_5000.pt' #'35.75_58.2_UM.pt'
 remasking_checkpoint_name = None #'ckpt_remasking_binary_600.pt'  # Optional: remasking_binary model checkpoint
 num_samples = 1  # Number of samples to generate
 sequence_length = 1024  # Total length of generated sequence
@@ -24,7 +23,9 @@ compile = False
 
 # Generation parameters
 temperature = 1.0  # Temperature for sampling (1.0 = no change, <1.0 = more deterministic, >1.0 = more random)
-top_p = 0.98  # Nucleus sampling parameter (1.0 = disabled, <1.0 = only sample from top cumulative probability mass)
+top_p = 0.8   # Nucleus sampling parameter (1.0 = disabled, <1.0 = only sample from top cumulative probability mass)
+repetition_penalty = 1.5  # Penalty for repeating recent tokens (>1.0 = discourage repetition)
+repetition_window = 10  # Look back this many tokens for repetition penalty
 diffusion_iterations = 100  # Number of demasking iterations
 start_ratio = 0.99  # Initial ratio of tokens to remask (99%)
 end_ratio = 0.05   # Final ratio of tokens to remask (5%)
@@ -53,26 +54,32 @@ if schedule_type == 'custom':
     diffusion_iterations = len(masking_ratios)
     print(f"Using custom schedule with {diffusion_iterations} iterations from masking_ratios")
 
-# -----------------------------------------------------------------------------
 
 def linear_remasking_schedule(total_iterations, current_iteration):
     """Linear decrease in remask ratio from start_ratio to end_ratio"""
     progress = current_iteration / (total_iterations - 1) if total_iterations > 1 else 1.0
     return start_ratio - progress * (start_ratio - end_ratio)
 
-def nucleus_sample(logits, top_p=1.0, temperature=1.0):
+def nucleus_sample(logits, top_p=1.0, temperature=1.0, recent_tokens=None, repetition_penalty=1.0):
     """
-    Nucleus (top-p) sampling from logits
+    Nucleus (top-p) sampling from logits with optional repetition penalty
     
     Args:
         logits: Tensor of shape (..., vocab_size) containing logits
         top_p: Float between 0 and 1. If < 1.0, only sample from tokens whose 
                cumulative probability is within top_p
         temperature: Temperature for scaling logits
+        recent_tokens: Recent tokens to apply repetition penalty to (optional)
+        repetition_penalty: Penalty for repeating recent tokens (>1.0 = discourage)
     
     Returns:
         Sampled token indices
     """
+    # Apply repetition penalty if provided
+    if recent_tokens is not None and repetition_penalty != 1.0 and len(recent_tokens) > 0:
+        for token_id in set(recent_tokens):
+            if token_id < logits.shape[-1]:
+                logits[..., token_id] = logits[..., token_id] / repetition_penalty
     if temperature != 1.0:
         logits = logits / temperature
     
@@ -215,7 +222,8 @@ def apply_remasking(tokens, remask_ratio, remasking_model, randomness_strength, 
 
 def diffusion_generate(model, batch_size, total_length, iterations, remasking_model, mask_token_id,
                       randomness_strength, decode_fn, decode_mask_fn, verbose=True, temperature=1.0,
-                      top_p=1.0, schedule_type='linear', masking_ratios=None):
+                      top_p=1.0, schedule_type='linear', masking_ratios=None, repetition_penalty=1.0, 
+                      repetition_window=10):
     """
     Generate text samples using diffusion-based iterative demasking
 
@@ -290,8 +298,18 @@ def diffusion_generate(model, batch_size, total_length, iterations, remasking_mo
                                 vocab_logit_mean = masked_logits[0, :vocab_size].mean().item()
                                 print(f"  DEBUG: First position - mask_token logit: {mask_logit:.3f}, vocab mean logit: {vocab_logit_mean:.3f}")
                         
-                        # Sample using nucleus sampling (handles temperature internally)
-                        new_tokens = nucleus_sample(masked_logits, top_p=top_p, temperature=temperature)
+                        # Get recent tokens for repetition penalty
+                        if repetition_penalty != 1.0 and repetition_window > 0:
+                            # Get recent unmasked tokens for this sample
+                            sample_tokens = tokens[sample_idx]
+                            unmasked_tokens = sample_tokens[sample_tokens != mask_token_id]
+                            recent_tokens = unmasked_tokens[-repetition_window:].tolist() if len(unmasked_tokens) > 0 else []
+                        else:
+                            recent_tokens = None
+                        
+                        # Sample using nucleus sampling with repetition penalty
+                        new_tokens = nucleus_sample(masked_logits, top_p=top_p, temperature=temperature,
+                                                  recent_tokens=recent_tokens, repetition_penalty=repetition_penalty)
                         
                         # DEBUG: Check what tokens were actually sampled
                         if verbose and sample_idx == 0:
@@ -300,6 +318,24 @@ def diffusion_generate(model, batch_size, total_length, iterations, remasking_mo
                             print(f"  DEBUG: Sampled {mask_count} mask tokens, {vocab_count} vocab tokens out of {len(new_tokens)}")
                             if mask_count > 0:
                                 print(f"  DEBUG: This is suspicious - model predicting mask tokens!")
+                            
+                            # Count non-alphabetic characters
+                            alphabetic_tokens = set(range(13, 39)) | set(range(39, 65))  # A-Z, a-z
+                            non_alpha_count = sum(1 for token in new_tokens.tolist() if token not in alphabetic_tokens and token < vocab_size)
+                            print(f"  DEBUG: Non-alphabetic tokens: {non_alpha_count}/{len(new_tokens)} ({non_alpha_count/len(new_tokens)*100:.1f}%)")
+                            
+                            # Find most common token
+                            from collections import Counter
+                            token_counts = Counter(new_tokens.tolist())
+                            most_common_token, most_common_count = token_counts.most_common(1)[0]
+                            most_common_char = itos[most_common_token] if most_common_token < len(itos) else f"[{most_common_token}]"
+                            print(f"  DEBUG: Most common token: '{most_common_char}' (ID={most_common_token}) x{most_common_count}")
+                            
+                            # Show token distribution for non-alphabetic chars
+                            punct_counts = {token: count for token, count in token_counts.items() if token < 13 and count > 1}
+                            if punct_counts:
+                                punct_info = [f"'{itos[t]}' x{c}" for t, c in sorted(punct_counts.items())]
+                                print(f"  DEBUG: Repeated punctuation: {', '.join(punct_info)}")
                         
                         tokens[sample_idx, mask_indices] = new_tokens
         
@@ -479,7 +515,7 @@ else:
 print(f"\n{'='*80}")
 print(f"GENERATION SETTINGS")
 print(f"Samples: {num_samples}, Length: {sequence_length}, Iterations: {diffusion_iterations}")
-print(f"Temperature: {temperature}, Top-p: {top_p}, Seed: {seed}")
+print(f"Temperature: {temperature}, Top-p: {top_p}, Repetition penalty: {repetition_penalty}, Seed: {seed}")
 print(f"Remasking schedule: {start_ratio:.1%} → {end_ratio:.1%}")
 if remasking_model is not None:
     print(f"Randomness strength: {randomness_strength} (0=pure model, 1=pure random)")
@@ -501,7 +537,9 @@ with torch.no_grad():
             temperature=temperature,
             top_p=top_p,
             schedule_type=schedule_type,
-            masking_ratios=masking_ratios
+            masking_ratios=masking_ratios,
+            repetition_penalty=repetition_penalty,
+            repetition_window=repetition_window
         )
         
         # Display results

@@ -76,7 +76,7 @@ enable_entropy_penalty = False # if True, apply entropy penalty to incentivize u
 max_entropy_penalty = 0.5 # maximum entropy penalty multiplier (penalizes concentrated wrong answers)
 entropy_penalty_start_iter = 6000 # iteration to start applying entropy penalty
 # label smoothing config
-uncertainty_factor = 0.1 # if > 0, apply label smoothing: correct answer gets (1-u), wrong answers get u/(vocab_size-1)
+uncertainty_factor = 0.0 # if > 0, apply label smoothing: correct answer gets (1-u), wrong answers get u/(vocab_size-1)
 
 # adamw optimizer
 learning_rate = 1e-3 # with baby networks can afford to go a bit higher
