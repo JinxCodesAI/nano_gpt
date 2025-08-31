@@ -212,7 +212,6 @@ class EditableTextWidget(QTextEdit):
         print(f"DEBUG: get_edited_tokens - vocab: {type(self.vocab)}, mask_token_id: {self.mask_token_id}")
         
         if not self.vocab or not self.mask_token_id:
-            print("DEBUG: get_edited_tokens - falling back to current_tokens")
             return self.current_tokens
         
         # Get the plain text content (not HTML)

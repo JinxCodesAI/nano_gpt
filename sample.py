@@ -24,6 +24,7 @@ compile = False
 
 # Generation parameters
 temperature = 1.0  # Temperature for sampling (1.0 = no change, <1.0 = more deterministic, >1.0 = more random)
+top_p = 0.98  # Nucleus sampling parameter (1.0 = disabled, <1.0 = only sample from top cumulative probability mass)
 diffusion_iterations = 100  # Number of demasking iterations
 start_ratio = 0.99  # Initial ratio of tokens to remask (99%)
 end_ratio = 0.05   # Final ratio of tokens to remask (5%)
@@ -58,6 +59,61 @@ def linear_remasking_schedule(total_iterations, current_iteration):
     """Linear decrease in remask ratio from start_ratio to end_ratio"""
     progress = current_iteration / (total_iterations - 1) if total_iterations > 1 else 1.0
     return start_ratio - progress * (start_ratio - end_ratio)
+
+def nucleus_sample(logits, top_p=1.0, temperature=1.0):
+    """
+    Nucleus (top-p) sampling from logits
+    
+    Args:
+        logits: Tensor of shape (..., vocab_size) containing logits
+        top_p: Float between 0 and 1. If < 1.0, only sample from tokens whose 
+               cumulative probability is within top_p
+        temperature: Temperature for scaling logits
+    
+    Returns:
+        Sampled token indices
+    """
+    if temperature != 1.0:
+        logits = logits / temperature
+    
+    if top_p >= 1.0:
+        # Standard sampling without nucleus filtering
+        probs = torch.softmax(logits, dim=-1)
+        return torch.multinomial(probs, num_samples=1).squeeze(-1)
+    
+    # Apply nucleus sampling
+    probs = torch.softmax(logits, dim=-1)
+    
+    # Sort probabilities in descending order
+    sorted_probs, sorted_indices = torch.sort(probs, dim=-1, descending=True)
+    
+    # Calculate cumulative probabilities
+    cumulative_probs = torch.cumsum(sorted_probs, dim=-1)
+    
+    # Find cutoff: indices where cumulative probability exceeds top_p
+    cutoff_mask = cumulative_probs > top_p
+    
+    # Keep at least one token (the most probable one)
+    cutoff_mask[..., 0] = False
+    
+    # Zero out probabilities beyond the cutoff
+    sorted_probs[cutoff_mask] = 0.0
+    
+    # Sample from the filtered distribution
+    if sorted_probs.sum(dim=-1, keepdim=True).min() > 0:
+        sampled_sorted_indices = torch.multinomial(sorted_probs, num_samples=1).squeeze(-1)
+        # Map back to original indices
+        batch_indices = torch.arange(sorted_indices.shape[0], device=sorted_indices.device).unsqueeze(-1)
+        if len(sorted_indices.shape) > 2:
+            # Handle multi-dimensional case
+            sample_indices = sampled_sorted_indices.unsqueeze(-1)
+            result = torch.gather(sorted_indices, -1, sample_indices).squeeze(-1)
+        else:
+            result = sorted_indices[batch_indices, sampled_sorted_indices.unsqueeze(-1)].squeeze(-1)
+        return result
+    else:
+        # Fallback: sample from original distribution if filtering removed everything
+        return torch.multinomial(probs, num_samples=1).squeeze(-1)
 
 def apply_remasking(tokens, remask_ratio, remasking_model, randomness_strength, mask_token_id, device, verbose=False):
     """
@@ -159,7 +215,7 @@ def apply_remasking(tokens, remask_ratio, remasking_model, randomness_strength, 
 
 def diffusion_generate(model, batch_size, total_length, iterations, remasking_model, mask_token_id,
                       randomness_strength, decode_fn, decode_mask_fn, verbose=True, temperature=1.0,
-                      schedule_type='linear', masking_ratios=None):
+                      top_p=1.0, schedule_type='linear', masking_ratios=None):
     """
     Generate text samples using diffusion-based iterative demasking
 
@@ -175,6 +231,7 @@ def diffusion_generate(model, batch_size, total_length, iterations, remasking_mo
         decode_mask_fn: Function to decode with mask characters
         verbose: Whether to print progress
         temperature: Temperature for sampling
+        top_p: Nucleus sampling parameter (1.0 = disabled, <1.0 = only sample from top cumulative probability mass)
         schedule_type: 'linear' or 'custom' - type of masking schedule to use
         masking_ratios: Array of masking ratios for 'custom' schedule (overrides iterations)
 
@@ -233,12 +290,8 @@ def diffusion_generate(model, batch_size, total_length, iterations, remasking_mo
                                 vocab_logit_mean = masked_logits[0, :vocab_size].mean().item()
                                 print(f"  DEBUG: First position - mask_token logit: {mask_logit:.3f}, vocab mean logit: {vocab_logit_mean:.3f}")
                         
-                        # Apply temperature
-                        if temperature != 1.0:
-                            masked_logits = masked_logits / temperature
-                        
-                        probs = torch.softmax(masked_logits, dim=-1)
-                        new_tokens = torch.multinomial(probs, num_samples=1).squeeze(-1)
+                        # Sample using nucleus sampling (handles temperature internally)
+                        new_tokens = nucleus_sample(masked_logits, top_p=top_p, temperature=temperature)
                         
                         # DEBUG: Check what tokens were actually sampled
                         if verbose and sample_idx == 0:
@@ -426,7 +479,7 @@ else:
 print(f"\n{'='*80}")
 print(f"GENERATION SETTINGS")
 print(f"Samples: {num_samples}, Length: {sequence_length}, Iterations: {diffusion_iterations}")
-print(f"Temperature: {temperature}, Seed: {seed}")
+print(f"Temperature: {temperature}, Top-p: {top_p}, Seed: {seed}")
 print(f"Remasking schedule: {start_ratio:.1%} → {end_ratio:.1%}")
 if remasking_model is not None:
     print(f"Randomness strength: {randomness_strength} (0=pure model, 1=pure random)")
@@ -446,6 +499,7 @@ with torch.no_grad():
             decode_mask_fn=decode_with_mask_char,
             verbose=True,
             temperature=temperature,
+            top_p=top_p,
             schedule_type=schedule_type,
             masking_ratios=masking_ratios
         )

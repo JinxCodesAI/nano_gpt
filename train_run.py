@@ -23,7 +23,8 @@ from train_utils import (
     get_batch, estimate_loss, get_lr, load_synthetic_model, 
     start_prefetch, stop_prefetch, TrainingContext, UnmaskingStage, update_stage_progress,
     create_unmasking_validation_set, UnmaskingStageType, StickyStageConfig, RandomStageConfig,
-    calculate_wrong_answer_entropy, get_current_entropy_penalty, update_entropy_multiplier_ema
+    calculate_wrong_answer_entropy, get_current_entropy_penalty, update_entropy_multiplier_ema,
+    apply_label_smoothing
 )
 
 torch._dynamo.config.suppress_errors = True
@@ -74,6 +75,8 @@ weight_loss_by_mask_ratio = False # if True, weight loss by sqrt(1.0 / mask_rati
 enable_entropy_penalty = False # if True, apply entropy penalty to incentivize uniform wrong answer distributions
 max_entropy_penalty = 0.5 # maximum entropy penalty multiplier (penalizes concentrated wrong answers)
 entropy_penalty_start_iter = 6000 # iteration to start applying entropy penalty
+# label smoothing config
+uncertainty_factor = 0.1 # if > 0, apply label smoothing: correct answer gets (1-u), wrong answers get u/(vocab_size-1)
 
 # adamw optimizer
 learning_rate = 1e-3 # with baby networks can afford to go a bit higher
@@ -282,7 +285,8 @@ training_ctx = TrainingContext(
     weight_loss_by_mask_ratio=weight_loss_by_mask_ratio,
     enable_entropy_penalty=enable_entropy_penalty,
     max_entropy_penalty=max_entropy_penalty,
-    entropy_penalty_start_iter=entropy_penalty_start_iter
+    entropy_penalty_start_iter=entropy_penalty_start_iter,
+    uncertainty_factor=uncertainty_factor
 )
 
 # Apply restored training context state if resuming from checkpoint
@@ -713,16 +717,26 @@ while True:
                 # Apply masking for unmasking training only (most efficient path)
                 if training_ctx.training_type == 'unmasking' and mask.any():
                     # Fast path: reshape once and use boolean indexing
+                    # Cross-entropy handles both hard targets (indices) and soft targets (probabilities)
                     logits_reshaped = logits.view(-1, logits.size(-1))
-                    targets_reshaped = Y.view(-1)
                     mask_reshaped = mask.view(-1)
                     
-                    # Use boolean mask directly - most efficient
-                    loss = torch.nn.functional.cross_entropy(
-                        logits_reshaped[mask_reshaped], 
-                        targets_reshaped[mask_reshaped], 
-                        reduction='mean'
-                    )
+                    if Y.dim() == 3:
+                        # Soft targets (probability distributions)
+                        targets_reshaped = Y.view(-1, Y.size(-1))
+                        loss = torch.nn.functional.cross_entropy(
+                            logits_reshaped[mask_reshaped], 
+                            targets_reshaped[mask_reshaped], 
+                            reduction='mean'
+                        )
+                    else:
+                        # Hard targets (token indices)
+                        targets_reshaped = Y.view(-1)
+                        loss = torch.nn.functional.cross_entropy(
+                            logits_reshaped[mask_reshaped], 
+                            targets_reshaped[mask_reshaped], 
+                            reduction='mean'
+                        )
                     
                     # Apply mask ratio weighting if enabled
                     if training_ctx.weight_loss_by_mask_ratio:

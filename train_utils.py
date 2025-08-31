@@ -156,6 +156,9 @@ class TrainingContext:
     entropy_multiplier_ema: float = 1.0  # Exponential moving average of entropy multiplier
     entropy_multiplier_ema_factor: float = 0.99  # EMA decay factor
     
+    # Label smoothing parameters
+    uncertainty_factor: float = 0.0  # Label smoothing factor: 0 = no smoothing, >0 = apply smoothing
+    
     def __post_init__(self):
         # Default unmasking stages if not provided
         if self.training_type == 'unmasking' and self.unmasking_stages is None:
@@ -347,7 +350,24 @@ def create_unmasking_validation_set(ctx: TrainingContext):
             # Apply stage-specific masking
             masked_x, mask = apply_stage_masking(x, stage_config, ctx.mask_token_id, ctx.meta_vocab_size)
             
-            stage_batches.append((masked_x.clone(), x.clone(), mask.clone()))
+            # Apply label smoothing to targets if enabled
+            y = x.clone()
+            if ctx.uncertainty_factor > 0.0:
+                # Determine special token IDs to exclude from smoothing
+                special_token_ids = []
+                if ctx.mask_token_id is not None and ctx.mask_token_id < ctx.extended_vocab_size:
+                    special_token_ids.append(ctx.mask_token_id)
+                if ctx.wrong_token_id is not None and ctx.wrong_token_id < ctx.extended_vocab_size:
+                    special_token_ids.append(ctx.wrong_token_id)
+                if ctx.remask_good_id is not None and ctx.remask_good_id < ctx.extended_vocab_size:
+                    special_token_ids.append(ctx.remask_good_id)
+                if ctx.remask_wrong_id is not None and ctx.remask_wrong_id < ctx.extended_vocab_size:
+                    special_token_ids.append(ctx.remask_wrong_id)
+                
+                y = apply_label_smoothing(y, ctx.uncertainty_factor, ctx.extended_vocab_size, 
+                                          special_token_ids=special_token_ids, device=ctx.device)
+            
+            stage_batches.append((masked_x.clone(), y.clone(), mask.clone()))
             samples_generated += batch_size
         
         validation_batches.extend(stage_batches)
@@ -420,8 +440,25 @@ def get_unmasking_training_batch_all_stages(ctx: TrainingContext):
             # Apply masking for this stage
             masked_x, mask = apply_stage_masking(x, stage_config, ctx.mask_token_id, ctx.meta_vocab_size)
             
+            # Apply label smoothing to targets if enabled
+            y = x.clone()
+            if ctx.uncertainty_factor > 0.0:
+                # Determine special token IDs to exclude from smoothing
+                special_token_ids = []
+                if ctx.mask_token_id is not None and ctx.mask_token_id < ctx.extended_vocab_size:
+                    special_token_ids.append(ctx.mask_token_id)
+                if ctx.wrong_token_id is not None and ctx.wrong_token_id < ctx.extended_vocab_size:
+                    special_token_ids.append(ctx.wrong_token_id)
+                if ctx.remask_good_id is not None and ctx.remask_good_id < ctx.extended_vocab_size:
+                    special_token_ids.append(ctx.remask_good_id)
+                if ctx.remask_wrong_id is not None and ctx.remask_wrong_id < ctx.extended_vocab_size:
+                    special_token_ids.append(ctx.remask_wrong_id)
+                
+                y = apply_label_smoothing(y, ctx.uncertainty_factor, ctx.extended_vocab_size, 
+                                          special_token_ids=special_token_ids, device=ctx.device)
+            
             all_masked_x.append(masked_x)
-            all_x.append(x)
+            all_x.append(y)  # Use smoothed targets
             all_masks.append(mask)
     
     # Concatenate all stages back into batch
@@ -515,6 +552,27 @@ def create_remasking_validation_set(ctx: TrainingContext, force_recreate=False):
             # Target: original tokens at correct positions, wrong_token_id at corrupted positions
             y = x.clone()
             y[mask] = ctx.wrong_token_id
+        
+        # Apply label smoothing if enabled
+        if ctx.uncertainty_factor > 0.0:
+            if ctx.training_type == 'remasking_binary':
+                # For binary classification, smooth over the 2 classes
+                y = apply_label_smoothing(y, ctx.uncertainty_factor, ctx.extended_vocab_size, 
+                                          device=ctx.device)
+            else:  # remasking
+                # For remasking, exclude special tokens from smoothing
+                special_token_ids = []
+                if ctx.wrong_token_id is not None and ctx.wrong_token_id < ctx.extended_vocab_size:
+                    special_token_ids.append(ctx.wrong_token_id)
+                if ctx.mask_token_id is not None and ctx.mask_token_id < ctx.extended_vocab_size:
+                    special_token_ids.append(ctx.mask_token_id)
+                if ctx.remask_good_id is not None and ctx.remask_good_id < ctx.extended_vocab_size:
+                    special_token_ids.append(ctx.remask_good_id)
+                if ctx.remask_wrong_id is not None and ctx.remask_wrong_id < ctx.extended_vocab_size:
+                    special_token_ids.append(ctx.remask_wrong_id)
+                
+                y = apply_label_smoothing(y, ctx.uncertainty_factor, ctx.extended_vocab_size, 
+                                          special_token_ids=special_token_ids, device=ctx.device)
         
         validation_batches.append((corrupted_x.clone(), y.clone(), mask.clone()))
     
@@ -1071,6 +1129,22 @@ def get_batch_unmasking(split, ctx: TrainingContext, validation_sample_idx=None)
 
     # Target is original x
     y = x.clone()
+    
+    # Apply label smoothing if enabled
+    if ctx.uncertainty_factor > 0.0:
+        # Determine special token IDs to exclude from smoothing
+        special_token_ids = []
+        if ctx.mask_token_id is not None and ctx.mask_token_id < ctx.extended_vocab_size:
+            special_token_ids.append(ctx.mask_token_id)
+        if ctx.wrong_token_id is not None and ctx.wrong_token_id < ctx.extended_vocab_size:
+            special_token_ids.append(ctx.wrong_token_id)
+        if ctx.remask_good_id is not None and ctx.remask_good_id < ctx.extended_vocab_size:
+            special_token_ids.append(ctx.remask_good_id)
+        if ctx.remask_wrong_id is not None and ctx.remask_wrong_id < ctx.extended_vocab_size:
+            special_token_ids.append(ctx.remask_wrong_id)
+        
+        y = apply_label_smoothing(y, ctx.uncertainty_factor, ctx.extended_vocab_size, 
+                                  special_token_ids=special_token_ids, device=ctx.device)
 
     # Cache validation batch for consistency
     if split == 'val':
@@ -1165,6 +1239,13 @@ def get_batch_remasking_binary(split, ctx: TrainingContext, validation_sample_id
     # Binary targets: remask_good_id for uncorrupted, remask_wrong_id for corrupted (already on GPU)
     y = torch.full_like(x, ctx.remask_good_id)
     y[mask] = ctx.remask_wrong_id
+    
+    # Apply label smoothing if enabled
+    if ctx.uncertainty_factor > 0.0:
+        # For binary classification, only smooth over the 2 classes (remask_good_id, remask_wrong_id)
+        # Don't include other special tokens as they shouldn't appear in binary classification
+        y = apply_label_smoothing(y, ctx.uncertainty_factor, ctx.extended_vocab_size, 
+                                  device=ctx.device)
 
     # No caching needed for training - validation uses pre-created set
     return corrupted_x, y, mask
@@ -1259,15 +1340,26 @@ def estimate_loss(model, torch_ctx, timer, training_ctx: TrainingContext):
                     # Apply masking for unmasking training only
                     if training_ctx.training_type == 'unmasking' and mask.any():
                         # Fast validation path - single reshape and boolean indexing
+                        # Cross-entropy handles both hard targets (indices) and soft targets (probabilities)
                         logits_reshaped = logits.view(-1, logits.size(-1))
-                        targets_reshaped = Y.view(-1)
                         mask_reshaped = mask.view(-1)
-
-                        loss = torch.nn.functional.cross_entropy(
-                            logits_reshaped[mask_reshaped],
-                            targets_reshaped[mask_reshaped],
-                            reduction='mean'
-                        )
+                        
+                        if Y.dim() == 3:
+                            # Soft targets (probability distributions)
+                            targets_reshaped = Y.view(-1, Y.size(-1))
+                            loss = torch.nn.functional.cross_entropy(
+                                logits_reshaped[mask_reshaped],
+                                targets_reshaped[mask_reshaped],
+                                reduction='mean'
+                            )
+                        else:
+                            # Hard targets (token indices)
+                            targets_reshaped = Y.view(-1)
+                            loss = torch.nn.functional.cross_entropy(
+                                logits_reshaped[mask_reshaped],
+                                targets_reshaped[mask_reshaped],
+                                reduction='mean'
+                            )
                         
                         # Apply mask ratio weighting if enabled (same as training)
                         if training_ctx.weight_loss_by_mask_ratio:
@@ -1282,7 +1374,14 @@ def estimate_loss(model, torch_ctx, timer, training_ctx: TrainingContext):
                     # Get probabilities from logits and flatten for statistics
                     probs = torch.nn.functional.softmax(logits, dim=-1)  # (batch_size, seq_len, vocab_size)
                     probs_flat = probs.view(-1, probs.size(-1))  # (batch_size * seq_len, vocab_size)
-                    targets_flat = Y.view(-1)  # (batch_size * seq_len,) - needed for validation stats
+                    
+                    # Handle both hard and soft targets
+                    if Y.dim() == 3:
+                        # Soft targets - get the most likely class from probability distribution
+                        targets_flat = torch.argmax(Y.view(-1, Y.size(-1)), dim=-1)  # (batch_size * seq_len,)
+                    else:
+                        # Hard targets
+                        targets_flat = Y.view(-1)  # (batch_size * seq_len,)
                     
                     # Calculate most likely predictions (argmax)
                     predictions = torch.argmax(probs, dim=-1)  # (batch_size, seq_len)
@@ -1747,3 +1846,59 @@ def update_entropy_multiplier_ema(ctx: TrainingContext, current_multiplier: floa
         # EMA update: ema = alpha * ema + (1-alpha) * current_value
         alpha = ctx.entropy_multiplier_ema_factor
         ctx.entropy_multiplier_ema = alpha * ctx.entropy_multiplier_ema + (1 - alpha) * current_multiplier
+
+def apply_label_smoothing(targets, uncertainty_factor, vocab_size, special_token_ids=None, device=None):
+    """
+    Apply label smoothing to target tokens.
+    
+    Args:
+        targets: Target token IDs (batch_size, seq_len)
+        uncertainty_factor: Label smoothing factor (0.0 = no smoothing, >0 = apply smoothing)
+        vocab_size: Size of vocabulary
+        special_token_ids: List of special token IDs to exclude from smoothing (optional)
+        device: Device to create tensors on
+        
+    Returns:
+        smoothed_targets: Probability distribution targets (batch_size, seq_len, vocab_size)
+    """
+    if uncertainty_factor <= 0.0:
+        # No smoothing, return one-hot encoded targets
+        return torch.nn.functional.one_hot(targets, num_classes=vocab_size).float()
+    
+    if device is None:
+        device = targets.device
+    
+    batch_size, seq_len = targets.shape
+    
+    # Create smoothed probability distribution
+    smoothed_targets = torch.zeros(batch_size, seq_len, vocab_size, device=device)
+    
+    # Set correct answer probability to (1 - uncertainty_factor)
+    correct_prob = 1.0 - uncertainty_factor
+    smoothed_targets.scatter_(2, targets.unsqueeze(-1), correct_prob)
+    
+    # Calculate incorrect answer probability: u / (vocab_size - 1)
+    # But we need to exclude special tokens from getting smoothed probability
+    incorrect_prob = uncertainty_factor / (vocab_size - 1)
+    
+    # Add smoothing probability to all positions except the correct answer
+    smoothed_targets += incorrect_prob
+    
+    # Remove the extra probability that was added to correct answers
+    smoothed_targets.scatter_(2, targets.unsqueeze(-1), correct_prob)
+    
+    # Handle special tokens - set their probability to 0 (except when they are the correct answer)
+    if special_token_ids is not None:
+        for special_id in special_token_ids:
+            if special_id < vocab_size:
+                # Create mask for positions where special_id is NOT the correct answer
+                not_correct_mask = (targets != special_id).unsqueeze(-1)
+                # Zero out probability for this special token where it's not correct
+                special_mask = torch.zeros(batch_size, seq_len, vocab_size, device=device)
+                special_mask[:, :, special_id] = 1.0
+                smoothed_targets = smoothed_targets * (1 - special_mask * not_correct_mask.float())
+    
+    # Renormalize to ensure probabilities sum to 1
+    smoothed_targets = smoothed_targets / smoothed_targets.sum(dim=-1, keepdim=True)
+    
+    return smoothed_targets

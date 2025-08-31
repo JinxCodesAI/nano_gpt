@@ -363,32 +363,42 @@ class GPT(nn.Module):
             logits = self.lm_head(x)
             
             if self.config.binary_classification:
-                # For binary classification, targets should be 0 or 1
-                # Flatten to (batch_size * seq_len, 2) and (batch_size * seq_len,)
-                
-                # Calculate dynamic class weights to handle class imbalance
-                flattened_targets = targets.view(-1)
-                valid_targets = flattened_targets[flattened_targets != -1]  # exclude ignore_index
-                
-                if len(valid_targets) > 0:
-                    unique, counts = torch.unique(valid_targets, return_counts=True)
-                    n_samples = len(valid_targets)
-                    n_classes = 2
-                    
-                    # Create balanced class weights: n_samples / (n_classes * class_count)
-                    class_weights = torch.zeros(2, device=targets.device, dtype=logits.dtype)
-                    for cls, count in zip(unique, counts):
-                        class_weights[cls] = n_samples / (n_classes * count)
-                    
-                    loss = F.cross_entropy(logits.view(-1, 2), flattened_targets, 
-                                         weight=class_weights, ignore_index=-1)
+                # For binary classification, targets can be class indices or probability distributions
+                if targets.dim() == 3:
+                    # Probability distributions (batch_size, seq_len, num_classes)
+                    # Cross-entropy can handle soft targets directly
+                    loss = F.cross_entropy(logits.view(-1, 2), targets.view(-1, 2))
                 else:
-                    # Fallback if no valid targets (shouldn't happen in practice)
-                    print(f"WARNING: No valid targets found for class weighting, using unweighted loss")
-                    loss = F.cross_entropy(logits.view(-1, 2), flattened_targets, ignore_index=-1)
+                    # Hard targets: 0 or 1 class indices
+                    # Calculate dynamic class weights to handle class imbalance
+                    flattened_targets = targets.view(-1)
+                    valid_targets = flattened_targets[flattened_targets != -1]  # exclude ignore_index
+                    
+                    if len(valid_targets) > 0:
+                        unique, counts = torch.unique(valid_targets, return_counts=True)
+                        n_samples = len(valid_targets)
+                        n_classes = 2
+                        
+                        # Create balanced class weights: n_samples / (n_classes * class_count)
+                        class_weights = torch.zeros(2, device=targets.device, dtype=logits.dtype)
+                        for cls, count in zip(unique, counts):
+                            class_weights[cls] = n_samples / (n_classes * count)
+                        
+                        loss = F.cross_entropy(logits.view(-1, 2), flattened_targets, 
+                                             weight=class_weights, ignore_index=-1)
+                    else:
+                        # Fallback if no valid targets (shouldn't happen in practice)
+                        print(f"WARNING: No valid targets found for class weighting, using unweighted loss")
+                        loss = F.cross_entropy(logits.view(-1, 2), flattened_targets, ignore_index=-1)
             else:
-                # For language modeling, targets are token IDs
-                loss = F.cross_entropy(logits.view(-1, logits.size(-1)), targets.view(-1), ignore_index=-1)
+                # For language modeling, targets can be token IDs or probability distributions
+                if targets.dim() == 3:
+                    # Probability distributions (batch_size, seq_len, vocab_size)
+                    # Cross-entropy can handle soft targets directly
+                    loss = F.cross_entropy(logits.view(-1, logits.size(-1)), targets.view(-1, logits.size(-1)))
+                else:
+                    # Token IDs (batch_size, seq_len)
+                    loss = F.cross_entropy(logits.view(-1, logits.size(-1)), targets.view(-1), ignore_index=-1)
         else:
             # Inference: behavior depends on attention type and classification mode
             if self.config.binary_classification:
