@@ -17,7 +17,7 @@ def linear_remasking_schedule(total_iterations, current_iteration):
 
 
 def apply_remasking(tokens, remask_ratio, remasking_model, randomness_strength, mask_token_id, device, 
-                   base_model=None, intelligent_remasking=False, verbose=False):
+                   base_model=None, intelligent_remasking=False, verbose=False, protected_positions=None):
     """
     Apply remasking using either random selection or model-guided selection
     
@@ -31,11 +31,40 @@ def apply_remasking(tokens, remask_ratio, remasking_model, randomness_strength, 
         base_model: Base model for intelligent remasking when remasking_model is None
         intelligent_remasking: Use base model for intelligent remasking
         verbose: Whether to print debug info
+        protected_positions: Set of sequence positions that should not be remasked
     
     Returns:
         tokens: Updated token sequence with remasked positions
     """
     batch_size, seq_len = tokens.shape
+    
+    # Initialize protected_positions if not provided
+    if protected_positions is None:
+        protected_positions = set()
+    
+    if verbose:
+        print(f"  DEBUG: apply_remasking called with protected_positions: {sorted(protected_positions) if protected_positions else 'None'}")
+    
+    def get_remaskable_indices(batch_idx, device):
+        """Get indices that are unmasked and not protected"""
+        unmasked_positions = (tokens[batch_idx] != mask_token_id)
+        unmasked_indices = torch.where(unmasked_positions)[0]
+        
+        # Filter out protected positions
+        if protected_positions:
+            protected_tensor = torch.tensor(list(protected_positions), device=device, dtype=torch.long)
+            # Keep only indices that are not in protected_positions
+            mask = ~torch.isin(unmasked_indices, protected_tensor)
+            remaskable_indices = unmasked_indices[mask]
+            
+            if verbose and batch_idx == 0:
+                print(f"    DEBUG: batch {batch_idx}: unmasked={len(unmasked_indices)}, protected={len(protected_positions)}, remaskable={len(remaskable_indices)}")
+                print(f"    DEBUG: protected positions: {sorted(protected_positions)}")
+                print(f"    DEBUG: filtered out {len(unmasked_indices) - len(remaskable_indices)} protected positions")
+        else:
+            remaskable_indices = unmasked_indices
+            
+        return remaskable_indices
     
     # Calculate target number of masks based on total sequence length
     target_masked = int(seq_len * remask_ratio)
@@ -74,27 +103,26 @@ def apply_remasking(tokens, remask_ratio, remasking_model, randomness_strength, 
                 for batch_idx in range(batch_size):
                     num_additional = additional_masks_needed[batch_idx].item()
                     if num_additional > 0:
-                        # Only consider unmasked positions for remasking
-                        unmasked_positions = (tokens[batch_idx] != mask_token_id)
-                        unmasked_indices = torch.where(unmasked_positions)[0]
-                        if len(unmasked_indices) > 0:
-                            # Get probabilities only for unmasked positions
-                            unmasked_model_probs = wrong_token_probs[batch_idx, unmasked_indices]
-                            unmasked_rand_probs = torch.rand(len(unmasked_indices), device=device)
+                        # Only consider unmasked, non-protected positions for remasking
+                        remaskable_indices = get_remaskable_indices(batch_idx, device)
+                        if len(remaskable_indices) > 0:
+                            # Get probabilities only for remaskable positions
+                            remaskable_model_probs = wrong_token_probs[batch_idx, remaskable_indices]
+                            remaskable_rand_probs = torch.rand(len(remaskable_indices), device=device)
                             
                             # Combine random and model probabilities
-                            combined_probs = randomness_strength * unmasked_rand_probs + (1 - randomness_strength) * unmasked_model_probs
+                            combined_probs = randomness_strength * remaskable_rand_probs + (1 - randomness_strength) * remaskable_model_probs
                             
                             # Select top positions by combined probability
-                            num_to_select = min(num_additional, len(unmasked_indices))
+                            num_to_select = min(num_additional, len(remaskable_indices))
                             _, top_indices = torch.topk(combined_probs, num_to_select)
-                            remask_indices = unmasked_indices[top_indices]
+                            remask_indices = remaskable_indices[top_indices]
                             tokens[batch_idx, remask_indices] = mask_token_id
                             
                             if verbose and batch_idx == 0:  # Show stats for first sample
-                                model_prob_range = f"{unmasked_model_probs.min().item():.3f}-{unmasked_model_probs.max().item():.3f}"
-                                selected_model_probs = unmasked_model_probs[top_indices]
-                                selected_rand_probs = unmasked_rand_probs[top_indices]
+                                model_prob_range = f"{remaskable_model_probs.min().item():.3f}-{remaskable_model_probs.max().item():.3f}"
+                                selected_model_probs = remaskable_model_probs[top_indices]
+                                selected_rand_probs = remaskable_rand_probs[top_indices]
                                 avg_model_prob = selected_model_probs.mean().item()
                                 avg_rand_prob = selected_rand_probs.mean().item()
                                 print(f"    Model prob range: {model_prob_range}")
@@ -109,13 +137,12 @@ def apply_remasking(tokens, remask_ratio, remasking_model, randomness_strength, 
             for batch_idx in range(batch_size):
                 num_additional = additional_masks_needed[batch_idx].item()
                 if num_additional > 0:
-                    # Only select from unmasked positions
-                    unmasked_positions = (tokens[batch_idx] != mask_token_id)
-                    unmasked_indices = torch.where(unmasked_positions)[0]
-                    if len(unmasked_indices) > 0:
-                        num_to_select = min(num_additional, len(unmasked_indices))
-                        selected_positions = torch.randperm(len(unmasked_indices), device=device)[:num_to_select]
-                        remask_indices = unmasked_indices[selected_positions]
+                    # Only select from unmasked, non-protected positions
+                    remaskable_indices = get_remaskable_indices(batch_idx, device)
+                    if len(remaskable_indices) > 0:
+                        num_to_select = min(num_additional, len(remaskable_indices))
+                        selected_positions = torch.randperm(len(remaskable_indices), device=device)[:num_to_select]
+                        remask_indices = remaskable_indices[selected_positions]
                         tokens[batch_idx, remask_indices] = mask_token_id
     else:
         # Model-guided remasking with randomness
@@ -135,27 +162,26 @@ def apply_remasking(tokens, remask_ratio, remasking_model, randomness_strength, 
             for batch_idx in range(batch_size):
                 num_additional = additional_masks_needed[batch_idx].item()
                 if num_additional > 0:
-                    # Only consider unmasked positions for remasking
-                    unmasked_positions = (tokens[batch_idx] != mask_token_id)
-                    unmasked_indices = torch.where(unmasked_positions)[0]
-                    if len(unmasked_indices) > 0:
-                        # Get probabilities only for unmasked positions
-                        unmasked_model_probs = wrong_token_probs[batch_idx, unmasked_indices]
-                        unmasked_rand_probs = torch.rand(len(unmasked_indices), device=device)
+                    # Only consider unmasked, non-protected positions for remasking
+                    remaskable_indices = get_remaskable_indices(batch_idx, device)
+                    if len(remaskable_indices) > 0:
+                        # Get probabilities only for remaskable positions
+                        remaskable_model_probs = wrong_token_probs[batch_idx, remaskable_indices]
+                        remaskable_rand_probs = torch.rand(len(remaskable_indices), device=device)
                         
                         # Combine random and model probabilities
-                        combined_probs = randomness_strength * unmasked_rand_probs + (1 - randomness_strength) * unmasked_model_probs
+                        combined_probs = randomness_strength * remaskable_rand_probs + (1 - randomness_strength) * remaskable_model_probs
                         
                         # Select top positions by combined probability
-                        num_to_select = min(num_additional, len(unmasked_indices))
+                        num_to_select = min(num_additional, len(remaskable_indices))
                         _, top_indices = torch.topk(combined_probs, num_to_select)
-                        remask_indices = unmasked_indices[top_indices]
+                        remask_indices = remaskable_indices[top_indices]
                         tokens[batch_idx, remask_indices] = mask_token_id
                         
                         if verbose and batch_idx == 0:  # Show stats for first sample
-                            model_prob_range = f"{unmasked_model_probs.min().item():.3f}-{unmasked_model_probs.max().item():.3f}"
-                            selected_model_probs = unmasked_model_probs[top_indices]
-                            selected_rand_probs = unmasked_rand_probs[top_indices]
+                            model_prob_range = f"{remaskable_model_probs.min().item():.3f}-{remaskable_model_probs.max().item():.3f}"
+                            selected_model_probs = remaskable_model_probs[top_indices]
+                            selected_rand_probs = remaskable_rand_probs[top_indices]
                             avg_model_prob = selected_model_probs.mean().item()
                             avg_rand_prob = selected_rand_probs.mean().item()
                             print(f"    Model prob range: {model_prob_range}")

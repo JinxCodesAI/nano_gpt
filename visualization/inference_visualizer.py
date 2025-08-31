@@ -36,7 +36,7 @@ class InferenceRunner(QThread):
     error_signal = pyqtSignal(str)
     generation_complete = pyqtSignal()
     
-    def __init__(self, model, settings, vocab, device, start_step=0, start_tokens=None):
+    def __init__(self, model, settings, vocab, device, start_step=0, start_tokens=None, protected_positions=None):
         super().__init__()
         self.model = model
         self.settings = settings
@@ -45,6 +45,7 @@ class InferenceRunner(QThread):
         self.start_step = start_step
         self.start_tokens = start_tokens
         self.should_stop = False
+        self.protected_positions = protected_positions or set()
         
     def run(self):
         try:
@@ -115,7 +116,7 @@ class InferenceRunner(QThread):
                     )
                     tokens = apply_remasking(
                         tokens, remask_ratio, None, self.settings['randomness_strength'],
-                        mask_token_id, self.device, self.model, True, False  # intelligent_remasking=True
+                        mask_token_id, self.device, self.model, True, True, self.protected_positions  # intelligent_remasking=True, verbose=True, protected_positions
                     )
                     
                     # Emit remasking substep (editable)
@@ -131,6 +132,11 @@ class InferenceRunner(QThread):
     
     def stop(self):
         self.should_stop = True
+    
+    def update_protected_positions(self, protected_positions):
+        """Update the protected positions during generation"""
+        self.protected_positions = protected_positions or set()
+        print(f"DEBUG: InferenceRunner - updated protected positions: {sorted(self.protected_positions)}")
 
 
 class EditableTextWidget(QTextEdit):
@@ -145,36 +151,32 @@ class EditableTextWidget(QTextEdit):
         self.current_tokens = None
         self.is_editable = True
         
-        # Connect text changes to signal with delay to avoid spam
-        self.save_timer = QTimer()
-        self.save_timer.setSingleShot(True)
-        self.save_timer.timeout.connect(self.emit_text_edited)
-        self.textChanged.connect(self.on_text_changed)
-        
-    def on_text_changed(self):
-        """Schedule emit signal when text is edited (with delay to avoid spam)"""
-        if self.is_editable:
-            self.save_timer.start(500)  # 500ms delay
-            
-    def emit_text_edited(self):
-        """Actually emit the signal after delay"""
-        self.text_edited.emit()
+        # Note: No longer connecting to textChanged - we save only on navigation
         
     def set_vocab(self, vocab, mask_token_id):
         self.vocab = vocab
         self.mask_token_id = mask_token_id
         
-    def display_tokens(self, tokens, show_mask_char=True, is_editable=True):
+    def display_tokens(self, tokens, show_mask_char=True, is_editable=True, protected_positions=None):
         """Display tokens with proper formatting and coloring"""
         self.current_tokens = tokens.clone() if isinstance(tokens, torch.Tensor) else torch.tensor(tokens)
         self.is_editable = is_editable
         self.setReadOnly(not is_editable)
         
+        if protected_positions is None:
+            protected_positions = set()
+        
         html = "<div style='font-family: Consolas, monospace; font-size: 12px;'>"
         
         for i, token_id in enumerate(tokens.flatten()):
+            is_protected = i in protected_positions
+            
             if token_id == self.mask_token_id:
-                if show_mask_char:
+                if is_protected:
+                    # Protected mask (should not happen normally, but handle it)
+                    char = "█" if show_mask_char else "_"
+                    style = "background-color: #90EE90; color: black; border: 2px solid #228B22;"
+                elif show_mask_char:
                     char = "█"  # Block character for mask
                     style = "background-color: #87CEEB; color: black;"
                 else:
@@ -182,7 +184,11 @@ class EditableTextWidget(QTextEdit):
                     style = "background-color: #FFE4E1; color: black;"
             else:
                 char = self.vocab.get(int(token_id), f"[UNK{token_id}]")
-                style = ""
+                if is_protected:
+                    # Protected text - green background with border
+                    style = "background-color: #90EE90; color: black; border: 2px solid #228B22;"
+                else:
+                    style = ""
                 
             # Escape HTML characters
             if char == '<':
@@ -211,8 +217,6 @@ class EditableTextWidget(QTextEdit):
         
         # Get the plain text content (not HTML)
         plain_text = self.toPlainText()
-        print(f"DEBUG: get_edited_tokens - plain text length: {len(plain_text)}")
-        print(f"DEBUG: get_edited_tokens - first 100 chars: {repr(plain_text[:100])}")
         
         # Convert string/char vocab to integer mapping if needed
         if isinstance(list(self.vocab.keys())[0], str):
@@ -230,10 +234,7 @@ class EditableTextWidget(QTextEdit):
                 tokens.append(char_to_id[char])
             else:
                 # Unknown character - mask it
-                print(f"DEBUG: Unknown character '{char}' (ord={ord(char)}), masking")
                 tokens.append(self.mask_token_id)
-        
-        print(f"DEBUG: get_edited_tokens - parsed {len(tokens)} tokens from plain text")
         
         # Ensure correct sequence length - pad with masks or trim
         expected_length = len(self.current_tokens)
@@ -241,15 +242,11 @@ class EditableTextWidget(QTextEdit):
         if len(tokens) < expected_length:
             # Pad with mask tokens at the end
             tokens.extend([self.mask_token_id] * (expected_length - len(tokens)))
-            print(f"DEBUG: get_edited_tokens - padded to {len(tokens)} tokens")
         elif len(tokens) > expected_length:
             # Trim to expected length
             tokens = tokens[:expected_length]
-            print(f"DEBUG: get_edited_tokens - trimmed to {len(tokens)} tokens")
             
         result = torch.tensor(tokens, dtype=torch.long)
-        print(f"DEBUG: get_edited_tokens - returning tensor shape: {result.shape}")
-        print(f"DEBUG: get_edited_tokens - first 20 tokens: {result[:20]}")
         return result
         
     def mask_selected_text(self):
@@ -260,6 +257,51 @@ class EditableTextWidget(QTextEdit):
             selected_text = cursor.selectedText()
             mask_text = '█' * len(selected_text)
             cursor.insertText(mask_text)
+    
+    def update_display_for_protection(self, protected_positions):
+        """Update visual display to show protected positions with special styling"""
+        if not self.vocab or self.current_tokens is None or len(self.current_tokens) == 0:
+            return
+            
+        # Re-display tokens with protection indicators
+        tokens = self.current_tokens
+        html = "<div style='font-family: Consolas, monospace; font-size: 12px;'>"
+        
+        for i, token_id in enumerate(tokens.flatten()):
+            is_protected = i in protected_positions
+            
+            if token_id == self.mask_token_id:
+                if is_protected:
+                    # Protected mask (should not happen normally, but handle it)
+                    char = "█"
+                    style = "background-color: #90EE90; color: black; border: 2px solid #228B22;"
+                else:
+                    char = "█"  # Block character for mask
+                    style = "background-color: #87CEEB; color: black;"
+            else:
+                char = self.vocab.get(int(token_id), f"[UNK{token_id}]")
+                if is_protected:
+                    # Protected text - green background with border
+                    style = "background-color: #90EE90; color: black; border: 2px solid #228B22;"
+                else:
+                    style = ""
+                
+            # Escape HTML characters
+            if char == '<':
+                char = '&lt;'
+            elif char == '>':
+                char = '&gt;'
+            elif char == '&':
+                char = '&amp;'
+            elif char == ' ':
+                char = '&nbsp;'
+            elif char == '\n':
+                char = '<br>'
+                
+            html += f"<span style='{style}'>{char}</span>"
+        
+        html += "</div>"
+        self.setHtml(html)
         
 
 
@@ -300,7 +342,7 @@ class MainPanel(QWidget):
         
         self.setLayout(layout)
         
-    def update_substep(self, step_num, total_steps, substep_type, tokens, vocab, mask_token_id, is_editable):
+    def update_substep(self, step_num, total_steps, substep_type, tokens, vocab, mask_token_id, is_editable, protected_positions=None):
         """Update display for a specific substep"""
         self.header_label.setText(f"Step {step_num} / {total_steps}")
         
@@ -321,7 +363,7 @@ class MainPanel(QWidget):
             self.substep_label.setStyleSheet("color: #FFB366; font-weight: bold;")
         
         self.text_widget.set_vocab(vocab, mask_token_id)
-        self.text_widget.display_tokens(tokens, True, is_editable)
+        self.text_widget.display_tokens(tokens, True, is_editable, protected_positions)
         
         # Calculate token statistics
         token_stats = self.calculate_token_stats(tokens, vocab, mask_token_id)
@@ -510,6 +552,12 @@ class LeftPanel(QWidget):
         self.mask_btn.setEnabled(False)
         edit_layout.addWidget(self.mask_btn)
         
+        # Protect edits checkbox
+        self.protect_edits_checkbox = QCheckBox("Protect Edits")
+        self.protect_edits_checkbox.setToolTip("When checked, manually edited characters will never be masked again")
+        self.protect_edits_checkbox.setChecked(False)
+        edit_layout.addWidget(self.protect_edits_checkbox)
+        
         edit_group.setLayout(edit_layout)
         layout.addWidget(edit_group)
         
@@ -646,6 +694,11 @@ class InferenceVisualizerApp(QMainWindow):
         self.current_substep_key = None
         self.inference_runner = None
         
+        # Protected positions tracking for "protect edits" feature
+        self.protected_positions = set()  # Set of sequence positions that are protected from remasking
+        self.protect_edits_enabled = False  # Whether protection is currently enabled
+        self.baseline_tokens = {}  # substep_key -> original tokens before user edits (for detecting changes)
+        
         self.load_vocab()
         self.init_ui()
         
@@ -763,11 +816,12 @@ class InferenceVisualizerApp(QMainWindow):
         self.left_panel.stop_btn.clicked.connect(self.stop_generation)
         self.left_panel.restart_btn.clicked.connect(self.restart_from_current)
         self.left_panel.mask_btn.clicked.connect(self.mask_selected)
+        self.left_panel.protect_edits_checkbox.toggled.connect(self.on_protect_edits_toggled)
         top_splitter.addWidget(self.left_panel)
         
         # Main panel
         self.main_panel = MainPanel()
-        self.main_panel.text_widget.text_edited.connect(self.on_text_edited)
+        # Note: No longer connecting text_edited - we save only on navigation
         top_splitter.addWidget(self.main_panel)
         
         # Set splitter proportions
@@ -842,12 +896,16 @@ class InferenceVisualizerApp(QMainWindow):
         self.generation_substeps.clear()
         self.current_substep_key = None
         
+        # Clear protected positions and baselines when starting new generation
+        self.protected_positions.clear()
+        self.baseline_tokens.clear()
+        
         # Get settings
         settings = self.left_panel.get_settings()
         
         # Start inference runner
         self.inference_runner = InferenceRunner(
-            self.model, settings, self.vocab, self.device
+            self.model, settings, self.vocab, self.device, protected_positions=self.protected_positions
         )
         self.inference_runner.substep_complete.connect(self.on_substep_complete)
         self.inference_runner.progress_update.connect(self.on_progress_update)
@@ -875,6 +933,10 @@ class InferenceVisualizerApp(QMainWindow):
             QMessageBox.warning(self, "Warning", "No valid substep to restart from")
             return
             
+        # Save any edits from current step if protection enabled
+        if self.protect_edits_enabled:
+            self.save_current_edits()
+            
         # Get current substep tokens (potentially edited)
         current_tokens = self.main_panel.text_widget.get_edited_tokens()
         
@@ -897,7 +959,7 @@ class InferenceVisualizerApp(QMainWindow):
         # Start inference runner from current step
         self.inference_runner = InferenceRunner(
             self.model, settings, self.vocab, self.device, 
-            step_num, current_tokens.unsqueeze(0).to(self.device)
+            step_num, current_tokens.unsqueeze(0).to(self.device), self.protected_positions
         )
         self.inference_runner.substep_complete.connect(self.on_substep_complete)
         self.inference_runner.progress_update.connect(self.on_progress_update)
@@ -921,6 +983,10 @@ class InferenceVisualizerApp(QMainWindow):
             'is_editable': is_editable,
             'step_num': step_num
         }
+        
+        # Store baseline tokens (original model output before user edits)
+        # This is crucial for detecting user edits later
+        self.baseline_tokens[substep_key] = tokens.clone()
         
         # Update bottom panel with new substep keys
         substep_keys = sorted(self.generation_substeps.keys(), key=lambda x: (int(x.split('_')[0]), x.split('_')[1]))
@@ -947,6 +1013,10 @@ class InferenceVisualizerApp(QMainWindow):
             
     def on_substep_changed(self, substep_key):
         """Handle substep change from bottom panel"""
+        # Before switching, save any edits from current step (ALWAYS, not just when protection enabled)
+        if self.current_substep_key:
+            self.save_current_edits()
+        
         if substep_key in self.generation_substeps:
             self.current_substep_key = substep_key
             self.update_main_panel()
@@ -961,7 +1031,7 @@ class InferenceVisualizerApp(QMainWindow):
             
             self.main_panel.update_substep(
                 substep_data['step_num'], total_steps, substep_data['substep_type'],
-                tokens[0], self.vocab, mask_token_id, substep_data['is_editable']
+                tokens[0], self.vocab, mask_token_id, substep_data['is_editable'], self.protected_positions
             )
             
             # Update edit controls based on editability
@@ -1007,8 +1077,22 @@ class InferenceVisualizerApp(QMainWindow):
         substep_data['tokens'] = modified_tokens.clone()
         self.generation_substeps[self.current_substep_key] = substep_data
         
-    def on_text_edited(self):
-        """Handle immediate text edits - save changes to current substep"""
+    def on_protect_edits_toggled(self, checked):
+        """Handle protect edits checkbox toggle"""
+        self.protect_edits_enabled = checked
+        if checked:
+            print("Protect edits enabled - manually edited characters will be protected from remasking")
+        else:
+            print("Protect edits disabled - all positions can be remasked normally")
+            # Clear current protections when disabled
+            self.protected_positions.clear()
+        
+        # Update visual display to show/hide protection indicators
+        if hasattr(self.main_panel, 'text_widget'):
+            self.main_panel.text_widget.update_display_for_protection(self.protected_positions)
+        
+    def save_current_edits(self):
+        """Save edits from current step and detect protected positions"""
         if not self.current_substep_key or self.current_substep_key not in self.generation_substeps:
             return
             
@@ -1019,19 +1103,82 @@ class InferenceVisualizerApp(QMainWindow):
         if not substep_data['is_editable']:
             return
             
-        # Get the edited tokens and save them
-        try:
-            modified_tokens = self.main_panel.text_widget.get_edited_tokens()
+        print(f"DEBUG: save_current_edits - saving edits for {self.current_substep_key}")
             
-            # Ensure proper tensor format (add batch dimension if needed)
-            if len(modified_tokens.shape) == 1:
-                modified_tokens = modified_tokens.unsqueeze(0)  # Add batch dimension
-                
+        try:
+            # Get edited tokens and ensure they match the original device/format
+            modified_tokens = self.main_panel.text_widget.get_edited_tokens()
+            original_tokens = substep_data['tokens']
+            
+            # Ensure same shape and device as original
+            if len(modified_tokens.shape) == 1 and len(original_tokens.shape) == 2:
+                modified_tokens = modified_tokens.unsqueeze(0)
+            
+            # Move to same device as original for saving
+            modified_tokens = modified_tokens.to(original_tokens.device)
+            
+            # Save the edited tokens immediately (basic functionality)
             substep_data['tokens'] = modified_tokens
             self.generation_substeps[self.current_substep_key] = substep_data
-            print(f"DEBUG: on_text_edited - saved edits to {self.current_substep_key}, shape: {modified_tokens.shape}")
+            print(f"DEBUG: save_current_edits - basic save completed, shape: {modified_tokens.shape}")
+            
+            # Do protection detection if enabled (with simpler device handling)
+            if self.protect_edits_enabled and self.current_substep_key in self.baseline_tokens:
+                self.detect_and_protect_edits(modified_tokens)
+                
         except Exception as e:
-            print(f"DEBUG: on_text_edited - error saving edits: {e}")
+            print(f"DEBUG: save_current_edits - error: {e}")
+            import traceback
+            traceback.print_exc()
+    
+    def detect_and_protect_edits(self, modified_tokens):
+        """Separate method for protection detection with robust device handling"""
+        try:
+            baseline_tokens = self.baseline_tokens[self.current_substep_key]
+            
+            # Move both to CPU for comparison
+            baseline_cpu = baseline_tokens.cpu()
+            modified_cpu = modified_tokens.cpu()
+            
+            # Ensure same shape
+            if len(baseline_cpu.shape) != len(modified_cpu.shape):
+                if len(baseline_cpu.shape) == 1:
+                    baseline_cpu = baseline_cpu.unsqueeze(0)
+                if len(modified_cpu.shape) == 1:
+                    modified_cpu = modified_cpu.unsqueeze(0)
+            
+            mask_token_id = len(self.vocab) if self.vocab else 0
+            
+            # Find changed positions
+            changed_positions = torch.where(
+                (baseline_cpu[0] != modified_cpu[0]) &
+                (modified_cpu[0] != mask_token_id)
+            )[0]
+            
+            # Add to protected set
+            new_protections = []
+            for pos in changed_positions:
+                pos_int = pos.item()
+                if pos_int not in self.protected_positions:
+                    self.protected_positions.add(pos_int)
+                    new_protections.append(pos_int)
+            
+            if len(new_protections) > 0:
+                print(f"DEBUG: Protected {len(new_protections)} positions: {new_protections}")
+                
+                # Update InferenceRunner
+                if self.inference_runner and hasattr(self.inference_runner, 'update_protected_positions'):
+                    self.inference_runner.update_protected_positions(self.protected_positions)
+                
+                # Update visual display
+                self.main_panel.text_widget.update_display_for_protection(self.protected_positions)
+                
+        except Exception as e:
+            print(f"DEBUG: detect_and_protect_edits - error: {e}")
+    
+    def on_text_edited(self):
+        """Legacy method - no longer used since we save only on navigation"""
+        pass
 
 
 def main():

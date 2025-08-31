@@ -13,7 +13,7 @@ from model import GPTConfig, GPT
 # Configuration
 init_from = 'resume'
 out_dir = 'out'
-checkpoint_name = 'optimal2_3400.pt' #'35.75_58.2_UM.pt'
+checkpoint_name = 'optimal2_7400.pt' #'35.75_58.2_UM.pt'
 remasking_checkpoint_name = None #'ckpt_remasking_binary_600.pt'  # Optional: remasking_binary model checkpoint
 num_samples = 1  # Number of samples to generate
 sequence_length = 1024  # Total length of generated sequence

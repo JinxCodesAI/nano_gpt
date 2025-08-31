@@ -100,7 +100,7 @@ class TrainingContext:
     # Data configuration
     data_dir: str = 'data/shakespeare_char'
     meta_vocab_size: int = None
-    vocab_size: int = None  # meta_vocab_size + 4 (mask, wrong, remask_good, remask_wrong)
+    vocab_size: int = None  # extended_vocab_size (meta_vocab_size + 15 reserved special tokens)
     use_paragraph_boundaries: bool = True  # If True, start samples at paragraph boundaries (double newlines)
     use_all_stages_for_training: bool = False  # If True, generate training batches from all stages like validation
     weight_loss_by_mask_ratio: bool = False  # If True, weight loss by sqrt(1.0 / mask_ratio) to balance gradient magnitude
@@ -169,7 +169,9 @@ class TrainingContext:
         if self.training_type == 'unmasking' and self.validation_stages is None:
             self.validation_stages = self.unmasking_stages
         
-        self.vocab_size = self.meta_vocab_size
+        # Keep both meta_vocab_size (for random token generation) and extended_vocab_size (for model)
+        # vocab_size is kept for backward compatibility but should equal extended_vocab_size
+        self.vocab_size = self.extended_vocab_size
     
     def get_current_stage_config(self) -> UnmaskingStage:
         """Get configuration for current unmasking stage"""
@@ -343,7 +345,7 @@ def create_unmasking_validation_set(ctx: TrainingContext):
                 x = x.to(ctx.device)
             
             # Apply stage-specific masking
-            masked_x, mask = apply_stage_masking(x, stage_config, ctx.mask_token_id, ctx.vocab_size)
+            masked_x, mask = apply_stage_masking(x, stage_config, ctx.mask_token_id, ctx.meta_vocab_size)
             
             stage_batches.append((masked_x.clone(), x.clone(), mask.clone()))
             samples_generated += batch_size
@@ -416,7 +418,7 @@ def get_unmasking_training_batch_all_stages(ctx: TrainingContext):
                 x = x.to(ctx.device)
             
             # Apply masking for this stage
-            masked_x, mask = apply_stage_masking(x, stage_config, ctx.mask_token_id, ctx.vocab_size)
+            masked_x, mask = apply_stage_masking(x, stage_config, ctx.mask_token_id, ctx.meta_vocab_size)
             
             all_masked_x.append(masked_x)
             all_x.append(x)
@@ -536,7 +538,7 @@ def get_remasking_validation_batch(ctx: TrainingContext, batch_idx=None):
 
 
 # In train_utils.py, modify this function
-def apply_random_masking_gpu(x, max_masked_ratio, mask_token_id, vocab_size):
+def apply_random_masking_gpu(x, max_masked_ratio, mask_token_id, meta_vocab_size):
     """
     GPU-optimized random masking for unmasking training.
     Each sample in the batch gets a different random masking probability.
@@ -552,13 +554,12 @@ def apply_random_masking_gpu(x, max_masked_ratio, mask_token_id, vocab_size):
     mask = rand_vals < mask_probs_expanded
     
     # Step 2: Apply the 80/10/10 corruption using the new function
-    # NOTE: You'll need to pass vocab_size to this function. Your TrainingContext
-    # has `meta_vocab_size`, which is what you should use.
-    corrupted_x = apply_bert_style_corruption_gpu(x, mask, mask_token_id, vocab_size)
+    # NOTE: We use meta_vocab_size to avoid generating special tokens randomly
+    corrupted_x = apply_bert_style_corruption_gpu(x, mask, mask_token_id, meta_vocab_size)
     
     return corrupted_x, mask
 
-def apply_stage_masking(x, stage_config: UnmaskingStage, mask_token_id, vocab_size):
+def apply_stage_masking(x, stage_config: UnmaskingStage, mask_token_id, meta_vocab_size):
     """
     Apply masking based on stage configuration type.
     
@@ -566,6 +567,7 @@ def apply_stage_masking(x, stage_config: UnmaskingStage, mask_token_id, vocab_si
         x: Input tokens (batch_size, seq_len)
         stage_config: UnmaskingStage configuration
         mask_token_id: Token ID to use for masking
+        meta_vocab_size: Size of original vocabulary (for random token generation, excluding special tokens)
         
     Returns:
         masked_x: Input with masked tokens replaced by mask_token_id
@@ -575,7 +577,7 @@ def apply_stage_masking(x, stage_config: UnmaskingStage, mask_token_id, vocab_si
     
     if stage_type == UnmaskingStageType.RANDOM:
         config = stage_config.config
-        return apply_random_masking_gpu(x, config.max_masked_ratio, mask_token_id, vocab_size)
+        return apply_random_masking_gpu(x, config.max_masked_ratio, mask_token_id, meta_vocab_size)
     elif stage_type == UnmaskingStageType.STICKY:
         config = stage_config.config
         return apply_target_driven_sticky_masking_gpu(
@@ -1002,14 +1004,14 @@ def get_batch_unmasking(split, ctx: TrainingContext, validation_sample_idx=None)
             stage_idx = (validation_sample_idx or 0) % len(ctx.validation_stages)
             stage_config = ctx.validation_stages[stage_idx]
             # Apply stage-specific masking
-            masked_x, mask = apply_stage_masking(x, stage_config, ctx.mask_token_id, ctx.vocab_size)
+            masked_x, mask = apply_stage_masking(x, stage_config, ctx.mask_token_id, ctx.meta_vocab_size)
         else:
             # Fallback to current stage if no stages defined
             stage_config = ctx.get_current_stage_config()
             if stage_config is None:
                 raise ValueError(f"No stage configuration available for {ctx.training_type} training")
             # Apply stage-specific masking
-            masked_x, mask = apply_stage_masking(x, stage_config, ctx.mask_token_id, ctx.vocab_size)
+            masked_x, mask = apply_stage_masking(x, stage_config, ctx.mask_token_id, ctx.meta_vocab_size)
     else:
         # For training: distribute batch samples across all stages up to current stage (inclusive)
         if ctx.unmasking_stages and ctx.current_stage >= 0:
@@ -1036,7 +1038,7 @@ def get_batch_unmasking(split, ctx: TrainingContext, validation_sample_idx=None)
                     start_idx += stage_samples
                     
                     # Apply masking for this stage
-                    stage_masked_x, stage_mask = apply_stage_masking(stage_x, stage_config, ctx.mask_token_id, ctx.vocab_size)
+                    stage_masked_x, stage_mask = apply_stage_masking(stage_x, stage_config, ctx.mask_token_id, ctx.meta_vocab_size)
                     
                     all_masked_x.append(stage_masked_x)
                     all_masks.append(stage_mask)
@@ -1062,7 +1064,7 @@ def get_batch_unmasking(split, ctx: TrainingContext, validation_sample_idx=None)
                 raise ValueError(f"No stage configuration available for {ctx.training_type} training")
             
             # Apply single stage masking (fallback case)
-            masked_x, mask = apply_stage_masking(x, stage_config, ctx.mask_token_id, ctx.vocab_size)
+            masked_x, mask = apply_stage_masking(x, stage_config, ctx.mask_token_id, ctx.meta_vocab_size)
     
     if split == 'val':
         torch.manual_seed(1337 + ctx.seed_offset)
@@ -1611,7 +1613,7 @@ def get_lr(it, ctx: TrainingContext):
 # In train_utils.py
 
 # Add this new function to train_utils.py
-def apply_bert_style_corruption_gpu(x, mask, mask_token_id, vocab_size):
+def apply_bert_style_corruption_gpu(x, mask, mask_token_id, meta_vocab_size):
     """
     Applies the 80/10/10 corruption strategy from BERT to the selected positions.
     
@@ -1619,7 +1621,7 @@ def apply_bert_style_corruption_gpu(x, mask, mask_token_id, vocab_size):
         x: Original input tokens (batch_size, seq_len)
         mask: Boolean mask of positions selected for prediction (batch_size, seq_len)
         mask_token_id: The ID of the [MASK] token.
-        vocab_size: The size of the vocabulary for generating random tokens.
+        meta_vocab_size: The size of the original vocabulary for generating random tokens (excluding special tokens).
         
     Returns:
         corrupted_x: The input tokens after applying the 80/10/10 rule.
@@ -1644,7 +1646,7 @@ def apply_bert_style_corruption_gpu(x, mask, mask_token_id, vocab_size):
     # Apply the random tokens
     num_random = random_token_positions.sum()
     if num_random > 0:
-        random_tokens = torch.randint(0, vocab_size, (num_random,), device=x.device)
+        random_tokens = torch.randint(0, meta_vocab_size, (num_random,), device=x.device)
         corrupted_x[random_token_positions] = random_tokens
         
     return corrupted_x

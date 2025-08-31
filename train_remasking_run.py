@@ -160,13 +160,14 @@ if os.path.exists(meta_path):
     print_and_flush(f"found vocab_size = {meta_vocab_size} (inside {meta_path})")
     
     # For binary classification, we only need mask_token_id and don't need the other special tokens
+    # But we reserve 15 special tokens for future finetuning consistency 
     mask_token_id = meta_vocab_size
-    extended_vocab_size = meta_vocab_size + 1  # Only need mask token for input
+    extended_vocab_size = meta_vocab_size + 15  # Reserve 15 special tokens for future finetuning
     print_and_flush(f"mask_token_id = {mask_token_id}, extended_vocab_size = {extended_vocab_size}")
 else:
     print_and_flush("No meta.pkl found, using default GPT-2 vocab")
     mask_token_id = 50304
-    extended_vocab_size = 50305
+    extended_vocab_size = 50304 + 15  # Reserve 15 special tokens
 
 # Create training context with remasking parameters
 training_ctx = TrainingContext(
@@ -206,7 +207,7 @@ model_args = dict(n_layer=n_layer, n_head=n_head, n_embd=n_embd, block_size=bloc
 if init_from == 'scratch':
     # init a new model from scratch
     print_and_flush("Initializing a new binary classification model from scratch")
-    model_args['vocab_size'] = extended_vocab_size if meta_vocab_size is not None else 50305
+    model_args['vocab_size'] = extended_vocab_size if meta_vocab_size is not None else 50304 + 15
     gptconf = GPTConfig(**model_args)
     model = GPT(gptconf)
 elif init_from == 'resume':

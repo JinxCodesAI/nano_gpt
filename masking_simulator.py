@@ -90,7 +90,7 @@ class MaskingSimulator:
             wrong_token_id=66,  # meta_vocab_size + 1
             remask_good_id=67,   # meta_vocab_size + 2
             remask_wrong_id=68,  # meta_vocab_size + 3
-            extended_vocab_size=69,  # meta_vocab_size + 4
+            extended_vocab_size=65 + 15,  # meta_vocab_size + 15 (reserve 15 special tokens)
             iter_num=0,  # Not used in stage-based system
             current_stage=stage_idx,
             unmasking_stages=unmasking_stage_objects,
