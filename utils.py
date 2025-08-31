@@ -35,6 +35,18 @@ class Timer:
         if name not in self.times or not self.times[name]:
             return 0.0
         return sum(self.times[name][-last_n:]) / min(len(self.times[name]), last_n)
+    
+    def get_recent_average(self, name, last_n=10):
+        """Get average time for very recent calls only"""
+        if name not in self.times or not self.times[name]:
+            return 0.0
+        return sum(self.times[name][-last_n:]) / min(len(self.times[name]), last_n)
+    
+    def get_last_time(self, name):
+        """Get the most recent time measurement"""
+        if name not in self.times or not self.times[name]:
+            return 0.0
+        return self.times[name][-1]
 
 
 

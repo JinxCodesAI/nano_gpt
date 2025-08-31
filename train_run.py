@@ -650,61 +650,63 @@ while True:
 
     # forward backward update, with optional gradient accumulation to simulate larger batch size
     # and using the GradScaler if data type is float16
-    for micro_step in range(gradient_accumulation_steps):
-        if ddp:
-            # in DDP training we only need to sync gradients at the last micro step.
-            # the official way to do this is with model.no_sync() context manager, but
-            # I really dislike that this bloats the code and forces us to repeat code
-            # looking at the source of that context manager, it just toggles this variable
-            model.require_backward_grad_sync = (micro_step == gradient_accumulation_steps - 1)
-        with ctx:
-            with timer.time_function('forward_pass'):
-                # Combined forward pass and loss computation for efficiency
-                logits, loss = model(X, Y)
+    with timer.time_function('gradient_accumulation_loop'):
+        for micro_step in range(gradient_accumulation_steps):
+            if ddp:
+                # in DDP training we only need to sync gradients at the last micro step.
+                # the official way to do this is with model.no_sync() context manager, but
+                # I really dislike that this bloats the code and forces us to repeat code
+                # looking at the source of that context manager, it just toggles this variable
+                model.require_backward_grad_sync = (micro_step == gradient_accumulation_steps - 1)
+            with ctx:
+                with timer.time_function('forward_pass'):
+                    # Combined forward pass and loss computation for efficiency
+                    logits, loss = model(X, Y)
                 
-                # TRAINING INSTABILITY DETECTION
-                if not torch.isfinite(logits).all():
-                    print(f"\n*** INSTABILITY DETECTED at iter {iter_num} ***")
-                    print(f"Logits contain NaN/Inf: {torch.isnan(logits).sum().item()} NaN, {torch.isinf(logits).sum().item()} Inf")
-                    print(f"Logits stats: min={logits.min().item():.6f}, max={logits.max().item():.6f}, mean={logits.mean().item():.6f}")
-                    print("*** ATTEMPTING RECOVERY FROM CHECKPOINT ***")
-                    if reload_from_checkpoint():
-                        # Reset local state and restart iteration completely
-                        local_iter_num = 0
-                        running_mfu = -1.0
-                        training_ctx.iter_num = iter_num
-                        # Generate new batch to avoid same problematic data
-                        X, Y, mask = get_batch('train', training_ctx)
-                        # Reset scaler state and start fresh iteration
-                        scaler = torch.cuda.amp.GradScaler(enabled=(dtype == 'float16'))
-                        optimizer.zero_grad(set_to_none=True)
-                        just_recovered = True
-                        t0 = time.time()
-                        continue
-                    else:
-                        print("*** RECOVERY FAILED - TERMINATING TRAINING ***")
-                        break
-                
-                if not torch.isfinite(loss):
-                    print(f"\n*** LOSS INSTABILITY at iter {iter_num} ***")
-                    print(f"Loss is {loss.item()}: {'NaN' if torch.isnan(loss) else 'Inf'}")
-                    print("*** ATTEMPTING RECOVERY FROM CHECKPOINT ***")
-                    if reload_from_checkpoint():
-                        # Reset local state and restart iteration completely
-                        local_iter_num = 0
-                        running_mfu = -1.0
-                        training_ctx.iter_num = iter_num
-                        # Generate new batch to avoid same problematic data
-                        X, Y, mask = get_batch('train', training_ctx)
-                        # Reset scaler state and start fresh iteration
-                        scaler = torch.cuda.amp.GradScaler(enabled=(dtype == 'float16'))
-                        optimizer.zero_grad(set_to_none=True)
-                        just_recovered = True
-                        t0 = time.time()
-                        continue
-                    else:
-                        print("*** RECOVERY FAILED - TERMINATING TRAINING ***")
-                        break
+                with timer.time_function('instability_detection'):
+                    # TRAINING INSTABILITY DETECTION
+                    if not torch.isfinite(logits).all():
+                        print(f"\n*** INSTABILITY DETECTED at iter {iter_num} ***")
+                        print(f"Logits contain NaN/Inf: {torch.isnan(logits).sum().item()} NaN, {torch.isinf(logits).sum().item()} Inf")
+                        print(f"Logits stats: min={logits.min().item():.6f}, max={logits.max().item():.6f}, mean={logits.mean().item():.6f}")
+                        print("*** ATTEMPTING RECOVERY FROM CHECKPOINT ***")
+                        if reload_from_checkpoint():
+                            # Reset local state and restart iteration completely
+                            local_iter_num = 0
+                            running_mfu = -1.0
+                            training_ctx.iter_num = iter_num
+                            # Generate new batch to avoid same problematic data
+                            X, Y, mask = get_batch('train', training_ctx)
+                            # Reset scaler state and start fresh iteration
+                            scaler = torch.cuda.amp.GradScaler(enabled=(dtype == 'float16'))
+                            optimizer.zero_grad(set_to_none=True)
+                            just_recovered = True
+                            t0 = time.time()
+                            continue
+                        else:
+                            print("*** RECOVERY FAILED - TERMINATING TRAINING ***")
+                            break
+                    
+                    if not torch.isfinite(loss):
+                        print(f"\n*** LOSS INSTABILITY at iter {iter_num} ***")
+                        print(f"Loss is {loss.item()}: {'NaN' if torch.isnan(loss) else 'Inf'}")
+                        print("*** ATTEMPTING RECOVERY FROM CHECKPOINT ***")
+                        if reload_from_checkpoint():
+                            # Reset local state and restart iteration completely
+                            local_iter_num = 0
+                            running_mfu = -1.0
+                            training_ctx.iter_num = iter_num
+                            # Generate new batch to avoid same problematic data
+                            X, Y, mask = get_batch('train', training_ctx)
+                            # Reset scaler state and start fresh iteration
+                            scaler = torch.cuda.amp.GradScaler(enabled=(dtype == 'float16'))
+                            optimizer.zero_grad(set_to_none=True)
+                            just_recovered = True
+                            t0 = time.time()
+                            continue
+                        else:
+                            print("*** RECOVERY FAILED - TERMINATING TRAINING ***")
+                            break
                 
                 # Apply masking for unmasking training only (most efficient path)
                 if training_ctx.training_type == 'unmasking' and mask.any():
@@ -730,28 +732,29 @@ while True:
                     if training_ctx.training_type == 'unmasking':
                         loss = torch.tensor(0.0, device=loss.device, requires_grad=True)
                 
-                # Apply entropy penalty if enabled (works for all training types)
-                if training_ctx.enable_entropy_penalty:
-                    current_entropy_penalty = get_current_entropy_penalty(iter_num, training_ctx)
-                    if current_entropy_penalty > 0:
-                        # Calculate entropy of wrong answer distributions
-                        wrong_answer_entropy = calculate_wrong_answer_entropy(logits, Y, training_ctx.extended_vocab_size)
-                        
-                        # Calculate max possible entropy for wrong answers: log(vocab_size - 1)
-                        max_wrong_entropy = math.log(training_ctx.extended_vocab_size - 1)
-                        
-                        # Penalty for LOW entropy (concentrated wrong answers)
-                        # When entropy is low (bad) -> high penalty
-                        # When entropy is high (good) -> low penalty  
-                        entropy_penalty_factor = (max_wrong_entropy - wrong_answer_entropy) / max_wrong_entropy
-                        entropy_multiplier = 1.0 + current_entropy_penalty * entropy_penalty_factor
-                        loss = loss * entropy_multiplier
-                        
-                        # Update EMA of entropy multiplier
-                        update_entropy_multiplier_ema(training_ctx, entropy_multiplier)
-                    else:
-                        # No penalty applied, multiplier is 1.0
-                        update_entropy_multiplier_ema(training_ctx, 1.0)
+                with timer.time_function('loss_processing'):
+                    # Apply entropy penalty if enabled (works for all training types)
+                    if training_ctx.enable_entropy_penalty:
+                        current_entropy_penalty = get_current_entropy_penalty(iter_num, training_ctx)
+                        if current_entropy_penalty > 0:
+                            # Calculate entropy of wrong answer distributions
+                            wrong_answer_entropy = calculate_wrong_answer_entropy(logits, Y, training_ctx.extended_vocab_size)
+                            
+                            # Calculate max possible entropy for wrong answers: log(vocab_size - 1)
+                            max_wrong_entropy = math.log(training_ctx.extended_vocab_size - 1)
+                            
+                            # Penalty for LOW entropy (concentrated wrong answers)
+                            # When entropy is low (bad) -> high penalty
+                            # When entropy is high (good) -> low penalty  
+                            entropy_penalty_factor = (max_wrong_entropy - wrong_answer_entropy) / max_wrong_entropy
+                            entropy_multiplier = 1.0 + current_entropy_penalty * entropy_penalty_factor
+                            loss = loss * entropy_multiplier
+                            
+                            # Update EMA of entropy multiplier
+                            update_entropy_multiplier_ema(training_ctx, entropy_multiplier)
+                        else:
+                            # No penalty applied, multiplier is 1.0
+                            update_entropy_multiplier_ema(training_ctx, 1.0)
 
                 # For remasking variants, model's internal loss is already correct
                 
@@ -786,169 +789,196 @@ while True:
             # Update training context with current iteration for the next batch
             training_ctx.iter_num = iter_num
             X, Y, mask = get_batch('train', training_ctx)
-        # backward pass, with gradient scaling if training in fp16
-        with timer.time_function('backward_pass'):
-            scaler.scale(loss).backward()
+            # backward pass, with gradient scaling if training in fp16
+            with timer.time_function('backward_pass'):
+                scaler.scale(loss).backward()
     
-    # GRADIENT INSTABILITY DETECTION
-    if grad_clip != 0.0:
-        scaler.unscale_(optimizer)
-        # Monitor gradient norms before clipping
-        grad_norm = torch.nn.utils.clip_grad_norm_(model.parameters(), grad_clip)
+    # GRADIENT PROCESSING AND CLIPPING
+    with timer.time_function('gradient_processing'):
+        if grad_clip != 0.0:
+            scaler.unscale_(optimizer)
+            # Monitor gradient norms before clipping
+            grad_norm = torch.nn.utils.clip_grad_norm_(model.parameters(), grad_clip)
         
-        # Check for true instability (NaN/Inf gradients)
-        if not torch.isfinite(grad_norm):
-            # At iteration 0 with lr=0, infinite gradients indicate model/loss issues
-            if iter_num == 0:
-                print(f"\n*** INITIALIZATION PROBLEM at iter {iter_num} ***")
-                print(f"Gradient norm is {grad_norm.item()}: {'NaN' if torch.isnan(grad_norm) else 'Inf'}")
-                print(f"Learning rate: {lr:.6f}")
-                print("This suggests model initialization or loss computation issues")
+            # Check for true instability (NaN/Inf gradients)
+            if not torch.isfinite(grad_norm):
+                # At iteration 0 with lr=0, infinite gradients indicate model/loss issues
+                if iter_num == 0:
+                    print(f"\n*** INITIALIZATION PROBLEM at iter {iter_num} ***")
+                    print(f"Gradient norm is {grad_norm.item()}: {'NaN' if torch.isnan(grad_norm) else 'Inf'}")
+                    print(f"Learning rate: {lr:.6f}")
+                    print("This suggests model initialization or loss computation issues")
+                    
+                    # Check a few key statistics
+                    print("\nModel parameter stats:")
+                    for name, param in list(model.named_parameters())[:3]:  # First 3 params
+                        print(f"  {name}: mean={param.data.mean().item():.6f}, std={param.data.std().item():.6f}")
+                        if param.grad is not None:
+                            print(f"    grad: mean={param.grad.data.mean().item():.6f}, std={param.grad.data.std().item():.6f}")
+                else:
+                    print(f"\n*** GRADIENT INSTABILITY at iter {iter_num} ***")
+                    print(f"Gradient norm is {grad_norm.item()}: {'NaN' if torch.isnan(grad_norm) else 'Inf'}")
                 
-                # Check a few key statistics
-                print("\nModel parameter stats:")
-                for name, param in list(model.named_parameters())[:3]:  # First 3 params
-                    print(f"  {name}: mean={param.data.mean().item():.6f}, std={param.data.std().item():.6f}")
+                # Check individual parameter gradients
+                nan_params = 0
+                inf_params = 0
+                for name, param in model.named_parameters():
                     if param.grad is not None:
-                        print(f"    grad: mean={param.grad.data.mean().item():.6f}, std={param.grad.data.std().item():.6f}")
-            else:
-                print(f"\n*** GRADIENT INSTABILITY at iter {iter_num} ***")
-                print(f"Gradient norm is {grad_norm.item()}: {'NaN' if torch.isnan(grad_norm) else 'Inf'}")
+                        if torch.isnan(param.grad).any():
+                            nan_params += 1
+                        if torch.isinf(param.grad).any():
+                            inf_params += 1
+                print(f"Parameters with NaN gradients: {nan_params}, with Inf gradients: {inf_params}")
+                print("*** ATTEMPTING RECOVERY FROM CHECKPOINT ***")
+                if reload_from_checkpoint():
+                    # Reset local state and restart iteration completely
+                    local_iter_num = 0
+                    running_mfu = -1.0
+                    training_ctx.iter_num = iter_num
+                    # Generate new batch to avoid same problematic data
+                    X, Y, mask = get_batch('train', training_ctx)
+                    # Reset scaler state and start fresh iteration
+                    scaler = torch.cuda.amp.GradScaler(enabled=(dtype == 'float16'))
+                    optimizer.zero_grad(set_to_none=True)
+                    just_recovered = True
+                    t0 = time.time()
+                    continue
+                else:
+                    print("*** RECOVERY FAILED - TERMINATING TRAINING ***")
+                    break
             
-            # Check individual parameter gradients
-            nan_params = 0
-            inf_params = 0
-            for name, param in model.named_parameters():
+            # Only warn about large gradients after initial iterations (when lr > 0)
+            if iter_num > 10 and grad_norm > grad_clip * 10:
+                print(f"WARNING: Large gradient norm at iter {iter_num}: {grad_norm.item():.4f} (clip threshold: {grad_clip})")
+        else:
+            # Still check gradient norms even without clipping
+            total_norm = 0.0
+            nan_grads = False
+            inf_grads = False
+            
+            for param in model.parameters():
                 if param.grad is not None:
-                    if torch.isnan(param.grad).any():
-                        nan_params += 1
-                    if torch.isinf(param.grad).any():
-                        inf_params += 1
-            print(f"Parameters with NaN gradients: {nan_params}, with Inf gradients: {inf_params}")
-            print("*** ATTEMPTING RECOVERY FROM CHECKPOINT ***")
-            if reload_from_checkpoint():
-                # Reset local state and restart iteration completely
-                local_iter_num = 0
-                running_mfu = -1.0
-                training_ctx.iter_num = iter_num
-                # Generate new batch to avoid same problematic data
-                X, Y, mask = get_batch('train', training_ctx)
-                # Reset scaler state and start fresh iteration
-                scaler = torch.cuda.amp.GradScaler(enabled=(dtype == 'float16'))
-                optimizer.zero_grad(set_to_none=True)
-                just_recovered = True
-                t0 = time.time()
-                continue
-            else:
-                print("*** RECOVERY FAILED - TERMINATING TRAINING ***")
-                break
-        
-        # Only warn about large gradients after initial iterations (when lr > 0)
-        if iter_num > 10 and grad_norm > grad_clip * 10:
-            print(f"WARNING: Large gradient norm at iter {iter_num}: {grad_norm.item():.4f} (clip threshold: {grad_clip})")
-    else:
-        # Still check gradient norms even without clipping
-        total_norm = 0.0
-        nan_grads = False
-        inf_grads = False
-        
-        for param in model.parameters():
-            if param.grad is not None:
-                param_norm = param.grad.data.norm(2)
-                if torch.isnan(param_norm):
-                    nan_grads = True
-                if torch.isinf(param_norm):
-                    inf_grads = True
-                total_norm += param_norm.item() ** 2
-        
-        total_norm = total_norm ** (1. / 2)
-        
-        if nan_grads or inf_grads:
-            print(f"\n*** GRADIENT INSTABILITY at iter {iter_num} (no clipping) ***")
-            print(f"NaN gradients: {nan_grads}, Inf gradients: {inf_grads}")
-            print(f"Total gradient norm: {total_norm:.6f}")
-            print("*** ATTEMPTING RECOVERY FROM CHECKPOINT ***")
-            if reload_from_checkpoint():
-                # Reset local state and restart iteration completely
-                local_iter_num = 0
-                running_mfu = -1.0
-                training_ctx.iter_num = iter_num
-                # Generate new batch to avoid same problematic data
-                X, Y, mask = get_batch('train', training_ctx)
-                # Reset scaler state and start fresh iteration
-                scaler = torch.cuda.amp.GradScaler(enabled=(dtype == 'float16'))
-                optimizer.zero_grad(set_to_none=True)
-                just_recovered = True
-                t0 = time.time()
-                continue
-            else:
-                print("*** RECOVERY FAILED - TERMINATING TRAINING ***")
-                break
-    # step the optimizer and scaler if training in fp16
-    scaler.step(optimizer)
-    scaler.update()
+                    param_norm = param.grad.data.norm(2)
+                    if torch.isnan(param_norm):
+                        nan_grads = True
+                    if torch.isinf(param_norm):
+                        inf_grads = True
+                    total_norm += param_norm.item() ** 2
+            
+            total_norm = total_norm ** (1. / 2)
+            
+            if nan_grads or inf_grads:
+                print(f"\n*** GRADIENT INSTABILITY at iter {iter_num} (no clipping) ***")
+                print(f"NaN gradients: {nan_grads}, Inf gradients: {inf_grads}")
+                print(f"Total gradient norm: {total_norm:.6f}")
+                print("*** ATTEMPTING RECOVERY FROM CHECKPOINT ***")
+                if reload_from_checkpoint():
+                    # Reset local state and restart iteration completely
+                    local_iter_num = 0
+                    running_mfu = -1.0
+                    training_ctx.iter_num = iter_num
+                    # Generate new batch to avoid same problematic data
+                    X, Y, mask = get_batch('train', training_ctx)
+                    # Reset scaler state and start fresh iteration
+                    scaler = torch.cuda.amp.GradScaler(enabled=(dtype == 'float16'))
+                    optimizer.zero_grad(set_to_none=True)
+                    just_recovered = True
+                    t0 = time.time()
+                    continue
+                else:
+                    print("*** RECOVERY FAILED - TERMINATING TRAINING ***")
+                    break
+    
+    # OPTIMIZER OPERATIONS  
+    with timer.time_function('optimizer_operations'):
+        # step the optimizer and scaler if training in fp16
+        scaler.step(optimizer)
+        scaler.update()
     
     # PARAMETER STABILITY DETECTION
-    nan_params = 0
-    inf_params = 0
-    param_names_with_issues = []
+    with timer.time_function('parameter_stability_check'):
+        nan_params = 0
+        inf_params = 0
+        param_names_with_issues = []
+        
+        for name, param in model.named_parameters():
+            if param.data is not None:
+                if torch.isnan(param.data).any():
+                    nan_params += 1
+                    param_names_with_issues.append(f"{name}(NaN)")
+                if torch.isinf(param.data).any():
+                    inf_params += 1
+                    param_names_with_issues.append(f"{name}(Inf)")
+        
+        if nan_params > 0 or inf_params > 0:
+            print(f"\n*** PARAMETER INSTABILITY at iter {iter_num} ***")
+            print(f"Parameters with NaN values: {nan_params}, with Inf values: {inf_params}")
+            print(f"Affected parameters: {param_names_with_issues[:10]}")  # Show first 10
+            if len(param_names_with_issues) > 10:
+                print(f"... and {len(param_names_with_issues) - 10} more")
+            print("*** ATTEMPTING RECOVERY FROM CHECKPOINT ***")
+            if reload_from_checkpoint():
+                # Reset local state and restart iteration completely
+                local_iter_num = 0
+                running_mfu = -1.0
+                training_ctx.iter_num = iter_num
+                # Generate new batch to avoid same problematic data
+                X, Y, mask = get_batch('train', training_ctx)
+                # Reset scaler state and start fresh iteration
+                scaler = torch.cuda.amp.GradScaler(enabled=(dtype == 'float16'))
+                optimizer.zero_grad(set_to_none=True)
+                just_recovered = True
+                t0 = time.time()
+                continue
+            else:
+                print("*** RECOVERY FAILED - TERMINATING TRAINING ***")
+                break
     
-    for name, param in model.named_parameters():
-        if param.data is not None:
-            if torch.isnan(param.data).any():
-                nan_params += 1
-                param_names_with_issues.append(f"{name}(NaN)")
-            if torch.isinf(param.data).any():
-                inf_params += 1
-                param_names_with_issues.append(f"{name}(Inf)")
-    
-    if nan_params > 0 or inf_params > 0:
-        print(f"\n*** PARAMETER INSTABILITY at iter {iter_num} ***")
-        print(f"Parameters with NaN values: {nan_params}, with Inf values: {inf_params}")
-        print(f"Affected parameters: {param_names_with_issues[:10]}")  # Show first 10
-        if len(param_names_with_issues) > 10:
-            print(f"... and {len(param_names_with_issues) - 10} more")
-        print("*** ATTEMPTING RECOVERY FROM CHECKPOINT ***")
-        if reload_from_checkpoint():
-            # Reset local state and restart iteration completely
-            local_iter_num = 0
-            running_mfu = -1.0
-            training_ctx.iter_num = iter_num
-            # Generate new batch to avoid same problematic data
-            X, Y, mask = get_batch('train', training_ctx)
-            # Reset scaler state and start fresh iteration
-            scaler = torch.cuda.amp.GradScaler(enabled=(dtype == 'float16'))
-            optimizer.zero_grad(set_to_none=True)
-            just_recovered = True
-            t0 = time.time()
-            continue
-        else:
-            print("*** RECOVERY FAILED - TERMINATING TRAINING ***")
-            break
-    
-    # flush the gradients as soon as we can, no need for this memory anymore
-    optimizer.zero_grad(set_to_none=True)
+    # CLEANUP OPERATIONS
+    with timer.time_function('cleanup_operations'):
+        # flush the gradients as soon as we can, no need for this memory anymore
+        optimizer.zero_grad(set_to_none=True)
 
     # timing and logging
     t1 = time.time()
     dt = t1 - t0
     t0 = t1
     if iter_num % log_interval == 0 and master_process:
-        # get loss as float. note: this is a CPU-GPU sync point
-        # scale up to undo the division above, approximating the true total loss (exact would have been a sum)
-        lossf = loss.item() * gradient_accumulation_steps
-        if local_iter_num >= 5: # let the training loop settle a bit
-            mfu = raw_model.estimate_mfu(batch_size * gradient_accumulation_steps, dt)
-            running_mfu = mfu if running_mfu == -1.0 else 0.9*running_mfu + 0.1*mfu
+        # GPU SYNCHRONIZATION OPERATIONS
+        with timer.time_function('gpu_synchronization'):
+            # get loss as float. note: this is a CPU-GPU sync point
+            # scale up to undo the division above, approximating the true total loss (exact would have been a sum)
+            lossf = loss.item() * gradient_accumulation_steps
+            if local_iter_num >= 5: # let the training loop settle a bit
+                mfu = raw_model.estimate_mfu(batch_size * gradient_accumulation_steps, dt)
+                running_mfu = mfu if running_mfu == -1.0 else 0.9*running_mfu + 0.1*mfu
 
-        # Enhanced logging with detailed timing
-        data_time = timer.get_average('data_generation') * 1000
-        forward_time = timer.get_average('forward_pass') * 1000
-        loss_time = timer.get_average('loss_computation') * 1000
-        backward_time = timer.get_average('backward_pass') * 1000
+        # Enhanced logging with detailed timing - use recent measurements only
+        data_time = timer.get_recent_average('data_generation') * 1000
+        forward_time = timer.get_recent_average('forward_pass') * 1000
+        loss_time = timer.get_recent_average('loss_computation') * 1000
+        backward_time = timer.get_recent_average('backward_pass') * 1000
+        grad_accum_time = timer.get_recent_average('gradient_accumulation_loop') * 1000
+        grad_proc_time = timer.get_recent_average('gradient_processing') * 1000
+        optimizer_time = timer.get_recent_average('optimizer_operations') * 1000
+        param_check_time = timer.get_recent_average('parameter_stability_check') * 1000
+        cleanup_time = timer.get_recent_average('cleanup_operations') * 1000
+        gpu_sync_time = timer.get_recent_average('gpu_synchronization') * 1000
+        loss_proc_time = timer.get_recent_average('loss_processing') * 1000
+        instability_time = timer.get_recent_average('instability_detection') * 1000
+
+        # Calculate total of measured components (avoid double-counting nested timers)
+        # grad_accum_time already contains ALL nested operations: data, forward, backward, loss_proc, instability
+        measured_total = grad_accum_time + grad_proc_time + optimizer_time + param_check_time + cleanup_time + gpu_sync_time
+        total_time = dt * 1000
+        unaccounted_time = total_time - measured_total
 
         print(f"iter {iter_num}: loss {lossf:.4f}, time {dt*1000:.2f}ms, mfu {running_mfu*100:.2f}%")
-        print(f"  data: {data_time:.2f}ms, forward: {forward_time:.2f}ms, loss: {loss_time:.2f}ms, backward: {backward_time:.2f}ms")
+        print(f"  data: {data_time:.1f}ms, grad_accum: {grad_accum_time:.1f}ms (fw: {forward_time:.1f}ms, bw: {backward_time:.1f}ms)")
+        print(f"  grad_proc: {grad_proc_time:.1f}ms, optimizer: {optimizer_time:.1f}ms, param_check: {param_check_time:.1f}ms")
+        print(f"  loss_proc: {loss_proc_time:.1f}ms, instability: {instability_time:.1f}ms")
+        print(f"  cleanup: {cleanup_time:.1f}ms, gpu_sync: {gpu_sync_time:.1f}ms")
+        print(f"  measured: {measured_total:.1f}ms, unaccounted: {unaccounted_time:.1f}ms ({unaccounted_time/total_time*100:.1f}%)")
         
         # Add entropy penalty logging if enabled
         if training_ctx.enable_entropy_penalty:
