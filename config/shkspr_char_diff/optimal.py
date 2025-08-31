@@ -52,11 +52,11 @@ validation_stages = [
 ]
 
 # adamw optimizer
-learning_rate = 5e-4 # with baby networks can afford to go a bit higher
-max_iters = 15000
-warmup_iters = 1000 # how many steps to warm up for
-lr_decay_iters = 15000 # make equal to max_iters usually
-min_lr = 1e-4 # learning_rate / 10 usually
+learning_rate = 3e-4 # with baby networks can afford to go a bit higher
+max_iters = 5000
+warmup_iters = 600 # how many steps to warm up for
+lr_decay_iters = 5000 # make equal to max_iters usually
+min_lr = 3e-5 # learning_rate / 10 usually
 weight_decay=1e-3
 dropout = 0.01 # for pretraining 0 is good, for finetuning try 0.1+
 

@@ -13,8 +13,8 @@ from model import GPTConfig, GPT
 # Configuration
 init_from = 'resume'
 out_dir = 'out'
-checkpoint_name = '35.75_58.2_UM.pt'  # Main model checkpoint to load
-remasking_checkpoint_name = 'ckpt_remasking_binary_600.pt'  # Optional: remasking_binary model checkpoint
+checkpoint_name = '34.5_32.7_58.1_UM.pt' #'35.75_58.2_UM.pt'
+remasking_checkpoint_name = None #'ckpt_remasking_binary_600.pt'  # Optional: remasking_binary model checkpoint
 num_samples = 1  # Number of samples to generate
 sequence_length = 1024  # Total length of generated sequence
 seed = -1
@@ -34,7 +34,7 @@ schedule_type = 'custom'  # 'linear' or 'custom' - type of masking schedule to u
 masking_ratios = [0.85,0.816,0.7819999999999999,0.7479999999999999,0.7139999999999999,0.6799999999999998,0.6459999999999998,0.6119999999999998,0.5779999999999997,0.5439999999999997,0.5099999999999997,0.47599999999999965,0.4419999999999996,0.4079999999999996,0.37399999999999956,0.3399999999999995,0.3059999999999995,0.27199999999999946,0.23799999999999946,0.20399999999999946,0.16999999999999946,0.13599999999999945,0.10199999999999945,0.06799999999999945,0.03399999999999945]   # Array of masking ratios for 'custom' schedule (overrides diffusion_iterations)
 
 # Remasking parameters (only used if remasking model is available)
-randomness_strength = 2# Balance between random (1.0) and model-guided (0.0) remasking
+randomness_strength = 0 # Balance between random (1.0) and model-guided (0.0) remasking
 
 if seed == -1:
     seed = int.from_bytes(os.urandom(4), byteorder='little')
