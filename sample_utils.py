@@ -12,7 +12,7 @@ def linear_remasking_schedule(total_iterations, current_iteration, start_ratio, 
     return start_ratio - progress * (start_ratio - end_ratio)
 
 
-def nucleus_sample(logits, top_p=1.0, temperature=1.0, recent_tokens=None, repetition_penalty=1.0):
+def nucleus_sample(logits, top_p=1.0, temperature=1.0, recent_tokens=None, repetition_penalty=1.0, vocab_size=None):
     """
     Nucleus (top-p) sampling from logits with optional repetition penalty
     
@@ -23,10 +23,17 @@ def nucleus_sample(logits, top_p=1.0, temperature=1.0, recent_tokens=None, repet
         temperature: Temperature for scaling logits
         recent_tokens: Recent tokens to apply repetition penalty to (optional)
         repetition_penalty: Penalty for repeating recent tokens (>1.0 = discourage)
+        vocab_size: Size of actual vocabulary (excluding special tokens). If provided,
+                   will mask out tokens beyond vocab_size+1 (mask token) to prevent
+                   sampling non-existent tokens
     
     Returns:
         Sampled token indices
     """
+    # Mask out invalid tokens before any processing to prevent sampling non-existent tokens
+    if vocab_size is not None and logits.shape[-1] > vocab_size + 1:  # +1 for mask token
+        logits = logits.clone()  # Don't modify original logits
+        logits[..., vocab_size+1:] = float('-inf')  # Set tokens beyond mask_token_id to -inf
     # Apply repetition penalty if provided
     if recent_tokens is not None and repetition_penalty != 1.0 and len(recent_tokens) > 0:
         for token_id in set(recent_tokens):
@@ -227,7 +234,8 @@ def predict_and_sample_tokens(model, tokens, mask_token_id, temperature, top_p, 
                     
                     # Sample using nucleus sampling with repetition penalty
                     new_tokens = nucleus_sample(masked_logits, top_p=top_p, temperature=temperature,
-                                              recent_tokens=recent_tokens, repetition_penalty=repetition_penalty)
+                                              recent_tokens=recent_tokens, repetition_penalty=repetition_penalty,
+                                              vocab_size=vocab_size)
                     
                     # Debug logging if function provided
                     if debug_logging_fn and verbose and log_debug:

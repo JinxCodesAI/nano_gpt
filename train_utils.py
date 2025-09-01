@@ -1901,5 +1901,6 @@ def apply_label_smoothing(targets, uncertainty_factor, vocab_size, special_token
     sum_probs = smoothed_targets.sum(dim=-1, keepdim=True)
     # Renormalize to ensure probabilities sum to 1
     smoothed_targets = smoothed_targets / sum_probs
+
     
     return smoothed_targets
