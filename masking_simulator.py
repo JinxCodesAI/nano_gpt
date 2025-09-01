@@ -16,7 +16,7 @@ import pickle
 # Add current directory to path to import local modules
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 
-from train_utils import TrainingContext, apply_target_driven_sticky_masking_gpu, UnmaskingStage
+from training_utils import TrainingContext, apply_target_driven_sticky_masking_gpu, UnmaskingStage
 from utils import analyze_clustering
 
 @dataclass

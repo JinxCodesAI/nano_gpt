@@ -1,0 +1,1003 @@
+"""
+Model Quality Assessment Script for Diffusion Models
+
+Evaluates relative quality of multiple diffusion models through ELO rating system.
+Each model generates samples, rates other models' samples, and competes in tournaments.
+"""
+
+import os
+import pickle
+import math
+import random
+import sys
+from collections import Counter, defaultdict
+from contextlib import nullcontext
+import torch
+from model import GPTConfig, GPT
+from sample_utils import (
+    calculate_selfconfidence_ratio, 
+    predict_and_sample_tokens, 
+    apply_remasking_step, 
+    linear_remasking_schedule
+)
+from training_utils import TrainingContext
+
+# Handle old module references in checkpoints
+class ModuleMapper:
+    """Maps old module names to new ones for checkpoint loading"""
+    def __init__(self):
+        self.module_map = {
+            'train_utils': 'training_utils',  # Handle renamed module
+        }
+    
+    def __enter__(self):
+        self._original_import = __builtins__.__import__
+        def custom_import(name, *args, **kwargs):
+            if name in self.module_map:
+                name = self.module_map[name]
+            return self._original_import(name, *args, **kwargs)
+        __builtins__.__import__ = custom_import
+        
+        # Also handle sys.modules mapping
+        if 'train_utils' not in sys.modules and 'training_utils' in sys.modules:
+            sys.modules['train_utils'] = sys.modules['training_utils']
+        
+        return self
+    
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        __builtins__.__import__ = self._original_import
+        if 'train_utils' in sys.modules and 'training_utils' in sys.modules:
+            if sys.modules['train_utils'] is sys.modules['training_utils']:
+                del sys.modules['train_utils']
+
+
+def diffusion_generate(model, batch_size, total_length, iterations, remasking_model, mask_token_id,
+                      randomness_strength, decode_fn, decode_mask_fn, device, vocab_size, itos, stoi,
+                      start_ratio=0.99, end_ratio=0.05, verbose=True, temperature=1.0,
+                      top_p=1.0, schedule_type='linear', masking_ratios=None, repetition_penalty=1.0, 
+                      repetition_window=10, log_debug=False):
+    """
+    Generate text samples using diffusion-based iterative demasking
+    
+    Modified version that doesn't rely on global variables
+    
+    Args:
+        model: Trained diffusion model
+        batch_size: Number of samples to generate
+        total_length: Length of sequence to generate
+        iterations: Number of demasking iterations
+        remasking_model: Optional remasking_binary model
+        mask_token_id: ID of mask token
+        randomness_strength: Balance between random and model-guided remasking (0-1)
+        decode_fn: Function to decode tokens to text
+        decode_mask_fn: Function to decode with mask characters
+        device: Device to run on
+        vocab_size: Size of vocabulary
+        itos: Index to string mapping
+        stoi: String to index mapping
+        start_ratio: Starting ratio for linear schedule
+        end_ratio: Ending ratio for linear schedule
+        verbose: Whether to print progress
+        temperature: Temperature for sampling
+        top_p: Nucleus sampling parameter
+        schedule_type: 'linear' or 'custom' - type of masking schedule to use
+        masking_ratios: Array of masking ratios for 'custom' schedule
+        repetition_penalty: Penalty for repeating recent tokens
+        repetition_window: Window size for repetition penalty
+        log_debug: Whether to do detailed debug logging
+        
+    Returns:
+        Generated tokens (batch_size, total_length)
+    """
+    # Start with all positions masked
+    tokens = torch.full((batch_size, total_length), mask_token_id, dtype=torch.long, device=device)
+    
+    if verbose:
+        print(f"Starting diffusion generation: {batch_size} samples, {iterations} iterations")
+        print(f"Total length: {total_length} (all tokens start masked)")
+        if remasking_model is not None:
+            print(f"Using remasking_binary model with randomness_strength={randomness_strength}")
+        else:
+            print("Using pure random remasking")
+        print("=" * 80)
+    
+    for iteration in range(iterations):
+        if verbose:
+            masked_positions = (tokens == mask_token_id)
+            num_masked_per_sample = masked_positions.sum(dim=1)
+            avg_masked = num_masked_per_sample.float().mean().item()
+            print(f"\nIteration {iteration + 1}/{iterations}")
+            print(f"Average tokens masked: {avg_masked:.1f}/{total_length} ({avg_masked/total_length*100:.1f}%)")
+        
+        # Step 1: Predict tokens for all masked positions
+        tokens, prediction_tokens = predict_and_sample_tokens(
+            model=model,
+            tokens=tokens,
+            mask_token_id=mask_token_id,
+            temperature=temperature,
+            top_p=top_p,
+            repetition_penalty=repetition_penalty,
+            repetition_window=repetition_window,
+            vocab_size=vocab_size,
+            device=device,
+            debug_logging_fn=None,  # Disable debug logging for evaluation
+            itos=itos,
+            stoi=stoi,
+            verbose=verbose,
+            log_debug=log_debug
+        )
+        
+        # Step 2: Remask tokens for next iteration (except final iteration)
+        if iteration < iterations - 1:
+            tokens = apply_remasking_step(
+                tokens=tokens,
+                prediction_tokens=prediction_tokens,
+                iteration=iteration,
+                iterations=iterations,
+                schedule_type=schedule_type,
+                masking_ratios=masking_ratios,
+                start_ratio=start_ratio,
+                end_ratio=end_ratio,
+                remasking_model=remasking_model,
+                randomness_strength=randomness_strength,
+                mask_token_id=mask_token_id,
+                device=device,
+                verbose=verbose
+            )
+        
+        if verbose:
+            print("=" * 80)
+    
+    return tokens
+
+
+# Configuration
+EVALUATION_CONFIG = {
+    # Model configuration
+    'checkpoints': [
+        'optimal6_7800.pt',
+        'optimal5_8000.pt',
+        'optimal5_6600.pt',
+        'optimal5_2000.pt',
+        'optimal3_7200.pt',
+        'optimal3_5000.pt',
+        'optimal2_8000.pt',
+        '35.75_58.2_UM.pt',
+        'optimal2_6400.pt',
+        'optimal_2400.pt',
+        # Add more model checkpoints here for comparison
+        # 'model2.pt',
+        # 'model3.pt',
+    ],
+    'remasking_checkpoint_name': None,  # Optional: remasking_binary model checkpoint
+    
+    # Evaluation parameters
+    'batch_size': 32,           # N samples per model per batch (generation)
+    'rating_batch_size': 64,    # Batch size for rating samples (GPU optimization)
+    'num_challenges': 1000,     # P tournament rounds before stopping
+    'sequence_length': 1024,   # Total length of generated sequence
+    'seed': 42,
+    'device': 'cuda',
+    'dtype': 'float16',
+    'compile': False,
+    
+    # Generation parameters (copied from sample.py)
+    'temperature': 1.0,
+    'top_p': 0.8,
+    'repetition_penalty': 1.0,
+    'repetition_window': 10,
+    'diffusion_iterations': 25,
+    'start_ratio': 0.99,
+    'end_ratio': 0.05,
+    'randomness_strength': 0.4,
+    
+    # Schedule parameters
+    'schedule_type': 'custom',
+    'masking_ratios': [0.85,0.816,0.782,0.748,0.714,0.68,0.646,0.612,0.578,0.544,0.51,0.476,0.442,0.408,0.374,0.34,0.306,0.272,0.238,0.204,0.17,0.136,0.102,0.068,0.034],
+    
+    # Output configuration
+    'out_dir': 'out',
+    'results_file': 'model_evaluation_results.txt',
+    'verbose': True,
+}
+
+# Allow configuration override from command line
+exec(open('configurator.py').read())
+
+# Validate configuration
+if len(EVALUATION_CONFIG['checkpoints']) < 2:
+    raise ValueError("Need at least 2 models for comparison")
+
+if EVALUATION_CONFIG['schedule_type'] == 'custom':
+    EVALUATION_CONFIG['diffusion_iterations'] = len(EVALUATION_CONFIG['masking_ratios'])
+
+
+class ModelLoader:
+    """Handles loading and managing multiple model checkpoints"""
+    
+    def __init__(self, config):
+        self.config = config
+        self.models = {}
+        self.model_names = []
+        self.vocab_info = None
+        self.remasking_model = None
+        
+    def load_all_models(self):
+        """Load all model checkpoints and vocabulary"""
+        print(f"Loading {len(self.config['checkpoints'])} models...")
+        
+        # Load vocabulary from first model (assuming all models use same vocab)
+        self._load_vocabulary()
+        
+        # Load each model checkpoint
+        for i, checkpoint_name in enumerate(self.config['checkpoints']):
+            model_id = f"model_{i}"
+            self.model_names.append(model_id)
+            model = self._load_single_model(checkpoint_name, model_id)
+            self.models[model_id] = model
+            
+        # Load optional remasking model
+        self._load_remasking_model()
+        
+        print(f"Successfully loaded {len(self.models)} models")
+        return self.models, self.vocab_info, self.remasking_model
+    
+    def _load_single_model(self, checkpoint_name, model_id):
+        """Load a single model checkpoint"""
+        ckpt_path = os.path.join(self.config['out_dir'], checkpoint_name)
+        
+        if not os.path.exists(ckpt_path):
+            raise FileNotFoundError(f"Checkpoint not found: {ckpt_path}")
+            
+        print(f"Loading {model_id} from {checkpoint_name}...")
+        with ModuleMapper():
+            checkpoint = torch.load(ckpt_path, map_location=self.config['device'], weights_only=False)
+        
+        # Create model
+        model_args = checkpoint['model_args']
+        if 'attention_type' not in model_args:
+            model_args['attention_type'] = 'causal'  # Backward compatibility
+            
+        model_config = GPTConfig(**model_args)
+        model = GPT(model_config)
+        
+        # Load weights
+        state_dict = checkpoint['model']
+        unwanted_prefix = '_orig_mod.'
+        for k, v in list(state_dict.items()):
+            if k.startswith(unwanted_prefix):
+                state_dict[k[len(unwanted_prefix):]] = state_dict.pop(k)
+        model.load_state_dict(state_dict)
+        
+        model.eval()
+        model.to(self.config['device'])
+        if self.config['compile']:
+            model = torch.compile(model)
+            
+        print(f"  {model_id} loaded (attention: {model_config.attention_type})")
+        return model
+    
+    def _load_vocabulary(self):
+        """Load vocabulary information from the first model"""
+        # Use same vocabulary loading logic as sample.py
+        first_checkpoint_name = self.config['checkpoints'][0]
+        ckpt_path = os.path.join(self.config['out_dir'], first_checkpoint_name)
+        with ModuleMapper():
+            checkpoint = torch.load(ckpt_path, map_location=self.config['device'], weights_only=False)
+        
+        # Determine dataset name
+        dataset_name = None
+        if 'config' in checkpoint:
+            config = checkpoint['config']
+            if hasattr(config, 'get'):
+                dataset_name = config.get('dataset')
+            elif hasattr(config, '__getitem__'):
+                try:
+                    dataset_name = config['dataset']
+                except (KeyError, TypeError):
+                    pass
+        
+        if not dataset_name:
+            if 'shakespeare' in first_checkpoint_name.lower():
+                dataset_name = 'shakespeare_char'
+            else:
+                dataset_name = 'shakespeare_char'
+        
+        # Load meta.pkl
+        meta_path = os.path.join('data', dataset_name, 'meta.pkl')
+        if not os.path.exists(meta_path):
+            raise FileNotFoundError(f"Meta file not found: {meta_path}")
+            
+        with open(meta_path, 'rb') as f:
+            meta = pickle.load(f)
+        
+        stoi, itos = meta['stoi'], meta['itos']
+        vocab_size = meta['vocab_size']
+        mask_token_id = vocab_size  # Mask token ID
+        
+        def decode(token_ids):
+            result = []
+            for token_id in token_ids:
+                if token_id == mask_token_id:
+                    result.append('[MASK]')
+                elif token_id < len(itos):
+                    result.append(itos[token_id])
+                else:
+                    result.append('[UNK]')
+            return ''.join(result)
+        
+        def decode_with_mask_char(token_ids, mask_char='#'):
+            result = []
+            for token_id in token_ids:
+                if token_id == mask_token_id:
+                    result.append(mask_char)
+                elif token_id < len(itos):
+                    result.append(itos[token_id])
+                else:
+                    result.append('[UNK]')
+            return ''.join(result)
+        
+        self.vocab_info = {
+            'stoi': stoi,
+            'itos': itos,
+            'vocab_size': vocab_size,
+            'mask_token_id': mask_token_id,
+            'decode': decode,
+            'decode_mask_fn': decode_with_mask_char,
+            'dataset_name': dataset_name
+        }
+        
+        print(f"Vocabulary loaded: size={vocab_size}, mask_token_id={mask_token_id}, dataset={dataset_name}")
+    
+    def _load_remasking_model(self):
+        """Load optional remasking model"""
+        remasking_checkpoint_name = self.config.get('remasking_checkpoint_name')
+        if remasking_checkpoint_name is None:
+            return
+            
+        remasking_ckpt_path = os.path.join(self.config['out_dir'], remasking_checkpoint_name)
+        if not os.path.exists(remasking_ckpt_path):
+            print(f"Remasking checkpoint not found: {remasking_ckpt_path}")
+            return
+            
+        print(f"Loading remasking model from {remasking_checkpoint_name}...")
+        with ModuleMapper():
+            remasking_checkpoint = torch.load(remasking_ckpt_path, map_location=self.config['device'], weights_only=False)
+        
+        remasking_model_args = remasking_checkpoint['model_args']
+        if 'attention_type' not in remasking_model_args:
+            remasking_model_args['attention_type'] = 'causal'
+        
+        # Verify it's a binary classification model
+        if not remasking_model_args.get('binary_classification', False):
+            print("Warning: Remasking model is not binary classification, skipping")
+            return
+            
+        remasking_config = GPTConfig(**remasking_model_args)
+        self.remasking_model = GPT(remasking_config)
+        
+        # Load weights
+        remasking_state_dict = remasking_checkpoint['model']
+        unwanted_prefix = '_orig_mod.'
+        for k, v in list(remasking_state_dict.items()):
+            if k.startswith(unwanted_prefix):
+                remasking_state_dict[k[len(unwanted_prefix):]] = remasking_state_dict.pop(k)
+        self.remasking_model.load_state_dict(remasking_state_dict)
+        
+        self.remasking_model.eval()
+        self.remasking_model.to(self.config['device'])
+        if self.config['compile']:
+            self.remasking_model = torch.compile(self.remasking_model)
+            
+        print("Remasking model loaded (binary classification)")
+
+
+class SampleGenerator:
+    """Generates samples from loaded models using diffusion process"""
+    
+    def __init__(self, config, vocab_info, remasking_model=None):
+        self.config = config
+        self.vocab_info = vocab_info
+        self.remasking_model = remasking_model
+        
+        # Set up device and dtype context
+        device_type = 'cuda' if 'cuda' in config['device'] else 'cpu'
+        ptdtype = {'float32': torch.float32, 'bfloat16': torch.bfloat16, 'float16': torch.float16}[config['dtype']]
+        self.ctx = nullcontext() if device_type == 'cpu' else torch.amp.autocast(device_type=device_type, dtype=ptdtype)
+    
+    def generate_samples_for_model(self, model, model_id):
+        """Generate samples for a single model"""
+        print(f"\nGenerating samples for {model_id}...")
+        
+        with torch.no_grad():
+            with self.ctx:
+                generated_tokens = diffusion_generate(
+                    model=model,
+                    batch_size=self.config['batch_size'],
+                    total_length=self.config['sequence_length'],
+                    iterations=self.config['diffusion_iterations'],
+                    remasking_model=self.remasking_model,
+                    mask_token_id=self.vocab_info['mask_token_id'],
+                    randomness_strength=self.config['randomness_strength'],
+                    decode_fn=self.vocab_info['decode'],
+                    decode_mask_fn=self.vocab_info['decode_mask_fn'],
+                    device=self.config['device'],
+                    vocab_size=self.vocab_info['vocab_size'],
+                    itos=self.vocab_info['itos'],
+                    stoi=self.vocab_info['stoi'],
+                    start_ratio=self.config['start_ratio'],
+                    end_ratio=self.config['end_ratio'],
+                    verbose=False,  # Suppress detailed generation logs
+                    temperature=self.config['temperature'],
+                    top_p=self.config['top_p'],
+                    schedule_type=self.config['schedule_type'],
+                    masking_ratios=self.config.get('masking_ratios'),
+                    repetition_penalty=self.config['repetition_penalty'],
+                    repetition_window=self.config['repetition_window'],
+                    log_debug=False
+                )
+        
+        # Convert to list of samples
+        samples = []
+        for i in range(self.config['batch_size']):
+            sample_tokens = generated_tokens[i].tolist()
+            sample_text = self.vocab_info['decode'](sample_tokens)
+            samples.append({
+                'tokens': sample_tokens,
+                'text': sample_text,
+                'model_id': model_id,
+                'sample_id': i
+            })
+        
+        print(f"Generated {len(samples)} samples for {model_id}")
+        return samples
+    
+    def generate_all_samples(self, models):
+        """Generate samples for all models"""
+        print(f"\n{'='*80}")
+        print("SAMPLE GENERATION PHASE")
+        print(f"{'='*80}")
+        
+        all_samples = {}
+        for model_id, model in models.items():
+            all_samples[model_id] = self.generate_samples_for_model(model, model_id)
+            
+        total_samples = sum(len(samples) for samples in all_samples.values())
+        print(f"\nGenerated {total_samples} total samples across {len(models)} models")
+        
+        return all_samples
+
+
+class ModelRater:
+    """Rates samples using model likelihood scores"""
+    
+    def __init__(self, config, vocab_info):
+        self.config = config
+        self.vocab_info = vocab_info
+        
+        # Set up device and dtype context
+        device_type = 'cuda' if 'cuda' in config['device'] else 'cpu'
+        ptdtype = {'float32': torch.float32, 'bfloat16': torch.bfloat16, 'float16': torch.float16}[config['dtype']]
+        self.ctx = nullcontext() if device_type == 'cpu' else torch.amp.autocast(device_type=device_type, dtype=ptdtype)
+    
+    def rate_samples_with_model(self, model, samples, rater_model_id, batch_size=None):
+        """Rate a list of samples using a specific model - GPU optimized with batching"""
+        if batch_size is None:
+            batch_size = self.config.get('rating_batch_size', 8)  # Default batch size for rating
+        
+        ratings = []
+        
+        with torch.no_grad():
+            # Process samples in batches for GPU efficiency
+            for i in range(0, len(samples), batch_size):
+                batch_samples = samples[i:i + batch_size]
+                
+                # Create batched tensor from all samples in this batch
+                batch_tokens = []
+                for sample in batch_samples:
+                    batch_tokens.append(sample['tokens'])
+                
+                # Convert to tensor (batch_size, sequence_length)
+                tokens_tensor = torch.tensor(batch_tokens, device=self.config['device'])
+                
+                # Calculate self-confidence scores for entire batch
+                confidence_scores = calculate_selfconfidence_ratio(
+                    model=model,
+                    tokens=tokens_tensor,
+                    mask_token_id=self.vocab_info['mask_token_id'],
+                    device=self.config['device'],
+                    ctx=self.ctx
+                )
+                
+                # Store ratings for each sample in the batch
+                for j, sample in enumerate(batch_samples):
+                    rating = {
+                        'sample_model_id': sample['model_id'],
+                        'sample_id': sample['sample_id'],
+                        'rater_model_id': rater_model_id,
+                        'confidence_score': confidence_scores[j],  # j-th sample in batch
+                        'log_prob': confidence_scores[j]
+                    }
+                    ratings.append(rating)
+        
+        return ratings
+    
+    def rate_all_samples(self, models, all_samples):
+        """Each model rates all other models' samples"""
+        print(f"\n{'='*80}")
+        print("CROSS-MODEL RATING PHASE")
+        print(f"{'='*80}")
+        
+        all_ratings = {}
+        
+        for rater_model_id, rater_model in models.items():
+            print(f"\n{rater_model_id} rating samples from other models...")
+            model_ratings = {}
+            
+            for sample_model_id, samples in all_samples.items():
+                if sample_model_id != rater_model_id:  # Don't rate own samples
+                    batch_size = self.config.get('rating_batch_size', 8)
+                    num_batches = (len(samples) + batch_size - 1) // batch_size
+                    print(f"  Rating {len(samples)} samples from {sample_model_id} (using {num_batches} batches of {batch_size})...")
+                    
+                    ratings = self.rate_samples_with_model(rater_model, samples, rater_model_id)
+                    model_ratings[sample_model_id] = ratings
+                    print(f"  ✓ Completed rating {len(ratings)} samples from {sample_model_id}")
+            
+            all_ratings[rater_model_id] = model_ratings
+        
+        print(f"\nRating phase complete")
+        return all_ratings
+
+
+class SampleStats:
+    """Tracks statistics for individual samples"""
+    
+    def __init__(self):
+        self.comparisons = 0
+        self.wins = 0
+        self.losses = 0
+        self.draws = 0
+    
+    def add_result(self, result):
+        """Add a tournament result (WIN/LOSE/DRAW)"""
+        self.comparisons += 1
+        if result == 'WIN':
+            self.wins += 1
+        elif result == 'LOSE':
+            self.losses += 1
+        elif result == 'DRAW':
+            self.draws += 1
+    
+    def get_points(self):
+        """Calculate points using win=3, draw=1, loss=0"""
+        return self.wins * 3 + self.draws * 1
+    
+    def get_win_rate(self):
+        """Calculate win percentage"""
+        if self.comparisons == 0:
+            return 0.0
+        return (self.wins / self.comparisons) * 100
+    
+    def get_avg_points(self):
+        """Calculate average points per comparison"""
+        if self.comparisons == 0:
+            return 0.0
+        return self.get_points() / self.comparisons
+    
+    def __str__(self):
+        if self.comparisons == 0:
+            return "No comparisons"
+        points = self.get_points()
+        win_rate = self.get_win_rate()
+        avg_points = self.get_avg_points()
+        return f"W:{self.wins} D:{self.draws} L:{self.losses} ({self.comparisons} games, {points} pts, {avg_points:.2f} avg pts, {win_rate:.1f}% win rate)"
+
+
+class ELOTracker:
+    """Manages ELO ratings and tournament statistics for models"""
+    
+    def __init__(self, model_names):
+        self.model_names = model_names
+        self.num_models = len(model_names)
+        self.ratings = {name: 1000.0 for name in model_names}
+        self.num_rounds = {name: 0 for name in model_names}
+        self.rating_history = {name: [1000.0] for name in model_names}
+        
+        # Sample-level statistics
+        self.sample_stats = {}  # {(model_id, sample_id): SampleStats}
+    
+    def get_sample_key(self, model_id, sample_id):
+        """Get key for sample statistics"""
+        return (model_id, sample_id)
+    
+    def initialize_sample_stats(self, all_samples):
+        """Initialize statistics for all samples"""
+        for model_id, samples in all_samples.items():
+            for sample in samples:
+                key = self.get_sample_key(model_id, sample['sample_id'])
+                self.sample_stats[key] = SampleStats()
+    
+    def calculate_elo_change(self, rating1, rating2, result):
+        """Calculate ELO rating change for player 1"""
+        K = 32  # ELO K-factor
+        
+        # Expected score
+        expected1 = 1 / (1 + 10 ** ((rating2 - rating1) / 400))
+        
+        # Actual score
+        if result == 'WIN':
+            actual1 = 1.0
+        elif result == 'LOSE':
+            actual1 = 0.0
+        else:  # DRAW
+            actual1 = 0.5
+        
+        # Rating change
+        change = K * (actual1 - expected1)
+        return change
+    
+    def update_elo(self, model1_id, model2_id, result):
+        """Update ELO ratings after a match"""
+        rating1 = self.ratings[model1_id]
+        rating2 = self.ratings[model2_id]
+        
+        change1 = self.calculate_elo_change(rating1, rating2, result)
+        change2 = -change1  # Zero-sum
+        
+        self.ratings[model1_id] += change1
+        self.ratings[model2_id] += change2
+        
+        # Update round counts
+        self.num_rounds[model1_id] += 1
+        self.num_rounds[model2_id] += 1
+        
+        # Store rating history
+        self.rating_history[model1_id].append(self.ratings[model1_id])
+        self.rating_history[model2_id].append(self.ratings[model2_id])
+    
+    def update_sample_stats(self, model1_id, sample1_id, model2_id, sample2_id, result):
+        """Update sample-level statistics"""
+        key1 = self.get_sample_key(model1_id, sample1_id)
+        key2 = self.get_sample_key(model2_id, sample2_id)
+        
+        # Update for sample 1
+        self.sample_stats[key1].add_result(result)
+        
+        # Update for sample 2 (opposite result)
+        if result == 'WIN':
+            opposite_result = 'LOSE'
+        elif result == 'LOSE':
+            opposite_result = 'WIN'
+        else:
+            opposite_result = 'DRAW'
+        
+        self.sample_stats[key2].add_result(opposite_result)
+    
+    def get_rankings(self):
+        """Get models ranked by ELO rating"""
+        return sorted(self.model_names, key=lambda x: self.ratings[x], reverse=True)
+    
+    def get_top_samples(self, all_samples, n=3):
+        """Get top N samples by points"""
+        return self._get_samples_by_rank(all_samples, n, reverse=True)
+    
+    def get_worst_samples(self, all_samples, n=3):
+        """Get worst N samples by points"""
+        return self._get_samples_by_rank(all_samples, n, reverse=False)
+    
+    def _get_samples_by_rank(self, all_samples, n, reverse=True):
+        """Get samples ranked by points and win rate"""
+        sample_scores = []
+        
+        for (model_id, sample_id), stats in self.sample_stats.items():
+            if stats.comparisons > 0:  # Only samples that participated in comparisons
+                # Find the actual sample data
+                sample_data = None
+                for sample in all_samples[model_id]:
+                    if sample['sample_id'] == sample_id:
+                        sample_data = sample
+                        break
+                
+                if sample_data:
+                    sample_scores.append({
+                        'model_id': model_id,
+                        'sample_id': sample_id,
+                        'sample_text': sample_data['text'],  # Store full text
+                        'sample_text_preview': sample_data['text'][:200] + '...' if len(sample_data['text']) > 200 else sample_data['text'],
+                        'stats': stats,
+                        'points': stats.get_points()
+                    })
+        
+        # Sort by average points per comparison, then by total points as tiebreaker
+        sample_scores.sort(key=lambda x: (x['points'] / x['stats'].comparisons if x['stats'].comparisons > 0 else 0, x['points']), reverse=reverse)
+        return sample_scores[:n]
+
+
+class TournamentManager:
+    """Manages pairwise tournament comparisons"""
+    
+    def __init__(self, config, elo_tracker):
+        self.config = config
+        self.elo_tracker = elo_tracker
+        self.total_comparisons = 0
+    
+    def determine_winner(self, model1_ratings, model2_ratings):
+        """Determine winner based on ratings from other models"""
+        # Get ratings for each sample from all other models
+        model1_scores = [rating['confidence_score'] for rating in model1_ratings]
+        model2_scores = [rating['confidence_score'] for rating in model2_ratings]
+        
+        # Count how many rater models prefer each sample
+        model1_wins = 0
+        model2_wins = 0
+        
+        for score1, score2 in zip(model1_scores, model2_scores):
+            if score1 > score2: #the more surprising the better
+                model1_wins += 1
+            elif score2 > score1: #the more surprising the better
+                model2_wins += 1
+            # Ties don't count towards either
+        
+        total_raters = len(model1_scores)
+        model1_win_rate = model1_wins / total_raters if total_raters > 0 else 0
+        model2_win_rate = model2_wins / total_raters if total_raters > 0 else 0
+        
+        # Determine result (60% threshold)
+        if model1_win_rate >= 0.6:
+            return 'WIN'
+        elif model2_win_rate >= 0.6:
+            return 'LOSE'
+        else:
+            return 'DRAW'
+    
+    def _select_weighted_sample(self, model_id, samples):
+        """Select a sample with weighting favoring less popular (less compared) samples"""
+        sample_weights = []
+        
+        for i, sample in enumerate(samples):
+            sample_key = self.elo_tracker.get_sample_key(model_id, sample['sample_id'])
+            if sample_key in self.elo_tracker.sample_stats:
+                comparisons = self.elo_tracker.sample_stats[sample_key].comparisons
+                # Invert the weight: more comparisons = lower weight
+                # Add 1 to avoid division by zero and give new samples high weight
+                weight = 1.0 / (comparisons + 1)
+            else:
+                # New sample with no comparisons gets maximum weight
+                weight = 1.0
+            sample_weights.append(weight)
+        
+        # Weighted random selection
+        total_weight = sum(sample_weights)
+        if total_weight == 0:
+            # Fallback to uniform random if all weights are zero
+            return random.randint(0, len(samples) - 1)
+        
+        # Generate random number and select based on cumulative weights
+        random_val = random.random() * total_weight
+        cumulative_weight = 0
+        
+        for i, weight in enumerate(sample_weights):
+            cumulative_weight += weight
+            if random_val <= cumulative_weight:
+                return i
+        
+        # Fallback (should not happen)
+        return len(samples) - 1
+    
+    def run_single_tournament(self, all_samples, all_ratings):
+        """Run a single tournament round"""
+        model_names = list(all_samples.keys())
+        
+        # Generate random matchup
+        model1_id = random.choice(model_names)
+        model2_id = random.choice([m for m in model_names if m != model1_id])
+        
+        # Use weighted selection to favor less popular samples
+        sample1_id = self._select_weighted_sample(model1_id, all_samples[model1_id])
+        sample2_id = self._select_weighted_sample(model2_id, all_samples[model2_id])
+        
+        # Collect ratings for both samples from all other models
+        model1_ratings = []
+        model2_ratings = []
+        
+        for rater_model_id in model_names:
+            if rater_model_id != model1_id and rater_model_id != model2_id:
+                # Get rating for sample1 from this rater
+                for rating in all_ratings[rater_model_id].get(model1_id, []):
+                    if rating['sample_id'] == sample1_id:
+                        model1_ratings.append(rating)
+                        break
+                
+                # Get rating for sample2 from this rater
+                for rating in all_ratings[rater_model_id].get(model2_id, []):
+                    if rating['sample_id'] == sample2_id:
+                        model2_ratings.append(rating)
+                        break
+        
+        if len(model1_ratings) == 0 or len(model2_ratings) == 0:
+            return False  # Skip if no ratings available
+        
+        # Determine winner
+        result = self.determine_winner(model1_ratings, model2_ratings)
+        
+        # Update ELO ratings
+        self.elo_tracker.update_elo(model1_id, model2_id, result)
+        
+        # Update sample statistics
+        self.elo_tracker.update_sample_stats(model1_id, sample1_id, model2_id, sample2_id, result)
+        
+        self.total_comparisons += 1
+        
+        if self.config['verbose'] and self.total_comparisons % 20 == 0:
+            print(f"  Completed {self.total_comparisons} comparisons...")
+        
+        return True
+    
+    def run_tournaments(self, all_samples, all_ratings):
+        """Run tournaments until stopping criteria met"""
+        print(f"\n{'='*80}")
+        print("TOURNAMENT PHASE")
+        print(f"{'='*80}")
+        
+        print(f"Running tournaments until all models have {self.config['num_challenges']} matches...")
+        
+        while True:
+            # Check if all models have enough rounds
+            min_rounds = min(self.elo_tracker.num_rounds.values())
+            if min_rounds >= self.config['num_challenges']:
+                break
+            
+            # Run a single tournament
+            success = self.run_single_tournament(all_samples, all_ratings)
+            if not success and self.total_comparisons > 0:
+                print("Warning: Could not generate valid comparison, continuing...")
+        
+        print(f"\nTournament phase complete: {self.total_comparisons} total comparisons")
+
+
+class ModelEvaluator:
+    """Main orchestrator for model evaluation"""
+    
+    def __init__(self, config):
+        self.config = config
+        
+    def run_evaluation(self):
+        """Run complete model evaluation pipeline"""
+        print(f"Model Quality Assessment - Evaluating {len(self.config['checkpoints'])} models")
+        print(f"Configuration: {self.config['batch_size']} samples per model, {self.config['num_challenges']} challenges")
+        print(f"Sequence length: {self.config['sequence_length']}, Seed: {self.config['seed']}")
+        
+        # Stage 1: Load models
+        model_loader = ModelLoader(self.config)
+        models, vocab_info, remasking_model = model_loader.load_all_models()
+        
+        # Stage 2: Generate samples
+        sample_generator = SampleGenerator(self.config, vocab_info, remasking_model)
+        all_samples = sample_generator.generate_all_samples(models)
+        
+        # Stage 3: Rate samples
+        model_rater = ModelRater(self.config, vocab_info)
+        all_ratings = model_rater.rate_all_samples(models, all_samples)
+        
+        # Stage 4: Run tournaments
+        elo_tracker = ELOTracker(model_loader.model_names)
+        elo_tracker.initialize_sample_stats(all_samples)
+        
+        tournament_manager = TournamentManager(self.config, elo_tracker)
+        tournament_manager.run_tournaments(all_samples, all_ratings)
+        
+        # Stage 5: Generate results
+        self.generate_results(elo_tracker, all_samples, model_loader.model_names)
+        
+        return elo_tracker, all_samples
+    
+    def generate_results(self, elo_tracker, all_samples, model_names):
+        """Generate and display final results"""
+        print(f"\n{'='*80}")
+        print("FINAL RESULTS")
+        print(f"{'='*80}")
+        
+        # Model rankings
+        rankings = elo_tracker.get_rankings()
+        print("\nModel Rankings (by ELO rating):")
+        print("-" * 50)
+        for i, model_id in enumerate(rankings):
+            rating = elo_tracker.ratings[model_id]
+            rounds = elo_tracker.num_rounds[model_id]
+            checkpoint_name = self.config['checkpoints'][int(model_id.split('_')[1])]
+            print(f"{i+1}. {model_id} ({checkpoint_name})")
+            print(f"   ELO: {rating:.1f} | Rounds: {rounds}")
+        
+        # Top samples
+        top_samples = elo_tracker.get_top_samples(all_samples, 3)
+        print(f"\nTop 3 Samples (by points: win=3, draw=1, loss=0):")
+        print("=" * 100)
+        for i, sample_info in enumerate(top_samples):
+            print(f"\n{i+1}. {sample_info['model_id']} Sample #{sample_info['sample_id']}")
+            print(f"   Stats: {sample_info['stats']}")
+            print(f"   Full Text:")
+            print(f"   {'-' * 90}")
+            # Print full text with proper indentation
+            full_text = sample_info['sample_text']
+            # Split into lines and indent each line for better readability
+            for line in full_text.split('\n'):
+                print(f"   {line}")
+            print(f"   {'-' * 90}")
+        
+        # Worst samples
+        worst_samples = elo_tracker.get_worst_samples(all_samples, 3)
+        print(f"\nWorst 3 Samples (by points: win=3, draw=1, loss=0):")
+        print("=" * 100)
+        for i, sample_info in enumerate(worst_samples):
+            print(f"\n{i+1}. {sample_info['model_id']} Sample #{sample_info['sample_id']}")
+            print(f"   Stats: {sample_info['stats']}")
+            print(f"   Full Text:")
+            print(f"   {'-' * 90}")
+            # Print full text with proper indentation
+            full_text = sample_info['sample_text']
+            # Split into lines and indent each line for better readability
+            for line in full_text.split('\n'):
+                print(f"   {line}")
+            print(f"   {'-' * 90}")
+        
+        # Save results to file
+        results_file = os.path.join(self.config['out_dir'], self.config['results_file'])
+        with open(results_file, 'w') as f:
+            f.write(f"Model Quality Assessment Results\n")
+            f.write(f"Generated on: {torch.cuda.get_device_name() if torch.cuda.is_available() else 'CPU'}\n")
+            f.write(f"Configuration: {self.config['batch_size']} samples per model, {self.config['num_challenges']} challenges\n\n")
+            
+            f.write("Model Rankings (by ELO rating):\n")
+            f.write("-" * 50 + "\n")
+            for i, model_id in enumerate(rankings):
+                rating = elo_tracker.ratings[model_id]
+                rounds = elo_tracker.num_rounds[model_id]
+                checkpoint_name = self.config['checkpoints'][int(model_id.split('_')[1])]
+                f.write(f"{i+1}. {model_id} ({checkpoint_name})\n")
+                f.write(f"   ELO: {rating:.1f} | Rounds: {rounds}\n")
+            
+            f.write(f"\nTop 3 Samples (by points):\n")
+            f.write("=" * 100 + "\n")
+            for i, sample_info in enumerate(top_samples):
+                f.write(f"\n{i+1}. {sample_info['model_id']} Sample #{sample_info['sample_id']}\n")
+                f.write(f"   Stats: {sample_info['stats']}\n")
+                f.write(f"   Full Text:\n")
+                f.write(f"   {'-' * 90}\n")
+                # Write full text with proper indentation
+                full_text = sample_info['sample_text']
+                for line in full_text.split('\n'):
+                    f.write(f"   {line}\n")
+                f.write(f"   {'-' * 90}\n")
+            
+            # Worst samples
+            worst_samples = elo_tracker.get_worst_samples(all_samples, 3)
+            f.write(f"\nWorst 3 Samples (by points):\n")
+            f.write("=" * 100 + "\n")
+            for i, sample_info in enumerate(worst_samples):
+                f.write(f"\n{i+1}. {sample_info['model_id']} Sample #{sample_info['sample_id']}\n")
+                f.write(f"   Stats: {sample_info['stats']}\n")
+                f.write(f"   Full Text:\n")
+                f.write(f"   {'-' * 90}\n")
+                # Write full text with proper indentation
+                full_text = sample_info['sample_text']
+                for line in full_text.split('\n'):
+                    f.write(f"   {line}\n")
+                f.write(f"   {'-' * 90}\n")
+        
+        print(f"\nResults saved to: {results_file}")
+
+
+if __name__ == "__main__":
+    # Initialize random seed
+    torch.manual_seed(EVALUATION_CONFIG['seed'])
+    if torch.cuda.is_available():
+        torch.cuda.manual_seed(EVALUATION_CONFIG['seed'])
+    random.seed(EVALUATION_CONFIG['seed'])
+    
+    torch.backends.cuda.matmul.allow_tf32 = True
+    torch.backends.cudnn.allow_tf32 = True
+    
+    # Run evaluation
+    evaluator = ModelEvaluator(EVALUATION_CONFIG)
+    elo_tracker, all_samples = evaluator.run_evaluation()
