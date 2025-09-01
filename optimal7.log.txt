@@ -4834,4 +4834,489 @@ iter 2000: loss 3.4034, time 6576.59ms, mfu 3.64%
   validation: 5962.31ms (data: 22.52ms, forward: 0.00ms, loss: 71.95ms)
 Masking: stage=0 (sticky), actual_ratio=0.505, target=0.4, p1=0.1, p2=0.3
 iter 2020: loss 3.3552, time 1397.34ms, mfu 3.69%
-  data: 247.6ms, grad_accum: 1404.3ms (fw: 13.3ms, bw: 194.8
+  data: 247.6ms, grad_accum: 1404.3ms (fw: 13.3ms, bw: 194.8ms)
+  grad_proc: 20.9ms, optimizer: 1.7ms, param_check: 22.9ms
+  loss_proc: 0.0ms, instability: 77.3ms
+  cleanup: 0.2ms, gpu_sync: 0.5ms
+  measured: 1450.5ms, unaccounted: -53.1ms (-3.8%)
+iter 2040: loss 3.2337, time 1352.79ms, mfu 3.75%
+  data: 243.5ms, grad_accum: 1564.2ms (fw: 13.2ms, bw: 192.1ms)
+  grad_proc: 17.6ms, optimizer: 1.4ms, param_check: 19.5ms
+  loss_proc: 0.0ms, instability: 75.1ms
+  cleanup: 0.3ms, gpu_sync: 0.6ms
+  measured: 1603.7ms, unaccounted: -250.9ms (-18.5%)
+iter 2060: loss 3.1378, time 1334.87ms, mfu 3.81%
+  data: 246.6ms, grad_accum: 1500.2ms (fw: 14.4ms, bw: 187.5ms)
+  grad_proc: 19.0ms, optimizer: 2.0ms, param_check: 20.0ms
+  loss_proc: 0.0ms, instability: 72.8ms
+  cleanup: 0.3ms, gpu_sync: 0.6ms
+  measured: 1542.1ms, unaccounted: -207.2ms (-15.5%)
+iter 2080: loss 3.1939, time 2683.15ms, mfu 3.65%
+  data: 217.0ms, grad_accum: 1433.0ms (fw: 12.6ms, bw: 172.7ms)
+  grad_proc: 18.6ms, optimizer: 1.4ms, param_check: 19.6ms
+  loss_proc: 0.0ms, instability: 211.3ms
+  cleanup: 0.2ms, gpu_sync: 0.6ms
+  measured: 1473.3ms, unaccounted: 1209.8ms (45.1%)
+iter 2100: loss 3.2039, time 1996.75ms, mfu 3.57%
+  data: 220.0ms, grad_accum: 1331.0ms (fw: 12.4ms, bw: 173.6ms)
+  grad_proc: 17.6ms, optimizer: 1.7ms, param_check: 20.3ms
+  loss_proc: 0.0ms, instability: 141.5ms
+  cleanup: 0.5ms, gpu_sync: 0.6ms
+  measured: 1371.8ms, unaccounted: 625.0ms (31.3%)
+iter 2120: loss 3.3010, time 1365.75ms, mfu 3.64%
+  data: 251.6ms, grad_accum: 1388.2ms (fw: 12.9ms, bw: 206.4ms)
+  grad_proc: 19.0ms, optimizer: 1.4ms, param_check: 24.2ms
+  loss_proc: 0.0ms, instability: 76.3ms
+  cleanup: 0.1ms, gpu_sync: 0.6ms
+  measured: 1433.5ms, unaccounted: -67.8ms (-5.0%)
+iter 2140: loss 3.2430, time 1292.67ms, mfu 3.73%
+  data: 233.0ms, grad_accum: 1312.9ms (fw: 13.4ms, bw: 173.5ms)
+  grad_proc: 19.6ms, optimizer: 1.9ms, param_check: 23.6ms
+  loss_proc: 0.0ms, instability: 70.0ms
+  cleanup: 0.2ms, gpu_sync: 0.6ms
+  measured: 1358.9ms, unaccounted: -66.2ms (-5.1%)
+iter 2160: loss 3.2989, time 1280.87ms, mfu 3.81%
+  data: 230.6ms, grad_accum: 1312.5ms (fw: 12.7ms, bw: 185.5ms)
+  grad_proc: 15.8ms, optimizer: 1.7ms, param_check: 18.3ms
+  loss_proc: 0.0ms, instability: 70.5ms
+  cleanup: 0.4ms, gpu_sync: 0.5ms
+  measured: 1349.4ms, unaccounted: -68.5ms (-5.3%)
+iter 2180: loss 3.2273, time 1294.09ms, mfu 3.88%
+  data: 225.8ms, grad_accum: 1317.5ms (fw: 12.3ms, bw: 180.3ms)
+  grad_proc: 16.6ms, optimizer: 1.4ms, param_check: 18.3ms
+  loss_proc: 0.0ms, instability: 72.1ms
+  cleanup: 0.7ms, gpu_sync: 0.5ms
+  measured: 1355.1ms, unaccounted: -61.0ms (-4.7%)
+
+--- Starting validation at iteration 2200 ---
+Using validation set with samples from all 14 stages
+  Validation complete: 20 batches processed (320 samples), avg loss = 3.0366
+  Per-stage validation losses:
+    Stage 0 (sticky): 2.8502 (23 samples) - ratio=0.4
+    Stage 1 (sticky): 3.1200 (16 samples) - ratio=0.6
+    Stage 2 (random): 3.1842 (23 samples) - max_ratio=0.5
+    Stage 3 (sticky): 3.2172 (7 samples) - ratio=0.6
+    Stage 4 (sticky): 2.7164 (16 samples) - ratio=0.6
+    Stage 5 (random): 2.9454 (23 samples) - max_ratio=0.2
+    Stage 6 (sticky): 3.1117 (7 samples) - ratio=0.2
+    Stage 7 (sticky): 3.9387 (16 samples) - ratio=0.4
+    Stage 8 (sticky): 3.2584 (23 samples) - ratio=0.4
+    Stage 9 (sticky): 3.1229 (7 samples) - ratio=0.6
+    Stage 10 (sticky): 2.4671 (23 samples) - ratio=0.7
+    Stage 11 (sticky): 2.8383 (16 samples) - ratio=0.8
+    Stage 12 (sticky): 2.9978 (7 samples) - ratio=0.8
+    Stage 13 (sticky): 3.1289 (23 samples) - ratio=0.9
+--- Validation complete ---
+step 2200: train loss 3.2087, val loss 3.0366, lr 0.000997
+Stage 0 (sticky): target_ratio=0.4, p1=0.1, p2=0.3, stale_count=0
+  val model vs random: 28.53x better
+  val avg correct prob: 0.3566 (random: 0.0125)
+  val signal to noise: 13.19 (median: 0.81)
+  Most likely guess correct P %: 46.5%
+  Stage 0: New best val loss 3.0366, reset stale count to 0
+
+saving checkpoint to out/ckpt_unmasking_2200.pt
+iter 2200: loss 3.3188, time 6234.14ms, mfu 3.58%
+  data: 223.5ms, grad_accum: 1446.7ms (fw: 27.9ms, bw: 175.8ms)
+  grad_proc: 17.6ms, optimizer: 1.6ms, param_check: 18.7ms
+  loss_proc: 0.0ms, instability: 58.3ms
+  cleanup: 0.4ms, gpu_sync: 0.5ms
+  measured: 1485.5ms, unaccounted: 4748.6ms (76.2%)
+  validation: 5829.21ms (data: 22.97ms, forward: 0.00ms, loss: 65.96ms)
+Masking: stage=0 (sticky), actual_ratio=0.486, target=0.4, p1=0.1, p2=0.3
+iter 2220: loss 3.4699, time 1401.66ms, mfu 3.64%
+  data: 244.5ms, grad_accum: 1484.1ms (fw: 14.0ms, bw: 176.9ms)
+  grad_proc: 20.5ms, optimizer: 2.0ms, param_check: 23.9ms
+  loss_proc: 0.0ms, instability: 75.3ms
+  cleanup: 0.4ms, gpu_sync: 0.4ms
+  measured: 1531.4ms, unaccounted: -129.7ms (-9.3%)
+iter 2240: loss 3.4180, time 1297.76ms, mfu 3.72%
+  data: 250.8ms, grad_accum: 1498.4ms (fw: 13.3ms, bw: 177.1ms)
+  grad_proc: 33.3ms, optimizer: 1.5ms, param_check: 31.4ms
+  loss_proc: 0.0ms, instability: 72.0ms
+  cleanup: 0.3ms, gpu_sync: 0.4ms
+  measured: 1565.1ms, unaccounted: -267.4ms (-20.6%)
+iter 2260: loss 3.3313, time 1310.33ms, mfu 3.79%
+  data: 228.5ms, grad_accum: 1314.7ms (fw: 14.5ms, bw: 182.0ms)
+  grad_proc: 17.8ms, optimizer: 1.4ms, param_check: 19.3ms
+  loss_proc: 0.0ms, instability: 70.4ms
+  cleanup: 0.3ms, gpu_sync: 0.3ms
+  measured: 1353.7ms, unaccounted: -43.4ms (-3.3%)
+iter 2280: loss 3.3230, time 1268.44ms, mfu 3.87%
+  data: 227.6ms, grad_accum: 1462.8ms (fw: 12.4ms, bw: 176.3ms)
+  grad_proc: 19.6ms, optimizer: 1.9ms, param_check: 21.9ms
+  loss_proc: 0.0ms, instability: 70.2ms
+  cleanup: 0.5ms, gpu_sync: 0.3ms
+  measured: 1507.0ms, unaccounted: -238.5ms (-18.8%)
+iter 2300: loss 3.1876, time 1267.78ms, mfu 3.94%
+  data: 231.8ms, grad_accum: 1301.8ms (fw: 12.7ms, bw: 186.7ms)
+  grad_proc: 16.8ms, optimizer: 1.5ms, param_check: 18.2ms
+  loss_proc: 0.0ms, instability: 70.2ms
+  cleanup: 0.5ms, gpu_sync: 0.2ms
+  measured: 1338.9ms, unaccounted: -71.2ms (-5.6%)
+iter 2320: loss 3.1552, time 2082.50ms, mfu 3.83%
+  data: 218.4ms, grad_accum: 1331.1ms (fw: 12.5ms, bw: 171.3ms)
+  grad_proc: 16.8ms, optimizer: 1.3ms, param_check: 20.4ms
+  loss_proc: 0.0ms, instability: 150.4ms
+  cleanup: 0.1ms, gpu_sync: 0.3ms
+  measured: 1369.9ms, unaccounted: 712.6ms (34.2%)
+iter 2340: loss 3.3126, time 1285.36ms, mfu 3.90%
+  data: 254.6ms, grad_accum: 1379.9ms (fw: 12.7ms, bw: 210.3ms)
+  grad_proc: 17.7ms, optimizer: 1.5ms, param_check: 20.8ms
+  loss_proc: 0.0ms, instability: 70.4ms
+  cleanup: 0.1ms, gpu_sync: 0.2ms
+  measured: 1420.2ms, unaccounted: -134.9ms (-10.5%)
+iter 2360: loss 3.4460, time 1273.27ms, mfu 3.96%
+  data: 212.9ms, grad_accum: 1247.1ms (fw: 12.3ms, bw: 169.4ms)
+  grad_proc: 17.5ms, optimizer: 1.9ms, param_check: 18.8ms
+  loss_proc: 0.0ms, instability: 70.9ms
+  cleanup: 0.3ms, gpu_sync: 0.2ms
+  measured: 1285.9ms, unaccounted: -12.6ms (-1.0%)
+iter 2380: loss 3.2707, time 1429.57ms, mfu 3.97%
+  data: 228.1ms, grad_accum: 1306.9ms (fw: 16.6ms, bw: 178.9ms)
+  grad_proc: 18.0ms, optimizer: 1.8ms, param_check: 20.2ms
+  loss_proc: 0.0ms, instability: 78.2ms
+  cleanup: 0.2ms, gpu_sync: 0.3ms
+  measured: 1347.3ms, unaccounted: 82.2ms (5.8%)
+
+--- Starting validation at iteration 2400 ---
+Using validation set with samples from all 14 stages
+  Validation complete: 20 batches processed (320 samples), avg loss = 3.0087
+  Per-stage validation losses:
+    Stage 0 (sticky): 2.8413 (23 samples) - ratio=0.4
+    Stage 1 (sticky): 3.1021 (16 samples) - ratio=0.6
+    Stage 2 (random): 3.1811 (23 samples) - max_ratio=0.5
+    Stage 3 (sticky): 3.1561 (7 samples) - ratio=0.6
+    Stage 4 (sticky): 2.7102 (16 samples) - ratio=0.6
+    Stage 5 (random): 2.9385 (23 samples) - max_ratio=0.2
+    Stage 6 (sticky): 3.1007 (7 samples) - ratio=0.2
+    Stage 7 (sticky): 3.8010 (16 samples) - ratio=0.4
+    Stage 8 (sticky): 3.1714 (23 samples) - ratio=0.4
+    Stage 9 (sticky): 3.0812 (7 samples) - ratio=0.6
+    Stage 10 (sticky): 2.4543 (23 samples) - ratio=0.7
+    Stage 11 (sticky): 2.8219 (16 samples) - ratio=0.8
+    Stage 12 (sticky): 2.9909 (7 samples) - ratio=0.8
+    Stage 13 (sticky): 3.1181 (23 samples) - ratio=0.9
+--- Validation complete ---
+step 2400: train loss 3.1786, val loss 3.0087, lr 0.000989
+Stage 0 (sticky): target_ratio=0.4, p1=0.1, p2=0.3, stale_count=0
+  val model vs random: 29.59x better
+  val avg correct prob: 0.3699 (random: 0.0125)
+  val signal to noise: 15.01 (median: 0.82)
+  Most likely guess correct P %: 46.8%
+  Stage 0: New best val loss 3.0087, reset stale count to 0
+
+saving checkpoint to out/ckpt_unmasking_2400.pt
+iter 2400: loss 3.2182, time 5984.05ms, mfu 3.67%
+  data: 224.3ms, grad_accum: 1368.2ms (fw: 41.1ms, bw: 174.2ms)
+  grad_proc: 17.8ms, optimizer: 1.6ms, param_check: 20.3ms
+  loss_proc: 0.0ms, instability: 51.3ms
+  cleanup: 0.5ms, gpu_sync: 0.3ms
+  measured: 1408.7ms, unaccounted: 4575.4ms (76.5%)
+  validation: 5694.88ms (data: 21.29ms, forward: 0.00ms, loss: 66.05ms)
+Masking: stage=0 (sticky), actual_ratio=0.527, target=0.4, p1=0.1, p2=0.3
+iter 2420: loss 3.4445, time 1323.54ms, mfu 3.75%
+  data: 219.5ms, grad_accum: 1421.0ms (fw: 13.5ms, bw: 172.4ms)
+  grad_proc: 19.2ms, optimizer: 1.5ms, param_check: 20.6ms
+  loss_proc: 0.1ms, instability: 73.4ms
+  cleanup: 0.4ms, gpu_sync: 0.3ms
+  measured: 1463.0ms, unaccounted: -139.4ms (-10.5%)
+iter 2440: loss 3.4477, time 1498.86ms, mfu 3.76%
+  data: 311.4ms, grad_accum: 1531.7ms (fw: 15.1ms, bw: 238.3ms)
+  grad_proc: 21.3ms, optimizer: 2.1ms, param_check: 31.3ms
+  loss_proc: 0.0ms, instability: 70.5ms
+  cleanup: 0.6ms, gpu_sync: 0.2ms
+  measured: 1587.2ms, unaccounted: -88.3ms (-5.9%)
+iter 2460: loss 3.3833, time 1326.16ms, mfu 3.82%
+  data: 222.6ms, grad_accum: 1436.9ms (fw: 13.0ms, bw: 174.4ms)
+  grad_proc: 19.4ms, optimizer: 1.6ms, param_check: 19.4ms
+  loss_proc: 0.0ms, instability: 73.2ms
+  cleanup: 0.3ms, gpu_sync: 0.2ms
+  measured: 1477.8ms, unaccounted: -151.7ms (-11.4%)
+iter 2480: loss 3.3254, time 1315.63ms, mfu 3.88%
+  data: 218.5ms, grad_accum: 1273.7ms (fw: 12.8ms, bw: 173.8ms)
+  grad_proc: 17.2ms, optimizer: 2.0ms, param_check: 18.9ms
+  loss_proc: 0.0ms, instability: 73.5ms
+  cleanup: 0.2ms, gpu_sync: 0.3ms
+  measured: 1312.3ms, unaccounted: 3.3ms (0.3%)
+iter 2500: loss 3.2719, time 1326.22ms, mfu 3.93%
+  data: 251.1ms, grad_accum: 1604.0ms (fw: 13.6ms, bw: 198.7ms)
+  grad_proc: 19.0ms, optimizer: 1.8ms, param_check: 21.3ms
+  loss_proc: 0.1ms, instability: 72.6ms
+  cleanup: 0.3ms, gpu_sync: 0.3ms
+  measured: 1646.7ms, unaccounted: -320.4ms (-24.2%)
+iter 2520: loss 3.1967, time 1335.22ms, mfu 3.97%
+  data: 225.7ms, grad_accum: 1432.1ms (fw: 12.8ms, bw: 175.9ms)
+  grad_proc: 16.7ms, optimizer: 1.5ms, param_check: 20.1ms
+  loss_proc: 0.0ms, instability: 73.0ms
+  cleanup: 0.3ms, gpu_sync: 0.3ms
+  measured: 1471.0ms, unaccounted: -135.8ms (-10.2%)
+iter 2540: loss 3.1990, time 1320.43ms, mfu 4.02%
+  data: 220.4ms, grad_accum: 1277.4ms (fw: 12.7ms, bw: 173.9ms)
+  grad_proc: 18.6ms, optimizer: 1.6ms, param_check: 21.0ms
+  loss_proc: 0.0ms, instability: 74.2ms
+  cleanup: 0.2ms, gpu_sync: 0.4ms
+  measured: 1319.2ms, unaccounted: 1.3ms (0.1%)
+iter 2560: loss 3.3503, time 1318.28ms, mfu 4.06%
+  data: 222.8ms, grad_accum: 1280.9ms (fw: 13.3ms, bw: 176.1ms)
+  grad_proc: 17.4ms, optimizer: 1.7ms, param_check: 19.6ms
+  loss_proc: 0.0ms, instability: 72.7ms
+  cleanup: 0.2ms, gpu_sync: 0.5ms
+  measured: 1320.2ms, unaccounted: -1.9ms (-0.1%)
+iter 2580: loss 3.0644, time 1303.78ms, mfu 4.10%
+  data: 222.5ms, grad_accum: 1354.3ms (fw: 13.0ms, bw: 175.2ms)
+  grad_proc: 17.1ms, optimizer: 1.7ms, param_check: 20.6ms
+  loss_proc: 0.0ms, instability: 72.1ms
+  cleanup: 0.2ms, gpu_sync: 0.5ms
+  measured: 1394.3ms, unaccounted: -90.5ms (-6.9%)
+
+--- Starting validation at iteration 2600 ---
+Using validation set with samples from all 14 stages
+  Validation complete: 20 batches processed (320 samples), avg loss = 2.9603
+  Per-stage validation losses:
+    Stage 0 (sticky): 2.7758 (23 samples) - ratio=0.4
+    Stage 1 (sticky): 3.0492 (16 samples) - ratio=0.6
+    Stage 2 (random): 3.1329 (23 samples) - max_ratio=0.5
+    Stage 3 (sticky): 3.0701 (7 samples) - ratio=0.6
+    Stage 4 (sticky): 2.6685 (16 samples) - ratio=0.6
+    Stage 5 (random): 2.9190 (23 samples) - max_ratio=0.2
+    Stage 6 (sticky): 3.0443 (7 samples) - ratio=0.2
+    Stage 7 (sticky): 3.7722 (16 samples) - ratio=0.4
+    Stage 8 (sticky): 3.0880 (23 samples) - ratio=0.4
+    Stage 9 (sticky): 3.0423 (7 samples) - ratio=0.6
+    Stage 10 (sticky): 2.3827 (23 samples) - ratio=0.7
+    Stage 11 (sticky): 2.7748 (16 samples) - ratio=0.8
+    Stage 12 (sticky): 2.9764 (7 samples) - ratio=0.8
+    Stage 13 (sticky): 3.1052 (23 samples) - ratio=0.9
+--- Validation complete ---
+step 2600: train loss 3.1411, val loss 2.9603, lr 0.000976
+Stage 0 (sticky): target_ratio=0.4, p1=0.1, p2=0.3, stale_count=0
+  val model vs random: 29.90x better
+  val avg correct prob: 0.3738 (random: 0.0125)
+  val signal to noise: 15.27 (median: 0.87)
+  Most likely guess correct P %: 47.8%
+  Stage 0: New best val loss 2.9603, reset stale count to 0
+
+saving checkpoint to out/ckpt_unmasking_2600.pt
+iter 2600: loss 3.3346, time 5327.51ms, mfu 3.79%
+  data: 235.0ms, grad_accum: 1332.3ms (fw: 13.0ms, bw: 176.7ms)
+  grad_proc: 19.0ms, optimizer: 1.7ms, param_check: 22.9ms
+  loss_proc: 0.0ms, instability: 75.4ms
+  cleanup: 0.3ms, gpu_sync: 0.5ms
+  measured: 1376.7ms, unaccounted: 3950.9ms (74.2%)
+  validation: 5555.73ms (data: 19.65ms, forward: 0.00ms, loss: 64.28ms)
+Masking: stage=0 (sticky), actual_ratio=0.518, target=0.4, p1=0.1, p2=0.3
+iter 2620: loss 3.0370, time 1277.85ms, mfu 3.87%
+  data: 213.9ms, grad_accum: 1306.7ms (fw: 13.1ms, bw: 169.0ms)
+  grad_proc: 17.1ms, optimizer: 1.6ms, param_check: 19.1ms
+  loss_proc: 0.0ms, instability: 69.6ms
+  cleanup: 0.4ms, gpu_sync: 0.5ms
+  measured: 1345.4ms, unaccounted: -67.6ms (-5.3%)
+iter 2640: loss 3.3126, time 1284.58ms, mfu 3.94%
+  data: 215.2ms, grad_accum: 1309.9ms (fw: 13.2ms, bw: 169.5ms)
+  grad_proc: 18.1ms, optimizer: 1.7ms, param_check: 20.3ms
+  loss_proc: 0.0ms, instability: 69.8ms
+  cleanup: 0.2ms, gpu_sync: 0.5ms
+  measured: 1350.6ms, unaccounted: -66.0ms (-5.1%)
+iter 2660: loss 3.1931, time 1276.50ms, mfu 4.00%
+  data: 212.9ms, grad_accum: 1234.8ms (fw: 12.7ms, bw: 167.8ms)
+  grad_proc: 17.2ms, optimizer: 1.5ms, param_check: 19.3ms
+  loss_proc: 0.0ms, instability: 70.1ms
+  cleanup: 0.4ms, gpu_sync: 0.5ms
+  measured: 1273.7ms, unaccounted: 2.8ms (0.2%)
+iter 2680: loss 3.1969, time 1269.84ms, mfu 4.06%
+  data: 214.1ms, grad_accum: 1237.0ms (fw: 12.7ms, bw: 168.9ms)
+  grad_proc: 16.1ms, optimizer: 1.6ms, param_check: 18.1ms
+  loss_proc: 0.0ms, instability: 70.0ms
+  cleanup: 0.3ms, gpu_sync: 0.4ms
+  measured: 1273.6ms, unaccounted: -3.7ms (-0.3%)
+iter 2700: loss 3.3478, time 1271.16ms, mfu 4.11%
+  data: 212.1ms, grad_accum: 1237.6ms (fw: 12.6ms, bw: 167.9ms)
+  grad_proc: 16.0ms, optimizer: 1.4ms, param_check: 18.9ms
+  loss_proc: 0.0ms, instability: 70.0ms
+  cleanup: 0.2ms, gpu_sync: 0.4ms
+  measured: 1274.4ms, unaccounted: -3.3ms (-0.3%)
+iter 2720: loss 3.1018, time 1271.28ms, mfu 4.15%
+  data: 212.7ms, grad_accum: 1367.4ms (fw: 12.7ms, bw: 166.6ms)
+  grad_proc: 18.2ms, optimizer: 1.7ms, param_check: 20.0ms
+  loss_proc: 0.0ms, instability: 69.9ms
+  cleanup: 0.5ms, gpu_sync: 0.3ms
+  measured: 1408.1ms, unaccounted: -136.8ms (-10.8%)
+iter 2740: loss 3.2132, time 1270.88ms, mfu 4.20%
+  data: 211.8ms, grad_accum: 1236.2ms (fw: 12.6ms, bw: 166.6ms)
+  grad_proc: 16.3ms, optimizer: 1.7ms, param_check: 18.2ms
+  loss_proc: 0.0ms, instability: 70.1ms
+  cleanup: 0.6ms, gpu_sync: 0.3ms
+  measured: 1273.3ms, unaccounted: -2.4ms (-0.2%)
+iter 2760: loss 3.4456, time 1293.47ms, mfu 4.23%
+  data: 213.5ms, grad_accum: 1236.3ms (fw: 12.5ms, bw: 167.7ms)
+  grad_proc: 17.1ms, optimizer: 1.6ms, param_check: 19.0ms
+  loss_proc: 0.0ms, instability: 70.9ms
+  cleanup: 0.3ms, gpu_sync: 0.2ms
+  measured: 1274.5ms, unaccounted: 18.9ms (1.5%)
+iter 2780: loss 3.2672, time 1266.67ms, mfu 4.26%
+  data: 213.9ms, grad_accum: 1307.6ms (fw: 12.2ms, bw: 168.5ms)
+  grad_proc: 15.7ms, optimizer: 1.5ms, param_check: 18.4ms
+  loss_proc: 0.0ms, instability: 70.5ms
+  cleanup: 0.3ms, gpu_sync: 0.1ms
+  measured: 1343.6ms, unaccounted: -76.9ms (-6.1%)
+
+--- Starting validation at iteration 2800 ---
+Using validation set with samples from all 14 stages
+  Validation complete: 20 batches processed (320 samples), avg loss = 2.9681
+  Per-stage validation losses:
+    Stage 0 (sticky): 2.7840 (23 samples) - ratio=0.4
+    Stage 1 (sticky): 3.1166 (16 samples) - ratio=0.6
+    Stage 2 (random): 3.1511 (23 samples) - max_ratio=0.5
+    Stage 3 (sticky): 3.2262 (7 samples) - ratio=0.6
+    Stage 4 (sticky): 2.6893 (16 samples) - ratio=0.6
+    Stage 5 (random): 2.9309 (23 samples) - max_ratio=0.2
+    Stage 6 (sticky): 3.1084 (7 samples) - ratio=0.2
+    Stage 7 (sticky): 3.7012 (16 samples) - ratio=0.4
+    Stage 8 (sticky): 3.0064 (23 samples) - ratio=0.4
+    Stage 9 (sticky): 3.0332 (7 samples) - ratio=0.6
+    Stage 10 (sticky): 2.4018 (23 samples) - ratio=0.7
+    Stage 11 (sticky): 2.7482 (16 samples) - ratio=0.8
+    Stage 12 (sticky): 2.9749 (7 samples) - ratio=0.8
+    Stage 13 (sticky): 3.1075 (23 samples) - ratio=0.9
+--- Validation complete ---
+step 2800: train loss 3.1320, val loss 2.9681, lr 0.000958
+Stage 0 (sticky): target_ratio=0.4, p1=0.1, p2=0.3, stale_count=0
+  val model vs random: 30.02x better
+  val avg correct prob: 0.3753 (random: 0.0125)
+  val signal to noise: 15.44 (median: 0.87)
+  Most likely guess correct P %: 47.8%
+  Stage 0: Val loss stale count 1/6
+
+saving checkpoint to out/ckpt_unmasking_2800.pt
+iter 2800: loss 3.1541, time 6386.15ms, mfu 3.93%
+  data: 214.1ms, grad_accum: 1241.6ms (fw: 19.5ms, bw: 168.7ms)
+  grad_proc: 16.4ms, optimizer: 1.7ms, param_check: 18.6ms
+  loss_proc: 0.0ms, instability: 64.8ms
+  cleanup: 0.2ms, gpu_sync: 0.2ms
+  measured: 1278.6ms, unaccounted: 5107.5ms (80.0%)
+  validation: 5488.90ms (data: 19.25ms, forward: 0.00ms, loss: 69.30ms)
+Masking: stage=0 (sticky), actual_ratio=0.511, target=0.4, p1=0.1, p2=0.3
+iter 2820: loss 3.2486, time 1274.89ms, mfu 3.99%
+  data: 253.0ms, grad_accum: 1368.9ms (fw: 12.7ms, bw: 207.9ms)
+  grad_proc: 18.2ms, optimizer: 1.6ms, param_check: 20.4ms
+  loss_proc: 0.0ms, instability: 70.1ms
+  cleanup: 0.5ms, gpu_sync: 0.2ms
+  measured: 1409.8ms, unaccounted: -134.9ms (-10.6%)
+iter 2840: loss 3.1146, time 1272.34ms, mfu 4.05%
+  data: 213.9ms, grad_accum: 1235.1ms (fw: 12.6ms, bw: 168.5ms)
+  grad_proc: 17.0ms, optimizer: 1.5ms, param_check: 19.7ms
+  loss_proc: 0.0ms, instability: 70.3ms
+  cleanup: 0.2ms, gpu_sync: 0.2ms
+  measured: 1273.7ms, unaccounted: -1.4ms (-0.1%)
+iter 2860: loss 3.1664, time 1270.42ms, mfu 4.10%
+  data: 211.7ms, grad_accum: 1303.7ms (fw: 12.5ms, bw: 167.8ms)
+  grad_proc: 18.1ms, optimizer: 1.4ms, param_check: 19.3ms
+  loss_proc: 0.0ms, instability: 70.3ms
+  cleanup: 0.4ms, gpu_sync: 0.3ms
+  measured: 1343.1ms, unaccounted: -72.7ms (-5.7%)
+iter 2880: loss 3.1330, time 1260.81ms, mfu 4.15%
+  data: 254.4ms, grad_accum: 1300.7ms (fw: 12.2ms, bw: 209.4ms)
+  grad_proc: 15.8ms, optimizer: 1.7ms, param_check: 20.1ms
+  loss_proc: 0.0ms, instability: 70.3ms
+  cleanup: 0.4ms, gpu_sync: 0.3ms
+  measured: 1338.9ms, unaccounted: -78.1ms (-6.2%)
+iter 2900: loss 3.1217, time 1352.89ms, mfu 4.17%
+  data: 213.0ms, grad_accum: 1315.0ms (fw: 14.7ms, bw: 166.8ms)
+  grad_proc: 18.4ms, optimizer: 1.5ms, param_check: 18.8ms
+  loss_proc: 0.0ms, instability: 76.9ms
+  cleanup: 0.4ms, gpu_sync: 0.3ms
+  measured: 1354.3ms, unaccounted: -1.4ms (-0.1%)
+iter 2920: loss 3.0642, time 1281.25ms, mfu 4.20%
+  data: 211.7ms, grad_accum: 1373.1ms (fw: 12.3ms, bw: 167.0ms)
+  grad_proc: 19.9ms, optimizer: 1.6ms, param_check: 20.8ms
+  loss_proc: 0.0ms, instability: 70.5ms
+  cleanup: 0.2ms, gpu_sync: 0.3ms
+  measured: 1415.7ms, unaccounted: -134.5ms (-10.5%)
+iter 2940: loss 3.1979, time 1267.35ms, mfu 4.24%
+  data: 212.5ms, grad_accum: 1234.7ms (fw: 12.3ms, bw: 168.9ms)
+  grad_proc: 17.7ms, optimizer: 1.6ms, param_check: 18.7ms
+  loss_proc: 0.0ms, instability: 70.4ms
+  cleanup: 0.4ms, gpu_sync: 0.2ms
+  measured: 1273.3ms, unaccounted: -5.9ms (-0.5%)
+iter 2960: loss 3.3581, time 1273.74ms, mfu 4.27%
+  data: 218.5ms, grad_accum: 1373.0ms (fw: 12.4ms, bw: 169.8ms)
+  grad_proc: 15.5ms, optimizer: 1.6ms, param_check: 18.0ms
+  loss_proc: 0.0ms, instability: 70.2ms
+  cleanup: 0.3ms, gpu_sync: 0.3ms
+  measured: 1408.8ms, unaccounted: -135.0ms (-10.6%)
+iter 2980: loss 3.1126, time 1267.18ms, mfu 4.30%
+  data: 212.4ms, grad_accum: 1234.5ms (fw: 12.0ms, bw: 167.8ms)
+  grad_proc: 17.3ms, optimizer: 1.4ms, param_check: 19.2ms
+  loss_proc: 0.0ms, instability: 70.6ms
+  cleanup: 0.4ms, gpu_sync: 0.3ms
+  measured: 1273.0ms, unaccounted: -5.9ms (-0.5%)
+
+--- Starting validation at iteration 3000 ---
+Using validation set with samples from all 14 stages
+  Validation complete: 20 batches processed (320 samples), avg loss = 2.8988
+  Per-stage validation losses:
+    Stage 0 (sticky): 2.7245 (23 samples) - ratio=0.4
+    Stage 1 (sticky): 3.0332 (16 samples) - ratio=0.6
+    Stage 2 (random): 3.0967 (23 samples) - max_ratio=0.5
+    Stage 3 (sticky): 2.9769 (7 samples) - ratio=0.6
+    Stage 4 (sticky): 2.6334 (16 samples) - ratio=0.6
+    Stage 5 (random): 2.8877 (23 samples) - max_ratio=0.2
+    Stage 6 (sticky): 3.0135 (7 samples) - ratio=0.2
+    Stage 7 (sticky): 3.6590 (16 samples) - ratio=0.4
+    Stage 8 (sticky): 2.9533 (23 samples) - ratio=0.4
+    Stage 9 (sticky): 2.9427 (7 samples) - ratio=0.6
+    Stage 10 (sticky): 2.3293 (23 samples) - ratio=0.7
+    Stage 11 (sticky): 2.7104 (16 samples) - ratio=0.8
+    Stage 12 (sticky): 2.9039 (7 samples) - ratio=0.8
+    Stage 13 (sticky): 3.0598 (23 samples) - ratio=0.9
+--- Validation complete ---
+step 3000: train loss 3.0919, val loss 2.8988, lr 0.000935
+Stage 0 (sticky): target_ratio=0.4, p1=0.1, p2=0.3, stale_count=1
+  val model vs random: 30.95x better
+  val avg correct prob: 0.3869 (random: 0.0125)
+  val signal to noise: 16.03 (median: 0.93)
+  Most likely guess correct P %: 48.9%
+  Stage 0: New best val loss 2.8988, reset stale count to 0
+
+saving checkpoint to out/ckpt_unmasking_3000.pt
+iter 3000: loss 3.1163, time 5797.36ms, mfu 3.97%
+  data: 234.7ms, grad_accum: 1320.4ms (fw: 35.3ms, bw: 185.6ms)
+  grad_proc: 16.6ms, optimizer: 1.7ms, param_check: 19.5ms
+  loss_proc: 0.0ms, instability: 52.0ms
+  cleanup: 0.3ms, gpu_sync: 0.2ms
+  measured: 1358.7ms, unaccounted: 4438.7ms (76.6%)
+  validation: 5394.64ms (data: 19.35ms, forward: 0.00ms, loss: 67.50ms)
+Masking: stage=0 (sticky), actual_ratio=0.504, target=0.4, p1=0.1, p2=0.3
+iter 3020: loss 3.1970, time 1281.11ms, mfu 4.03%
+  data: 211.4ms, grad_accum: 1234.2ms (fw: 12.4ms, bw: 167.0ms)
+  grad_proc: 16.9ms, optimizer: 1.4ms, param_check: 18.9ms
+  loss_proc: 0.0ms, instability: 70.9ms
+  cleanup: 0.3ms, gpu_sync: 0.3ms
+  measured: 1272.0ms, unaccounted: 9.2ms (0.7%)
+iter 3040: loss 3.1032, time 1267.93ms, mfu 4.09%
+  data: 212.8ms, grad_accum: 1240.7ms (fw: 12.7ms, bw: 167.0ms)
+  grad_proc: 17.1ms, optimizer: 1.5ms, param_check: 19.3ms
+  loss_proc: 0.0ms, instability: 70.3ms
+  cleanup: 0.4ms, gpu_sync: 0.3ms
+  measured: 1279.2ms, unaccounted: -11.3ms (-0.9%)
+iter 3060: loss 3.1619, time 1265.67ms, mfu 4.14%
+  data: 219.9ms, grad_accum: 1312.3ms (fw: 12.3ms, bw: 173.4ms)
+  grad_proc: 18.4ms, optimizer: 1.7ms, param_check: 18.9ms
+  loss_proc: 0.0ms, instability: 70.4ms
+  cleanup: 0.3ms, gpu_sync: 0.3ms
+  measured: 1351.9ms, unaccounted: -86.2ms (-6.8%)
+iter 3080: loss 2.9921, time 1286.40ms, mfu 4.17%
+  data: 214.0ms, grad_accum: 1311.2ms (fw: 13.8ms, bw: 167.5ms)
+  grad_proc: 16.8ms, optimizer: 1.4ms, param_check: 18.9ms
+  loss_proc: 0.0ms, instability: 69.1ms
+  cleanup: 0.4ms, gpu_sync: 0.3ms
+  measured: 1349.0ms, unaccounted: -62.6ms (-4.9%)
+iter 3100: loss 3.2129, time 1270.67ms, mfu 4.21%
+  data: 252.7ms, grad_accum: 1533.5ms (fw: 13.0ms, bw: 206.3ms)
+  grad_proc: 17.8ms, optimizer: 1.8ms, param_check: 20.8ms
+  loss_proc: 0.0ms, instability: 69.9ms
+  cleanup: 0.4ms, gpu_sync: 0.3ms
+  measured: 1574.5ms, unaccounted: -303.8ms (-23.9%)
+iter 3120: loss 3.1928, time 1272.46ms, mfu 4.25%
+  data: 214.4ms, grad_accum: 13
