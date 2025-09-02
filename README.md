@@ -25,31 +25,35 @@ Note: This framework is designed specifically for character-level tokenization a
 
 The framework supports different model modes that require different data formats:
 
-### Model Modes and Data Requirements
+### Data Format Requirements by Model Mode
 
 #### 1. Language Model (`language_model`)
-**Purpose**: Next-token prediction (standard autoregressive language modeling)
-**Data format**:
-- Input: `X = tokens[:-1]` (all tokens except last)
-- Target: `Y = tokens[1:]` (input shifted by 1)
-- Mask: `mask = all_ones` (no masking)
-**Example datasets**: `shakespeare_char` (general text)
+**Model head**: `Linear(n_embd, vocab_size)` with weight tying to embeddings
+**What your dataset must provide**:
+- `X`: Input token IDs `(batch_size, block_size)`
+- `Y`: Target token IDs `(batch_size, block_size)` - can be same as X or shifted, model doesn't care
+- `mask`: Not used by model - loss computed on all positions with `ignore_index=-1`
+**Loss**: Cross-entropy over full vocabulary, `F.cross_entropy(logits.view(-1, vocab_size), targets.view(-1), ignore_index=-1)`
+**Example datasets**: `shakespeare_char`
 
 #### 2. Token Classifier (`token_classifier`)
-**Purpose**: Per-token binary/multi-class classification (e.g., masked language modeling)
-**Data format**:
-- Input: `X = masked_tokens` (some tokens replaced with `<MASK>`)
-- Target: `Y = original_tokens` (ground truth for all positions)
-- Mask: `mask = masking_pattern` (indicates which tokens to predict)
-**Example datasets**: `shakespeare_char_diffusion` (unmasking training)
+**Model head**: `Linear(n_embd, 2)` for binary classification (no weight tying)
+**What your dataset must provide**:
+- `X`: Input token IDs `(batch_size, block_size)`
+- `Y`: Class indices `(batch_size, block_size)` with values 0/1 (or -1 to ignore),
+       OR soft probability distributions `(batch_size, block_size, 2)`
+- `mask`: Not used by model - loss computed on all positions with `ignore_index=-1`
+**Loss**: Class-weighted cross-entropy over 2 classes with automatic balancing
+**Example datasets**: `shakespeare_char_diffusion`
 
 #### 3. Sequence Classifier (`sequence_classifier`)
-**Purpose**: Sequence-level classification or regression
-**Data format**:
-- Input: `X = [CLS] + tokens` (sequence with special CLS token)
-- Target: `Y = sequence_label` (single label for entire sequence)
-- Mask: `mask = attention_mask` (sequence-level attention)
-**Example datasets**: Custom datasets with sequence-level labels
+**Model head**: `Linear(n_embd, 1)` for regression, forces bidirectional attention
+**What your dataset must provide**:
+- `X`: Input token IDs `(batch_size, block_size)` - first token used as CLS representation
+- `Y`: Sequence labels `(batch_size,)` - single float value per sequence
+- `mask`: Not used by model
+**Loss**: MSE regression loss `F.mse_loss(logits, targets.float())`
+**Example datasets**: Custom datasets with sequence-level float labels
 
 ---
 
@@ -77,9 +81,9 @@ meta = {
     'block_size': 1024,                  # Fixed sequence length
     'supported_model_modes': ['language_model'],  # Only supports language modeling
     'data_shapes': {
-        'X': '(batch_size, block_size-1)',  # Input tokens
-        'Y': '(batch_size, block_size-1)',  # Target tokens (shifted)
-        'mask': '(batch_size, block_size-1)',  # All ones (no masking)
+        'X': '(batch_size, block_size)',  # Input tokens
+        'Y': '(batch_size, block_size)',  # Target tokens (shifted)
+        'mask': '(batch_size, block_size)',  # All ones (no masking)
         'description': 'Language modeling: X=input[:-1], Y=input[1:]'
     }
 }
