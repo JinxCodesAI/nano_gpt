@@ -17,7 +17,7 @@ import torch
 from torch.nn.parallel import DistributedDataParallel as DDP
 from torch.distributed import init_process_group, destroy_process_group
 
-from model import GPTConfig, GPT
+from model import GPTConfig, GPT, ModelMode
 from utils import Timer, log_masking_stats
 from training_utils import (
     get_batch, estimate_loss, get_lr, load_synthetic_model, 
@@ -81,7 +81,7 @@ uncertainty_factor = 0.0 # if > 0, apply label smoothing: correct answer gets (1
 # transfer learning config
 transfer_learning_mode = 'from_scratch'  # 'from_scratch', 'feature_extraction', 'fine_tuning'
 pretrained_checkpoint_path = None  # Path to pretrained checkpoint for transfer learning
-switch_to_binary = False  # Switch from language modeling to binary classification after loading pretrained weights
+model_mode = 'language_model'  # 'language_model', 'token_classifier', or 'sequence_classifier' - target mode after loading pretrained weights
 
 # adamw optimizer
 learning_rate = 1e-3 # with baby networks can afford to go a bit higher
@@ -293,7 +293,7 @@ training_ctx = TrainingContext(
     uncertainty_factor=uncertainty_factor,
     transfer_learning_mode=transfer_learning_mode,
     pretrained_checkpoint_path=pretrained_checkpoint_path,
-    switch_to_binary=switch_to_binary
+    model_mode=model_mode
 )
 
 # Apply restored training context state if resuming from checkpoint
@@ -324,7 +324,7 @@ elif init_from == 'resume':
         print_and_flush("*** TRANSFER LEARNING MODE ***")
         print_and_flush(f"Loading pretrained weights from: {pretrained_checkpoint_path}")
         print_and_flush(f"Transfer learning mode: {transfer_learning_mode}")
-        print_and_flush(f"Switch to binary classification: {switch_to_binary}")
+        print_and_flush(f"Target model mode: {model_mode}")
         
         # Load pretrained checkpoint
         if not os.path.exists(pretrained_checkpoint_path):
@@ -346,9 +346,9 @@ elif init_from == 'resume':
         if 'use_rope' in pretrained_model_args:
             model_args['use_rope'] = pretrained_model_args['use_rope']
         
-        # Set vocab size and binary classification for the new model
+        # Set vocab size and mode for the new model
         model_args['vocab_size'] = training_ctx.extended_vocab_size
-        model_args['binary_classification'] = False  # Always load as language model first
+        model_args['mode'] = ModelMode.LANGUAGE_MODEL  # Always load as language model first
         
         # Create model with pretrained architecture
         gptconf = GPTConfig(**model_args)
@@ -374,11 +374,19 @@ elif init_from == 'resume':
         
         print_and_flush("✓ Pretrained weights loaded successfully")
         
-        # Switch to binary classification if requested
-        if switch_to_binary:
-            print_and_flush("Switching to binary classification head...")
-            model.switch_to_binary_classification()
-            print_and_flush("✓ Switched to binary classification")
+        # Switch to target mode if different from language modeling
+        if model_mode == 'token_classifier':
+            print_and_flush("Switching to token classification mode...")
+            model.switch_to_token_classification()
+            print_and_flush("✓ Switched to token classification mode")
+        elif model_mode == 'sequence_classifier':
+            print_and_flush("Switching to sequence classification mode...")
+            model.switch_to_sequence_classification()
+            print_and_flush("✓ Switched to sequence classification mode")
+        elif model_mode == 'language_model':
+            print_and_flush("Keeping language modeling mode (no switching needed)")
+        else:
+            raise ValueError(f"Unknown model_mode: {model_mode}. Must be 'language_model', 'token_classifier', or 'sequence_classifier'")
         
         # Set transfer learning mode (freeze/unfreeze)
         if transfer_learning_mode == 'feature_extraction':

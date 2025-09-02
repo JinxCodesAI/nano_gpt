@@ -137,7 +137,7 @@ class TrainingContext:
     # Transfer learning parameters
     transfer_learning_mode: str = 'from_scratch'  # 'from_scratch', 'feature_extraction', 'fine_tuning'
     pretrained_checkpoint_path: str = None  # Path to pretrained checkpoint for transfer learning
-    switch_to_binary: bool = False  # Switch from language modeling to binary classification after loading
+    model_mode: str = 'language_model'  # Target model mode: 'language_model', 'token_classifier', or 'sequence_classifier'
     
     def __post_init__(self):
         # Default unmasking stages if not provided

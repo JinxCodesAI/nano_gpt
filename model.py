@@ -10,10 +10,16 @@ https://github.com/huggingface/transformers/blob/main/src/transformers/models/gp
 import math
 import inspect
 from dataclasses import dataclass
+from enum import Enum, auto
 
 import torch
 import torch.nn as nn
 from torch.nn import functional as F
+
+class ModelMode(Enum):
+    LANGUAGE_MODEL = auto()
+    TOKEN_CLASSIFIER = auto()
+    SEQUENCE_CLASSIFIER = auto()
 
 class RotaryPositionalEmbedding(nn.Module):
     """
@@ -267,7 +273,14 @@ class GPTConfig:
     bias: bool = True # True: bias in Linears and LayerNorms, like GPT-2. False: a bit better and faster
     attention_type: str = 'causal' # 'causal' or 'bidirectional' - type of attention to use
     use_rope: bool = True # Use Rotary Position Embeddings instead of absolute position embeddings
-    binary_classification: bool = False # True: use binary classification head (2 outputs), False: use language model head (vocab_size outputs)
+    mode: ModelMode = ModelMode.LANGUAGE_MODEL # Default to language modeling
+    
+    def __post_init__(self):
+        # Automatically set attention to bidirectional for sequence classification
+        if self.mode == ModelMode.SEQUENCE_CLASSIFIER:
+            if self.attention_type != 'bidirectional':
+                print(f"Warning: mode is {self.mode}, forcing attention_type to 'bidirectional'.")
+                self.attention_type = 'bidirectional'
 
 class GPT(nn.Module):
 
@@ -291,16 +304,23 @@ class GPT(nn.Module):
         
         self.transformer = nn.ModuleDict(transformer_components)
         
-        # Choose between language model head and binary classification head
-        if config.binary_classification:
-            self.lm_head = nn.Linear(config.n_embd, 2, bias=False)  # Binary classifier: 2 outputs
-        else:
+        # Create appropriate heads based on mode
+        self.lm_head = None
+        self.sequence_head = None
+
+        if self.config.mode == ModelMode.LANGUAGE_MODEL:
             self.lm_head = nn.Linear(config.n_embd, config.vocab_size, bias=False)
             # with weight tying when using torch.compile() some warnings get generated:
             # "UserWarning: functional_call was passed multiple values for tied weights.
             # This behavior is deprecated and will be an error in future versions"
             # not 100% sure what this is, so far seems to be harmless. TODO investigate
             self.transformer.wte.weight = self.lm_head.weight # https://paperswithcode.com/method/weight-tying
+        elif self.config.mode == ModelMode.TOKEN_CLASSIFIER:
+            # Head for per-token binary classification
+            self.lm_head = nn.Linear(config.n_embd, 2, bias=False)
+        elif self.config.mode == ModelMode.SEQUENCE_CLASSIFIER:
+            # Head for sequence-level regression (outputs a single value)
+            self.sequence_head = nn.Linear(config.n_embd, 1, bias=False)
 
         # init all weights
         self.apply(self._init_weights)
@@ -309,10 +329,13 @@ class GPT(nn.Module):
             if pn.endswith('c_proj.weight'):
                 torch.nn.init.normal_(p, mean=0.0, std=0.02/math.sqrt(2 * config.n_layer))
         
-        # Special initialization for binary classification head (after general init)
-        if config.binary_classification:
+        # Special initialization for classification heads (after general init)
+        if self.config.mode == ModelMode.TOKEN_CLASSIFIER:
             # Initialize with much smaller weights to prevent gradient explosion
             torch.nn.init.normal_(self.lm_head.weight, mean=0.0, std=0.002)  # Very small std
+        elif self.config.mode == ModelMode.SEQUENCE_CLASSIFIER:
+            # Initialize sequence head with small weights
+            torch.nn.init.normal_(self.sequence_head.weight, mean=0.0, std=0.002)  # Very small std
 
         # report number of parameters
         print("number of parameters: %.2fM" % (self.get_num_params()/1e6,))
@@ -358,61 +381,74 @@ class GPT(nn.Module):
             x = block(x)
         x = self.transformer.ln_f(x)
 
-        if targets is not None:
-            # Training: always compute logits for all positions
-            logits = self.lm_head(x)
-            
-            if self.config.binary_classification:
-                # For binary classification, targets can be class indices or probability distributions
-                if targets.dim() == 3:
-                    # Probability distributions (batch_size, seq_len, num_classes)
-                    # Cross-entropy can handle soft targets directly
-                    loss = F.cross_entropy(logits.view(-1, 2), targets.view(-1, 2))
-                else:
-                    # Hard targets: 0 or 1 class indices
-                    # Calculate dynamic class weights to handle class imbalance
-                    flattened_targets = targets.view(-1)
-                    valid_targets = flattened_targets[flattened_targets != -1]  # exclude ignore_index
-                    
-                    if len(valid_targets) > 0:
-                        unique, counts = torch.unique(valid_targets, return_counts=True)
-                        n_samples = len(valid_targets)
-                        n_classes = 2
-                        
-                        # Create balanced class weights: n_samples / (n_classes * class_count)
-                        class_weights = torch.zeros(2, device=targets.device, dtype=logits.dtype)
-                        for cls, count in zip(unique, counts):
-                            class_weights[cls] = n_samples / (n_classes * count)
-                        
-                        loss = F.cross_entropy(logits.view(-1, 2), flattened_targets, 
-                                             weight=class_weights, ignore_index=-1)
-                    else:
-                        # Fallback if no valid targets (shouldn't happen in practice)
-                        print(f"WARNING: No valid targets found for class weighting, using unweighted loss")
-                        loss = F.cross_entropy(logits.view(-1, 2), flattened_targets, ignore_index=-1)
-            else:
-                # For language modeling, targets can be token IDs or probability distributions
-                if targets.dim() == 3:
-                    # Probability distributions (batch_size, seq_len, vocab_size)
-                    # Cross-entropy can handle soft targets directly
-                    loss = F.cross_entropy(logits.view(-1, logits.size(-1)), targets.view(-1, logits.size(-1)))
-                else:
-                    # Token IDs (batch_size, seq_len)
-                    loss = F.cross_entropy(logits.view(-1, logits.size(-1)), targets.view(-1), ignore_index=-1)
-        else:
-            # Inference: behavior depends on attention type and classification mode
-            if self.config.binary_classification:
-                # For binary classification, always compute all positions
+        logits, loss = None, None
+
+        if self.config.mode == ModelMode.SEQUENCE_CLASSIFIER:
+            # Sequence classification/regression: use the [CLS] token's output
+            # We assume the [CLS] token is at the first position
+            cls_output = x[:, 0, :] # Shape: (b, n_embd)
+            logits = self.sequence_head(cls_output).squeeze(-1) # Shape: (b,)
+
+            if targets is not None:
+                # For regression, targets must be a FloatTensor
+                loss = F.mse_loss(logits, targets.float())
+
+        elif self.config.mode in [ModelMode.LANGUAGE_MODEL, ModelMode.TOKEN_CLASSIFIER]:
+            # Token-level predictions
+            if targets is not None:
+                # Training: always compute logits for all positions
                 logits = self.lm_head(x)
+                
+                if self.config.mode == ModelMode.TOKEN_CLASSIFIER:
+                    # For token-level binary classification, targets can be class indices or probability distributions
+                    if targets.dim() == 3:
+                        # Probability distributions (batch_size, seq_len, num_classes)
+                        # Cross-entropy can handle soft targets directly
+                        loss = F.cross_entropy(logits.view(-1, 2), targets.view(-1, 2))
+                    else:
+                        # Hard targets: 0 or 1 class indices
+                        # Calculate dynamic class weights to handle class imbalance
+                        flattened_targets = targets.view(-1)
+                        valid_targets = flattened_targets[flattened_targets != -1]  # exclude ignore_index
+                        
+                        if len(valid_targets) > 0:
+                            unique, counts = torch.unique(valid_targets, return_counts=True)
+                            n_samples = len(valid_targets)
+                            n_classes = 2
+                            
+                            # Create balanced class weights: n_samples / (n_classes * class_count)
+                            class_weights = torch.zeros(2, device=targets.device, dtype=logits.dtype)
+                            for cls, count in zip(unique, counts):
+                                class_weights[cls] = n_samples / (n_classes * count)
+                            
+                            loss = F.cross_entropy(logits.view(-1, 2), flattened_targets, 
+                                                 weight=class_weights, ignore_index=-1)
+                        else:
+                            # Fallback if no valid targets (shouldn't happen in practice)
+                            print(f"WARNING: No valid targets found for class weighting, using unweighted loss")
+                            loss = F.cross_entropy(logits.view(-1, 2), flattened_targets, ignore_index=-1)
+                else:  # Language Modeling
+                    # For language modeling, targets can be token IDs or probability distributions
+                    if targets.dim() == 3:
+                        # Probability distributions (batch_size, seq_len, vocab_size)
+                        # Cross-entropy can handle soft targets directly
+                        loss = F.cross_entropy(logits.view(-1, logits.size(-1)), targets.view(-1, logits.size(-1)))
+                    else:
+                        # Token IDs (batch_size, seq_len)
+                        loss = F.cross_entropy(logits.view(-1, logits.size(-1)), targets.view(-1), ignore_index=-1)
             else:
-                attention_type = getattr(self.config, 'attention_type', 'causal')
-                if attention_type == 'causal':
-                    # For causal attention (autoregressive), optimize by only computing last position
-                    logits = self.lm_head(x[:, [-1], :]) # note: using list [-1] to preserve the time dim
-                else:
-                    # For bidirectional attention (diffusion), we need logits for all positions
-                    logits = self.lm_head(x)  # Compute logits for all positions
-            loss = None
+                # Inference: behavior depends on attention type and mode
+                if self.config.mode == ModelMode.TOKEN_CLASSIFIER:
+                    # For token classification, always compute all positions
+                    logits = self.lm_head(x)
+                else:  # Language Modeling
+                    attention_type = getattr(self.config, 'attention_type', 'causal')
+                    if attention_type == 'causal':
+                        # For causal attention (autoregressive), optimize by only computing last position
+                        logits = self.lm_head(x[:, [-1], :]) # note: using list [-1] to preserve the time dim
+                    else:
+                        # For bidirectional attention (diffusion), we need logits for all positions
+                        logits = self.lm_head(x)  # Compute logits for all positions
 
         return logits, loss
 
@@ -539,14 +575,14 @@ class GPT(nn.Module):
         mfu = flops_achieved / flops_promised
         return mfu
 
-    def switch_to_binary_classification(self):
-        """Switch from language modeling to binary classification head"""
-        if self.config.binary_classification:
-            print("Model is already in binary classification mode")
+    def switch_to_token_classification(self):
+        """Switch to token-level binary classification mode"""
+        if self.config.mode == ModelMode.TOKEN_CLASSIFIER:
+            print("Model is already in token classification mode")
             return
         
         # Break weight tying if it exists (language model heads are tied to token embeddings)
-        if hasattr(self.transformer, 'wte') and hasattr(self, 'lm_head'):
+        if hasattr(self.transformer, 'wte') and hasattr(self, 'lm_head') and self.lm_head is not None:
             # Check if weights are tied by comparing tensor identity
             if hasattr(self.transformer.wte, 'weight') and hasattr(self.lm_head, 'weight'):
                 if self.transformer.wte.weight is self.lm_head.weight:
@@ -557,29 +593,53 @@ class GPT(nn.Module):
                         self.transformer.wte.weight = nn.Parameter(new_wte_weight)
                     print("Broke weight tying between token embeddings and language model head")
         
-        # Create new binary classification head
-        old_head = self.lm_head
+        # Store old head device for moving new head
+        old_device = None
+        if hasattr(self, 'lm_head') and self.lm_head is not None:
+            old_device = self.lm_head.weight.device
+        elif hasattr(self, 'sequence_head') and self.sequence_head is not None:
+            old_device = self.sequence_head.weight.device
+        else:
+            old_device = next(self.parameters()).device
+        
+        # Clear existing heads
+        self.lm_head = None
+        self.sequence_head = None
+        
+        # Create new token classification head
         self.lm_head = nn.Linear(self.config.n_embd, 2, bias=False)
         
-        # Initialize new head with small weights (same as in __init__)
+        # Initialize new head with small weights
         torch.nn.init.normal_(self.lm_head.weight, mean=0.0, std=0.002)
         
         # Update config
-        self.config.binary_classification = True
+        self.config.mode = ModelMode.TOKEN_CLASSIFIER
         
-        # Move to same device as old head
-        self.lm_head = self.lm_head.to(old_head.weight.device)
+        # Move to correct device
+        self.lm_head = self.lm_head.to(old_device)
         
-        print(f"Switched to binary classification head (2 outputs)")
+        print(f"Switched to token classification head (2 outputs)")
 
     def switch_to_language_modeling(self, vocab_size):
-        """Switch from binary classification to language modeling head"""
-        if not self.config.binary_classification:
+        """Switch to language modeling mode"""
+        if self.config.mode == ModelMode.LANGUAGE_MODEL:
             print("Model is already in language modeling mode")
             return
         
+        # Store old head device for moving new head
+        old_device = None
+        if hasattr(self, 'lm_head') and self.lm_head is not None:
+            old_device = self.lm_head.weight.device
+        elif hasattr(self, 'sequence_head') and self.sequence_head is not None:
+            old_device = self.sequence_head.weight.device
+        else:
+            old_device = next(self.parameters()).device
+        
+        # Clear existing heads
+        self.lm_head = None
+        self.sequence_head = None
+        
         # Create new language modeling head
-        old_head = self.lm_head
         self.lm_head = nn.Linear(self.config.n_embd, vocab_size, bias=False)
         
         # Initialize with existing token embedding weights if available and compatible
@@ -592,11 +652,11 @@ class GPT(nn.Module):
             print(f"Initialized language model head with random weights")
         
         # Update config
-        self.config.binary_classification = False
+        self.config.mode = ModelMode.LANGUAGE_MODEL
         self.config.vocab_size = vocab_size
         
-        # Move to same device
-        self.lm_head = self.lm_head.to(old_head.weight.device)
+        # Move to correct device
+        self.lm_head = self.lm_head.to(old_device)
         
         # Restore weight tying between token embeddings and language model head
         # This should match the original initialization behavior
@@ -606,6 +666,55 @@ class GPT(nn.Module):
             print(f"Restored weight tying between token embeddings and language model head")
         
         print(f"Switched to language modeling head ({vocab_size} outputs)")
+
+    def switch_to_sequence_classification(self):
+        """Switch to sequence-level classification/regression mode"""
+        if self.config.mode == ModelMode.SEQUENCE_CLASSIFIER:
+            print("Model is already in sequence classification mode")
+            return
+        
+        # Store old head device for moving new head
+        old_device = None
+        if hasattr(self, 'lm_head') and self.lm_head is not None:
+            old_device = self.lm_head.weight.device
+        elif hasattr(self, 'sequence_head') and self.sequence_head is not None:
+            old_device = self.sequence_head.weight.device
+        else:
+            old_device = next(self.parameters()).device
+        
+        # Break weight tying if it exists (language model heads are tied to token embeddings)
+        if hasattr(self.transformer, 'wte') and hasattr(self, 'lm_head') and self.lm_head is not None:
+            # Check if weights are tied by comparing tensor identity
+            if hasattr(self.transformer.wte, 'weight') and hasattr(self.lm_head, 'weight'):
+                if self.transformer.wte.weight is self.lm_head.weight:
+                    # Create independent token embedding weights (break the tie)
+                    with torch.no_grad():
+                        # Create new independent weight tensor for token embeddings
+                        new_wte_weight = self.transformer.wte.weight.clone()
+                        self.transformer.wte.weight = nn.Parameter(new_wte_weight)
+                    print("Broke weight tying between token embeddings and language model head")
+        
+        # Clear existing heads
+        self.lm_head = None
+        self.sequence_head = None
+        
+        # Create new sequence classification head
+        self.sequence_head = nn.Linear(self.config.n_embd, 1, bias=False)
+        
+        # Initialize new head with small weights
+        torch.nn.init.normal_(self.sequence_head.weight, mean=0.0, std=0.002)
+        
+        # Update config - force bidirectional attention
+        old_attention_type = self.config.attention_type
+        self.config.mode = ModelMode.SEQUENCE_CLASSIFIER
+        if self.config.attention_type != 'bidirectional':
+            print(f"Warning: mode is {self.config.mode}, forcing attention_type from '{old_attention_type}' to 'bidirectional'.")
+            self.config.attention_type = 'bidirectional'
+        
+        # Move to correct device
+        self.sequence_head = self.sequence_head.to(old_device)
+        
+        print(f"Switched to sequence classification head (1 output)")
 
     def get_trainable_param_count(self):
         """Return count of trainable parameters"""
@@ -617,7 +726,7 @@ class GPT(nn.Module):
         trainable_params = 0
         
         for name, param in self.named_parameters():
-            if 'lm_head' not in name:  # Don't freeze the head
+            if 'lm_head' not in name and 'sequence_head' not in name:  # Don't freeze any head
                 param.requires_grad = False
                 frozen_params += param.numel()
             else:
@@ -640,7 +749,7 @@ class GPT(nn.Module):
         head_params = []
         
         for name, param in self.named_parameters():
-            if 'lm_head' in name:
+            if 'lm_head' in name or 'sequence_head' in name:
                 head_params.append((name, param))
             else:
                 backbone_params.append((name, param))
