@@ -5,7 +5,7 @@ Contains all configuration data structures used across the training pipeline.
 
 from enum import Enum
 from abc import ABC, abstractmethod
-from typing import Union
+from typing import Union, Any
 from dataclasses import dataclass
 
 

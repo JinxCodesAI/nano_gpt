@@ -45,16 +45,11 @@ from .validation_sets import (
 
 from .masking_strategies import (
     load_synthetic_model,
-    apply_random_masking_gpu,
-    apply_stage_masking,
-    apply_target_driven_sticky_masking_gpu,
-    apply_corruption_gpu
+    apply_bert_style_corruption_gpu
 )
 
 from .batch_generation import (
-    get_batch,
-    get_batch_unmasking,
-    get_batch_remasking_binary
+    get_batch
 )
 
 from .model_evaluation import (
@@ -97,15 +92,10 @@ __all__ = [
     
     # Masking strategy functions
     'load_synthetic_model',
-    'apply_random_masking_gpu',
-    'apply_stage_masking',
-    'apply_target_driven_sticky_masking_gpu',
-    'apply_corruption_gpu',
+    'apply_bert_style_corruption_gpu',
     
     # Batch generation functions
     'get_batch',
-    'get_batch_unmasking',
-    'get_batch_remasking_binary',
     
     # Model evaluation functions
     'estimate_loss',

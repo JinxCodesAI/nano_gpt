@@ -257,10 +257,15 @@ def main():
     prepare_cached_data(meta)
     print("✓ Cached data prepared")
     
+    # Generate fixed validation pools for all stages
+    print("Generating fixed validation pools...")
+    prepare_validation_pools(meta)
+    print("✓ Fixed validation pools generated")
+
     # Pre-generate training data for 8000 iterations with eval every 200 iterations
-    print("Pre-generating training and validation batches...")
+    print("Pre-generating training batches...")
     pre_generate_training_data(max_iters=8000, eval_interval=200, meta=meta)
-    print("✓ All training and validation data pre-generated")
+    print("✓ All training data pre-generated")
     
     # Summary
     train_data = np.memmap('train.bin', dtype=np.uint16, mode='r')

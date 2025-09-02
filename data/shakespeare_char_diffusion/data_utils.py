@@ -161,13 +161,44 @@ def apply_stage_masking(x, stage_config: Dict, mask_token_id, meta_vocab_size):
         raise ValueError(f"Unknown stage type: {stage_type}")
 
 
-def generate_batch_for_iteration(data: np.memmap, valid_indices: np.ndarray, 
+def generate_batch_for_iteration(data: np.memmap, valid_indices: np.ndarray,
                                 iteration: int, batch_size: int, block_size: int,
                                 stages_config: List[Dict], meta: Dict) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
     """Generate a batch for specific iteration using stage progression logic"""
-    # Implementation will be added during prepare.py creation
-    # This is a placeholder for the batch generation logic that will be moved here
-    pass
+    device = 'cpu'  # Generate on CPU for storage
+
+    # Create iteration-to-stage mapping
+    iteration_mapping = create_iteration_mapping(8000, stages_config)  # TODO: make max_iters configurable
+
+    # Get current stage for this iteration
+    stage_idx = iteration_mapping.get(iteration, len(stages_config) - 1)
+    current_stage_config = stages_config[stage_idx]
+
+    # Use iteration as seed for reproducible but varied training data
+    torch.manual_seed(1337 + iteration)
+
+    # Sample indices
+    if len(valid_indices) > 0:
+        ix_indices = torch.randint(len(valid_indices), (batch_size,)).numpy()
+        ix_np = valid_indices[ix_indices]
+    else:
+        ix_np = torch.randint(len(data) - block_size, (batch_size,)).numpy()
+
+    # Vectorized data loading
+    ix_expanded = ix_np[:, None] + np.arange(block_size)[None, :]
+    x_np = data[ix_expanded].astype(np.int64)
+    x = torch.from_numpy(x_np).to(device)
+
+    # Apply stage masking
+    mask_token_id = meta['special_tokens']['mask_token_id']
+    meta_vocab_size = meta['vocab_size']
+
+    masked_x, mask = apply_stage_masking(x, current_stage_config, mask_token_id, meta_vocab_size)
+
+    # Target is original x
+    y = x.clone()
+
+    return masked_x, y, mask
 
 
 def create_iteration_mapping(max_iters: int, stages_config: List[Dict]) -> Dict[int, int]:

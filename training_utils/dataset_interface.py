@@ -70,14 +70,68 @@ class DatasetConfig:
         # Collect samples to form the requested batch size
         return self._collect_samples_for_batch(batch_size, iteration, 'train')
     
-    def get_validation_batch(self, iteration: int, validation_sample_idx: int) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
-        """Get validation batch for specific iteration and sample index"""
-        batch_file = self._find_batch_file_for_iteration(iteration, 'val')
-        val_batches = torch.load(batch_file, map_location='cpu')
-        
-        # Return specific validation stage batch based on sample_idx
-        stage_idx = validation_sample_idx % len(val_batches)
-        return val_batches[stage_idx]
+    def load_validation_set(self, eval_iters: int) -> List[List[Tuple[torch.Tensor, torch.Tensor, torch.Tensor]]]:
+        """Load fixed validation set ONCE at training start - dataset provides 'buffet', training decides consumption"""
+        print("Loading fixed validation set...")
+
+        # Load validation metadata
+        validation_dir = os.path.join(self.data_dir, 'validation')
+        validation_meta_path = os.path.join(validation_dir, 'validation_meta.pkl')
+
+        if not os.path.exists(validation_meta_path):
+            raise FileNotFoundError(f"Validation metadata not found: {validation_meta_path}. Run prepare.py first.")
+
+        with open(validation_meta_path, 'rb') as f:
+            validation_meta = pickle.load(f)
+
+        validation_batches = []
+
+        # Training script decides how many samples it needs per stage
+        samples_needed_per_stage = eval_iters
+
+        for stage_idx in range(validation_meta['num_stages']):
+            stage_samples = []
+            samples_collected = 0
+            file_idx = 0
+
+            while samples_collected < samples_needed_per_stage:
+                # Load validation file
+                file_path = os.path.join(validation_dir, f"stage_{stage_idx}_file_{file_idx}.pt")
+
+                if not os.path.exists(file_path):
+                    # If we've exhausted available files, repeat from beginning
+                    if file_idx == 0:
+                        raise FileNotFoundError(f"No validation files found for stage {stage_idx}")
+                    file_idx = 0
+                    file_path = os.path.join(validation_dir, f"stage_{stage_idx}_file_{file_idx}.pt")
+
+                file_samples = torch.load(file_path, map_location='cpu')
+
+                # Take what we need
+                remaining_needed = samples_needed_per_stage - samples_collected
+                samples_to_take = min(len(file_samples), remaining_needed)
+                stage_samples.extend(file_samples[:samples_to_take])
+
+                samples_collected += samples_to_take
+                file_idx += 1
+
+            validation_batches.append(stage_samples)
+            print(f"  Loaded {len(stage_samples)} validation samples for stage {stage_idx+1}/{validation_meta['num_stages']}")
+
+        print(f"✓ Validation set loaded: {validation_meta['num_stages']} stages, {eval_iters} samples per stage")
+        return validation_batches
+
+    def get_validation_sample(self, validation_batches: List[List], stage_idx: int, sample_idx: int) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+        """Get specific validation sample from pre-loaded validation set"""
+        if stage_idx >= len(validation_batches):
+            raise IndexError(f"Stage index {stage_idx} out of range (max: {len(validation_batches)-1})")
+
+        stage_samples = validation_batches[stage_idx]
+        if sample_idx >= len(stage_samples):
+            # Wrap around if we need more samples than available
+            sample_idx = sample_idx % len(stage_samples)
+
+        return stage_samples[sample_idx]
     
     def get_stage_config_for_iteration(self, iteration: int) -> Dict:
         """Get stage configuration for given iteration"""
