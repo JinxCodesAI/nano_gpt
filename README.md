@@ -23,19 +23,39 @@ Note: This framework is designed specifically for character-level tokenization a
 
 ## Dataset Preparation
 
-The framework supports two types of datasets:
+The framework supports different model modes that require different data formats:
 
-### 1. General Datasets (Simple)
-Basic datasets that work with standard model modes (`language_model`, `token_classifier`, `sequence_classifier`) without specialized training procedures.
+### Model Modes and Data Requirements
 
-### 2. Training-Specific Datasets (Advanced)
-Datasets with specialized training procedures like unmasking/diffusion training that require custom stage configurations.
+#### 1. Language Model (`language_model`)
+**Purpose**: Next-token prediction (standard autoregressive language modeling)
+**Data format**:
+- Input: `X = tokens[:-1]` (all tokens except last)
+- Target: `Y = tokens[1:]` (input shifted by 1)
+- Mask: `mask = all_ones` (no masking)
+**Example datasets**: `shakespeare_char` (general text)
+
+#### 2. Token Classifier (`token_classifier`)
+**Purpose**: Per-token binary/multi-class classification (e.g., masked language modeling)
+**Data format**:
+- Input: `X = masked_tokens` (some tokens replaced with `<MASK>`)
+- Target: `Y = original_tokens` (ground truth for all positions)
+- Mask: `mask = masking_pattern` (indicates which tokens to predict)
+**Example datasets**: `shakespeare_char_diffusion` (unmasking training)
+
+#### 3. Sequence Classifier (`sequence_classifier`)
+**Purpose**: Sequence-level classification or regression
+**Data format**:
+- Input: `X = [CLS] + tokens` (sequence with special CLS token)
+- Target: `Y = sequence_label` (single label for entire sequence)
+- Mask: `mask = attention_mask` (sequence-level attention)
+**Example datasets**: Custom datasets with sequence-level labels
 
 ---
 
-### General Dataset Setup
+### Language Model Dataset Setup
 
-For standard language modeling, token classification, or sequence classification:
+For standard next-token prediction:
 
 #### Basic Structure
 ```
@@ -53,34 +73,30 @@ meta = {
     'vocab_size': 65,                    # Base vocabulary size
     'itos': {...},                       # Index to string mapping
     'stoi': {...},                       # String to index mapping
-    'extended_vocab_size': 80,           # With special tokens
-    'special_tokens': {                  # Special token IDs
-        'mask_token_id': 65,
-        'wrong_token_id': 66,
-        # ... other special tokens
-    },
     'dataset_type': 'character',         # 'character', 'subword', 'word'
     'block_size': 1024,                  # Fixed sequence length
-    'supported_model_modes': [           # Which training modes this dataset supports
-        'language_model',                # Standard next-token prediction
-        'token_classifier',              # Per-token classification
-        'sequence_classifier'            # Sequence-level classification
-    ]
+    'supported_model_modes': ['language_model'],  # Only supports language modeling
+    'data_shapes': {
+        'X': '(batch_size, block_size-1)',  # Input tokens
+        'Y': '(batch_size, block_size-1)',  # Target tokens (shifted)
+        'mask': '(batch_size, block_size-1)',  # All ones (no masking)
+        'description': 'Language modeling: X=input[:-1], Y=input[1:]'
+    }
 }
 ```
 
 #### Usage
 ```python
 # In your training config file
-dataset = 'your_dataset_name'
-model_mode = 'language_model'  # or 'token_classifier', 'sequence_classifier'
+dataset = 'shakespeare_char'
+model_mode = 'language_model'
 ```
 
 ---
 
-### Training-Specific Dataset Setup (Advanced)
+### Token Classifier Dataset Setup
 
-For specialized training like unmasking/diffusion that requires curriculum learning:
+For masked language modeling / unmasking training:
 
 #### Advanced Structure
 ```
@@ -98,13 +114,40 @@ data/your_dataset_name/
 │   └── ...
 └── validation/            # Generated: fixed validation pools
     ├── validation_meta.pkl
-    ├── stage_00_batch_00.pt
+    ├── stage_00_file_00.pt
     └── ...
+```
+
+#### Required meta.pkl Contents
+```python
+meta = {
+    'vocab_size': 65,                    # Base vocabulary size
+    'itos': {...},                       # Index to string mapping
+    'stoi': {...},                       # String to index mapping
+    'extended_vocab_size': 80,           # With special tokens for masking
+    'special_tokens': {                  # Special token IDs
+        'mask_token_id': 65,
+        'wrong_token_id': 66,
+        'remask_good_id': 67,
+        'remask_wrong_id': 68,
+    },
+    'dataset_type': 'character',         # 'character', 'subword', 'word'
+    'block_size': 1024,                  # Fixed sequence length
+    'supported_model_modes': ['token_classifier'],  # Only supports token classification
+    'training_stages': 8,                # Number of curriculum stages
+    'validation_stages': 14,             # Number of validation stages
+    'data_shapes': {
+        'X': '(batch_size, block_size)',     # Masked input tokens
+        'Y': '(batch_size, block_size)',     # Original target tokens
+        'mask': '(batch_size, block_size)',  # Masking pattern (0/1)
+        'description': 'Token classification: X=masked_input, Y=original_targets, mask=masking_pattern'
+    }
+}
 ```
 
 #### Training Configuration Example
 ```python
-# training_config.py - Only needed for specialized training
+# training_config.py - Defines curriculum stages
 UNMASKING_STAGES = [
     {
         "type": "sticky",
@@ -113,11 +156,11 @@ UNMASKING_STAGES = [
         "p2_probability": 0.3,
         "val_loss_stale_count": 6
     },
-    # ... curriculum stages
+    # ... more stages with increasing difficulty
 ]
 
 VALIDATION_STAGES = [
-    # ... validation configurations
+    # ... validation configurations for each difficulty level
 ]
 
 # Dataset constraints
@@ -129,51 +172,44 @@ VALIDATION_SAMPLES_PER_STAGE = 100
 #### Usage
 ```python
 # In your training config file
-dataset = 'your_specialized_dataset'
-training_type = 'unmasking'  # Specialized training procedure
+dataset = 'shakespeare_char_diffusion'
+model_mode = 'token_classifier'
+training_type = 'unmasking'
 ```
-
----
-
-### Model Modes and Data Requirements
-
-The framework supports three model modes with different data requirements:
-
-#### 1. Language Model (`language_model`)
-- **Purpose**: Next-token prediction (standard language modeling)
-- **Data format**: Text sequences, targets are input shifted by 1
-- **Works with**: Any general dataset
-- **Example**: Shakespeare text generation
-
-#### 2. Token Classifier (`token_classifier`)
-- **Purpose**: Per-token binary/multi-class classification
-- **Data format**: Requires token-level labels or masking patterns
-- **Works with**: Training-specific datasets (like unmasking/diffusion)
-- **Example**: Masked language modeling, token-level sentiment analysis
-
-#### 3. Sequence Classifier (`sequence_classifier`)
-- **Purpose**: Sequence-level classification or regression
-- **Data format**: Requires sequence-level labels, uses [CLS] token
-- **Works with**: Specialized datasets with sequence labels
-- **Example**: Document classification, sequence-level scoring
 
 ---
 
 ## Quick Start
 
-### Basic Language Modeling
+### Language Modeling (Next-Token Prediction)
 ```python
-# config/my_experiment.py
-dataset = 'shakespeare_char_diffusion'  # or any general dataset
-model_mode = 'language_model'
-training_type = 'standard'  # Standard next-token prediction
+# config/language_model.py
+dataset = 'shakespeare_char'           # General text dataset
+model_mode = 'language_model'          # Next-token prediction
+batch_size = 16
+max_iters = 5000
+learning_rate = 1e-3
 ```
 ```sh
-python train_run.py config/my_experiment.py
+python train_run.py config/language_model.py
 ```
 
-### Specialized Training (Unmasking/Diffusion)
+### Token Classification (Unmasking/Diffusion Training)
+```python
+# config/token_classifier.py
+dataset = 'shakespeare_char_diffusion'  # Dataset with masking support
+model_mode = 'token_classifier'         # Per-token classification
+training_type = 'unmasking'             # Curriculum-based unmasking
+batch_size = 16
+max_iters = 8000
+```
 ```sh
+python train_run.py config/token_classifier.py
+```
+
+### Pre-configured Experiments
+```sh
+# Unmasking training with curriculum learning
 python train_run.py config/shakespeare_diffusion/experiment1.py
 ```
 
@@ -236,35 +272,26 @@ training_type = 'unmasking'
 
 ### Transfer Learning
 
-The framework supports transfer learning for both feature extraction and fine-tuning:
+The framework supports transfer learning between model modes:
 
-#### Feature Extraction (Freeze Backbone, Train Head Only)
+#### From Language Model to Token Classifier
 ```python
-# config/feature_extraction.py
+# config/transfer_to_classifier.py
 init_from = 'resume'
-pretrained_checkpoint_path = 'out/pretrained_model.pt'
-switch_to_binary = True
-transfer_learning_mode = 'feature_extraction'
+pretrained_checkpoint_path = 'out/language_model.pt'  # Trained with language_model mode
+dataset = 'shakespeare_char_diffusion'                # Dataset supporting token_classifier
+model_mode = 'token_classifier'                       # Switch to classification
+transfer_learning_mode = 'feature_extraction'        # or 'fine_tuning'
 learning_rate = 1e-3
 max_iters = 5000
 ```
 ```sh
-python train_run.py config/feature_extraction.py
+python train_run.py config/transfer_to_classifier.py
 ```
 
-#### Fine-tuning (Train All Parameters)
-```python
-# config/fine_tuning.py
-init_from = 'resume'
-pretrained_checkpoint_path = 'out/pretrained_model.pt'
-switch_to_binary = True
-transfer_learning_mode = 'fine_tuning'
-learning_rate = 1e-4
-max_iters = 10000
-```
-```sh
-python train_run.py config/fine_tuning.py
-```
+#### Transfer Learning Modes
+- **Feature Extraction**: Freeze backbone, train only the classification head
+- **Fine-tuning**: Train all parameters with pretrained initialization
 
 ### CPU Training (Reduced Model)
 
