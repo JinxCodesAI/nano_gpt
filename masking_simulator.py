@@ -16,7 +16,7 @@ import pickle
 # Add current directory to path to import local modules
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 
-from training_utils import TrainingContext, apply_target_driven_sticky_masking_gpu, UnmaskingStage
+from training_utils import TrainingContext, apply_target_driven_sticky_masking_gpu, UnmaskingStage, StickyStageConfig
 from utils import analyze_clustering
 
 @dataclass
@@ -70,10 +70,12 @@ class MaskingSimulator:
         # Convert stage configs to UnmaskingStage objects
         unmasking_stage_objects = [
             UnmaskingStage(
-                target_masked_ratio=stage['target_masked_ratio'],
-                p1_probability=stage['p1_probability'],
-                p2_probability=stage['p2_probability'],
-                val_loss_stale_count=5  # Default stale count
+                config=StickyStageConfig(
+                    target_masked_ratio=stage['target_masked_ratio'],
+                    p1_probability=stage['p1_probability'],
+                    p2_probability=stage['p2_probability'],
+                    val_loss_stale_count=stage.get('val_loss_stale_count', 5)  # Use from stage config or default
+                )
             ) for stage in self.config.stages
         ]
         
@@ -94,8 +96,6 @@ class MaskingSimulator:
             iter_num=0,  # Not used in stage-based system
             current_stage=stage_idx,
             unmasking_stages=unmasking_stage_objects,
-            remasking_corruption_strategy='mixed',  # Default strategy
-            remasking_strategy_weights=[0.25, 0.4, 0.25, 0.1],  # Default weights
             eval_iters=20,  # Default eval iters
             warmup_iters=2000,  # Default warmup
             lr_decay_iters=8000,  # Default decay
@@ -115,15 +115,13 @@ class MaskingSimulator:
         stage_config = ctx.get_current_stage_config()
         
         # Apply target-driven sticky masking
-        # Note: Using a dummy meta_vocab_size since this is just for simulation
-        meta_vocab_size = 50000  # Typical vocabulary size
         masked_x, mask = apply_target_driven_sticky_masking_gpu(
             x,
-            stage_config.target_masked_ratio,
-            stage_config.p1_probability,
-            stage_config.p2_probability,
+            stage_config.config.target_masked_ratio,
+            stage_config.config.p1_probability,
+            stage_config.config.p2_probability,
             ctx.mask_token_id,
-            meta_vocab_size
+            ctx.meta_vocab_size
         )
         
         # Calculate statistics
@@ -135,22 +133,22 @@ class MaskingSimulator:
         
         results = {
             'stage_idx': stage_idx,
-            'target_masked_ratio': stage_config.target_masked_ratio,
+            'target_masked_ratio': stage_config.config.target_masked_ratio,
             'actual_mask_ratio': mask_ratio,
-            'p1_probability': stage_config.p1_probability,
-            'p2_probability': stage_config.p2_probability,
+            'p1_probability': stage_config.config.p1_probability,
+            'p2_probability': stage_config.config.p2_probability,
             'avg_cluster_size': cluster_stats['avg_cluster_size'],
             'max_cluster_size': cluster_stats['max_cluster_size'],
             'num_clusters_per_batch': cluster_stats['num_clusters_per_batch'],
             'cluster_size_distribution': cluster_size_distribution,
-            'ratio_accuracy': abs(mask_ratio - stage_config.target_masked_ratio)
+            'ratio_accuracy': abs(mask_ratio - stage_config.config.target_masked_ratio)
         }
         
         # Print detailed analysis
-        print(f"Target mask ratio: {stage_config.target_masked_ratio:.4f}")
+        print(f"Target mask ratio: {stage_config.config.target_masked_ratio:.4f}")
         print(f"Actual mask ratio: {mask_ratio:.4f} (diff: {results['ratio_accuracy']:.4f})")
-        print(f"P1 probability: {stage_config.p1_probability:.3f}")
-        print(f"P2 probability: {stage_config.p2_probability:.3f}")
+        print(f"P1 probability: {stage_config.config.p1_probability:.3f}")
+        print(f"P2 probability: {stage_config.config.p2_probability:.3f}")
         print(f"Avg cluster size: {cluster_stats['avg_cluster_size']:.3f}")
         print(f"Max cluster size: {cluster_stats['max_cluster_size']}")
         print(f"Clusters per batch: {cluster_stats['num_clusters_per_batch']:.1f}")
