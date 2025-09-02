@@ -115,12 +115,15 @@ class MaskingSimulator:
         stage_config = ctx.get_current_stage_config()
         
         # Apply target-driven sticky masking
+        # Note: Using a dummy meta_vocab_size since this is just for simulation
+        meta_vocab_size = 50000  # Typical vocabulary size
         masked_x, mask = apply_target_driven_sticky_masking_gpu(
-            x, 
+            x,
             stage_config.target_masked_ratio,
             stage_config.p1_probability,
             stage_config.p2_probability,
-            ctx.mask_token_id
+            ctx.mask_token_id,
+            meta_vocab_size
         )
         
         # Calculate statistics
