@@ -71,19 +71,41 @@ The models use bidirectional attention with Rotary Position Embeddings (RoPE):
 
 ## Quick Start Examples
 
-### GPU Training (Recommended)
+### Standard Unmasking Training (GPU Recommended)
 
 ```sh
 python train_run.py \
   --training_type=unmasking \
   --batch_size=16 \
   --block_size=1024 \
-  --n_layer=6 \
-  --n_head=6 \
-  --n_embd=384 \
-  --max_iters=50000 \
-  --use_paragraph_boundaries=True \
+  --max_iters=5000 \
   --learning_rate=1e-3
+```
+
+### Transfer Learning (NEW!)
+
+The framework now supports **transfer learning** for both feature extraction and fine-tuning:
+
+#### Feature Extraction (Freeze Backbone, Train Head Only)
+```sh
+python train_run.py \
+  --init_from=resume \
+  --pretrained_checkpoint_path=out/pretrained_model.pt \
+  --switch_to_binary=True \
+  --transfer_learning_mode=feature_extraction \
+  --learning_rate=1e-3 \
+  --max_iters=5000
+```
+
+#### Fine-tuning (Train All Parameters)
+```sh
+python train_run.py \
+  --init_from=resume \
+  --pretrained_checkpoint_path=out/pretrained_model.pt \
+  --switch_to_binary=True \
+  --transfer_learning_mode=fine_tuning \
+  --learning_rate=1e-4 \
+  --max_iters=10000
 ```
 
 ### CPU Training (Reduced Model)
@@ -170,7 +192,7 @@ unmasking_stages = [
 n_layer = 6           # Number of transformer layers (4-12 typical)
 n_head = 6            # Number of attention heads (usually same as n_layer)
 n_embd = 384          # Embedding dimension (128, 256, 384, 512, 768)
-dropout = 0.01        # Dropout rate (0.0-0.1, lower for small models)
+dropout = 0.2        # Dropout rate (0.0-0.1, lower for small models)
 bias = False          # Use bias in Linear/LayerNorm (False often better)
 
 # Context and batch
@@ -190,7 +212,7 @@ max_iters = 50000     # Total training iterations
 # Optimizer
 beta1 = 0.9           # Adam beta1 (momentum)
 beta2 = 0.99          # Adam beta2 (RMSprop-like)
-weight_decay = 1e-3   # L2 regularization (1e-4 to 1e-2)
+weight_decay = 2e-2   # L2 regularization (1e-4 to 1e-2)
 grad_clip = 1.0       # Gradient clipping (0.5 to 2.0)
 ```
 
@@ -295,6 +317,232 @@ Per-stage validation losses:
 - Model vs random ratio > 5x
 - Stages advancing automatically
 - Per-stage losses improving across all stages
+
+## Transfer Learning Guide
+
+### Overview
+
+The framework now supports comprehensive **transfer learning** capabilities, allowing you to:
+
+1. **Load pretrained models** trained with `binary_classification=False` (language modeling)
+2. **Switch to binary classification** (`binary_classification=True`) with automatic head reinitialization  
+3. **Choose training mode**:
+   - **Feature Extraction**: Freeze backbone, train only the classification head
+   - **Fine-tuning**: Train all parameters with pretrained initialization
+4. **Train normally** using the existing robust training pipeline
+
+### Transfer Learning Workflow
+
+#### Step 1: Train a Pretrained Model (Language Modeling)
+
+First, train a model with standard unmasking on your text data:
+
+```sh
+python train_run.py \
+  --training_type=unmasking \
+  --batch_size=16 \
+  --max_iters=20000 \
+  --out_dir=pretrained_model
+```
+
+This creates a language model checkpoint (e.g., `pretrained_model/ckpt_unmasking_20000.pt`).
+
+#### Step 2: Transfer Learning for Classification
+
+**Feature Extraction Mode** (recommended first approach):
+```sh
+python train_run.py \
+  --init_from=resume \
+  --pretrained_checkpoint_path=pretrained_model/ckpt_unmasking_20000.pt \
+  --switch_to_binary=True \
+  --transfer_learning_mode=feature_extraction \
+  --training_type=unmasking \
+  --learning_rate=1e-3 \
+  --max_iters=5000 \
+  --out_dir=feature_extraction_model
+```
+
+**Fine-tuning Mode** (for better performance):
+```sh
+python train_run.py \
+  --init_from=resume \
+  --pretrained_checkpoint_path=pretrained_model/ckpt_unmasking_20000.pt \
+  --switch_to_binary=True \
+  --transfer_learning_mode=fine_tuning \
+  --training_type=unmasking \
+  --learning_rate=1e-4 \
+  --max_iters=10000 \
+  --out_dir=fine_tuning_model
+```
+
+### Transfer Learning Configuration
+
+#### Required Parameters
+
+- `--init_from=resume`: Use checkpoint loading mode
+- `--pretrained_checkpoint_path=PATH`: Path to your pretrained language model checkpoint
+- `--switch_to_binary=True`: Switch from language modeling to binary classification head
+- `--transfer_learning_mode=MODE`: Choose `feature_extraction` or `fine_tuning`
+
+#### Transfer Learning Modes
+
+**Feature Extraction (`feature_extraction`)**:
+- **Freezes**: All transformer layers (backbone)
+- **Trains**: Only the binary classification head
+- **Use case**: When you have limited training data or want fast training
+- **Learning rate**: Can use higher rates (1e-3 to 5e-3)
+- **Training time**: Much faster due to fewer parameters
+
+**Fine-tuning (`fine_tuning`)**:
+- **Freezes**: Nothing - all parameters trainable
+- **Trains**: Entire model with pretrained initialization
+- **Use case**: When you have sufficient training data and want best performance
+- **Learning rate**: Use lower rates (1e-4 to 1e-3) to avoid destroying pretrained features
+- **Training time**: Longer but often achieves better results
+
+### Transfer Learning Best Practices
+
+#### Learning Rates
+```sh
+# Feature extraction: Higher learning rates OK
+--transfer_learning_mode=feature_extraction --learning_rate=1e-3
+
+# Fine-tuning: Lower learning rates to preserve pretrained features  
+--transfer_learning_mode=fine_tuning --learning_rate=1e-4
+```
+
+#### Training Duration
+```sh
+# Feature extraction: Shorter training usually sufficient
+--transfer_learning_mode=feature_extraction --max_iters=2000-5000
+
+# Fine-tuning: Longer training for convergence
+--transfer_learning_mode=fine_tuning --max_iters=5000-15000
+```
+
+#### Model Architecture Compatibility
+- **Compatible**: Pretrained and target models must have same `n_layer`, `n_head`, `n_embd`, `block_size`
+- **Flexible**: `vocab_size` and `binary_classification` can differ (handled automatically)
+- **Error handling**: Framework validates architecture compatibility and provides clear error messages
+
+### Monitoring Transfer Learning
+
+#### Key Metrics to Watch
+
+**Parameter Counts**:
+```
+*** TRANSFER LEARNING OPTIMIZER SETUP ***
+Optimizer parameter summary:
+  Total parameters: 2,345,678
+  Trainable parameters: 1,536 (feature extraction) or 2,345,678 (fine-tuning)
+  Frozen parameters: 2,344,142 (feature extraction) or 0 (fine-tuning)
+  Trainable percentage: 0.1% (feature extraction) or 100.0% (fine-tuning)
+```
+
+**Training Logs**:
+```
+*** TRANSFER LEARNING MODE ***
+Loading pretrained weights from: pretrained_model/ckpt_unmasking_20000.pt
+Transfer learning mode: feature_extraction
+Switch to binary classification: True
+✓ Pretrained weights loaded successfully
+✓ Switched to binary classification
+✓ Backbone frozen for feature extraction
+```
+
+#### Expected Behavior
+
+**Feature Extraction**:
+- Very few trainable parameters (typically < 1% of total)
+- Fast training iterations
+- Quick convergence (often within 1000-3000 iterations)
+
+**Fine-tuning**:
+- All parameters trainable
+- Slower training iterations
+- More gradual convergence
+- Often achieves lower final loss than feature extraction
+
+### Transfer Learning Examples
+
+#### Example 1: Text Classification
+```sh
+# 1. Train language model on text corpus
+python train_run.py --training_type=unmasking --max_iters=20000 --out_dir=lm_model
+
+# 2. Feature extraction for classification task
+python train_run.py \
+  --init_from=resume \
+  --pretrained_checkpoint_path=lm_model/ckpt_unmasking_20000.pt \
+  --switch_to_binary=True \
+  --transfer_learning_mode=feature_extraction \
+  --max_iters=3000 \
+  --out_dir=classifier_features
+
+# 3. Fine-tuning for better performance  
+python train_run.py \
+  --init_from=resume \
+  --pretrained_checkpoint_path=lm_model/ckpt_unmasking_20000.pt \
+  --switch_to_binary=True \
+  --transfer_learning_mode=fine_tuning \
+  --learning_rate=5e-5 \
+  --max_iters=8000 \
+  --out_dir=classifier_finetuned
+```
+
+#### Example 2: Domain Adaptation
+```sh
+# 1. Train on general text (e.g., Shakespeare)  
+python train_run.py --dataset=shakespeare_char --max_iters=15000 --out_dir=general_lm
+
+# 2. Fine-tune for domain-specific classification
+python train_run.py \
+  --init_from=resume \
+  --pretrained_checkpoint_path=general_lm/latest.pt \
+  --dataset=domain_specific_char \
+  --switch_to_binary=True \
+  --transfer_learning_mode=fine_tuning \
+  --learning_rate=1e-4 \
+  --max_iters=12000 \
+  --out_dir=domain_classifier
+```
+
+### Transfer Learning Troubleshooting
+
+#### Common Issues
+
+**Architecture Mismatch**:
+```
+FileNotFoundError: Pretrained checkpoint file not found
+```
+- Check the checkpoint path is correct
+- Ensure the checkpoint file exists
+
+**Parameter Count Warnings**:
+```
+WARNING: Optimizer param count (X) != trainable param count (Y)
+```
+- This indicates an internal inconsistency (should not occur with the current implementation)
+- Try restarting training or check for custom optimizer configurations
+
+**Poor Transfer Performance**:
+- **Try lower learning rates** for fine-tuning (1e-5 to 1e-4)
+- **Train longer** - transfer learning can take time to converge
+- **Check pretrained model quality** - ensure base model was well-trained
+- **Verify data compatibility** - ensure training data is appropriate for the task
+
+#### Performance Tips
+
+**For Better Results**:
+- Use well-trained pretrained models (>15k iterations)
+- Start with feature extraction, then try fine-tuning
+- Use appropriate learning rates (lower for fine-tuning)
+- Monitor both training and validation metrics
+
+**For Faster Training**:
+- Use feature extraction mode for rapid prototyping
+- Freeze more layers if you implement custom freezing
+- Use larger batch sizes if memory allows
 
 ## Advanced Usage
 

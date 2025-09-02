@@ -539,6 +539,150 @@ class GPT(nn.Module):
         mfu = flops_achieved / flops_promised
         return mfu
 
+    def switch_to_binary_classification(self):
+        """Switch from language modeling to binary classification head"""
+        if self.config.binary_classification:
+            print("Model is already in binary classification mode")
+            return
+        
+        # Break weight tying if it exists (language model heads are tied to token embeddings)
+        if hasattr(self.transformer, 'wte') and hasattr(self, 'lm_head'):
+            # Check if weights are tied by comparing tensor identity
+            if hasattr(self.transformer.wte, 'weight') and hasattr(self.lm_head, 'weight'):
+                if self.transformer.wte.weight is self.lm_head.weight:
+                    # Create independent token embedding weights (break the tie)
+                    with torch.no_grad():
+                        # Create new independent weight tensor for token embeddings
+                        new_wte_weight = self.transformer.wte.weight.clone()
+                        self.transformer.wte.weight = nn.Parameter(new_wte_weight)
+                    print("Broke weight tying between token embeddings and language model head")
+        
+        # Create new binary classification head
+        old_head = self.lm_head
+        self.lm_head = nn.Linear(self.config.n_embd, 2, bias=False)
+        
+        # Initialize new head with small weights (same as in __init__)
+        torch.nn.init.normal_(self.lm_head.weight, mean=0.0, std=0.002)
+        
+        # Update config
+        self.config.binary_classification = True
+        
+        # Move to same device as old head
+        self.lm_head = self.lm_head.to(old_head.weight.device)
+        
+        print(f"Switched to binary classification head (2 outputs)")
+
+    def switch_to_language_modeling(self, vocab_size):
+        """Switch from binary classification to language modeling head"""
+        if not self.config.binary_classification:
+            print("Model is already in language modeling mode")
+            return
+        
+        # Create new language modeling head
+        old_head = self.lm_head
+        self.lm_head = nn.Linear(self.config.n_embd, vocab_size, bias=False)
+        
+        # Initialize with existing token embedding weights if available and compatible
+        if hasattr(self.transformer, 'wte') and self.transformer.wte.weight.size(0) >= vocab_size:
+            with torch.no_grad():
+                self.lm_head.weight.copy_(self.transformer.wte.weight[:vocab_size])
+            print(f"Initialized language model head with token embeddings")
+        else:
+            torch.nn.init.normal_(self.lm_head.weight, mean=0.0, std=0.02)
+            print(f"Initialized language model head with random weights")
+        
+        # Update config
+        self.config.binary_classification = False
+        self.config.vocab_size = vocab_size
+        
+        # Move to same device
+        self.lm_head = self.lm_head.to(old_head.weight.device)
+        
+        # Restore weight tying between token embeddings and language model head
+        # This should match the original initialization behavior
+        if hasattr(self.transformer, 'wte') and self.transformer.wte.weight.size(0) == vocab_size:
+            # Use the same pattern as in __init__: wte.weight = lm_head.weight
+            self.transformer.wte.weight = self.lm_head.weight
+            print(f"Restored weight tying between token embeddings and language model head")
+        
+        print(f"Switched to language modeling head ({vocab_size} outputs)")
+
+    def get_trainable_param_count(self):
+        """Return count of trainable parameters"""
+        return sum(p.numel() for p in self.parameters() if p.requires_grad)
+
+    def freeze_backbone(self):
+        """Freeze all parameters except the classification head"""
+        frozen_params = 0
+        trainable_params = 0
+        
+        for name, param in self.named_parameters():
+            if 'lm_head' not in name:  # Don't freeze the head
+                param.requires_grad = False
+                frozen_params += param.numel()
+            else:
+                trainable_params += param.numel()
+        
+        print(f"Frozen backbone: {frozen_params:,} parameters")
+        print(f"Trainable head: {trainable_params:,} parameters")
+
+    def unfreeze_all(self):
+        """Unfreeze all parameters for full fine-tuning"""
+        total_params = 0
+        for param in self.parameters():
+            param.requires_grad = True
+            total_params += param.numel()
+        print(f"Unfrozen all parameters for fine-tuning: {total_params:,} parameters")
+
+    def get_parameter_groups(self):
+        """Get parameter groups split by backbone vs head for debugging"""
+        backbone_params = []
+        head_params = []
+        
+        for name, param in self.named_parameters():
+            if 'lm_head' in name:
+                head_params.append((name, param))
+            else:
+                backbone_params.append((name, param))
+        
+        return {
+            'backbone': backbone_params,
+            'head': head_params
+        }
+
+    def print_parameter_status(self):
+        """Print detailed parameter freeze/unfreeze status"""
+        groups = self.get_parameter_groups()
+        
+        print("\n--- Parameter Status ---")
+        print(f"Backbone parameters:")
+        frozen_count = 0
+        trainable_count = 0
+        
+        for name, param in groups['backbone']:
+            status = "trainable" if param.requires_grad else "frozen"
+            if param.requires_grad:
+                trainable_count += param.numel()
+            else:
+                frozen_count += param.numel()
+            print(f"  {name}: {param.numel():,} params ({status})")
+        
+        print(f"\nHead parameters:")
+        head_trainable = 0
+        for name, param in groups['head']:
+            status = "trainable" if param.requires_grad else "frozen"
+            if param.requires_grad:
+                head_trainable += param.numel()
+            print(f"  {name}: {param.numel():,} params ({status})")
+        
+        total_trainable = trainable_count + head_trainable
+        total_frozen = frozen_count + (0 if head_trainable > 0 else sum(p.numel() for _, p in groups['head']))
+        
+        print(f"\nSummary:")
+        print(f"  Trainable: {total_trainable:,} parameters")
+        print(f"  Frozen: {total_frozen:,} parameters")
+        print(f"  Total: {total_trainable + total_frozen:,} parameters")
+
     @torch.no_grad()
     def generate(self, idx, max_new_tokens, temperature=1.0, top_k=None):
         """

@@ -78,6 +78,11 @@ entropy_penalty_start_iter = 6000 # iteration to start applying entropy penalty
 # label smoothing config
 uncertainty_factor = 0.0 # if > 0, apply label smoothing: correct answer gets (1-u), wrong answers get u/(vocab_size-1)
 
+# transfer learning config
+transfer_learning_mode = 'from_scratch'  # 'from_scratch', 'feature_extraction', 'fine_tuning'
+pretrained_checkpoint_path = None  # Path to pretrained checkpoint for transfer learning
+switch_to_binary = False  # Switch from language modeling to binary classification after loading pretrained weights
+
 # adamw optimizer
 learning_rate = 1e-3 # with baby networks can afford to go a bit higher
 max_iters = 50000
@@ -285,7 +290,10 @@ training_ctx = TrainingContext(
     enable_entropy_penalty=enable_entropy_penalty,
     max_entropy_penalty=max_entropy_penalty,
     entropy_penalty_start_iter=entropy_penalty_start_iter,
-    uncertainty_factor=uncertainty_factor
+    uncertainty_factor=uncertainty_factor,
+    transfer_learning_mode=transfer_learning_mode,
+    pretrained_checkpoint_path=pretrained_checkpoint_path,
+    switch_to_binary=switch_to_binary
 )
 
 # Apply restored training context state if resuming from checkpoint
@@ -311,75 +319,161 @@ if init_from == 'scratch':
     gptconf = GPTConfig(**model_args)
     model = GPT(gptconf)
 elif init_from == 'resume':
-    print_and_flush(f"Resuming unmasking training from {out_dir}")
-    # resume training from a checkpoint.
-    # Find the latest unmasking checkpoint file
-    if ckpt_filename is None:
-        import glob
-        ckpt_pattern = os.path.join(out_dir, 'ckpt_*unmasking*.pt')
-        ckpt_files = glob.glob(ckpt_pattern)
-        if not ckpt_files:
-            # Fallback to old naming convention
-            ckpt_path = os.path.join(out_dir, 'ckpt.pt')
-            if not os.path.exists(ckpt_path):
-                raise FileNotFoundError(f"No unmasking checkpoint files found in {out_dir}")
-        else:
-            # Extract iteration numbers and find the latest
-            def extract_iter_num(filename):
-                basename = os.path.basename(filename)
-                # Extract number from ckpt_unmasking_XXX.pt
-                parts = basename.split('_')
-                for part in parts:
-                    if part.replace('.pt', '').isdigit():
-                        return int(part.replace('.pt', ''))
-                return 0
-
-            latest_ckpt = max(ckpt_files, key=extract_iter_num)
-            ckpt_path = latest_ckpt
-        print_and_flush(f"Loading latest checkpoint: {os.path.basename(ckpt_path)}")
-    else:
-        ckpt_path = os.path.join(out_dir, ckpt_filename)
-        if not os.path.exists(ckpt_path):
-            raise FileNotFoundError(f"Checkpoint file {ckpt_path} not found")
-
-    checkpoint = torch.load(ckpt_path, map_location=device, weights_only=False)
-    checkpoint_model_args = checkpoint['model_args']
-    training_ctx.extended_vocab_size = checkpoint_model_args['vocab_size']
-    print_and_flush(f"Checkpoint vocab size: {training_ctx.extended_vocab_size}")
-    # force these config attributes to be equal otherwise we can't even resume training
-    # the rest of the attributes (e.g. dropout) can stay as desired from command line
-    for k in ['n_layer', 'n_head', 'n_embd', 'block_size', 'bias', 'vocab_size']:
-        model_args[k] = checkpoint_model_args[k]
-    # Also restore use_rope setting if it exists in checkpoint
-    if 'use_rope' in checkpoint_model_args:
-        model_args['use_rope'] = checkpoint_model_args['use_rope']
-    # create the model
-    gptconf = GPTConfig(**model_args)
-    model = GPT(gptconf)
-    state_dict = checkpoint['model']
-    # fix the keys of the state dictionary :(
-    # honestly no idea how checkpoints sometimes get this prefix, have to debug more
-    unwanted_prefix = '_orig_mod.'
-    for k,v in list(state_dict.items()):
-        if k.startswith(unwanted_prefix):
-            state_dict[k[len(unwanted_prefix):]] = state_dict.pop(k)
-    model.load_state_dict(state_dict)
-    iter_num = checkpoint['iter_num']
-    start_iter_num = iter_num
-    best_val_loss = checkpoint['best_val_loss']
-    
-    # Restore training context state if available
-    if 'training_context' in checkpoint:
-        ctx_state = checkpoint['training_context']
-        print_and_flush(f"Restoring training context state:")
-        print_and_flush(f"  Stage: {ctx_state.get('current_stage', 0)}")
-        print_and_flush(f"  Val loss stale count: {ctx_state.get('val_loss_stale_count', 0)}")
-        print_and_flush(f"  Best val loss for stage: {ctx_state.get('best_val_loss_for_stage', float('inf'))}")
+    # Handle transfer learning case
+    if pretrained_checkpoint_path is not None:
+        print_and_flush("*** TRANSFER LEARNING MODE ***")
+        print_and_flush(f"Loading pretrained weights from: {pretrained_checkpoint_path}")
+        print_and_flush(f"Transfer learning mode: {transfer_learning_mode}")
+        print_and_flush(f"Switch to binary classification: {switch_to_binary}")
         
-        # These will be set on the training_ctx after it's created
-        checkpoint_training_context = ctx_state
-    else:
+        # Load pretrained checkpoint
+        if not os.path.exists(pretrained_checkpoint_path):
+            raise FileNotFoundError(f"Pretrained checkpoint file {pretrained_checkpoint_path} not found")
+        
+        pretrained_checkpoint = torch.load(pretrained_checkpoint_path, map_location=device, weights_only=False)
+        pretrained_model_args = pretrained_checkpoint['model_args']
+        
+        print_and_flush(f"Pretrained model architecture:")
+        for k in ['n_layer', 'n_head', 'n_embd', 'block_size', 'bias', 'vocab_size']:
+            if k in pretrained_model_args:
+                print_and_flush(f"  {k}: {pretrained_model_args[k]}")
+        
+        # Use pretrained architecture but adapt for current training needs
+        for k in ['n_layer', 'n_head', 'n_embd', 'block_size', 'bias']:
+            model_args[k] = pretrained_model_args[k]
+        
+        # Also restore use_rope setting if it exists in checkpoint
+        if 'use_rope' in pretrained_model_args:
+            model_args['use_rope'] = pretrained_model_args['use_rope']
+        
+        # Set vocab size and binary classification for the new model
+        model_args['vocab_size'] = training_ctx.extended_vocab_size
+        model_args['binary_classification'] = False  # Always load as language model first
+        
+        # Create model with pretrained architecture
+        gptconf = GPTConfig(**model_args)
+        model = GPT(gptconf)
+        
+        # Load pretrained state dict (will have language model head)
+        pretrained_state = pretrained_checkpoint['model']
+        
+        # Remove _orig_mod prefix if present
+        unwanted_prefix = '_orig_mod.'
+        for k, v in list(pretrained_state.items()):
+            if k.startswith(unwanted_prefix):
+                pretrained_state[k[len(unwanted_prefix):]] = pretrained_state.pop(k)
+        
+        print_and_flush("Loading pretrained weights (allowing head size mismatch)...")
+        # Use strict=False to allow head size mismatches
+        missing_keys, unexpected_keys = model.load_state_dict(pretrained_state, strict=False)
+        
+        if missing_keys:
+            print_and_flush(f"Missing keys (expected for vocab size changes): {len(missing_keys)} keys")
+        if unexpected_keys:
+            print_and_flush(f"Unexpected keys: {len(unexpected_keys)} keys")
+        
+        print_and_flush("✓ Pretrained weights loaded successfully")
+        
+        # Switch to binary classification if requested
+        if switch_to_binary:
+            print_and_flush("Switching to binary classification head...")
+            model.switch_to_binary_classification()
+            print_and_flush("✓ Switched to binary classification")
+        
+        # Set transfer learning mode (freeze/unfreeze)
+        if transfer_learning_mode == 'feature_extraction':
+            print_and_flush("Setting feature extraction mode (freezing backbone)...")
+            model.freeze_backbone()
+            print_and_flush("✓ Backbone frozen for feature extraction")
+        elif transfer_learning_mode == 'fine_tuning':
+            print_and_flush("Setting fine-tuning mode (all parameters trainable)...")
+            model.unfreeze_all()
+            print_and_flush("✓ All parameters unfrozen for fine-tuning")
+        else:  # from_scratch
+            print_and_flush("Using pretrained weights with all parameters trainable")
+        
+        # Print parameter status
+        model.print_parameter_status()
+        
+        # Initialize fresh training state for transfer learning
+        iter_num = 0
+        start_iter_num = 0
+        best_val_loss = 1e9
         checkpoint_training_context = None
+        
+        print_and_flush("*** TRANSFER LEARNING SETUP COMPLETE ***")
+        
+    else:
+        # Regular resume training from a checkpoint
+        print_and_flush(f"Resuming unmasking training from {out_dir}")
+        # resume training from a checkpoint.
+        # Find the latest unmasking checkpoint file
+        if ckpt_filename is None:
+            import glob
+            ckpt_pattern = os.path.join(out_dir, 'ckpt_*unmasking*.pt')
+            ckpt_files = glob.glob(ckpt_pattern)
+            if not ckpt_files:
+                # Fallback to old naming convention
+                ckpt_path = os.path.join(out_dir, 'ckpt.pt')
+                if not os.path.exists(ckpt_path):
+                    raise FileNotFoundError(f"No unmasking checkpoint files found in {out_dir}")
+            else:
+                # Extract iteration numbers and find the latest
+                def extract_iter_num(filename):
+                    basename = os.path.basename(filename)
+                    # Extract number from ckpt_unmasking_XXX.pt
+                    parts = basename.split('_')
+                    for part in parts:
+                        if part.replace('.pt', '').isdigit():
+                            return int(part.replace('.pt', ''))
+                    return 0
+
+                latest_ckpt = max(ckpt_files, key=extract_iter_num)
+                ckpt_path = latest_ckpt
+            print_and_flush(f"Loading latest checkpoint: {os.path.basename(ckpt_path)}")
+        else:
+            ckpt_path = os.path.join(out_dir, ckpt_filename)
+            if not os.path.exists(ckpt_path):
+                raise FileNotFoundError(f"Checkpoint file {ckpt_path} not found")
+
+        checkpoint = torch.load(ckpt_path, map_location=device, weights_only=False)
+        checkpoint_model_args = checkpoint['model_args']
+        training_ctx.extended_vocab_size = checkpoint_model_args['vocab_size']
+        print_and_flush(f"Checkpoint vocab size: {training_ctx.extended_vocab_size}")
+        # force these config attributes to be equal otherwise we can't even resume training
+        # the rest of the attributes (e.g. dropout) can stay as desired from command line
+        for k in ['n_layer', 'n_head', 'n_embd', 'block_size', 'bias', 'vocab_size']:
+            model_args[k] = checkpoint_model_args[k]
+        # Also restore use_rope setting if it exists in checkpoint
+        if 'use_rope' in checkpoint_model_args:
+            model_args['use_rope'] = checkpoint_model_args['use_rope']
+        # create the model
+        gptconf = GPTConfig(**model_args)
+        model = GPT(gptconf)
+        state_dict = checkpoint['model']
+        # fix the keys of the state dictionary :(
+        # honestly no idea how checkpoints sometimes get this prefix, have to debug more
+        unwanted_prefix = '_orig_mod.'
+        for k,v in list(state_dict.items()):
+            if k.startswith(unwanted_prefix):
+                state_dict[k[len(unwanted_prefix):]] = state_dict.pop(k)
+        model.load_state_dict(state_dict)
+        iter_num = checkpoint['iter_num']
+        start_iter_num = iter_num
+        best_val_loss = checkpoint['best_val_loss']
+        
+        # Restore training context state if available
+        if 'training_context' in checkpoint:
+            ctx_state = checkpoint['training_context']
+            print_and_flush(f"Restoring training context state:")
+            print_and_flush(f"  Stage: {ctx_state.get('current_stage', 0)}")
+            print_and_flush(f"  Val loss stale count: {ctx_state.get('val_loss_stale_count', 0)}")
+            print_and_flush(f"  Best val loss for stage: {ctx_state.get('best_val_loss_for_stage', float('inf'))}")
+            
+            # These will be set on the training_ctx after it's created
+            checkpoint_training_context = ctx_state
+        else:
+            checkpoint_training_context = None
 
 # crop down the model block size if desired, using model surgery
 if block_size < model.config.block_size:
@@ -394,8 +488,41 @@ scaler = torch.cuda.amp.GradScaler(enabled=(dtype == 'float16'))
 
 # optimizer
 optimizer = model.configure_optimizers(weight_decay, learning_rate, (beta1, beta2), device_type)
-if init_from == 'resume':
+
+# Transfer learning specific optimizer adjustments and logging
+if pretrained_checkpoint_path is not None:
+    # Transfer learning: don't load optimizer state, start fresh
+    print_and_flush("*** TRANSFER LEARNING OPTIMIZER SETUP ***")
+    
+    trainable_params = model.get_trainable_param_count()
+    total_params = sum(p.numel() for p in model.parameters())
+    frozen_params = total_params - trainable_params
+    
+    print_and_flush(f"Optimizer parameter summary:")
+    print_and_flush(f"  Total parameters: {total_params:,}")
+    print_and_flush(f"  Trainable parameters: {trainable_params:,}")  
+    print_and_flush(f"  Frozen parameters: {frozen_params:,}")
+    print_and_flush(f"  Trainable percentage: {trainable_params/total_params*100:.1f}%")
+    
+    if transfer_learning_mode == 'feature_extraction':
+        print_and_flush(f"Feature extraction mode: optimizer will only update {trainable_params:,} head parameters")
+    elif transfer_learning_mode == 'fine_tuning':
+        print_and_flush(f"Fine-tuning mode: optimizer will update all {trainable_params:,} parameters")
+    
+    # Verify optimizer only has gradients for trainable parameters
+    optimizer_param_count = sum(p.numel() for group in optimizer.param_groups for p in group['params'])
+    if optimizer_param_count != trainable_params:
+        print_and_flush(f"⚠ WARNING: Optimizer param count ({optimizer_param_count:,}) != trainable param count ({trainable_params:,})")
+    else:
+        print_and_flush(f"✓ Optimizer correctly configured for {trainable_params:,} trainable parameters")
+    
+    print_and_flush("*** TRANSFER LEARNING OPTIMIZER READY ***")
+    
+elif init_from == 'resume':
+    # Regular resume: load optimizer state
     optimizer.load_state_dict(checkpoint['optimizer'])
+    print_and_flush("Loaded optimizer state from checkpoint")
+
 checkpoint = None # free up memory
 
 # compile the model

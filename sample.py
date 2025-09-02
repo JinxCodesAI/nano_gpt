@@ -11,10 +11,13 @@ import torch
 from model import GPTConfig, GPT
 from sample_utils import linear_remasking_schedule, nucleus_sample, apply_remasking, calculate_selfconfidence_ratio, predict_and_sample_tokens, apply_remasking_step
 
+# Import training_utils to register compatibility mapping for old checkpoints
+import training_utils
+
 # Configuration
 init_from = 'resume'
 out_dir = 'out'
-checkpoint_name = 'optimal6_7400.pt' #'35.75_58.2_UM.pt' Decent models optimal2_3400.pt, 
+checkpoint_name = 'optimal5_8000.pt' #'35.75_58.2_UM.pt' Decent models optimal2_3400.pt, 
 remasking_checkpoint_name = None #'ckpt_remasking_binary_600.pt'  # Optional: remasking_binary model checkpoint
 num_samples = 8  # Number of samples to generate
 sequence_length = 1024  # Total length of generated sequence
@@ -357,7 +360,8 @@ def diffusion_generate(model, batch_size, total_length, iterations, remasking_mo
                 randomness_strength=randomness_strength,
                 mask_token_id=mask_token_id,
                 device=device,
-                verbose=verbose
+                verbose=verbose,
+                main_model=model
             )
             
             if verbose and decode_mask_fn:

@@ -134,6 +134,11 @@ class TrainingContext:
     # Label smoothing parameters
     uncertainty_factor: float = 0.0  # Label smoothing factor: 0 = no smoothing, >0 = apply smoothing
     
+    # Transfer learning parameters
+    transfer_learning_mode: str = 'from_scratch'  # 'from_scratch', 'feature_extraction', 'fine_tuning'
+    pretrained_checkpoint_path: str = None  # Path to pretrained checkpoint for transfer learning
+    switch_to_binary: bool = False  # Switch from language modeling to binary classification after loading
+    
     def __post_init__(self):
         # Default unmasking stages if not provided
         if self.training_type == 'unmasking' and self.unmasking_stages is None:

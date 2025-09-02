@@ -10,45 +10,79 @@ import pickle
 import math
 import random
 import sys
+import numpy as np
 from collections import Counter, defaultdict
 from contextlib import nullcontext
 import torch
 from model import GPTConfig, GPT
 from sample_utils import (
-    calculate_selfconfidence_ratio, 
-    predict_and_sample_tokens, 
-    apply_remasking_step, 
+    calculate_selfconfidence_ratio,
+    calculate_probability_percentile,
+    predict_and_sample_tokens,
+    apply_remasking_step,
     linear_remasking_schedule
 )
 from training_utils import TrainingContext
 
-# Handle old module references in checkpoints
-class ModuleMapper:
-    """Maps old module names to new ones for checkpoint loading"""
-    def __init__(self):
-        self.module_map = {
-            'train_utils': 'training_utils',  # Handle renamed module
-        }
-    
-    def __enter__(self):
-        self._original_import = __builtins__.__import__
-        def custom_import(name, *args, **kwargs):
-            if name in self.module_map:
-                name = self.module_map[name]
-            return self._original_import(name, *args, **kwargs)
-        __builtins__.__import__ = custom_import
-        
-        # Also handle sys.modules mapping
-        if 'train_utils' not in sys.modules and 'training_utils' in sys.modules:
-            sys.modules['train_utils'] = sys.modules['training_utils']
-        
-        return self
-    
-    def __exit__(self, exc_type, exc_val, exc_tb):
-        __builtins__.__import__ = self._original_import
-        if 'train_utils' in sys.modules and 'training_utils' in sys.modules:
-            if sys.modules['train_utils'] is sys.modules['training_utils']:
-                del sys.modules['train_utils']
+# Note: Compatibility mapping for old 'train_utils' module references in checkpoints
+# is handled by importing training_utils above, which registers the mapping in sys.modules
+
+
+class GroundTruthModel:
+    """
+    A fake model that generates samples by taking them from validation set.
+    This serves as ground truth baseline in tournament comparisons.
+    """
+
+    def __init__(self, config, vocab_info):
+        self.config = config
+        self.vocab_info = vocab_info
+        self.validation_data = None
+        self.sample_index = 0
+        self._load_validation_data()
+
+    def _load_validation_data(self):
+        """Load validation data from val.bin file"""
+        # Determine dataset name from config or use default
+        dataset_name = self.vocab_info.get('dataset_name', 'shakespeare_char')
+        data_dir = os.path.join('data', dataset_name)
+        val_path = os.path.join(data_dir, 'val.bin')
+
+        if not os.path.exists(val_path):
+            raise FileNotFoundError(f"Validation data not found: {val_path}")
+
+        # Load validation data
+        self.validation_data = np.memmap(val_path, dtype=np.uint16, mode='r')
+        print(f"Ground truth model loaded validation data: {len(self.validation_data)} tokens")
+
+    def generate_samples(self, batch_size, sequence_length):
+        """Generate samples by extracting sequences from validation data"""
+        if self.validation_data is None:
+            raise RuntimeError("Validation data not loaded")
+
+        samples = []
+        max_start_idx = len(self.validation_data) - sequence_length
+
+        for i in range(batch_size):
+            # Use deterministic sampling with wraparound to ensure reproducibility
+            start_idx = (self.sample_index + i * 1000) % max_start_idx
+
+            # Extract sequence
+            sequence = self.validation_data[start_idx:start_idx + sequence_length]
+            sample_tokens = sequence.astype(np.int64).tolist()
+            sample_text = self.vocab_info['decode'](sample_tokens)
+
+            samples.append({
+                'tokens': sample_tokens,
+                'text': sample_text,
+                'model_id': 'ground_truth',
+                'sample_id': i
+            })
+
+        # Update sample index for next batch
+        self.sample_index = (self.sample_index + batch_size * 1000) % max_start_idx
+
+        return samples
 
 
 def diffusion_generate(model, batch_size, total_length, iterations, remasking_model, mask_token_id,
@@ -142,7 +176,8 @@ def diffusion_generate(model, batch_size, total_length, iterations, remasking_mo
                 randomness_strength=randomness_strength,
                 mask_token_id=mask_token_id,
                 device=device,
-                verbose=verbose
+                verbose=verbose,
+                main_model=model
             )
         
         if verbose:
@@ -160,7 +195,7 @@ EVALUATION_CONFIG = {
         'optimal5_6600.pt',
         'optimal5_2000.pt',
         'optimal3_7200.pt',
-        'optimal3_5000.pt',
+        'optimal5_8000.pt',
         'optimal2_8000.pt',
         '35.75_58.2_UM.pt',
         'optimal2_6400.pt',
@@ -170,14 +205,14 @@ EVALUATION_CONFIG = {
         # 'model3.pt',
     ],
     'remasking_checkpoint_name': None,  # Optional: remasking_binary model checkpoint
-    'judge_model': '35.75_58.2_UM.pt',  # Which model to use as the single judge
+    'judge_model': '35.75_58.2_UM.pt',  # '35.75_58.2_UM.pt',  # Which model to use as the single judge
     
     # Evaluation parameters
     'batch_size': 32,           # N samples per model per batch (generation)
     'rating_batch_size': 64,    # Batch size for rating samples (GPU optimization)
     'num_challenges': 1000,     # P tournament rounds before stopping
     'sequence_length': 1024,   # Total length of generated sequence
-    'seed': 42,
+    'seed': -1,
     'device': 'cuda',
     'dtype': 'float16',
     'compile': False,
@@ -190,7 +225,7 @@ EVALUATION_CONFIG = {
     'diffusion_iterations': 25,
     'start_ratio': 0.99,
     'end_ratio': 0.05,
-    'randomness_strength': 1.0,
+    'randomness_strength': 0.4,
     
     # Schedule parameters
     'schedule_type': 'custom',
@@ -200,6 +235,9 @@ EVALUATION_CONFIG = {
     'out_dir': 'out',
     'results_file': 'model_evaluation_results.txt',
     'verbose': True,
+
+    # Metric configuration
+    'probability_percentile': 0.1,  # Calculate 10th percentile of token probabilities
 }
 
 # Allow configuration override from command line
@@ -226,31 +264,38 @@ class ModelLoader:
         
     def load_all_models(self):
         """Load all model checkpoints and vocabulary"""
-        print(f"Loading {len(self.config['checkpoints'])} models...")
-        
+        print(f"Loading {len(self.config['checkpoints'])} models + ground truth...")
+
         # Load vocabulary from first model (assuming all models use same vocab)
         self._load_vocabulary()
-        
+
         # Load each model checkpoint
         for i, checkpoint_name in enumerate(self.config['checkpoints']):
             model_id = f"model_{i}"
             self.model_names.append(model_id)
             model = self._load_single_model(checkpoint_name, model_id)
             self.models[model_id] = model
-            
+
             # Track which model is the judge
             if checkpoint_name == self.config['judge_model']:
                 self.judge_model_id = model_id
                 print(f"  ✓ {model_id} identified as judge model")
-            
+
+        # Add ground truth model
+        ground_truth_id = "ground_truth"
+        self.model_names.append(ground_truth_id)
+        ground_truth_model = GroundTruthModel(self.config, self.vocab_info)
+        self.models[ground_truth_id] = ground_truth_model
+        print(f"  ✓ {ground_truth_id} loaded (validation data baseline)")
+
         # Load optional remasking model
         self._load_remasking_model()
-        
+
         # Verify judge model was found
         if self.judge_model_id is None:
             raise ValueError(f"Judge model '{self.config['judge_model']}' not found in checkpoints list")
-        
-        print(f"Successfully loaded {len(self.models)} models")
+
+        print(f"Successfully loaded {len(self.models)} models (including ground truth)")
         return self.models, self.vocab_info, self.remasking_model, self.judge_model_id
     
     def _load_single_model(self, checkpoint_name, model_id):
@@ -261,8 +306,7 @@ class ModelLoader:
             raise FileNotFoundError(f"Checkpoint not found: {ckpt_path}")
             
         print(f"Loading {model_id} from {checkpoint_name}...")
-        with ModuleMapper():
-            checkpoint = torch.load(ckpt_path, map_location=self.config['device'], weights_only=False)
+        checkpoint = torch.load(ckpt_path, map_location=self.config['device'], weights_only=False)
         
         # Create model
         model_args = checkpoint['model_args']
@@ -293,8 +337,7 @@ class ModelLoader:
         # Use same vocabulary loading logic as sample.py
         first_checkpoint_name = self.config['checkpoints'][0]
         ckpt_path = os.path.join(self.config['out_dir'], first_checkpoint_name)
-        with ModuleMapper():
-            checkpoint = torch.load(ckpt_path, map_location=self.config['device'], weights_only=False)
+        checkpoint = torch.load(ckpt_path, map_location=self.config['device'], weights_only=False)
         
         # Determine dataset name
         dataset_name = None
@@ -364,29 +407,30 @@ class ModelLoader:
         """Load optional remasking model"""
         remasking_checkpoint_name = self.config.get('remasking_checkpoint_name')
         if remasking_checkpoint_name is None:
+            print("No separate remasking model specified - will use main model for intelligent remasking")
             return
-            
+
         remasking_ckpt_path = os.path.join(self.config['out_dir'], remasking_checkpoint_name)
         if not os.path.exists(remasking_ckpt_path):
             print(f"Remasking checkpoint not found: {remasking_ckpt_path}")
+            print("Will use main model for intelligent remasking")
             return
-            
+
         print(f"Loading remasking model from {remasking_checkpoint_name}...")
-        with ModuleMapper():
-            remasking_checkpoint = torch.load(remasking_ckpt_path, map_location=self.config['device'], weights_only=False)
-        
+        remasking_checkpoint = torch.load(remasking_ckpt_path, map_location=self.config['device'], weights_only=False)
+
         remasking_model_args = remasking_checkpoint['model_args']
         if 'attention_type' not in remasking_model_args:
             remasking_model_args['attention_type'] = 'causal'
-        
+
         # Verify it's a binary classification model
         if not remasking_model_args.get('binary_classification', False):
-            print("Warning: Remasking model is not binary classification, skipping")
+            print("Warning: Remasking model is not binary classification, will use main model instead")
             return
-            
+
         remasking_config = GPTConfig(**remasking_model_args)
         self.remasking_model = GPT(remasking_config)
-        
+
         # Load weights
         remasking_state_dict = remasking_checkpoint['model']
         unwanted_prefix = '_orig_mod.'
@@ -394,12 +438,12 @@ class ModelLoader:
             if k.startswith(unwanted_prefix):
                 remasking_state_dict[k[len(unwanted_prefix):]] = remasking_state_dict.pop(k)
         self.remasking_model.load_state_dict(remasking_state_dict)
-        
+
         self.remasking_model.eval()
         self.remasking_model.to(self.config['device'])
         if self.config['compile']:
             self.remasking_model = torch.compile(self.remasking_model)
-            
+
         print("Remasking model loaded (binary classification)")
 
 
@@ -419,7 +463,17 @@ class SampleGenerator:
     def generate_samples_for_model(self, model, model_id):
         """Generate samples for a single model"""
         print(f"\nGenerating samples for {model_id}...")
-        
+
+        # Handle ground truth model differently
+        if model_id == "ground_truth":
+            samples = model.generate_samples(
+                batch_size=self.config['batch_size'],
+                sequence_length=self.config['sequence_length']
+            )
+            print(f"Generated {len(samples)} samples for {model_id} (from validation data)")
+            return samples
+
+        # Regular diffusion generation for other models
         with torch.no_grad():
             with self.ctx:
                 generated_tokens = diffusion_generate(
@@ -447,7 +501,7 @@ class SampleGenerator:
                     repetition_window=self.config['repetition_window'],
                     log_debug=False
                 )
-        
+
         # Convert to list of samples
         samples = []
         for i in range(self.config['batch_size']):
@@ -459,7 +513,7 @@ class SampleGenerator:
                 'model_id': model_id,
                 'sample_id': i
             })
-        
+
         print(f"Generated {len(samples)} samples for {model_id}")
         return samples
     
@@ -519,7 +573,18 @@ class ModelRater:
                     device=self.config['device'],
                     ctx=self.ctx
                 )
-                
+
+                # Calculate probability percentile scores for entire batch
+                percentile_value = self.config.get('probability_percentile', 0.1)  # Default to 10th percentile
+                percentile_scores = calculate_probability_percentile(
+                    model=model,
+                    tokens=tokens_tensor,
+                    mask_token_id=self.vocab_info['mask_token_id'],
+                    device=self.config['device'],
+                    ctx=self.ctx,
+                    percentile=percentile_value
+                )
+
                 # Store ratings for each sample in the batch
                 for j, sample in enumerate(batch_samples):
                     rating = {
@@ -527,7 +592,9 @@ class ModelRater:
                         'sample_id': sample['sample_id'],
                         'rater_model_id': rater_model_id,
                         'confidence_score': confidence_scores[j],  # j-th sample in batch
-                        'log_prob': confidence_scores[j]
+                        'log_prob': confidence_scores[j],
+                        'percentile_score': percentile_scores[j],  # New percentile metric
+                        'percentile_value': percentile_value  # Store which percentile was used
                     }
                     ratings.append(rating)
         
@@ -610,14 +677,20 @@ class SampleStats:
 
 class ELOTracker:
     """Manages ELO ratings and tournament statistics for models"""
-    
+
     def __init__(self, model_names):
         self.model_names = model_names
         self.num_models = len(model_names)
         self.ratings = {name: 1000.0 for name in model_names}
         self.num_rounds = {name: 0 for name in model_names}
         self.rating_history = {name: [1000.0] for name in model_names}
-        
+
+        # Model-level statistics (aggregated across all samples)
+        self.model_wins = {name: 0 for name in model_names}
+        self.model_losses = {name: 0 for name in model_names}
+        self.model_draws = {name: 0 for name in model_names}
+        self.model_competitions = {name: 0 for name in model_names}
+
         # Sample-level statistics
         self.sample_stats = {}  # {(model_id, sample_id): SampleStats}
     
@@ -655,17 +728,31 @@ class ELOTracker:
         """Update ELO ratings after a match"""
         rating1 = self.ratings[model1_id]
         rating2 = self.ratings[model2_id]
-        
+
         change1 = self.calculate_elo_change(rating1, rating2, result)
         change2 = -change1  # Zero-sum
-        
+
         self.ratings[model1_id] += change1
         self.ratings[model2_id] += change2
-        
+
         # Update round counts
         self.num_rounds[model1_id] += 1
         self.num_rounds[model2_id] += 1
-        
+
+        # Update model-level statistics
+        self.model_competitions[model1_id] += 1
+        self.model_competitions[model2_id] += 1
+
+        if result == 'WIN':
+            self.model_wins[model1_id] += 1
+            self.model_losses[model2_id] += 1
+        elif result == 'LOSE':
+            self.model_losses[model1_id] += 1
+            self.model_wins[model2_id] += 1
+        else:  # DRAW
+            self.model_draws[model1_id] += 1
+            self.model_draws[model2_id] += 1
+
         # Store rating history
         self.rating_history[model1_id].append(self.ratings[model1_id])
         self.rating_history[model2_id].append(self.ratings[model2_id])
@@ -693,20 +780,24 @@ class ELOTracker:
         return sorted(self.model_names, key=lambda x: self.ratings[x], reverse=True)
     
     def get_sample_scores(self, model_id, sample_id, all_ratings):
-        """Get judge model score for a specific sample"""
+        """Get judge model scores for a specific sample"""
         sample_scores = {}
-        
+
         # With single judge, get rating from the one judge model
         judge_model_id = list(all_ratings.keys())[0]  # Should be only one judge
         judge_ratings = all_ratings[judge_model_id]
-        
+
         if model_id in judge_ratings:
             # Find the rating for this specific sample
             for rating in judge_ratings[model_id]:
                 if rating['sample_id'] == sample_id:
-                    sample_scores[judge_model_id] = rating['confidence_score']
+                    sample_scores[judge_model_id] = {
+                        'confidence_score': rating['confidence_score'],
+                        'percentile_score': rating.get('percentile_score', 0.0),
+                        'percentile_value': rating.get('percentile_value', 0.1)
+                    }
                     break
-        
+
         return sample_scores
     
     def get_top_samples(self, all_samples, n=3):
@@ -936,9 +1027,20 @@ class ModelEvaluator:
         for i, model_id in enumerate(rankings):
             rating = elo_tracker.ratings[model_id]
             rounds = elo_tracker.num_rounds[model_id]
-            checkpoint_name = self.config['checkpoints'][int(model_id.split('_')[1])]
+            wins = elo_tracker.model_wins[model_id]
+            losses = elo_tracker.model_losses[model_id]
+            draws = elo_tracker.model_draws[model_id]
+            competitions = elo_tracker.model_competitions[model_id]
+
+            # Handle ground truth model differently
+            if model_id == "ground_truth":
+                checkpoint_name = "Ground Truth (validation data)"
+            else:
+                checkpoint_name = self.config['checkpoints'][int(model_id.split('_')[1])]
+
             print(f"{i+1}. {model_id} ({checkpoint_name})")
             print(f"   ELO: {rating:.1f} | Rounds: {rounds}")
+            print(f"   W:{wins} L:{losses} D:{draws} | Competitions: {competitions}")
         
         # Top samples
         top_samples = elo_tracker.get_top_samples(all_samples, 3)
@@ -955,8 +1057,16 @@ class ModelEvaluator:
                 all_ratings
             )
             if sample_scores:
-                scores_list = [f"{score:.3f}" for score in sorted(sample_scores.values())]
-                print(f"   Scores: [{', '.join(scores_list)}]")
+                # Display both confidence and percentile scores
+                for judge_id, scores in sample_scores.items():
+                    if isinstance(scores, dict):
+                        conf_score = scores['confidence_score']
+                        perc_score = scores['percentile_score']
+                        perc_val = scores['percentile_value']
+                        print(f"   Confidence: {conf_score:.3f}, {perc_val*100:.0f}th percentile: {perc_score:.3f}")
+                    else:
+                        # Backward compatibility for old format
+                        print(f"   Confidence: {scores:.3f}")
             
             print(f"   Full Text:")
             print(f"   {'-' * 90}")
@@ -982,8 +1092,16 @@ class ModelEvaluator:
                 all_ratings
             )
             if sample_scores:
-                scores_list = [f"{score:.3f}" for score in sorted(sample_scores.values())]
-                print(f"   Scores: [{', '.join(scores_list)}]")
+                # Display both confidence and percentile scores
+                for judge_id, scores in sample_scores.items():
+                    if isinstance(scores, dict):
+                        conf_score = scores['confidence_score']
+                        perc_score = scores['percentile_score']
+                        perc_val = scores['percentile_value']
+                        print(f"   Confidence: {conf_score:.3f}, {perc_val*100:.0f}th percentile: {perc_score:.3f}")
+                    else:
+                        # Backward compatibility for old format
+                        print(f"   Confidence: {scores:.3f}")
             
             print(f"   Full Text:")
             print(f"   {'-' * 90}")
@@ -1006,9 +1124,20 @@ class ModelEvaluator:
             for i, model_id in enumerate(rankings):
                 rating = elo_tracker.ratings[model_id]
                 rounds = elo_tracker.num_rounds[model_id]
-                checkpoint_name = self.config['checkpoints'][int(model_id.split('_')[1])]
+                wins = elo_tracker.model_wins[model_id]
+                losses = elo_tracker.model_losses[model_id]
+                draws = elo_tracker.model_draws[model_id]
+                competitions = elo_tracker.model_competitions[model_id]
+
+                # Handle ground truth model differently
+                if model_id == "ground_truth":
+                    checkpoint_name = "Ground Truth (validation data)"
+                else:
+                    checkpoint_name = self.config['checkpoints'][int(model_id.split('_')[1])]
+
                 f.write(f"{i+1}. {model_id} ({checkpoint_name})\n")
                 f.write(f"   ELO: {rating:.1f} | Rounds: {rounds}\n")
+                f.write(f"   W:{wins} L:{losses} D:{draws} | Competitions: {competitions}\n")
             
             f.write(f"\nTop 3 Samples (by points):\n")
             f.write("=" * 100 + "\n")
@@ -1023,8 +1152,16 @@ class ModelEvaluator:
                     all_ratings
                 )
                 if sample_scores:
-                    scores_list = [f"{score:.3f}" for score in sorted(sample_scores.values())]
-                    f.write(f"   Scores: [{', '.join(scores_list)}]\n")
+                    # Write both confidence and percentile scores
+                    for judge_id, scores in sample_scores.items():
+                        if isinstance(scores, dict):
+                            conf_score = scores['confidence_score']
+                            perc_score = scores['percentile_score']
+                            perc_val = scores['percentile_value']
+                            f.write(f"   Confidence: {conf_score:.3f}, {perc_val*100:.0f}th percentile: {perc_score:.3f}\n")
+                        else:
+                            # Backward compatibility for old format
+                            f.write(f"   Confidence: {scores:.3f}\n")
                 
                 f.write(f"   Full Text:\n")
                 f.write(f"   {'-' * 90}\n")
@@ -1049,8 +1186,16 @@ class ModelEvaluator:
                     all_ratings
                 )
                 if sample_scores:
-                    scores_list = [f"{score:.3f}" for score in sorted(sample_scores.values())]
-                    f.write(f"   Scores: [{', '.join(scores_list)}]\n")
+                    # Write both confidence and percentile scores
+                    for judge_id, scores in sample_scores.items():
+                        if isinstance(scores, dict):
+                            conf_score = scores['confidence_score']
+                            perc_score = scores['percentile_score']
+                            perc_val = scores['percentile_value']
+                            f.write(f"   Confidence: {conf_score:.3f}, {perc_val*100:.0f}th percentile: {perc_score:.3f}\n")
+                        else:
+                            # Backward compatibility for old format
+                            f.write(f"   Confidence: {scores:.3f}\n")
                 
                 f.write(f"   Full Text:\n")
                 f.write(f"   {'-' * 90}\n")

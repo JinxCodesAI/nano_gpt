@@ -82,10 +82,10 @@ def nucleus_sample(logits, top_p=1.0, temperature=1.0, recent_tokens=None, repet
         return torch.multinomial(probs, num_samples=1).squeeze(-1)
 
 
-def apply_remasking(tokens, remask_ratio, remasking_model, randomness_strength, mask_token_id, device, verbose=False):
+def apply_remasking(tokens, remask_ratio, remasking_model, randomness_strength, mask_token_id, device, verbose=False, main_model=None):
     """
     Apply remasking using either random selection or model-guided selection
-    
+
     Args:
         tokens: Current token sequence (batch_size, seq_len)
         remask_ratio: Fraction of tokens to remask
@@ -94,7 +94,8 @@ def apply_remasking(tokens, remask_ratio, remasking_model, randomness_strength, 
         mask_token_id: ID of mask token
         device: Device to run on
         verbose: Whether to print debug info
-    
+        main_model: Optional main model for intelligent remasking when remasking_model is None
+
     Returns:
         tokens: Updated token sequence with remasked positions
     """
@@ -117,23 +118,68 @@ def apply_remasking(tokens, remask_ratio, remasking_model, randomness_strength, 
         return tokens
     
     if remasking_model is None:
-        # Pure random remasking
-        if verbose:
-            avg_additional = additional_masks_needed.float().mean().item()
-            avg_currently_masked = currently_masked.float().mean().item()
-            print(f"  Using pure random remasking: adding {avg_additional:.1f} masks (currently {avg_currently_masked:.1f}/{seq_len}, target {target_masked})")
-        
-        for batch_idx in range(batch_size):
-            num_additional = additional_masks_needed[batch_idx].item()
-            if num_additional > 0:
-                # Only select from unmasked positions
-                unmasked_positions = (tokens[batch_idx] != mask_token_id)
-                unmasked_indices = torch.where(unmasked_positions)[0]
-                if len(unmasked_indices) > 0:
-                    num_to_select = min(num_additional, len(unmasked_indices))
-                    selected_positions = torch.randperm(len(unmasked_indices), device=device)[:num_to_select]
-                    remask_indices = unmasked_indices[selected_positions]
-                    tokens[batch_idx, remask_indices] = mask_token_id
+        if main_model is not None and randomness_strength < 1.0:
+            # Use main model for intelligent remasking (confidence-based)
+            if verbose:
+                avg_additional = additional_masks_needed.float().mean().item()
+                avg_currently_masked = currently_masked.float().mean().item()
+                print(f"  Using main model for intelligent remasking: randomness={randomness_strength:.2f}, adding {avg_additional:.1f} masks (currently {avg_currently_masked:.1f}/{seq_len}, target {target_masked})")
+
+            with torch.no_grad():
+                # Get main model predictions for confidence estimation
+                dummy_targets = torch.zeros_like(tokens)
+                logits, _ = main_model(tokens, dummy_targets)
+
+                # Calculate confidence (negative entropy) for each position
+                probs = torch.softmax(logits, dim=-1)
+                log_probs = torch.log_softmax(logits, dim=-1)
+                entropy = -(probs * log_probs).sum(dim=-1)  # (batch_size, seq_len)
+
+                # Convert entropy to confidence (lower entropy = higher confidence)
+                # Normalize entropy to [0, 1] range for mixing with random
+                max_entropy = math.log(logits.shape[-1])  # Maximum possible entropy
+                confidence = 1.0 - (entropy / max_entropy)  # Higher confidence = more likely to be correct
+
+                # Invert confidence to get "uncertainty" (more likely to remask uncertain tokens)
+                uncertainty = 1.0 - confidence
+
+                for batch_idx in range(batch_size):
+                    num_additional = additional_masks_needed[batch_idx].item()
+                    if num_additional > 0:
+                        # Only consider unmasked positions for remasking
+                        unmasked_positions = (tokens[batch_idx] != mask_token_id)
+                        unmasked_indices = torch.where(unmasked_positions)[0]
+                        if len(unmasked_indices) > 0:
+                            # Get uncertainty only for unmasked positions
+                            unmasked_uncertainty = uncertainty[batch_idx, unmasked_indices]
+                            unmasked_rand_probs = torch.rand(len(unmasked_indices), device=device)
+
+                            # Combine random and uncertainty-based probabilities
+                            combined_probs = randomness_strength * unmasked_rand_probs + (1 - randomness_strength) * unmasked_uncertainty
+
+                            # Select positions with highest combined probabilities
+                            num_to_select = min(num_additional, len(unmasked_indices))
+                            _, selected_positions = torch.topk(combined_probs, num_to_select)
+                            remask_indices = unmasked_indices[selected_positions]
+                            tokens[batch_idx, remask_indices] = mask_token_id
+        else:
+            # Pure random remasking
+            if verbose:
+                avg_additional = additional_masks_needed.float().mean().item()
+                avg_currently_masked = currently_masked.float().mean().item()
+                print(f"  Using pure random remasking: adding {avg_additional:.1f} masks (currently {avg_currently_masked:.1f}/{seq_len}, target {target_masked})")
+
+            for batch_idx in range(batch_size):
+                num_additional = additional_masks_needed[batch_idx].item()
+                if num_additional > 0:
+                    # Only select from unmasked positions
+                    unmasked_positions = (tokens[batch_idx] != mask_token_id)
+                    unmasked_indices = torch.where(unmasked_positions)[0]
+                    if len(unmasked_indices) > 0:
+                        num_to_select = min(num_additional, len(unmasked_indices))
+                        selected_positions = torch.randperm(len(unmasked_indices), device=device)[:num_to_select]
+                        remask_indices = unmasked_indices[selected_positions]
+                        tokens[batch_idx, remask_indices] = mask_token_id
     else:
         # Model-guided remasking with randomness
         if verbose:
@@ -256,11 +302,11 @@ def predict_and_sample_tokens(model, tokens, mask_token_id, temperature, top_p, 
 
 
 def apply_remasking_step(tokens, prediction_tokens, iteration, iterations, schedule_type, masking_ratios,
-                        start_ratio, end_ratio, remasking_model, randomness_strength, mask_token_id, 
-                        device, verbose=False):
+                        start_ratio, end_ratio, remasking_model, randomness_strength, mask_token_id,
+                        device, verbose=False, main_model=None):
     """
     Apply remasking step with scheduling
-    
+
     Args:
         tokens: Current token sequence
         prediction_tokens: Tokens after prediction (for tracking)
@@ -275,7 +321,8 @@ def apply_remasking_step(tokens, prediction_tokens, iteration, iterations, sched
         mask_token_id: ID of mask token
         device: Device to run on
         verbose: Whether to print progress
-        
+        main_model: Optional main model for intelligent remasking when remasking_model is None
+
     Returns:
         Updated tokens after remasking
     """
@@ -289,8 +336,8 @@ def apply_remasking_step(tokens, prediction_tokens, iteration, iterations, sched
     # Debug: Track masks before remasking (using actual prediction results)
     masks_before = (prediction_tokens == mask_token_id).sum().item()
     
-    tokens = apply_remasking(tokens, remask_ratio, remasking_model, randomness_strength, 
-                           mask_token_id, device, verbose)
+    tokens = apply_remasking(tokens, remask_ratio, remasking_model, randomness_strength,
+                           mask_token_id, device, verbose, main_model)
     
     # Debug: Track masks after remasking
     if verbose:
@@ -353,3 +400,66 @@ def calculate_selfconfidence_ratio(model, tokens, mask_token_id, device, ctx):
                                        torch.full_like(log_prob_sums, float('-inf')))
             
     return avg_log_probs.cpu().tolist()
+
+
+def calculate_probability_percentile(model, tokens, mask_token_id, device, ctx, percentile=0.1):
+    """
+    Calculate the X percentile of probability of generated tokens.
+
+    This metric computes the percentile of token probabilities, where a lower percentile
+    value (e.g., 0.1) represents the highest probability among the 10% lowest probabilities.
+    This can help identify how confident the model is about its least confident predictions.
+
+    Args:
+        model: The trained diffusion model
+        tokens: Final generated token sequence (batch_size, seq_len)
+        mask_token_id: ID of mask token (should not be present in final tokens)
+        device: Device to run on
+        ctx: Context manager for autocast
+        percentile: Percentile to compute (0.0 to 1.0). 0.1 means 10th percentile.
+
+    Returns:
+        List of percentile probability values for each sample in the batch
+    """
+    batch_size, seq_len = tokens.shape
+
+    with torch.no_grad():
+        with ctx:
+            # Create dummy targets (not used in inference)
+            dummy_targets = torch.zeros_like(tokens)
+
+            # Get model predictions for the final tokens
+            logits, _ = model(tokens, dummy_targets)
+
+            # Convert logits to probabilities (not log-probabilities for percentile calculation)
+            probs = torch.softmax(logits, dim=-1)  # (batch_size, seq_len, vocab_size)
+
+            # Create batch and position indices for advanced indexing
+            batch_indices = torch.arange(batch_size, device=device).unsqueeze(1).expand(-1, seq_len)
+            pos_indices = torch.arange(seq_len, device=device).unsqueeze(0).expand(batch_size, -1)
+
+            # Extract probabilities for actual tokens using advanced indexing
+            selected_probs = probs[batch_indices, pos_indices, tokens]  # (batch_size, seq_len)
+
+            # Create mask for valid tokens (not mask_token_id and within vocab bounds)
+            valid_mask = (tokens != mask_token_id) & (tokens < probs.shape[-1])
+
+            # Calculate percentile for each sample
+            percentile_values = []
+
+            for i in range(batch_size):
+                # Get valid probabilities for this sample
+                sample_valid_mask = valid_mask[i]
+                if sample_valid_mask.sum() == 0:
+                    # No valid tokens, return 0
+                    percentile_values.append(0.0)
+                    continue
+
+                sample_probs = selected_probs[i][sample_valid_mask]  # Only valid tokens
+
+                # Calculate the specified percentile
+                # torch.quantile expects percentile as a value between 0 and 1
+                percentile_value = torch.quantile(sample_probs, percentile).item()
+                percentile_values.append(percentile_value)
+
+    return percentile_values

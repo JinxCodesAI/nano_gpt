@@ -15,6 +15,10 @@ Modules:
     entropy_utils: Entropy penalty and label smoothing utilities
 """
 
+# Compatibility: Register this module as 'train_utils' for old checkpoints
+import sys
+sys.modules['train_utils'] = sys.modules[__name__]
+
 # Export commonly used classes and functions for easy importing
 from .training_config import (
     UnmaskingStageType,
