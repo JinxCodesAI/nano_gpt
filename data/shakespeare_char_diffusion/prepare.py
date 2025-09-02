@@ -40,6 +40,13 @@ def create_enhanced_meta() -> Dict[str, Any]:
         'training_stages': len(UNMASKING_STAGES),
         'validation_stages': len(VALIDATION_STAGES),
         'batch_cache_size': 1000,
+        # Data shape information for validation
+        'data_shapes': {
+            'X': f'(batch_size, {BLOCK_SIZE})',  # Input tokens (masked)
+            'Y': f'(batch_size, {BLOCK_SIZE})',  # Target tokens (original)
+            'mask': f'(batch_size, {BLOCK_SIZE})',  # Mask indicating which tokens are masked
+            'description': 'Token classification format: X=masked input, Y=original targets, mask=masking pattern'
+        },
     }
     return enhanced_meta
 

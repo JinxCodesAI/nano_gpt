@@ -56,6 +56,17 @@ meta = {
     'vocab_size': vocab_size,
     'itos': itos,
     'stoi': stoi,
+    # General dataset metadata
+    'dataset_type': 'character',
+    'block_size': 1024,  # Default block size for general datasets
+    'supported_model_modes': ['language_model'],  # General datasets support language modeling by default
+    # Data shape information for validation
+    'data_shapes': {
+        'X': '(batch_size, block_size-1)',  # Input tokens for next-token prediction
+        'Y': '(batch_size, block_size-1)',  # Target tokens (shifted by 1)
+        'mask': '(batch_size, block_size-1)',  # All ones for language modeling (no masking)
+        'description': 'Language modeling format: X=input[:-1], Y=input[1:], mask=all_ones'
+    },
 }
 with open(os.path.join(os.path.dirname(__file__), 'meta.pkl'), 'wb') as f:
     pickle.dump(meta, f)
