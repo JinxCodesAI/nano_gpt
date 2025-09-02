@@ -170,6 +170,7 @@ EVALUATION_CONFIG = {
         # 'model3.pt',
     ],
     'remasking_checkpoint_name': None,  # Optional: remasking_binary model checkpoint
+    'judge_model': '35.75_58.2_UM.pt',  # Which model to use as the single judge
     
     # Evaluation parameters
     'batch_size': 32,           # N samples per model per batch (generation)
@@ -189,7 +190,7 @@ EVALUATION_CONFIG = {
     'diffusion_iterations': 25,
     'start_ratio': 0.99,
     'end_ratio': 0.05,
-    'randomness_strength': 0.4,
+    'randomness_strength': 1.0,
     
     # Schedule parameters
     'schedule_type': 'custom',
@@ -221,6 +222,7 @@ class ModelLoader:
         self.model_names = []
         self.vocab_info = None
         self.remasking_model = None
+        self.judge_model_id = None
         
     def load_all_models(self):
         """Load all model checkpoints and vocabulary"""
@@ -236,11 +238,20 @@ class ModelLoader:
             model = self._load_single_model(checkpoint_name, model_id)
             self.models[model_id] = model
             
+            # Track which model is the judge
+            if checkpoint_name == self.config['judge_model']:
+                self.judge_model_id = model_id
+                print(f"  ✓ {model_id} identified as judge model")
+            
         # Load optional remasking model
         self._load_remasking_model()
         
+        # Verify judge model was found
+        if self.judge_model_id is None:
+            raise ValueError(f"Judge model '{self.config['judge_model']}' not found in checkpoints list")
+        
         print(f"Successfully loaded {len(self.models)} models")
-        return self.models, self.vocab_info, self.remasking_model
+        return self.models, self.vocab_info, self.remasking_model, self.judge_model_id
     
     def _load_single_model(self, checkpoint_name, model_id):
         """Load a single model checkpoint"""
@@ -522,31 +533,34 @@ class ModelRater:
         
         return ratings
     
-    def rate_all_samples(self, models, all_samples):
-        """Each model rates all other models' samples"""
+    def rate_all_samples(self, models, all_samples, judge_model_id):
+        """Use only the specified judge model to rate all samples"""
+        judge_checkpoint = self.config['judge_model']
         print(f"\n{'='*80}")
-        print("CROSS-MODEL RATING PHASE")
+        print(f"SINGLE-MODEL RATING PHASE ({judge_model_id} - {judge_checkpoint} as judge)")
         print(f"{'='*80}")
         
+        if judge_model_id not in models:
+            raise ValueError(f"Judge model {judge_model_id} not found in loaded models")
+        
+        judge_model = models[judge_model_id]
         all_ratings = {}
         
-        for rater_model_id, rater_model in models.items():
-            print(f"\n{rater_model_id} rating samples from other models...")
-            model_ratings = {}
-            
-            for sample_model_id, samples in all_samples.items():
-                if sample_model_id != rater_model_id:  # Don't rate own samples
-                    batch_size = self.config.get('rating_batch_size', 8)
-                    num_batches = (len(samples) + batch_size - 1) // batch_size
-                    print(f"  Rating {len(samples)} samples from {sample_model_id} (using {num_batches} batches of {batch_size})...")
-                    
-                    ratings = self.rate_samples_with_model(rater_model, samples, rater_model_id)
-                    model_ratings[sample_model_id] = ratings
-                    print(f"  ✓ Completed rating {len(ratings)} samples from {sample_model_id}")
-            
-            all_ratings[rater_model_id] = model_ratings
+        print(f"\n{judge_model_id} ({judge_checkpoint}) rating all samples...")
+        model_ratings = {}
         
-        print(f"\nRating phase complete")
+        for sample_model_id, samples in all_samples.items():
+            batch_size = self.config.get('rating_batch_size', 8)
+            num_batches = (len(samples) + batch_size - 1) // batch_size
+            print(f"  Rating {len(samples)} samples from {sample_model_id} (using {num_batches} batches of {batch_size})...")
+            
+            ratings = self.rate_samples_with_model(judge_model, samples, judge_model_id)
+            model_ratings[sample_model_id] = ratings
+            print(f"  ✓ Completed rating {len(ratings)} samples from {sample_model_id}")
+        
+        all_ratings[judge_model_id] = model_ratings
+        
+        print(f"\nRating phase complete - {judge_model_id} rated all samples")
         return all_ratings
 
 
@@ -678,6 +692,23 @@ class ELOTracker:
         """Get models ranked by ELO rating"""
         return sorted(self.model_names, key=lambda x: self.ratings[x], reverse=True)
     
+    def get_sample_scores(self, model_id, sample_id, all_ratings):
+        """Get judge model score for a specific sample"""
+        sample_scores = {}
+        
+        # With single judge, get rating from the one judge model
+        judge_model_id = list(all_ratings.keys())[0]  # Should be only one judge
+        judge_ratings = all_ratings[judge_model_id]
+        
+        if model_id in judge_ratings:
+            # Find the rating for this specific sample
+            for rating in judge_ratings[model_id]:
+                if rating['sample_id'] == sample_id:
+                    sample_scores[judge_model_id] = rating['confidence_score']
+                    break
+        
+        return sample_scores
+    
     def get_top_samples(self, all_samples, n=3):
         """Get top N samples by points"""
         return self._get_samples_by_rank(all_samples, n, reverse=True)
@@ -723,33 +754,29 @@ class TournamentManager:
         self.total_comparisons = 0
     
     def determine_winner(self, model1_ratings, model2_ratings):
-        """Determine winner based on ratings from other models"""
-        # Get ratings for each sample from all other models
-        model1_scores = [rating['confidence_score'] for rating in model1_ratings]
-        model2_scores = [rating['confidence_score'] for rating in model2_ratings]
-        
-        # Count how many rater models prefer each sample
-        model1_wins = 0
-        model2_wins = 0
-        
-        for score1, score2 in zip(model1_scores, model2_scores):
-            if score1 > score2: #the more surprising the better
-                model1_wins += 1
-            elif score2 > score1: #the more surprising the better
-                model2_wins += 1
-            # Ties don't count towards either
-        
-        total_raters = len(model1_scores)
-        model1_win_rate = model1_wins / total_raters if total_raters > 0 else 0
-        model2_win_rate = model2_wins / total_raters if total_raters > 0 else 0
-        
-        # Determine result (60% threshold)
-        if model1_win_rate >= 0.6:
-            return 'WIN'
-        elif model2_win_rate >= 0.6:
-            return 'LOSE'
-        else:
+        """Determine winner based on model_7's confidence scores"""
+        # Get ratings from model_7 (the single judge)
+        if len(model1_ratings) == 0 or len(model2_ratings) == 0:
             return 'DRAW'
+        
+        # With single judge, we have one score per sample
+        model1_score = model1_ratings[0]['confidence_score']
+        model2_score = model2_ratings[0]['confidence_score']
+        
+        # Calculate the absolute difference
+        score_diff = abs(model1_score - model2_score)
+        
+        # Use a threshold based on the magnitude of scores
+        # If difference is less than 5% of the average absolute score, it's a draw
+        avg_abs_score = (abs(model1_score) + abs(model2_score)) / 2
+        threshold = 0.05 * avg_abs_score if avg_abs_score > 0 else 0.01  # Fallback threshold
+        
+        if score_diff <= threshold:
+            return 'DRAW'
+        elif model1_score > model2_score:  # Higher score (less negative) wins
+            return 'WIN'
+        else:
+            return 'LOSE'
     
     def _select_weighted_sample(self, model_id, samples):
         """Select a sample with weighting favoring less popular (less compared) samples"""
@@ -797,23 +824,27 @@ class TournamentManager:
         sample1_id = self._select_weighted_sample(model1_id, all_samples[model1_id])
         sample2_id = self._select_weighted_sample(model2_id, all_samples[model2_id])
         
-        # Collect ratings for both samples from all other models
+        # Collect ratings for both samples from the single judge model
         model1_ratings = []
         model2_ratings = []
         
-        for rater_model_id in model_names:
-            if rater_model_id != model1_id and rater_model_id != model2_id:
-                # Get rating for sample1 from this rater
-                for rating in all_ratings[rater_model_id].get(model1_id, []):
-                    if rating['sample_id'] == sample1_id:
-                        model1_ratings.append(rating)
-                        break
-                
-                # Get rating for sample2 from this rater
-                for rating in all_ratings[rater_model_id].get(model2_id, []):
-                    if rating['sample_id'] == sample2_id:
-                        model2_ratings.append(rating)
-                        break
+        # Find the judge model (should be only one in all_ratings)
+        judge_model_id = list(all_ratings.keys())[0]
+        judge_ratings = all_ratings[judge_model_id]
+        
+        # Get rating for sample1 from the judge
+        if model1_id in judge_ratings:
+            for rating in judge_ratings[model1_id]:
+                if rating['sample_id'] == sample1_id:
+                    model1_ratings.append(rating)
+                    break
+        
+        # Get rating for sample2 from the judge
+        if model2_id in judge_ratings:
+            for rating in judge_ratings[model2_id]:
+                if rating['sample_id'] == sample2_id:
+                    model2_ratings.append(rating)
+                    break
         
         if len(model1_ratings) == 0 or len(model2_ratings) == 0:
             return False  # Skip if no ratings available
@@ -870,7 +901,7 @@ class ModelEvaluator:
         
         # Stage 1: Load models
         model_loader = ModelLoader(self.config)
-        models, vocab_info, remasking_model = model_loader.load_all_models()
+        models, vocab_info, remasking_model, judge_model_id = model_loader.load_all_models()
         
         # Stage 2: Generate samples
         sample_generator = SampleGenerator(self.config, vocab_info, remasking_model)
@@ -878,7 +909,7 @@ class ModelEvaluator:
         
         # Stage 3: Rate samples
         model_rater = ModelRater(self.config, vocab_info)
-        all_ratings = model_rater.rate_all_samples(models, all_samples)
+        all_ratings = model_rater.rate_all_samples(models, all_samples, judge_model_id)
         
         # Stage 4: Run tournaments
         elo_tracker = ELOTracker(model_loader.model_names)
@@ -888,11 +919,11 @@ class ModelEvaluator:
         tournament_manager.run_tournaments(all_samples, all_ratings)
         
         # Stage 5: Generate results
-        self.generate_results(elo_tracker, all_samples, model_loader.model_names)
+        self.generate_results(elo_tracker, all_samples, model_loader.model_names, all_ratings)
         
         return elo_tracker, all_samples
     
-    def generate_results(self, elo_tracker, all_samples, model_names):
+    def generate_results(self, elo_tracker, all_samples, model_names, all_ratings):
         """Generate and display final results"""
         print(f"\n{'='*80}")
         print("FINAL RESULTS")
@@ -916,6 +947,17 @@ class ModelEvaluator:
         for i, sample_info in enumerate(top_samples):
             print(f"\n{i+1}. {sample_info['model_id']} Sample #{sample_info['sample_id']}")
             print(f"   Stats: {sample_info['stats']}")
+            
+            # Get individual model scores
+            sample_scores = elo_tracker.get_sample_scores(
+                sample_info['model_id'], 
+                sample_info['sample_id'], 
+                all_ratings
+            )
+            if sample_scores:
+                scores_list = [f"{score:.3f}" for score in sorted(sample_scores.values())]
+                print(f"   Scores: [{', '.join(scores_list)}]")
+            
             print(f"   Full Text:")
             print(f"   {'-' * 90}")
             # Print full text with proper indentation
@@ -932,6 +974,17 @@ class ModelEvaluator:
         for i, sample_info in enumerate(worst_samples):
             print(f"\n{i+1}. {sample_info['model_id']} Sample #{sample_info['sample_id']}")
             print(f"   Stats: {sample_info['stats']}")
+            
+            # Get individual model scores
+            sample_scores = elo_tracker.get_sample_scores(
+                sample_info['model_id'], 
+                sample_info['sample_id'], 
+                all_ratings
+            )
+            if sample_scores:
+                scores_list = [f"{score:.3f}" for score in sorted(sample_scores.values())]
+                print(f"   Scores: [{', '.join(scores_list)}]")
+            
             print(f"   Full Text:")
             print(f"   {'-' * 90}")
             # Print full text with proper indentation
@@ -962,6 +1015,17 @@ class ModelEvaluator:
             for i, sample_info in enumerate(top_samples):
                 f.write(f"\n{i+1}. {sample_info['model_id']} Sample #{sample_info['sample_id']}\n")
                 f.write(f"   Stats: {sample_info['stats']}\n")
+                
+                # Write individual model scores
+                sample_scores = elo_tracker.get_sample_scores(
+                    sample_info['model_id'], 
+                    sample_info['sample_id'], 
+                    all_ratings
+                )
+                if sample_scores:
+                    scores_list = [f"{score:.3f}" for score in sorted(sample_scores.values())]
+                    f.write(f"   Scores: [{', '.join(scores_list)}]\n")
+                
                 f.write(f"   Full Text:\n")
                 f.write(f"   {'-' * 90}\n")
                 # Write full text with proper indentation
@@ -977,6 +1041,17 @@ class ModelEvaluator:
             for i, sample_info in enumerate(worst_samples):
                 f.write(f"\n{i+1}. {sample_info['model_id']} Sample #{sample_info['sample_id']}\n")
                 f.write(f"   Stats: {sample_info['stats']}\n")
+                
+                # Write individual model scores
+                sample_scores = elo_tracker.get_sample_scores(
+                    sample_info['model_id'], 
+                    sample_info['sample_id'], 
+                    all_ratings
+                )
+                if sample_scores:
+                    scores_list = [f"{score:.3f}" for score in sorted(sample_scores.values())]
+                    f.write(f"   Scores: [{', '.join(scores_list)}]\n")
+                
                 f.write(f"   Full Text:\n")
                 f.write(f"   {'-' * 90}\n")
                 # Write full text with proper indentation
