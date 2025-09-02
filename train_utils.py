@@ -1879,7 +1879,7 @@ def apply_label_smoothing(targets, uncertainty_factor, vocab_size, special_token
     
     # Calculate incorrect answer probability: u / (vocab_size - 1)
     # But we need to exclude special tokens from getting smoothed probability
-    incorrect_prob = uncertainty_factor / (vocab_size - 1)
+    incorrect_prob = uncertainty_factor / (vocab_size - len(special_token_ids))
     
     # Add smoothing probability to all positions except the correct answer
     smoothed_targets += incorrect_prob
@@ -1898,7 +1898,8 @@ def apply_label_smoothing(targets, uncertainty_factor, vocab_size, special_token
                 special_mask[:, :, special_id] = 1.0
                 smoothed_targets = smoothed_targets * (1 - special_mask * not_correct_mask.float())
     
+    sum_probs = smoothed_targets.sum(dim=-1, keepdim=True)
     # Renormalize to ensure probabilities sum to 1
-    smoothed_targets = smoothed_targets / smoothed_targets.sum(dim=-1, keepdim=True)
+    smoothed_targets = smoothed_targets / sum_probs
     
     return smoothed_targets
