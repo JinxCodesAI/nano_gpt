@@ -9,12 +9,12 @@ from collections import Counter
 from contextlib import nullcontext
 import torch
 from model import GPTConfig, GPT
-from sample_utils import linear_remasking_schedule, nucleus_sample, apply_remasking, calculate_selfconfidence_ratio
+from sample_utils import linear_remasking_schedule, nucleus_sample, apply_remasking, calculate_selfconfidence_ratio, predict_and_sample_tokens, apply_remasking_step
 
 # Configuration
 init_from = 'resume'
 out_dir = 'out'
-checkpoint_name = 'optimal5_8000.pt' #'35.75_58.2_UM.pt' Decent models optimal2_3400.pt, 
+checkpoint_name = 'optimal6_7400.pt' #'35.75_58.2_UM.pt' Decent models optimal2_3400.pt, 
 remasking_checkpoint_name = None #'ckpt_remasking_binary_600.pt'  # Optional: remasking_binary model checkpoint
 num_samples = 8  # Number of samples to generate
 sequence_length = 1024  # Total length of generated sequence
@@ -25,8 +25,8 @@ compile = False
 
 # Generation parameters
 temperature = 1.0  # Temperature for sampling (1.0 = no change, <1.0 = more deterministic, >1.0 = more random)
-top_p = 0.6   # Nucleus sampling parameter (1.0 = disabled, <1.0 = only sample from top cumulative probability mass)
-repetition_penalty = 1.5  # Penalty for repeating recent tokens (>1.0 = discourage repetition)
+top_p = 0.8   # Nucleus sampling parameter (1.0 = disabled, <1.0 = only sample from top cumulative probability mass)
+repetition_penalty = 1  # Penalty for repeating recent tokens (>1.0 = discourage repetition)
 repetition_window = 10  # Look back this many tokens for repetition penalty
 diffusion_iterations = 100  # Number of demasking iterations
 start_ratio = 0.99  # Initial ratio of tokens to remask (99%)
@@ -61,12 +61,233 @@ if schedule_type == 'custom':
 
 
 
+def log_generation_start(batch_size, iterations, total_length, remasking_model, randomness_strength):
+    """Log generation start information"""
+    print(f"Starting diffusion generation: {batch_size} samples, {iterations} iterations")
+    print(f"Total length: {total_length} (all tokens start masked)")
+    if remasking_model is not None:
+        print(f"Using remasking_binary model with randomness_strength={randomness_strength}")
+    else:
+        print("Using pure random remasking")
+    print("=" * 80)
+
+
+def log_iteration_start(iteration, iterations, tokens, mask_token_id, total_length, decode_mask_fn):
+    """Log iteration start information"""
+    masked_positions = (tokens == mask_token_id)
+    num_masked_per_sample = masked_positions.sum(dim=1)
+    avg_masked = num_masked_per_sample.float().mean().item()
+    print(f"\nIteration {iteration + 1}/{iterations}")
+    print(f"Average tokens masked: {avg_masked:.1f}/{total_length} ({avg_masked/total_length*100:.1f}%)")
+    
+    # Show first sample as example
+    if decode_mask_fn:
+        masked_sequence = decode_mask_fn(tokens[0].tolist())
+        print(f"Sample 1 BEFORE: {masked_sequence[:100]}{'...' if len(masked_sequence) > 100 else ''}")
+
+
+def log_sample_after_prediction(prediction_tokens, decode_fn):
+    """Log sample after prediction"""
+    if decode_fn:
+        unmasked_sequence = decode_fn(prediction_tokens[0].tolist())
+        print(f"Sample 1 AFTER:  {unmasked_sequence[:100]}{'...' if len(unmasked_sequence) > 100 else ''}")
+
+
+def log_debug_prediction_analysis(sample_idx, logits, mask_indices, masked_logits, new_tokens, 
+                                 mask_token_id, vocab_size, itos, stoi, log_debug):
+    """Log detailed debug analysis during prediction"""
+    if not (sample_idx == 0):  # Only debug first sample
+        return
+        
+    # DEBUG: Check logits dimensions and values
+    print(f"  DEBUG: Model output shape: {logits.shape}, Masked positions: {len(mask_indices)}")
+    print(f"  DEBUG: Logits shape for masked positions: {masked_logits.shape}")
+    print(f"  DEBUG: vocab_size={vocab_size}, mask_token_id={mask_token_id}")
+    
+    if masked_logits.shape[-1] > 0:
+        mask_logit = masked_logits[0, mask_token_id] if mask_token_id < masked_logits.shape[-1] else float('-inf')
+        vocab_logit_mean = masked_logits[0, :vocab_size].mean().item()
+        print(f"  DEBUG: First position - mask_token logit: {mask_logit:.3f}, vocab mean logit: {vocab_logit_mean:.3f}")
+        
+        # MODEL CONFIDENCE ANALYSIS
+        probs = torch.softmax(masked_logits, dim=-1)
+        vocab_probs = probs[:, :vocab_size]  # Only vocab tokens
+        
+        # Calculate entropy (measure of uncertainty)
+        entropy = -(vocab_probs * torch.log(vocab_probs + 1e-10)).sum(dim=-1)
+        avg_entropy = entropy.mean().item()
+        max_entropy = math.log(vocab_size)  # Maximum possible entropy
+        normalized_entropy = avg_entropy / max_entropy
+        
+        # Calculate max probability (measure of confidence)
+        max_probs = vocab_probs.max(dim=-1)[0]
+        avg_confidence = max_probs.mean().item()
+        
+        print(f"  🧠 MODEL CONFIDENCE: Avg max prob: {avg_confidence:.3f}, Normalized entropy: {normalized_entropy:.3f}")
+        
+        # Check if model is very confident about punctuation
+        punct_probs = vocab_probs[:, :13].sum(dim=-1)  # Sum of all punctuation probs
+        high_punct_positions = (punct_probs > 0.7).sum().item()
+        if high_punct_positions > 0:
+            avg_punct_confidence = punct_probs[punct_probs > 0.7].mean().item() if high_punct_positions > 0 else 0
+            print(f"  ⚠️  HIGH PUNCTUATION CONFIDENCE: {high_punct_positions} positions with >70% punct prob (avg: {avg_punct_confidence:.3f})")
+            
+            # Show which punctuation characters are being strongly predicted
+            punct_logits = masked_logits[:, :13]
+            punct_top_probs, punct_top_tokens = torch.topk(torch.softmax(punct_logits, dim=-1), 3, dim=-1)
+            high_punct_masks = punct_probs > 0.7
+            if high_punct_masks.sum() > 0:
+                for pos_idx in range(min(3, high_punct_masks.sum().item())):
+                    actual_pos_idx = high_punct_masks.nonzero()[pos_idx].item()
+                    top_punct_chars = [itos[t.item()] if t.item() < len(itos) else f"[{t.item()}]" for t in punct_top_tokens[actual_pos_idx]]
+                    top_punct_probs_vals = [f"{p.item():.3f}" for p in punct_top_probs[actual_pos_idx]]
+                    punct_alternatives = ", ".join([f"'{c}':{p}" for c, p in zip(top_punct_chars, top_punct_probs_vals)])
+                    print(f"    High-confidence punct position: {punct_alternatives}")
+
+    # DEBUG: Check what tokens were actually sampled
+    mask_count = (new_tokens == mask_token_id).sum().item()
+    vocab_count = (new_tokens < vocab_size).sum().item()
+    print(f"  DEBUG: Sampled {mask_count} mask tokens, {vocab_count} vocab tokens out of {len(new_tokens)}")
+    if mask_count > 0:
+        print(f"  DEBUG: This is suspicious - model predicting mask tokens!")
+    
+    # Count non-alphabetic characters
+    alphabetic_tokens = set(range(13, 39)) | set(range(39, 65))  # A-Z, a-z
+    non_alpha_count = sum(1 for token in new_tokens.tolist() if token not in alphabetic_tokens and token < vocab_size)
+    print(f"  DEBUG: Non-alphabetic tokens: {non_alpha_count}/{len(new_tokens)} ({non_alpha_count/len(new_tokens)*100:.1f}%)")
+    
+    # Find most common token
+    from collections import Counter
+    token_counts = Counter(new_tokens.tolist())
+    most_common_token, most_common_count = token_counts.most_common(1)[0]
+    most_common_char = itos[most_common_token] if most_common_token < len(itos) else f"[{most_common_token}]"
+    print(f"  DEBUG: Most common token: '{most_common_char}' (ID={most_common_token}) x{most_common_count}")
+    
+    # Show token distribution for non-alphabetic chars
+    punct_counts = {token: count for token, count in token_counts.items() if token < 13 and count > 1}
+    if punct_counts:
+        punct_info = [f"'{itos[t]}' x{c}" for t, c in sorted(punct_counts.items())]
+        print(f"  DEBUG: Repeated punctuation: {', '.join(punct_info)}")
+    
+    # DETAILED LOGGING: Analyze model predictions for specific patterns
+    if log_debug:
+        dash_token_id = stoi.get('-', None)
+        if dash_token_id is not None:
+            dash_positions = (new_tokens == dash_token_id)
+            dash_count = dash_positions.sum().item()
+            if dash_count > 0:
+                print(f"  🔍 DASH ANALYSIS: Generated {dash_count} dashes at positions {dash_positions.nonzero().squeeze().tolist()}")
+                
+                # Check what was predicted for dash positions
+                dash_mask_indices = mask_indices[dash_positions]
+                if len(dash_mask_indices) > 0:
+                    dash_logits = masked_logits[dash_positions]
+                    dash_probs = torch.softmax(dash_logits, dim=-1)
+                    dash_prob_for_dash = dash_probs[:, dash_token_id].mean().item()
+                    
+                    # Check top alternatives
+                    top_probs, top_tokens = torch.topk(dash_probs, 5, dim=-1)
+                    print(f"  🔍 DASH PREDICTIONS: Avg prob for dash={dash_prob_for_dash:.3f}")
+                    for pos_idx in range(min(3, len(dash_logits))):  # Show first 3 dash positions
+                        pos_top_tokens = [itos[t.item()] if t.item() < len(itos) else f"[{t.item()}]" for t in top_tokens[pos_idx]]
+                        pos_top_probs = [f"{p.item():.3f}" for p in top_probs[pos_idx]]
+                        alternatives = ", ".join([f"'{t}':{p}" for t, p in zip(pos_top_tokens, pos_top_probs)])
+                        print(f"    Position {dash_mask_indices[pos_idx].item()}: {alternatives}")
+        
+        # SEQUENCE PATTERN ANALYSIS: Look for consecutive identical tokens
+        new_tokens_list = new_tokens.tolist()
+        consecutive_patterns = {}
+        i = 0
+        while i < len(new_tokens_list):
+            current_token = new_tokens_list[i]
+            if current_token < vocab_size:  # Only analyze vocab tokens
+                consecutive_count = 1
+                j = i + 1
+                while j < len(new_tokens_list) and new_tokens_list[j] == current_token:
+                    consecutive_count += 1
+                    j += 1
+                
+                if consecutive_count > 1:
+                    token_char = itos[current_token] if current_token < len(itos) else f"[{current_token}]"
+                    if token_char not in consecutive_patterns:
+                        consecutive_patterns[token_char] = []
+                    consecutive_patterns[token_char].append((i, consecutive_count))
+                i = j
+            else:
+                i += 1
+        
+        if consecutive_patterns:
+            print(f"  🔍 REPETITION PATTERNS:")
+            for char, occurrences in consecutive_patterns.items():
+                for start_pos, count in occurrences:
+                    abs_pos = mask_indices[start_pos].item()
+                    print(f"    '{char}' x{count} at positions {abs_pos}-{abs_pos+count-1}")
+        
+        # CONTEXT ANALYSIS: Check what tokens surround frequently repeated patterns
+        if dash_token_id is not None and (new_tokens == dash_token_id).sum().item() > 2:
+            print(f"  🔍 CONTEXT ANALYSIS: Checking context around dash predictions")
+            # This would need the full tokens sequence passed in - simplified for now
+            print(f"    Context analysis simplified - dash count: {(new_tokens == dash_token_id).sum().item()}")
+
+
+def log_iteration_summary(iteration, tokens, mask_token_id, itos, stoi):
+    """Log iteration summary with pattern analysis"""
+    print(f"  📊 ITERATION {iteration + 1} SUMMARY:")
+    
+    # Analyze the full sequence for patterns after each iteration
+    full_sample = tokens[0].tolist()  # First sample
+    unmasked_positions = [i for i, token in enumerate(full_sample) if token != mask_token_id]
+    
+    if len(unmasked_positions) > 0:
+        unmasked_tokens = [full_sample[i] for i in unmasked_positions]
+        
+        # Count dash sequences
+        dash_token_id = stoi.get('-', None)
+        if dash_token_id is not None:
+            dash_sequences = []
+            current_dash_seq = 0
+            max_dash_seq = 0
+            
+            for token in unmasked_tokens:
+                if token == dash_token_id:
+                    current_dash_seq += 1
+                    max_dash_seq = max(max_dash_seq, current_dash_seq)
+                else:
+                    if current_dash_seq > 1:  # Record sequences of 2+
+                        dash_sequences.append(current_dash_seq)
+                    current_dash_seq = 0
+            
+            # Don't forget the last sequence
+            if current_dash_seq > 1:
+                dash_sequences.append(current_dash_seq)
+            
+            total_dashes = sum(1 for t in unmasked_tokens if t == dash_token_id)
+            if total_dashes > 0:
+                print(f"    🔸 Dashes: {total_dashes} total, max sequence: {max_dash_seq}")
+                if dash_sequences:
+                    seq_counts = Counter(dash_sequences)
+                    seq_info = [f"{length}x{count}" for length, count in sorted(seq_counts.items())]
+                    print(f"    🔸 Dash sequences (2+): {', '.join(seq_info)}")
+        
+        # Character type distribution
+        punct_count = sum(1 for t in unmasked_tokens if t < 13)  # First 13 are punctuation
+        alpha_count = sum(1 for t in unmasked_tokens if 13 <= t < 65)  # Letters
+        total_unmasked = len(unmasked_tokens)
+        
+        print(f"    🔸 Character types: {punct_count} punct ({punct_count/total_unmasked*100:.1f}%), {alpha_count} letters ({alpha_count/total_unmasked*100:.1f}%)")
+        
+        # Most common tokens in this iteration
+        from collections import Counter
+        token_counter = Counter(unmasked_tokens)
+        top_tokens = token_counter.most_common(5)
+        top_info = [f"'{itos[t] if t < len(itos) else f'[{t}]'}' x{c}" for t, c in top_tokens]
+        print(f"    🔸 Most common: {', '.join(top_info)}")
+
+
 def diffusion_generate(model, batch_size, total_length, iterations, remasking_model, mask_token_id,
                       randomness_strength, decode_fn, decode_mask_fn, verbose=True, temperature=1.0,
                       top_p=1.0, schedule_type='linear', masking_ratios=None, repetition_penalty=1.0, 
                       repetition_window=10, log_debug=False):
-    # Helper variable for cleaner debug logging conditions
-    debug = verbose and log_debug
     """
     Generate text samples using diffusion-based iterative demasking
 
@@ -93,303 +314,60 @@ def diffusion_generate(model, batch_size, total_length, iterations, remasking_mo
     tokens = torch.full((batch_size, total_length), mask_token_id, dtype=torch.long, device=device)
     
     if verbose:
-        print(f"Starting diffusion generation: {batch_size} samples, {iterations} iterations")
-        print(f"Total length: {total_length} (all tokens start masked)")
-        if remasking_model is not None:
-            print(f"Using remasking_binary model with randomness_strength={randomness_strength}")
-        else:
-            print("Using pure random remasking")
-        print("=" * 80)
+        log_generation_start(batch_size, iterations, total_length, remasking_model, randomness_strength)
     
     for iteration in range(iterations):
         if verbose:
-            masked_positions = (tokens == mask_token_id)
-            num_masked_per_sample = masked_positions.sum(dim=1)
-            avg_masked = num_masked_per_sample.float().mean().item()
-            print(f"\nIteration {iteration + 1}/{iterations}")
-            print(f"Average tokens masked: {avg_masked:.1f}/{total_length} ({avg_masked/total_length*100:.1f}%)")
-            
-            # Show first sample as example
-            if decode_mask_fn:
-                masked_sequence = decode_mask_fn(tokens[0].tolist())
-                print(f"Sample 1 BEFORE: {masked_sequence[:100]}{'...' if len(masked_sequence) > 100 else ''}")
+            log_iteration_start(iteration, iterations, tokens, mask_token_id, total_length, decode_mask_fn)
         
         # Step 1: Predict tokens for all masked positions
-        masked_positions = (tokens == mask_token_id)
-        total_masked = masked_positions.sum().item()
-        
-        if total_masked > 0:
-            with torch.no_grad():
-                # Get predictions for all samples
-                dummy_targets = torch.zeros_like(tokens)
-                logits, _ = model(tokens, dummy_targets)
-                
-                # Sample new tokens for masked positions
-                for sample_idx in range(batch_size):
-                    sample_masked = masked_positions[sample_idx]
-                    if sample_masked.sum() > 0:
-                        mask_indices = torch.where(sample_masked)[0]
-                        masked_logits = logits[sample_idx, mask_indices]
-                        
-                        # DEBUG: Check logits dimensions and values
-                        if debug and sample_idx == 0:
-                            print(f"  DEBUG: Model output shape: {logits.shape}, Masked positions: {len(mask_indices)}")
-                            print(f"  DEBUG: Logits shape for masked positions: {masked_logits.shape}")
-                            print(f"  DEBUG: vocab_size={vocab_size}, mask_token_id={mask_token_id}")
-                            if masked_logits.shape[-1] > 0:
-                                mask_logit = masked_logits[0, mask_token_id] if mask_token_id < masked_logits.shape[-1] else float('-inf')
-                                vocab_logit_mean = masked_logits[0, :vocab_size].mean().item()
-                                print(f"  DEBUG: First position - mask_token logit: {mask_logit:.3f}, vocab mean logit: {vocab_logit_mean:.3f}")
-                                
-                                # MODEL CONFIDENCE ANALYSIS
-                                probs = torch.softmax(masked_logits, dim=-1)
-                                vocab_probs = probs[:, :vocab_size]  # Only vocab tokens
-                                
-                                # Calculate entropy (measure of uncertainty)
-                                entropy = -(vocab_probs * torch.log(vocab_probs + 1e-10)).sum(dim=-1)
-                                avg_entropy = entropy.mean().item()
-                                max_entropy = math.log(vocab_size)  # Maximum possible entropy
-                                normalized_entropy = avg_entropy / max_entropy
-                                
-                                # Calculate max probability (measure of confidence)
-                                max_probs = vocab_probs.max(dim=-1)[0]
-                                avg_confidence = max_probs.mean().item()
-                                
-                                print(f"  🧠 MODEL CONFIDENCE: Avg max prob: {avg_confidence:.3f}, Normalized entropy: {normalized_entropy:.3f}")
-                                
-                                # Check if model is very confident about punctuation
-                                punct_probs = vocab_probs[:, :13].sum(dim=-1)  # Sum of all punctuation probs
-                                high_punct_positions = (punct_probs > 0.7).sum().item()
-                                if high_punct_positions > 0:
-                                    avg_punct_confidence = punct_probs[punct_probs > 0.7].mean().item() if high_punct_positions > 0 else 0
-                                    print(f"  ⚠️  HIGH PUNCTUATION CONFIDENCE: {high_punct_positions} positions with >70% punct prob (avg: {avg_punct_confidence:.3f})")
-                                    
-                                    # Show which punctuation characters are being strongly predicted
-                                    punct_logits = masked_logits[:, :13]
-                                    punct_top_probs, punct_top_tokens = torch.topk(torch.softmax(punct_logits, dim=-1), 3, dim=-1)
-                                    high_punct_masks = punct_probs > 0.7
-                                    if high_punct_masks.sum() > 0:
-                                        for pos_idx in range(min(3, high_punct_masks.sum().item())):
-                                            actual_pos_idx = high_punct_masks.nonzero()[pos_idx].item()
-                                            top_punct_chars = [itos[t.item()] if t.item() < len(itos) else f"[{t.item()}]" for t in punct_top_tokens[actual_pos_idx]]
-                                            top_punct_probs_vals = [f"{p.item():.3f}" for p in punct_top_probs[actual_pos_idx]]
-                                            punct_alternatives = ", ".join([f"'{c}':{p}" for c, p in zip(top_punct_chars, top_punct_probs_vals)])
-                                            print(f"    High-confidence punct position: {punct_alternatives}")
-                        
-                        # Get recent tokens for repetition penalty
-                        if repetition_penalty != 1.0 and repetition_window > 0:
-                            # Get recent unmasked tokens for this sample
-                            sample_tokens = tokens[sample_idx]
-                            unmasked_tokens = sample_tokens[sample_tokens != mask_token_id]
-                            recent_tokens = unmasked_tokens[-repetition_window:].tolist() if len(unmasked_tokens) > 0 else []
-                        else:
-                            recent_tokens = None
-                        
-                        # Sample using nucleus sampling with repetition penalty
-                        new_tokens = nucleus_sample(masked_logits, top_p=top_p, temperature=temperature,
-                                                  recent_tokens=recent_tokens, repetition_penalty=repetition_penalty)
-                        
-                        # DEBUG: Check what tokens were actually sampled
-                        if debug and sample_idx == 0:
-                            mask_count = (new_tokens == mask_token_id).sum().item()
-                            vocab_count = (new_tokens < vocab_size).sum().item()
-                            print(f"  DEBUG: Sampled {mask_count} mask tokens, {vocab_count} vocab tokens out of {len(new_tokens)}")
-                            if mask_count > 0:
-                                print(f"  DEBUG: This is suspicious - model predicting mask tokens!")
-                            
-                            # Count non-alphabetic characters
-                            alphabetic_tokens = set(range(13, 39)) | set(range(39, 65))  # A-Z, a-z
-                            non_alpha_count = sum(1 for token in new_tokens.tolist() if token not in alphabetic_tokens and token < vocab_size)
-                            print(f"  DEBUG: Non-alphabetic tokens: {non_alpha_count}/{len(new_tokens)} ({non_alpha_count/len(new_tokens)*100:.1f}%)")
-                            
-                            # Find most common token
-                            from collections import Counter
-                            token_counts = Counter(new_tokens.tolist())
-                            most_common_token, most_common_count = token_counts.most_common(1)[0]
-                            most_common_char = itos[most_common_token] if most_common_token < len(itos) else f"[{most_common_token}]"
-                            print(f"  DEBUG: Most common token: '{most_common_char}' (ID={most_common_token}) x{most_common_count}")
-                            
-                            # Show token distribution for non-alphabetic chars
-                            punct_counts = {token: count for token, count in token_counts.items() if token < 13 and count > 1}
-                            if punct_counts:
-                                punct_info = [f"'{itos[t]}' x{c}" for t, c in sorted(punct_counts.items())]
-                                print(f"  DEBUG: Repeated punctuation: {', '.join(punct_info)}")
-                            
-                            # DETAILED LOGGING: Analyze model predictions for specific patterns
-                            if log_debug:
-                                dash_token_id = stoi.get('-', None)
-                                if dash_token_id is not None:
-                                    dash_positions = (new_tokens == dash_token_id)
-                                    dash_count = dash_positions.sum().item()
-                                    if dash_count > 0:
-                                        print(f"  🔍 DASH ANALYSIS: Generated {dash_count} dashes at positions {dash_positions.nonzero().squeeze().tolist()}")
-                                        
-                                        # Check what was predicted for dash positions
-                                        dash_mask_indices = mask_indices[dash_positions]
-                                        if len(dash_mask_indices) > 0:
-                                            dash_logits = masked_logits[dash_positions]
-                                            dash_probs = torch.softmax(dash_logits, dim=-1)
-                                            dash_prob_for_dash = dash_probs[:, dash_token_id].mean().item()
-                                            
-                                            # Check top alternatives
-                                            top_probs, top_tokens = torch.topk(dash_probs, 5, dim=-1)
-                                            print(f"  🔍 DASH PREDICTIONS: Avg prob for dash={dash_prob_for_dash:.3f}")
-                                            for pos_idx in range(min(3, len(dash_logits))):  # Show first 3 dash positions
-                                                pos_top_tokens = [itos[t.item()] if t.item() < len(itos) else f"[{t.item()}]" for t in top_tokens[pos_idx]]
-                                                pos_top_probs = [f"{p.item():.3f}" for p in top_probs[pos_idx]]
-                                                alternatives = ", ".join([f"'{t}':{p}" for t, p in zip(pos_top_tokens, pos_top_probs)])
-                                                print(f"    Position {dash_mask_indices[pos_idx].item()}: {alternatives}")
-                                
-                                # SEQUENCE PATTERN ANALYSIS: Look for consecutive identical tokens
-                                new_tokens_list = new_tokens.tolist()
-                                consecutive_patterns = {}
-                                i = 0
-                                while i < len(new_tokens_list):
-                                    current_token = new_tokens_list[i]
-                                    if current_token < vocab_size:  # Only analyze vocab tokens
-                                        consecutive_count = 1
-                                        j = i + 1
-                                        while j < len(new_tokens_list) and new_tokens_list[j] == current_token:
-                                            consecutive_count += 1
-                                            j += 1
-                                        
-                                        if consecutive_count > 1:
-                                            token_char = itos[current_token] if current_token < len(itos) else f"[{current_token}]"
-                                            if token_char not in consecutive_patterns:
-                                                consecutive_patterns[token_char] = []
-                                            consecutive_patterns[token_char].append((i, consecutive_count))
-                                        i = j
-                                    else:
-                                        i += 1
-                                
-                                if consecutive_patterns:
-                                    print(f"  🔍 REPETITION PATTERNS:")
-                                    for char, occurrences in consecutive_patterns.items():
-                                        for start_pos, count in occurrences:
-                                            abs_pos = mask_indices[start_pos].item()
-                                            print(f"    '{char}' x{count} at positions {abs_pos}-{abs_pos+count-1}")
-                                
-                                # CONTEXT ANALYSIS: Check what tokens surround frequently repeated patterns
-                                if dash_token_id is not None and dash_count > 2:
-                                    print(f"  🔍 CONTEXT ANALYSIS: Checking context around dash predictions")
-                                    full_sequence = tokens[sample_idx].tolist()
-                                    for i, mask_idx in enumerate(mask_indices):
-                                        if new_tokens[i] == dash_token_id:
-                                            abs_pos = mask_idx.item()
-                                            # Get context window
-                                            context_start = max(0, abs_pos - 5)
-                                            context_end = min(len(full_sequence), abs_pos + 6)
-                                            context_tokens = full_sequence[context_start:context_end]
-                                            
-                                            # Decode context, highlighting the predicted position
-                                            context_str = ""
-                                            for j, ctx_token in enumerate(context_tokens):
-                                                actual_pos = context_start + j
-                                                if ctx_token == mask_token_id:
-                                                    if actual_pos == abs_pos:
-                                                        context_str += "[DASH]"  # This is where we predicted dash
-                                                    else:
-                                                        context_str += "#"  # Other masked positions
-                                                elif ctx_token < len(itos):
-                                                    context_str += itos[ctx_token]
-                                                else:
-                                                    context_str += "?"
-                                            
-                                            print(f"    Pos {abs_pos}: ...{context_str}...")
-                                            break  # Only show first dash context to avoid spam
-                        
-                        tokens[sample_idx, mask_indices] = new_tokens
-        
-        # Save tokens after prediction for accurate display
-        prediction_tokens = tokens.clone()  # Always save the actual prediction results
+        debug_logging_fn = log_debug_prediction_analysis if log_debug else None
+        tokens, prediction_tokens = predict_and_sample_tokens(
+            model=model,
+            tokens=tokens,
+            mask_token_id=mask_token_id,
+            temperature=temperature,
+            top_p=top_p,
+            repetition_penalty=repetition_penalty,
+            repetition_window=repetition_window,
+            vocab_size=vocab_size,
+            device=device,
+            debug_logging_fn=debug_logging_fn,
+            itos=itos,
+            stoi=stoi,
+            verbose=verbose,
+            log_debug=log_debug
+        )
         
         if verbose:
-            predicted_masks = (prediction_tokens == mask_token_id).sum().item()
-            if predicted_masks > 0:
-                print(f"  ⚠️  Model predicted {predicted_masks} mask tokens during prediction step!")
-        
-        if verbose and decode_fn:
-            unmasked_sequence = decode_fn(prediction_tokens[0].tolist())
-            print(f"Sample 1 AFTER:  {unmasked_sequence[:100]}{'...' if len(unmasked_sequence) > 100 else ''}")
+            log_sample_after_prediction(prediction_tokens, decode_fn)
         
         # Step 2: Remask tokens for next iteration (except final iteration)
         if iteration < iterations - 1:
-            if schedule_type == 'custom':
-                # Use the next ratio from the custom schedule
-                remask_ratio = masking_ratios[iteration + 1]
-            else:
-                # Use linear schedule
-                remask_ratio = linear_remasking_schedule(iterations, iteration + 1, start_ratio, end_ratio)
-            
-            # Debug: Track masks before remasking (using actual prediction results)
-            masks_before = (prediction_tokens == mask_token_id).sum().item()
-            
-            tokens = apply_remasking(tokens, remask_ratio, remasking_model, randomness_strength, 
-                                   mask_token_id, device, verbose)
-            
-            # Debug: Track masks after remasking
-            if verbose:
-                masks_after = (tokens == mask_token_id).sum().item()
-                mask_change = masks_after - masks_before
-                print(f"  Masks: {masks_before} → {masks_after} (change: {mask_change:+d})")
+            tokens = apply_remasking_step(
+                tokens=tokens,
+                prediction_tokens=prediction_tokens,
+                iteration=iteration,
+                iterations=iterations,
+                schedule_type=schedule_type,
+                masking_ratios=masking_ratios,
+                start_ratio=start_ratio,
+                end_ratio=end_ratio,
+                remasking_model=remasking_model,
+                randomness_strength=randomness_strength,
+                mask_token_id=mask_token_id,
+                device=device,
+                verbose=verbose
+            )
             
             if verbose and decode_mask_fn:
                 remasked_sequence = decode_mask_fn(tokens[0].tolist())
                 print(f"Sample 1 REMASKED: {remasked_sequence[:100]}{'...' if len(remasked_sequence) > 100 else ''}")
         
         # ITERATION SUMMARY LOGGING
-        if debug:
-            print(f"  📊 ITERATION {iteration + 1} SUMMARY:")
-            
-            # Analyze the full sequence for patterns after each iteration
-            full_sample = tokens[0].tolist()  # First sample
-            unmasked_positions = [i for i, token in enumerate(full_sample) if token != mask_token_id]
-            
-            if len(unmasked_positions) > 0:
-                unmasked_tokens = [full_sample[i] for i in unmasked_positions]
-                
-                # Count dash sequences
-                dash_token_id = stoi.get('-', None)
-                if dash_token_id is not None:
-                    dash_sequences = []
-                    current_dash_seq = 0
-                    max_dash_seq = 0
-                    
-                    for token in unmasked_tokens:
-                        if token == dash_token_id:
-                            current_dash_seq += 1
-                            max_dash_seq = max(max_dash_seq, current_dash_seq)
-                        else:
-                            if current_dash_seq > 1:  # Record sequences of 2+
-                                dash_sequences.append(current_dash_seq)
-                            current_dash_seq = 0
-                    
-                    # Don't forget the last sequence
-                    if current_dash_seq > 1:
-                        dash_sequences.append(current_dash_seq)
-                    
-                    total_dashes = sum(1 for t in unmasked_tokens if t == dash_token_id)
-                    if total_dashes > 0:
-                        print(f"    🔸 Dashes: {total_dashes} total, max sequence: {max_dash_seq}")
-                        if dash_sequences:
-                            seq_counts = Counter(dash_sequences)
-                            seq_info = [f"{length}x{count}" for length, count in sorted(seq_counts.items())]
-                            print(f"    🔸 Dash sequences (2+): {', '.join(seq_info)}")
-                
-                # Character type distribution
-                punct_count = sum(1 for t in unmasked_tokens if t < 13)  # First 13 are punctuation
-                alpha_count = sum(1 for t in unmasked_tokens if 13 <= t < 65)  # Letters
-                total_unmasked = len(unmasked_tokens)
-                
-                print(f"    🔸 Character types: {punct_count} punct ({punct_count/total_unmasked*100:.1f}%), {alpha_count} letters ({alpha_count/total_unmasked*100:.1f}%)")
-                
-                # Most common tokens in this iteration
-                from collections import Counter
-                token_counter = Counter(unmasked_tokens)
-                top_tokens = token_counter.most_common(5)
-                top_info = [f"'{itos[t] if t < len(itos) else f'[{t}]'}' x{c}" for t, c in top_tokens]
-                print(f"    🔸 Most common: {', '.join(top_info)}")
-                
+        if verbose and log_debug:
+            log_iteration_summary(iteration, tokens, mask_token_id, itos, stoi)
+        
         if verbose:
             print("=" * 80)
     

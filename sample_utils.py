@@ -12,7 +12,7 @@ def linear_remasking_schedule(total_iterations, current_iteration, start_ratio, 
     return start_ratio - progress * (start_ratio - end_ratio)
 
 
-def nucleus_sample(logits, top_p=1.0, temperature=1.0, recent_tokens=None, repetition_penalty=1.0):
+def nucleus_sample(logits, top_p=1.0, temperature=1.0, recent_tokens=None, repetition_penalty=1.0, vocab_size=None):
     """
     Nucleus (top-p) sampling from logits with optional repetition penalty
     
@@ -23,10 +23,17 @@ def nucleus_sample(logits, top_p=1.0, temperature=1.0, recent_tokens=None, repet
         temperature: Temperature for scaling logits
         recent_tokens: Recent tokens to apply repetition penalty to (optional)
         repetition_penalty: Penalty for repeating recent tokens (>1.0 = discourage)
+        vocab_size: Size of actual vocabulary (excluding special tokens). If provided,
+                   will mask out tokens beyond vocab_size+1 (mask token) to prevent
+                   sampling non-existent tokens
     
     Returns:
         Sampled token indices
     """
+    # Mask out invalid tokens before any processing to prevent sampling non-existent tokens
+    if vocab_size is not None and logits.shape[-1] > vocab_size + 1:  # +1 for mask token
+        logits = logits.clone()  # Don't modify original logits
+        logits[..., vocab_size+1:] = float('-inf')  # Set tokens beyond mask_token_id to -inf
     # Apply repetition penalty if provided
     if recent_tokens is not None and repetition_penalty != 1.0 and len(recent_tokens) > 0:
         for token_id in set(recent_tokens):
@@ -170,6 +177,126 @@ def apply_remasking(tokens, remask_ratio, remasking_model, randomness_strength, 
                             avg_rand_prob = selected_rand_probs.mean().item()
                             print(f"    Model prob range: {model_prob_range}")
                             print(f"    Selected positions - avg model prob: {avg_model_prob:.3f}, avg rand prob: {avg_rand_prob:.3f}")
+    
+    return tokens
+
+
+def predict_and_sample_tokens(model, tokens, mask_token_id, temperature, top_p, repetition_penalty, 
+                            repetition_window, vocab_size, device, debug_logging_fn=None, 
+                            itos=None, stoi=None, verbose=False, log_debug=False):
+    """
+    Predict and sample tokens for all masked positions
+    
+    Args:
+        model: The trained diffusion model
+        tokens: Current token sequence (batch_size, seq_len)
+        mask_token_id: ID of mask token
+        temperature: Temperature for sampling
+        top_p: Nucleus sampling parameter
+        repetition_penalty: Penalty for repeating recent tokens
+        repetition_window: Window size for repetition penalty
+        vocab_size: Size of vocabulary
+        device: Device to run on
+        debug_logging_fn: Function for debug logging (optional)
+        itos: Index to string mapping (for debug logging)
+        stoi: String to index mapping (for debug logging)
+        verbose: Whether to print progress
+        log_debug: Whether to do detailed debug logging
+        
+    Returns:
+        (updated_tokens, prediction_tokens): Updated tokens and tokens after prediction step
+    """
+    batch_size, seq_len = tokens.shape
+    masked_positions = (tokens == mask_token_id)
+    total_masked = masked_positions.sum().item()
+    
+    if total_masked > 0:
+        with torch.no_grad():
+            # Get predictions for all samples
+            dummy_targets = torch.zeros_like(tokens)
+            logits, _ = model(tokens, dummy_targets)
+            
+            # Sample new tokens for masked positions
+            for sample_idx in range(batch_size):
+                sample_masked = masked_positions[sample_idx]
+                if sample_masked.sum() > 0:
+                    mask_indices = torch.where(sample_masked)[0]
+                    masked_logits = logits[sample_idx, mask_indices]
+                    
+                    # Get recent tokens for repetition penalty
+                    if repetition_penalty != 1.0 and repetition_window > 0:
+                        # Get recent unmasked tokens for this sample
+                        sample_tokens = tokens[sample_idx]
+                        unmasked_tokens = sample_tokens[sample_tokens != mask_token_id]
+                        recent_tokens = unmasked_tokens[-repetition_window:].tolist() if len(unmasked_tokens) > 0 else []
+                    else:
+                        recent_tokens = None
+                    
+                    # Sample using nucleus sampling with repetition penalty
+                    new_tokens = nucleus_sample(masked_logits, top_p=top_p, temperature=temperature,
+                                              recent_tokens=recent_tokens, repetition_penalty=repetition_penalty,
+                                              vocab_size=vocab_size)
+                    
+                    # Debug logging if function provided
+                    if debug_logging_fn and verbose and log_debug:
+                        debug_logging_fn(sample_idx, logits, mask_indices, masked_logits, new_tokens, 
+                                       mask_token_id, vocab_size, itos, stoi, log_debug)
+                    
+                    tokens[sample_idx, mask_indices] = new_tokens
+    
+    # Save tokens after prediction for accurate display
+    prediction_tokens = tokens.clone()
+    
+    if verbose:
+        predicted_masks = (prediction_tokens == mask_token_id).sum().item()
+        if predicted_masks > 0:
+            print(f"  ⚠️  Model predicted {predicted_masks} mask tokens during prediction step!")
+    
+    return tokens, prediction_tokens
+
+
+def apply_remasking_step(tokens, prediction_tokens, iteration, iterations, schedule_type, masking_ratios,
+                        start_ratio, end_ratio, remasking_model, randomness_strength, mask_token_id, 
+                        device, verbose=False):
+    """
+    Apply remasking step with scheduling
+    
+    Args:
+        tokens: Current token sequence
+        prediction_tokens: Tokens after prediction (for tracking)
+        iteration: Current iteration number
+        iterations: Total iterations
+        schedule_type: 'linear' or 'custom'
+        masking_ratios: Custom masking ratios (if schedule_type='custom')
+        start_ratio: Starting ratio for linear schedule
+        end_ratio: Ending ratio for linear schedule
+        remasking_model: Optional remasking model
+        randomness_strength: Balance between random and model-guided remasking
+        mask_token_id: ID of mask token
+        device: Device to run on
+        verbose: Whether to print progress
+        
+    Returns:
+        Updated tokens after remasking
+    """
+    if schedule_type == 'custom':
+        # Use the next ratio from the custom schedule
+        remask_ratio = masking_ratios[iteration + 1]
+    else:
+        # Use linear schedule
+        remask_ratio = linear_remasking_schedule(iterations, iteration + 1, start_ratio, end_ratio)
+    
+    # Debug: Track masks before remasking (using actual prediction results)
+    masks_before = (prediction_tokens == mask_token_id).sum().item()
+    
+    tokens = apply_remasking(tokens, remask_ratio, remasking_model, randomness_strength, 
+                           mask_token_id, device, verbose)
+    
+    # Debug: Track masks after remasking
+    if verbose:
+        masks_after = (tokens == mask_token_id).sum().item()
+        mask_change = masks_after - masks_before
+        print(f"  Masks: {masks_before} → {masks_after} (change: {mask_change:+d})")
     
     return tokens
 

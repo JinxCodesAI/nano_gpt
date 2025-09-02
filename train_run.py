@@ -209,9 +209,8 @@ if os.path.exists(meta_path):
     extended_vocab_size = meta_vocab_size + 15  # Reserve 15 special tokens for future finetuning
     print_and_flush(f"mask_token_id = {mask_token_id}, extended_vocab_size = {extended_vocab_size}")
 else:
-    print_and_flush("No meta.pkl found, using default GPT-2 vocab")
-    mask_token_id = 50304
-    extended_vocab_size = 50304 + 15  # Reserve 15 special tokens
+    mask_token_id = 65
+    extended_vocab_size = 65 + 15  # Reserve 15 special tokens
 
 # Create training context with all parameters
 # Convert unmasking_stages dict to UnmaskingStage objects
@@ -308,9 +307,7 @@ if init_from == 'scratch':
     # init a new model from scratch
     print_and_flush("Initializing a new model from scratch")
     # determine the vocab size we'll use for from-scratch training
-    if meta_vocab_size is None:
-        print_and_flush("defaulting to vocab_size of GPT-2 to 50304 (50257 rounded up for efficiency)")
-    model_args['vocab_size'] = extended_vocab_size if meta_vocab_size is not None else 50304 + 15
+    model_args['vocab_size'] = extended_vocab_size if meta_vocab_size is not None else 65 + 15
     gptconf = GPTConfig(**model_args)
     model = GPT(gptconf)
 elif init_from == 'resume':
