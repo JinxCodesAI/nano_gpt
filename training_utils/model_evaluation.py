@@ -6,11 +6,11 @@ Contains comprehensive validation logic with detailed metrics tracking.
 import math
 import torch
 
-from .training_config import TrainingContext
+from .training_config import TrainingContext, UnmaskingStageType
 from .batch_generation import get_batch
 
 
-def estimate_loss(model, torch_ctx, timer, training_ctx: TrainingContext, dataset_config, validation_batches=None):
+def estimate_loss(model, torch_ctx, timer, training_ctx: TrainingContext):
     """Estimate loss over either split using many batches"""
     out = {}
     model.eval()
@@ -20,14 +20,16 @@ def estimate_loss(model, torch_ctx, timer, training_ctx: TrainingContext, datase
         stage_config = training_ctx.get_current_stage_config()
         if stage_config:
             out['current_stage'] = training_ctx.current_stage
-            stage_type = stage_config['type']
-            out['stage_type'] = stage_type
-            if stage_type == 'sticky':
-                out['target_masked_ratio'] = stage_config['target_masked_ratio']
-                out['p1_probability'] = stage_config['p1_probability']
-                out['p2_probability'] = stage_config['p2_probability']
-            elif stage_type == 'random':
-                out['max_masked_ratio'] = stage_config['max_masked_ratio']
+            stage_type = stage_config.get_stage_type()
+            out['stage_type'] = stage_type.value
+            if stage_type == UnmaskingStageType.STICKY:
+                config = stage_config.config
+                out['target_masked_ratio'] = config.target_masked_ratio
+                out['p1_probability'] = config.p1_probability
+                out['p2_probability'] = config.p2_probability
+            elif stage_type == UnmaskingStageType.RANDOM:
+                config = stage_config.config
+                out['max_masked_ratio'] = config.max_masked_ratio
             out['val_loss_stale_count'] = training_ctx.val_loss_stale_count
     
     for split in ['train', 'val']:
@@ -65,29 +67,22 @@ def estimate_loss(model, torch_ctx, timer, training_ctx: TrainingContext, datase
         
         for k in range(training_ctx.eval_iters):
             with timer.time_function('validation_data_generation'):
-                if split == 'val' and validation_batches is not None:
-                    # Use pre-loaded validation set - determine which stage this sample belongs to
-                    total_samples = training_ctx.eval_iters
-                    num_stages = len(validation_batches)
+                if split == 'val' and training_ctx.training_type == 'unmasking':
+                    # Use pre-created validation set with batch index
+                    X, Y, mask = get_batch(split, training_ctx, validation_sample_idx=k)
+                    # Determine which stage this batch belongs to based on validation set structure
+                    total_samples = training_ctx.eval_iters * training_ctx.batch_size
+                    num_stages = len(training_ctx.validation_stages)
                     samples_per_stage = total_samples // num_stages
-                    current_stage_idx = min(k // samples_per_stage, num_stages - 1)
-                    sample_idx_in_stage = k % samples_per_stage
-
-                    # Get validation sample from pre-loaded set
-                    X, Y, mask = dataset_config.get_validation_sample(validation_batches, current_stage_idx, sample_idx_in_stage)
-
-                    # Add batch dimension if needed
-                    if X.dim() == 1:
-                        X = X.unsqueeze(0)
-                        Y = Y.unsqueeze(0)
-                        mask = mask.unsqueeze(0)
-                elif split == 'train':
-                    # Training data - use dataset interface
-                    X, Y, mask = get_batch(split, dataset_config, training_ctx.iter_num, training_ctx.batch_size, training_ctx.block_size)
+                    current_sample_idx = k * training_ctx.batch_size
+                    current_stage_idx = min(current_sample_idx // samples_per_stage, num_stages - 1)
+                elif split == 'val' and training_ctx.training_type in ['remasking_binary', 'remasking']:
+                    # Fix: pass validation_sample_idx to get different validation batches
+                    X, Y, mask = get_batch(split, training_ctx, validation_sample_idx=k)
                     current_stage_idx = None
                 else:
-                    # Fallback for validation without pre-loaded batches (shouldn't happen)
-                    raise ValueError("Validation split requires pre-loaded validation_batches parameter")
+                    X, Y, mask = get_batch(split, training_ctx)
+                    current_stage_idx = None
 
             # Calculate masked token ratio for this batch
             # Get per-sample ratios to capture the full range of masking rates
@@ -317,15 +312,17 @@ def estimate_loss(model, torch_ctx, timer, training_ctx: TrainingContext, datase
                 for stage_idx in range(len(training_ctx.validation_stages)):
                     if stage_idx in stage_losses and stage_losses[stage_idx]:
                         stage_config = training_ctx.validation_stages[stage_idx]
-                        stage_type = stage_config['type']
+                        stage_type = stage_config.get_stage_type()
                         avg_loss = sum(stage_losses[stage_idx]) / len(stage_losses[stage_idx])
                         sample_count = stage_sample_counts[stage_idx]
-
-                        stage_info = f"    Stage {stage_idx} ({stage_type}): {avg_loss:.4f} ({sample_count} samples)"
-                        if stage_type == 'sticky':
-                            stage_info += f" - ratio={stage_config['target_masked_ratio']:.1f}"
-                        elif stage_type == 'random':
-                            stage_info += f" - max_ratio={stage_config['max_masked_ratio']:.1f}"
+                        
+                        stage_info = f"    Stage {stage_idx} ({stage_type.value}): {avg_loss:.4f} ({sample_count} samples)"
+                        if stage_type == UnmaskingStageType.STICKY:
+                            config = stage_config.config
+                            stage_info += f" - ratio={config.target_masked_ratio:.1f}"
+                        elif stage_type == UnmaskingStageType.RANDOM:
+                            config = stage_config.config
+                            stage_info += f" - max_ratio={config.max_masked_ratio:.1f}"
                         print(stage_info)
 
         # Add masked token ratio statistics
