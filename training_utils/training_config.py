@@ -61,6 +61,9 @@ class UnmaskingStage:
 @dataclass
 class TrainingContext:
     """Configuration class for training parameters to avoid long parameter lists"""
+    # Dataset configuration (NEW - replaces dataset-specific fields)
+    dataset_config: Any = None  # DatasetConfig instance
+    
     # Training configuration
     training_type: str = 'remasking'
     batch_size: int = 16
@@ -72,42 +75,25 @@ class TrainingContext:
     device_type: str = 'cuda'
     seed_offset: int = 0
     
-    # Data configuration
-    data_dir: str = 'data/shakespeare_char'
-    meta_vocab_size: int = None
-    vocab_size: int = None  # extended_vocab_size (meta_vocab_size + 15 reserved special tokens)
-    use_paragraph_boundaries: bool = True  # If True, start samples at paragraph boundaries (double newlines)
-    use_all_stages_for_training: bool = False  # If True, generate training batches from all stages like validation
-    weight_loss_by_mask_ratio: bool = False  # If True, weight loss by sqrt(1.0 / mask_ratio) to balance gradient magnitude
-    
-    # Token IDs
-    mask_token_id: int = None
-    wrong_token_id: int = None
-    remask_good_id: int = None
-    remask_wrong_id: int = None
-    extended_vocab_size: int = None
-    
     # Training iteration and stage tracking
     iter_num: int = 0
     current_stage: int = 0
     val_loss_stale_count: int = 0
     best_val_loss_this_stage: float = float('inf')
     
-    # Unmasking stages (only for unmasking training)
-    unmasking_stages: list = None
-    validation_stages: list = None  # Separate stages for validation set creation
+    # Training-specific loss computation parameters (KEEP - control loss during training)
+    weight_loss_by_mask_ratio: bool = False  # Weight loss by sqrt(1.0 / mask_ratio) to balance gradient magnitude
+    enable_entropy_penalty: bool = False     # Apply entropy penalty to loss
+    max_entropy_penalty: float = 0.5          # Maximum entropy penalty multiplier
+    entropy_penalty_start_iter: int = 6000  # Iteration to start applying entropy penalty
+    uncertainty_factor: float = 0.0           # Label smoothing factor for loss computation
     
-    # Remasking strategy - only random supported
-    
-    # Remasking corruption parameters
-    # Random corruption parameters
+    # Remasking corruption parameters (KEEP for remasking training type)
     guaranteed_unmasked_max: float = 0.95
     guaranteed_unmasked_min: float = 0.1
     sticky_transition_start: int = 1000
     sticky_transition_end: int = 6000
     random_mask_warmup: int = 1000
-    
-    # Sticky corruption parameters
     sticky_rounds: int = 4
     sticky_p1_p2_multiplier: float = 1.2
     sticky_p1_divisor: float = 2.0
@@ -122,17 +108,9 @@ class TrainingContext:
     learning_rate: float = 1e-4
     min_lr: float = 1e-5
     
-    # Entropy penalty parameters (incentivize uniform wrong answer distributions)
-    enable_entropy_penalty: bool = False
-    max_entropy_penalty: float = 0.5  # Penalty for concentrated wrong answers
-    entropy_penalty_start_iter: int = 6000
-    
     # Entropy multiplier tracking
     entropy_multiplier_ema: float = 1.0  # Exponential moving average of entropy multiplier
     entropy_multiplier_ema_factor: float = 0.99  # EMA decay factor
-    
-    # Label smoothing parameters
-    uncertainty_factor: float = 0.0  # Label smoothing factor: 0 = no smoothing, >0 = apply smoothing
     
     # Transfer learning parameters
     transfer_learning_mode: str = 'from_scratch'  # 'from_scratch', 'feature_extraction', 'fine_tuning'
@@ -140,36 +118,24 @@ class TrainingContext:
     model_mode: str = 'language_model'  # Target model mode: 'language_model', 'token_classifier', or 'sequence_classifier'
     
     def __post_init__(self):
-        # Default unmasking stages if not provided
-        if self.training_type == 'unmasking' and self.unmasking_stages is None:
-            self.unmasking_stages = [
-                UnmaskingStage(StickyStageConfig(target_masked_ratio=0.2, p1_probability=0.3, p2_probability=0.0, val_loss_stale_count=5)),
-                UnmaskingStage(StickyStageConfig(target_masked_ratio=0.4, p1_probability=0.2, p2_probability=0.8, val_loss_stale_count=5)),
-                UnmaskingStage(StickyStageConfig(target_masked_ratio=0.6, p1_probability=0.1, p2_probability=0.9, val_loss_stale_count=10)),
-            ]
-        
-        # Default validation stages if not provided (same as training stages by default)
-        if self.training_type == 'unmasking' and self.validation_stages is None:
-            self.validation_stages = self.unmasking_stages
-        
-        # Keep both meta_vocab_size (for random token generation) and extended_vocab_size (for model)
-        # vocab_size is kept for backward compatibility but should equal extended_vocab_size
-        self.vocab_size = self.extended_vocab_size
+        # Validate that dataset_config is provided
+        if self.dataset_config is None:
+            raise ValueError("dataset_config is required in TrainingContext")
     
-    def get_current_stage_config(self) -> UnmaskingStage:
-        """Get configuration for current unmasking stage"""
-        if self.training_type != 'unmasking' or not self.unmasking_stages:
+    def get_current_stage_config(self):
+        """Get configuration for current unmasking stage - delegate to dataset configuration"""
+        if self.training_type != 'unmasking' or not self.dataset_config:
             return None
         
-        if self.current_stage >= len(self.unmasking_stages):
-            # Return last stage if we've exceeded all stages
-            return self.unmasking_stages[-1]
-        
-        return self.unmasking_stages[self.current_stage]
+        return self.dataset_config.get_stage_config_for_iteration(self.iter_num)
     
     def advance_stage(self):
         """Advance to next unmasking stage and reset stale count"""
-        if self.current_stage < len(self.unmasking_stages) - 1:
+        if not self.dataset_config or not hasattr(self.dataset_config.training_config, 'UNMASKING_STAGES'):
+            return False
+            
+        stages = self.dataset_config.training_config.UNMASKING_STAGES
+        if self.current_stage < len(stages) - 1:
             self.current_stage += 1
             self.val_loss_stale_count = 0
             self.best_val_loss_this_stage = float('inf')

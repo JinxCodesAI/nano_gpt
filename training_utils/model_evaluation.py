@@ -10,7 +10,7 @@ from .training_config import TrainingContext, UnmaskingStageType
 from .batch_generation import get_batch
 
 
-def estimate_loss(model, torch_ctx, timer, training_ctx: TrainingContext):
+def estimate_loss(model, torch_ctx, timer, training_ctx: TrainingContext, dataset_config):
     """Estimate loss over either split using many batches"""
     out = {}
     model.eval()
@@ -69,7 +69,7 @@ def estimate_loss(model, torch_ctx, timer, training_ctx: TrainingContext):
             with timer.time_function('validation_data_generation'):
                 if split == 'val' and training_ctx.training_type == 'unmasking':
                     # Use pre-created validation set with batch index
-                    X, Y, mask = get_batch(split, training_ctx, validation_sample_idx=k)
+                    X, Y, mask = get_batch(split, dataset_config, training_ctx.iter_num, training_ctx.batch_size, training_ctx.block_size, validation_sample_idx=k)
                     # Determine which stage this batch belongs to based on validation set structure
                     total_samples = training_ctx.eval_iters * training_ctx.batch_size
                     num_stages = len(training_ctx.validation_stages)
@@ -78,10 +78,10 @@ def estimate_loss(model, torch_ctx, timer, training_ctx: TrainingContext):
                     current_stage_idx = min(current_sample_idx // samples_per_stage, num_stages - 1)
                 elif split == 'val' and training_ctx.training_type in ['remasking_binary', 'remasking']:
                     # Fix: pass validation_sample_idx to get different validation batches
-                    X, Y, mask = get_batch(split, training_ctx, validation_sample_idx=k)
+                    X, Y, mask = get_batch(split, dataset_config, training_ctx.iter_num, training_ctx.batch_size, training_ctx.block_size, validation_sample_idx=k)
                     current_stage_idx = None
                 else:
-                    X, Y, mask = get_batch(split, training_ctx)
+                    X, Y, mask = get_batch(split, dataset_config, training_ctx.iter_num, training_ctx.batch_size, training_ctx.block_size)
                     current_stage_idx = None
 
             # Calculate masked token ratio for this batch

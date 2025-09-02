@@ -20,12 +20,12 @@ from torch.distributed import init_process_group, destroy_process_group
 from model import GPTConfig, GPT, ModelMode
 from utils import Timer, log_masking_stats
 from training_utils import (
-    get_batch, estimate_loss, get_lr, load_synthetic_model, 
-    start_prefetch, stop_prefetch, TrainingContext, UnmaskingStage, update_stage_progress,
-    create_unmasking_validation_set, UnmaskingStageType, StickyStageConfig, RandomStageConfig,
+    estimate_loss, get_lr, load_synthetic_model, 
+    TrainingContext, update_stage_progress,
     calculate_wrong_answer_entropy, get_current_entropy_penalty, update_entropy_multiplier_ema,
     apply_label_smoothing
 )
+from training_utils.batch_generation import get_batch
 
 torch._dynamo.config.suppress_errors = True
 
@@ -192,79 +192,35 @@ device_type = 'cuda' if 'cuda' in device else 'cpu' # for later use in torch.aut
 ptdtype = {'float32': torch.float32, 'bfloat16': torch.bfloat16, 'float16': torch.float16}[dtype]
 ctx = nullcontext() if device_type == 'cpu' else torch.amp.autocast(device_type=device_type, dtype=ptdtype)
 
-# poor man's data loader
-data_dir = os.path.join('data', dataset)
+# NEW: Simple dataset initialization using dataset interface
+from training_utils.dataset_interface import DatasetConfig
+
+# Initialize dataset configuration
+dataset_config = DatasetConfig(dataset)
+dataset_config.validate_training_config(block_size, batch_size)
 
 # init these up here, can override if init_from='resume' (i.e. from a checkpoint)
 iter_num = 0
 best_val_loss = 1e9
 checkpoint_training_context = None  # For restoring training context state
 
-# attempt to derive vocab_size from the dataset
-meta_path = os.path.join(data_dir, 'meta.pkl')
-meta_vocab_size = None
-if os.path.exists(meta_path):
-    with open(meta_path, 'rb') as f:
-        meta = pickle.load(f)
-    meta_vocab_size = meta['vocab_size']
-    print_and_flush(f"found vocab_size = {meta_vocab_size} (inside {meta_path})")
-    
-    # Set special token ID for unmasking training
-    mask_token_id = meta_vocab_size
-    extended_vocab_size = meta_vocab_size + 15  # Reserve 15 special tokens for future finetuning
-    print_and_flush(f"mask_token_id = {mask_token_id}, extended_vocab_size = {extended_vocab_size}")
-else:
-    mask_token_id = 65
-    extended_vocab_size = 65 + 15  # Reserve 15 special tokens
+# All dataset info now comes from dataset_config
+meta_vocab_size = dataset_config.meta['vocab_size']
+extended_vocab_size = dataset_config.meta['extended_vocab_size']
+mask_token_id = dataset_config.meta['special_tokens']['mask_token_id']
 
-# Create training context with all parameters
-# Convert unmasking_stages dict to UnmaskingStage objects
-unmasking_stage_objects = None
-if training_type == 'unmasking':
-    unmasking_stage_objects = []
-    for stage in unmasking_stages:
-        stage_type = stage['type']
-        if stage_type == 'sticky':
-            config = StickyStageConfig(
-                target_masked_ratio=stage['target_masked_ratio'],
-                p1_probability=stage['p1_probability'],
-                p2_probability=stage['p2_probability'],
-                val_loss_stale_count=stage['val_loss_stale_count']
-            )
-        elif stage_type == 'random':
-            config = RandomStageConfig(
-                max_masked_ratio=stage['max_masked_ratio'],
-                val_loss_stale_count=stage['val_loss_stale_count']
-            )
-        else:
-            raise ValueError(f"Unknown stage type: {stage_type}")
-        
-        unmasking_stage_objects.append(UnmaskingStage(config))
+print_and_flush(f"Dataset: {dataset}")
+print_and_flush(f"Block size constraint: {dataset_config.meta['block_size']}")
+print_and_flush(f"Original vocab_size: {meta_vocab_size}")
+print_and_flush(f"Extended vocab_size: {extended_vocab_size}")
+print_and_flush(f"Mask token ID: {mask_token_id}")
+print_and_flush(f"Training stages: {dataset_config.meta['training_stages']}")
+print_and_flush(f"Validation stages: {dataset_config.meta['validation_stages']}")
 
-# Convert validation_stages dict to UnmaskingStage objects (if different from training stages)
-validation_stage_objects = None
-if training_type == 'unmasking' and len(validation_stages) > 0:
-    validation_stage_objects = []
-    for stage in validation_stages:
-        stage_type = stage['type']
-        if stage_type == 'sticky':
-            config = StickyStageConfig(
-                target_masked_ratio=stage['target_masked_ratio'],
-                p1_probability=stage['p1_probability'],
-                p2_probability=stage['p2_probability'],
-                val_loss_stale_count=stage['val_loss_stale_count']
-            )
-        elif stage_type == 'random':
-            config = RandomStageConfig(
-                max_masked_ratio=stage['max_masked_ratio'],
-                val_loss_stale_count=stage['val_loss_stale_count']
-            )
-        else:
-            raise ValueError(f"Unknown stage type: {stage_type}")
-        
-        validation_stage_objects.append(UnmaskingStage(config))
-
+# NEW: Simple training context creation with dataset configuration
 training_ctx = TrainingContext(
+    dataset_config=dataset_config,
+    # Training hyperparameters:
     training_type=training_type,
     batch_size=batch_size,
     block_size=block_size,
@@ -272,20 +228,13 @@ training_ctx = TrainingContext(
     device=device,
     device_type=device_type,
     seed_offset=seed_offset,
-    data_dir=data_dir,
-    meta_vocab_size=meta_vocab_size,
-    mask_token_id=mask_token_id,
-    extended_vocab_size=extended_vocab_size,
     iter_num=iter_num,
-    unmasking_stages=unmasking_stage_objects,
-    validation_stages=validation_stage_objects,
     eval_iters=eval_iters,
     warmup_iters=warmup_iters,
     lr_decay_iters=lr_decay_iters,
     learning_rate=learning_rate,
     min_lr=min_lr,
-    use_paragraph_boundaries=use_paragraph_boundaries,
-    use_all_stages_for_training=use_all_stages_for_training,
+    # Training logic parameters:
     weight_loss_by_mask_ratio=weight_loss_by_mask_ratio,
     enable_entropy_penalty=enable_entropy_penalty,
     max_entropy_penalty=max_entropy_penalty,
@@ -314,8 +263,8 @@ model_args = dict(n_layer=n_layer, n_head=n_head, n_embd=n_embd, block_size=bloc
 if init_from == 'scratch':
     # init a new model from scratch
     print_and_flush("Initializing a new model from scratch")
-    # determine the vocab size we'll use for from-scratch training
-    model_args['vocab_size'] = extended_vocab_size if meta_vocab_size is not None else 65 + 15
+    # NEW: Use dataset configuration
+    model_args['vocab_size'] = dataset_config.meta['extended_vocab_size']
     gptconf = GPTConfig(**model_args)
     model = GPT(gptconf)
 elif init_from == 'resume':
@@ -629,7 +578,7 @@ def reload_from_checkpoint():
     return True
 
 # training loop
-X, Y, mask = get_batch('train', training_ctx) # fetch the very first batch
+X, Y, mask = get_batch('train', dataset_config, training_ctx.iter_num, training_ctx.batch_size, training_ctx.block_size) # fetch the very first batch
 t0 = time.time()
 local_iter_num = 0 # number of iterations in the lifetime of this process
 raw_model = model.module if ddp else model # unwrap DDP container if needed
@@ -677,7 +626,7 @@ while True:
         with timer.time_function('validation'):
             # Update training context with current iteration
             training_ctx.iter_num = iter_num
-            losses = estimate_loss(model, ctx, timer, training_ctx)
+            losses = estimate_loss(model, ctx, timer, training_ctx, dataset_config)
 
         # VALIDATION INSTABILITY DETECTION
         train_loss_finite = math.isfinite(losses['train'])
@@ -814,7 +763,7 @@ while True:
                             running_mfu = -1.0
                             training_ctx.iter_num = iter_num
                             # Generate new batch to avoid same problematic data
-                            X, Y, mask = get_batch('train', training_ctx)
+                            X, Y, mask = get_batch('train', dataset_config, training_ctx.iter_num, training_ctx.batch_size, training_ctx.block_size)
                             # Reset scaler state and start fresh iteration
                             scaler = torch.cuda.amp.GradScaler(enabled=(dtype == 'float16'))
                             optimizer.zero_grad(set_to_none=True)
@@ -835,7 +784,7 @@ while True:
                             running_mfu = -1.0
                             training_ctx.iter_num = iter_num
                             # Generate new batch to avoid same problematic data
-                            X, Y, mask = get_batch('train', training_ctx)
+                            X, Y, mask = get_batch('train', dataset_config, training_ctx.iter_num, training_ctx.batch_size, training_ctx.block_size)
                             # Reset scaler state and start fresh iteration
                             scaler = torch.cuda.amp.GradScaler(enabled=(dtype == 'float16'))
                             optimizer.zero_grad(set_to_none=True)
@@ -920,7 +869,7 @@ while True:
                         running_mfu = -1.0
                         training_ctx.iter_num = iter_num
                         # Generate new batch to avoid same problematic data
-                        X, Y, mask = get_batch('train', training_ctx)
+                        X, Y, mask = get_batch('train', dataset_config, training_ctx.iter_num, training_ctx.batch_size, training_ctx.block_size)
                         # Reset scaler state and start fresh iteration
                         scaler = torch.cuda.amp.GradScaler(enabled=(dtype == 'float16'))
                         optimizer.zero_grad(set_to_none=True)
@@ -936,7 +885,7 @@ while True:
         with timer.time_function('data_generation'):
             # Update training context with current iteration for the next batch
             training_ctx.iter_num = iter_num
-            X, Y, mask = get_batch('train', training_ctx)
+            X, Y, mask = get_batch('train', dataset_config, training_ctx.iter_num, training_ctx.batch_size, training_ctx.block_size)
             # backward pass, with gradient scaling if training in fp16
             with timer.time_function('backward_pass'):
                 scaler.scale(loss).backward()
@@ -984,7 +933,7 @@ while True:
                     running_mfu = -1.0
                     training_ctx.iter_num = iter_num
                     # Generate new batch to avoid same problematic data
-                    X, Y, mask = get_batch('train', training_ctx)
+                    X, Y, mask = get_batch('train', dataset_config, training_ctx.iter_num, training_ctx.batch_size, training_ctx.block_size)
                     # Reset scaler state and start fresh iteration
                     scaler = torch.cuda.amp.GradScaler(enabled=(dtype == 'float16'))
                     optimizer.zero_grad(set_to_none=True)
@@ -1026,7 +975,7 @@ while True:
                     running_mfu = -1.0
                     training_ctx.iter_num = iter_num
                     # Generate new batch to avoid same problematic data
-                    X, Y, mask = get_batch('train', training_ctx)
+                    X, Y, mask = get_batch('train', dataset_config, training_ctx.iter_num, training_ctx.batch_size, training_ctx.block_size)
                     # Reset scaler state and start fresh iteration
                     scaler = torch.cuda.amp.GradScaler(enabled=(dtype == 'float16'))
                     optimizer.zero_grad(set_to_none=True)
@@ -1071,7 +1020,7 @@ while True:
                 running_mfu = -1.0
                 training_ctx.iter_num = iter_num
                 # Generate new batch to avoid same problematic data
-                X, Y, mask = get_batch('train', training_ctx)
+                X, Y, mask = get_batch('train', dataset_config, training_ctx.iter_num, training_ctx.batch_size, training_ctx.block_size)
                 # Reset scaler state and start fresh iteration
                 scaler = torch.cuda.amp.GradScaler(enabled=(dtype == 'float16'))
                 optimizer.zero_grad(set_to_none=True)
