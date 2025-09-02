@@ -83,7 +83,7 @@ def estimate_loss(model, torch_ctx, timer, training_ctx: TrainingContext, datase
                         mask = mask.unsqueeze(0)
                 elif split == 'train':
                     # Training data - use dataset interface
-                    X, Y, mask = get_batch(split, dataset_config, training_ctx.iter_num, training_ctx.batch_size, training_ctx.block_size)
+                    X, Y, mask = get_batch(split, dataset_config, training_ctx.iter_num, training_ctx.batch_size, training_ctx.block_size, training_ctx.model_mode)
                     current_stage_idx = None
                 else:
                     # Fallback for validation without pre-loaded batches (shouldn't happen)

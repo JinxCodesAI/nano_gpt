@@ -43,34 +43,57 @@ class DatasetConfig:
     
     def _validate_dataset(self):
         """Validate dataset has all required components"""
-        required_files = ['meta.pkl', 'training_config.py', 'train.bin', 'val.bin']
+        required_files = ['meta.pkl', 'train.bin', 'val.bin']
         for file in required_files:
             filepath = os.path.join(self.data_dir, file)
             if not os.path.exists(filepath):
                 raise FileNotFoundError(f"Dataset {self.dataset_name} missing required file: {file}")
-        
-        # Validate prepared batches exist
+
+        # Check if this is a training-specific dataset (has training_config.py and prepared batches)
+        # or a general dataset (just has basic data files)
+        training_config_path = os.path.join(self.data_dir, 'training_config.py')
         prepared_dir = os.path.join(self.data_dir, 'prepared_batches')
-        if not os.path.exists(prepared_dir):
-            raise FileNotFoundError(f"Dataset {self.dataset_name} missing prepared_batches directory. Run prepare.py first.")
+
+        if os.path.exists(training_config_path):
+            # Training-specific dataset - validate prepared batches exist
+            if not os.path.exists(prepared_dir):
+                raise FileNotFoundError(f"Dataset {self.dataset_name} has training_config.py but missing prepared_batches directory. Run prepare.py first.")
+        else:
+            # General dataset - no training_config.py required
+            print(f"Dataset {self.dataset_name} is a general dataset (no training_config.py found)")
+
+        # Validate supported model modes
+        supported_modes = self.meta.get('supported_model_modes', ['language_model'])
+        if not isinstance(supported_modes, list) or len(supported_modes) == 0:
+            raise ValueError(f"Dataset {self.dataset_name} meta.pkl must specify 'supported_model_modes' as a non-empty list")
     
-    def validate_training_config(self, block_size: int, batch_size: Optional[int] = None):
+    def validate_training_config(self, block_size: int, model_mode: str, batch_size: Optional[int] = None):
         """Validate training parameters against dataset constraints"""
         if block_size != self.meta['block_size']:
             raise ValueError(f"Block size mismatch: dataset '{self.dataset_name}' requires {self.meta['block_size']}, got {block_size}")
-        
+
+        # Validate model mode is supported by this dataset
+        supported_modes = self.meta.get('supported_model_modes', ['language_model'])
+        if model_mode not in supported_modes:
+            raise ValueError(f"Dataset '{self.dataset_name}' does not support model_mode '{model_mode}'. Supported modes: {supported_modes}")
+
         # Any batch_size should be supported through dynamic loading
         if batch_size and batch_size <= 0:
             raise ValueError(f"Invalid batch_size: {batch_size}")
     
-    def get_training_batch(self, iteration: int, batch_size: int, block_size: int) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+    def get_training_batch(self, iteration: int, batch_size: int, block_size: int, model_mode: str) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
         """Get training batch for specific iteration with runtime caching"""
-        self.validate_training_config(block_size, batch_size)
-        
-        # Collect samples to form the requested batch size
-        return self._collect_samples_for_batch(batch_size, iteration, 'train')
+        self.validate_training_config(block_size, model_mode, batch_size)
+
+        # Check if this dataset has training-specific preparation
+        if hasattr(self.training_config, 'UNMASKING_STAGES'):
+            # Training-specific dataset with prepared batches
+            return self._collect_samples_for_batch(batch_size, iteration, 'train')
+        else:
+            # General dataset - generate batch on-the-fly based on model_mode
+            return self._generate_batch_for_model_mode(batch_size, block_size, model_mode, 'train')
     
-    def load_validation_set(self, eval_iters: int) -> List[List[Tuple[torch.Tensor, torch.Tensor, torch.Tensor]]]:
+    def load_validation_set(self, eval_iters: int, device: str = 'cpu') -> List[List[Tuple[torch.Tensor, torch.Tensor, torch.Tensor]]]:
         """Load fixed validation set ONCE at training start - dataset provides 'buffet', training decides consumption"""
         print("Loading fixed validation set...")
 
@@ -105,12 +128,23 @@ class DatasetConfig:
                     file_idx = 0
                     file_path = os.path.join(validation_dir, f"stage_{stage_idx}_file_{file_idx}.pt")
 
-                file_samples = torch.load(file_path, map_location='cpu')
+                file_samples = torch.load(file_path, map_location=device)
 
-                # Take what we need
+                # Take what we need and ensure all tensors are on the correct device
                 remaining_needed = samples_needed_per_stage - samples_collected
                 samples_to_take = min(len(file_samples), remaining_needed)
-                stage_samples.extend(file_samples[:samples_to_take])
+
+                # Move each sample's tensors to the correct device
+                for sample in file_samples[:samples_to_take]:
+                    if isinstance(sample, (list, tuple)) and len(sample) == 3:
+                        x, y, mask = sample
+                        # Ensure all tensors are on the correct device
+                        x = x.to(device) if hasattr(x, 'to') else x
+                        y = y.to(device) if hasattr(y, 'to') else y
+                        mask = mask.to(device) if hasattr(mask, 'to') else mask
+                        stage_samples.append((x, y, mask))
+                    else:
+                        stage_samples.append(sample)
 
                 samples_collected += samples_to_take
                 file_idx += 1
@@ -234,5 +268,44 @@ class DatasetConfig:
         batch_x = torch.cat(collected_x[:target_batch_size], dim=0)
         batch_y = torch.cat(collected_y[:target_batch_size], dim=0)
         batch_mask = torch.cat(collected_mask[:target_batch_size], dim=0)
-        
+
         return batch_x, batch_y, batch_mask
+
+    def _generate_batch_for_model_mode(self, batch_size: int, block_size: int, model_mode: str, split: str) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+        """Generate batch on-the-fly for general datasets based on model_mode"""
+        from .data_loading_utils import load_memmap_data, sample_indices_random
+
+        # Load data
+        data_path = os.path.join(self.data_dir, f'{split}.bin')
+        data = load_memmap_data(data_path)
+
+        # Sample indices
+        indices = sample_indices_random(len(data), batch_size, block_size)
+
+        # Load sequences
+        ix_expanded = indices[:, None] + np.arange(block_size)[None, :]
+        x_data = data[ix_expanded].astype(np.int64)
+        x = torch.from_numpy(x_data)
+
+        if model_mode == 'language_model':
+            # Standard language modeling: predict next token
+            y = x[:, 1:].contiguous()  # Shift by 1 for next token prediction
+            x = x[:, :-1].contiguous()  # Remove last token from input
+            mask = torch.ones_like(x)  # No masking for standard LM
+
+        elif model_mode == 'token_classifier':
+            # Token classification: classify each token (e.g., binary classification)
+            # For general datasets, we can't generate meaningful token labels
+            # This would need to be implemented per dataset
+            raise NotImplementedError(f"Token classification not implemented for general dataset {self.dataset_name}. Use a training-specific dataset.")
+
+        elif model_mode == 'sequence_classifier':
+            # Sequence classification: classify entire sequence
+            # For general datasets, we can't generate meaningful sequence labels
+            # This would need to be implemented per dataset
+            raise NotImplementedError(f"Sequence classification not implemented for general dataset {self.dataset_name}. Use a training-specific dataset.")
+
+        else:
+            raise ValueError(f"Unknown model_mode: {model_mode}")
+
+        return x, y, mask

@@ -1,11 +1,11 @@
 
 # Discrete Diffusion LLM Training - Unmasking Framework
 
-A training framework for discrete diffusion-based language models using **unmasking training**, derived from [nanoGPT](https://github.com/karpathy/nanoGPT). This repository implements progressive unmasking with stage-based curriculum learning for character-level language modeling.
+A training framework for discrete diffusion-based language models using unmasking training, derived from [nanoGPT](https://github.com/karpathy/nanoGPT). This repository implements progressive unmasking with stage-based curriculum learning for character-level language modeling.
 
-**Unmasking Training** uses a curriculum learning approach where the model learns to predict masked tokens, starting with easier masking patterns and progressively advancing to more challenging ones. The model uses bidirectional attention (unlike autoregressive models) and learns through stages that automatically advance based on validation performance.
+Unmasking training uses a curriculum learning approach where the model learns to predict masked tokens, starting with easier masking patterns and progressively advancing to more challenging ones. The model uses bidirectional attention and learns through stages that automatically advance based on validation performance.
 
-The framework is designed exclusively for character-level tokenization and implements sophisticated masking strategies, validation systems, and automatic stage progression.
+The framework is designed for character-level tokenization and includes masking strategies, validation systems, and automatic stage progression.
 
 ## install
 
@@ -21,15 +21,161 @@ Dependencies:
 
 Note: This framework is designed specifically for character-level tokenization and does not require transformers, datasets, or tiktoken packages.
 
-## quick start
+## Dataset Preparation
 
-To get started with discrete diffusion LLM training, first prepare your character-level dataset. For Shakespeare:
+The framework supports two types of datasets:
 
-```sh
-python data/shakespeare_char/prepare.py
+### 1. General Datasets (Simple)
+Basic datasets that work with standard model modes (`language_model`, `token_classifier`, `sequence_classifier`) without specialized training procedures.
+
+### 2. Training-Specific Datasets (Advanced)
+Datasets with specialized training procedures like unmasking/diffusion training that require custom stage configurations.
+
+---
+
+### General Dataset Setup
+
+For standard language modeling, token classification, or sequence classification:
+
+#### Basic Structure
+```
+data/your_dataset_name/
+├── prepare.py              # Data preparation script
+├── input.txt              # Raw text data
+├── train.bin              # Generated: tokenized training data
+├── val.bin                # Generated: tokenized validation data
+└── meta.pkl               # Generated: vocabulary and dataset metadata
 ```
 
-This creates `train.bin` and `val.bin` with character-level tokenization. 
+#### Required meta.pkl Contents
+```python
+meta = {
+    'vocab_size': 65,                    # Base vocabulary size
+    'itos': {...},                       # Index to string mapping
+    'stoi': {...},                       # String to index mapping
+    'extended_vocab_size': 80,           # With special tokens
+    'special_tokens': {                  # Special token IDs
+        'mask_token_id': 65,
+        'wrong_token_id': 66,
+        # ... other special tokens
+    },
+    'dataset_type': 'character',         # 'character', 'subword', 'word'
+    'block_size': 1024,                  # Fixed sequence length
+    'supported_model_modes': [           # Which training modes this dataset supports
+        'language_model',                # Standard next-token prediction
+        'token_classifier',              # Per-token classification
+        'sequence_classifier'            # Sequence-level classification
+    ]
+}
+```
+
+#### Usage
+```python
+# In your training config file
+dataset = 'your_dataset_name'
+model_mode = 'language_model'  # or 'token_classifier', 'sequence_classifier'
+```
+
+---
+
+### Training-Specific Dataset Setup (Advanced)
+
+For specialized training like unmasking/diffusion that requires curriculum learning:
+
+#### Advanced Structure
+```
+data/your_dataset_name/
+├── prepare.py              # Enhanced preparation script
+├── training_config.py      # Training-specific configuration
+├── data_utils.py          # Dataset-specific utilities
+├── input.txt              # Raw text data
+├── train.bin              # Generated: tokenized training data
+├── val.bin                # Generated: tokenized validation data
+├── meta.pkl               # Generated: enhanced metadata
+├── prepared_batches/       # Generated: pre-computed training batches
+│   ├── train_iter_0000.pt
+│   ├── train_iter_0200.pt
+│   └── ...
+└── validation/            # Generated: fixed validation pools
+    ├── validation_meta.pkl
+    ├── stage_00_batch_00.pt
+    └── ...
+```
+
+#### Training Configuration Example
+```python
+# training_config.py - Only needed for specialized training
+UNMASKING_STAGES = [
+    {
+        "type": "sticky",
+        "target_masked_ratio": 0.2,
+        "p1_probability": 0.15,
+        "p2_probability": 0.3,
+        "val_loss_stale_count": 6
+    },
+    # ... curriculum stages
+]
+
+VALIDATION_STAGES = [
+    # ... validation configurations
+]
+
+# Dataset constraints
+BLOCK_SIZE = 1024
+USE_PARAGRAPH_BOUNDARIES = True
+VALIDATION_SAMPLES_PER_STAGE = 100
+```
+
+#### Usage
+```python
+# In your training config file
+dataset = 'your_specialized_dataset'
+training_type = 'unmasking'  # Specialized training procedure
+```
+
+---
+
+### Model Modes and Data Requirements
+
+The framework supports three model modes with different data requirements:
+
+#### 1. Language Model (`language_model`)
+- **Purpose**: Next-token prediction (standard language modeling)
+- **Data format**: Text sequences, targets are input shifted by 1
+- **Works with**: Any general dataset
+- **Example**: Shakespeare text generation
+
+#### 2. Token Classifier (`token_classifier`)
+- **Purpose**: Per-token binary/multi-class classification
+- **Data format**: Requires token-level labels or masking patterns
+- **Works with**: Training-specific datasets (like unmasking/diffusion)
+- **Example**: Masked language modeling, token-level sentiment analysis
+
+#### 3. Sequence Classifier (`sequence_classifier`)
+- **Purpose**: Sequence-level classification or regression
+- **Data format**: Requires sequence-level labels, uses [CLS] token
+- **Works with**: Specialized datasets with sequence labels
+- **Example**: Document classification, sequence-level scoring
+
+---
+
+## Quick Start
+
+### Basic Language Modeling
+```python
+# config/my_experiment.py
+dataset = 'shakespeare_char_diffusion'  # or any general dataset
+model_mode = 'language_model'
+training_type = 'standard'  # Standard next-token prediction
+```
+```sh
+python train_run.py config/my_experiment.py
+```
+
+### Specialized Training (Unmasking/Diffusion)
+```sh
+python train_run.py config/shakespeare_diffusion/experiment1.py
+```
 
 ## Unmasking Training Overview
 
@@ -74,76 +220,97 @@ The models use bidirectional attention with Rotary Position Embeddings (RoPE):
 ### Standard Unmasking Training (GPU Recommended)
 
 ```sh
-python train_run.py \
-  --training_type=unmasking \
-  --batch_size=16 \
-  --block_size=1024 \
-  --max_iters=5000 \
-  --learning_rate=1e-3
+python train_run.py config/shakespeare_diffusion/experiment1.py
 ```
 
-### Transfer Learning (NEW!)
+Or create your own config file with:
+```python
+# config/my_experiment.py
+dataset = 'shakespeare_char_diffusion'
+batch_size = 16
+block_size = 1024
+max_iters = 5000
+learning_rate = 1e-3
+training_type = 'unmasking'
+```
 
-The framework now supports **transfer learning** for both feature extraction and fine-tuning:
+### Transfer Learning
+
+The framework supports transfer learning for both feature extraction and fine-tuning:
 
 #### Feature Extraction (Freeze Backbone, Train Head Only)
+```python
+# config/feature_extraction.py
+init_from = 'resume'
+pretrained_checkpoint_path = 'out/pretrained_model.pt'
+switch_to_binary = True
+transfer_learning_mode = 'feature_extraction'
+learning_rate = 1e-3
+max_iters = 5000
+```
 ```sh
-python train_run.py \
-  --init_from=resume \
-  --pretrained_checkpoint_path=out/pretrained_model.pt \
-  --switch_to_binary=True \
-  --transfer_learning_mode=feature_extraction \
-  --learning_rate=1e-3 \
-  --max_iters=5000
+python train_run.py config/feature_extraction.py
 ```
 
 #### Fine-tuning (Train All Parameters)
+```python
+# config/fine_tuning.py
+init_from = 'resume'
+pretrained_checkpoint_path = 'out/pretrained_model.pt'
+switch_to_binary = True
+transfer_learning_mode = 'fine_tuning'
+learning_rate = 1e-4
+max_iters = 10000
+```
 ```sh
-python train_run.py \
-  --init_from=resume \
-  --pretrained_checkpoint_path=out/pretrained_model.pt \
-  --switch_to_binary=True \
-  --transfer_learning_mode=fine_tuning \
-  --learning_rate=1e-4 \
-  --max_iters=10000
+python train_run.py config/fine_tuning.py
 ```
 
 ### CPU Training (Reduced Model)
 
+```python
+# config/cpu_training.py
+dataset = 'shakespeare_char_diffusion'
+training_type = 'unmasking'
+device = 'cpu'
+compile = False
+batch_size = 8
+block_size = 256
+n_layer = 4
+n_head = 4
+n_embd = 128
+max_iters = 10000
+learning_rate = 5e-4
+```
 ```sh
-python train_run.py \
-  --training_type=unmasking \
-  --device=cpu \
-  --compile=False \
-  --batch_size=8 \
-  --block_size=256 \
-  --n_layer=4 \
-  --n_head=4 \
-  --n_embd=128 \
-  --max_iters=10000 \
-  --learning_rate=5e-4
+python train_run.py config/cpu_training.py
 ```
 
 ### Apple Silicon (MPS)
 
+```python
+# config/mps_training.py
+dataset = 'shakespeare_char_diffusion'
+training_type = 'unmasking'
+device = 'mps'
+batch_size = 12
+block_size = 512
+max_iters = 25000
+```
 ```sh
-python train_run.py \
-  --training_type=unmasking \
-  --device=mps \
-  --batch_size=12 \
-  --block_size=512 \
-  --max_iters=25000
+python train_run.py config/mps_training.py
 ```
 
 ## Detailed Configuration Guide
 
 ### Unmasking Stage Configuration
 
-Stages are defined in `train_run.py` around line 64. Each stage is a dictionary with:
+Stages are defined in dataset configuration files (e.g., `data/shakespeare_char_diffusion/training_config.py`). Each stage is a dictionary with:
 
 #### Sticky Masking Stages
 ```python
-unmasking_stages = [
+# In data/your_dataset/training_config.py
+UNMASKING_STAGES = [
     {
         "type": "sticky",
         "target_masked_ratio": 0.2,      # 20% of tokens masked
@@ -159,7 +326,7 @@ unmasking_stages = [
         "val_loss_stale_count": 5
     },
     {
-        "type": "sticky", 
+        "type": "sticky",
         "target_masked_ratio": 0.6,      # 60% of tokens masked (hardest)
         "p1_probability": 0.1,           # 10% chance for new regions
         "p2_probability": 0.9,           # 90% chance to extend (very sticky)
@@ -170,7 +337,8 @@ unmasking_stages = [
 
 #### Random Masking Stages
 ```python
-unmasking_stages = [
+# In data/your_dataset/training_config.py
+UNMASKING_STAGES = [
     {
         "type": "random",
         "max_masked_ratio": 0.3,         # Up to 30% tokens masked randomly
@@ -219,10 +387,9 @@ grad_clip = 1.0       # Gradient clipping (0.5 to 2.0)
 #### Data Configuration
 ```python
 # Data handling
-use_paragraph_boundaries = True  # Start sequences at paragraph breaks (recommended)
-dataset = 'shakespeare_char'     # Character-level dataset
-eval_interval = 200             # How often to evaluate (iterations)
-eval_iters = 20                 # Number of batches for evaluation
+dataset = 'shakespeare_char_diffusion'  # Character-level dataset
+eval_interval = 200                     # How often to evaluate (iterations)
+eval_iters = 20                         # Number of batches for evaluation
 ```
 
 ### Hardware-Specific Settings
@@ -261,7 +428,7 @@ gradient_accumulation_steps = 2  # Simulate larger batches
 
 ### Validation Strategy
 
-Unmasking training uses a sophisticated validation approach:
+Unmasking training uses a structured validation approach:
 
 **Pre-created Validation Sets**:
 - Generated once at training start
@@ -322,7 +489,7 @@ Per-stage validation losses:
 
 ### Overview
 
-The framework now supports comprehensive **transfer learning** capabilities, allowing you to:
+The framework supports transfer learning capabilities, allowing you to:
 
 1. **Load pretrained models** trained with `binary_classification=False` (language modeling)
 2. **Switch to binary classification** (`binary_classification=True`) with automatic head reinitialization  
@@ -337,12 +504,16 @@ The framework now supports comprehensive **transfer learning** capabilities, all
 
 First, train a model with standard unmasking on your text data:
 
+```python
+# config/pretrain.py
+dataset = 'shakespeare_char_diffusion'
+training_type = 'unmasking'
+batch_size = 16
+max_iters = 20000
+out_dir = 'pretrained_model'
+```
 ```sh
-python train_run.py \
-  --training_type=unmasking \
-  --batch_size=16 \
-  --max_iters=20000 \
-  --out_dir=pretrained_model
+python train_run.py config/pretrain.py
 ```
 
 This creates a language model checkpoint (e.g., `pretrained_model/ckpt_unmasking_20000.pt`).
@@ -350,39 +521,46 @@ This creates a language model checkpoint (e.g., `pretrained_model/ckpt_unmasking
 #### Step 2: Transfer Learning for Classification
 
 **Feature Extraction Mode** (recommended first approach):
+```python
+# config/feature_extraction_transfer.py
+init_from = 'resume'
+pretrained_checkpoint_path = 'pretrained_model/ckpt_unmasking_20000.pt'
+switch_to_binary = True
+transfer_learning_mode = 'feature_extraction'
+training_type = 'unmasking'
+learning_rate = 1e-3
+max_iters = 5000
+out_dir = 'feature_extraction_model'
+```
 ```sh
-python train_run.py \
-  --init_from=resume \
-  --pretrained_checkpoint_path=pretrained_model/ckpt_unmasking_20000.pt \
-  --switch_to_binary=True \
-  --transfer_learning_mode=feature_extraction \
-  --training_type=unmasking \
-  --learning_rate=1e-3 \
-  --max_iters=5000 \
-  --out_dir=feature_extraction_model
+python train_run.py config/feature_extraction_transfer.py
 ```
 
 **Fine-tuning Mode** (for better performance):
+```python
+# config/fine_tuning_transfer.py
+init_from = 'resume'
+pretrained_checkpoint_path = 'pretrained_model/ckpt_unmasking_20000.pt'
+switch_to_binary = True
+transfer_learning_mode = 'fine_tuning'
+training_type = 'unmasking'
+learning_rate = 1e-4
+max_iters = 10000
+out_dir = 'fine_tuning_model'
+```
 ```sh
-python train_run.py \
-  --init_from=resume \
-  --pretrained_checkpoint_path=pretrained_model/ckpt_unmasking_20000.pt \
-  --switch_to_binary=True \
-  --transfer_learning_mode=fine_tuning \
-  --training_type=unmasking \
-  --learning_rate=1e-4 \
-  --max_iters=10000 \
-  --out_dir=fine_tuning_model
+python train_run.py config/fine_tuning_transfer.py
 ```
 
 ### Transfer Learning Configuration
 
 #### Required Parameters
 
-- `--init_from=resume`: Use checkpoint loading mode
-- `--pretrained_checkpoint_path=PATH`: Path to your pretrained language model checkpoint
-- `--switch_to_binary=True`: Switch from language modeling to binary classification head
-- `--transfer_learning_mode=MODE`: Choose `feature_extraction` or `fine_tuning`
+In your configuration file:
+- `init_from = 'resume'`: Use checkpoint loading mode
+- `pretrained_checkpoint_path = 'PATH'`: Path to your pretrained language model checkpoint
+- `switch_to_binary = True`: Switch from language modeling to binary classification head
+- `transfer_learning_mode = 'MODE'`: Choose `'feature_extraction'` or `'fine_tuning'`
 
 #### Transfer Learning Modes
 
@@ -403,21 +581,25 @@ python train_run.py \
 ### Transfer Learning Best Practices
 
 #### Learning Rates
-```sh
+```python
 # Feature extraction: Higher learning rates OK
---transfer_learning_mode=feature_extraction --learning_rate=1e-3
+transfer_learning_mode = 'feature_extraction'
+learning_rate = 1e-3
 
-# Fine-tuning: Lower learning rates to preserve pretrained features  
---transfer_learning_mode=fine_tuning --learning_rate=1e-4
+# Fine-tuning: Lower learning rates to preserve pretrained features
+transfer_learning_mode = 'fine_tuning'
+learning_rate = 1e-4
 ```
 
 #### Training Duration
-```sh
+```python
 # Feature extraction: Shorter training usually sufficient
---transfer_learning_mode=feature_extraction --max_iters=2000-5000
+transfer_learning_mode = 'feature_extraction'
+max_iters = 2000  # to 5000
 
 # Fine-tuning: Longer training for convergence
---transfer_learning_mode=fine_tuning --max_iters=5000-15000
+transfer_learning_mode = 'fine_tuning'
+max_iters = 5000  # to 15000
 ```
 
 #### Model Architecture Compatibility
@@ -468,43 +650,49 @@ Switch to binary classification: True
 #### Example 1: Text Classification
 ```sh
 # 1. Train language model on text corpus
-python train_run.py --training_type=unmasking --max_iters=20000 --out_dir=lm_model
+python train_run.py config/shakespeare_diffusion/experiment1.py
 
 # 2. Feature extraction for classification task
-python train_run.py \
-  --init_from=resume \
-  --pretrained_checkpoint_path=lm_model/ckpt_unmasking_20000.pt \
-  --switch_to_binary=True \
-  --transfer_learning_mode=feature_extraction \
-  --max_iters=3000 \
-  --out_dir=classifier_features
+# config/classifier_features.py
+init_from = 'resume'
+pretrained_checkpoint_path = 'out/ckpt_unmasking_20000.pt'
+switch_to_binary = True
+transfer_learning_mode = 'feature_extraction'
+max_iters = 3000
+out_dir = 'classifier_features'
 
-# 3. Fine-tuning for better performance  
-python train_run.py \
-  --init_from=resume \
-  --pretrained_checkpoint_path=lm_model/ckpt_unmasking_20000.pt \
-  --switch_to_binary=True \
-  --transfer_learning_mode=fine_tuning \
-  --learning_rate=5e-5 \
-  --max_iters=8000 \
-  --out_dir=classifier_finetuned
+python train_run.py config/classifier_features.py
+
+# 3. Fine-tuning for better performance
+# config/classifier_finetuned.py
+init_from = 'resume'
+pretrained_checkpoint_path = 'out/ckpt_unmasking_20000.pt'
+switch_to_binary = True
+transfer_learning_mode = 'fine_tuning'
+learning_rate = 5e-5
+max_iters = 8000
+out_dir = 'classifier_finetuned'
+
+python train_run.py config/classifier_finetuned.py
 ```
 
 #### Example 2: Domain Adaptation
 ```sh
-# 1. Train on general text (e.g., Shakespeare)  
-python train_run.py --dataset=shakespeare_char --max_iters=15000 --out_dir=general_lm
+# 1. Train on general text (e.g., Shakespeare)
+python train_run.py config/shakespeare_diffusion/experiment1.py
 
 # 2. Fine-tune for domain-specific classification
-python train_run.py \
-  --init_from=resume \
-  --pretrained_checkpoint_path=general_lm/latest.pt \
-  --dataset=domain_specific_char \
-  --switch_to_binary=True \
-  --transfer_learning_mode=fine_tuning \
-  --learning_rate=1e-4 \
-  --max_iters=12000 \
-  --out_dir=domain_classifier
+# config/domain_classifier.py
+init_from = 'resume'
+pretrained_checkpoint_path = 'out/latest.pt'
+dataset = 'domain_specific_char_diffusion'
+switch_to_binary = True
+transfer_learning_mode = 'fine_tuning'
+learning_rate = 1e-4
+max_iters = 12000
+out_dir = 'domain_classifier'
+
+python train_run.py config/domain_classifier.py
 ```
 
 ### Transfer Learning Troubleshooting
@@ -550,8 +738,14 @@ WARNING: Optimizer param count (X) != trainable param count (Y)
 
 Training automatically saves checkpoints and can be resumed:
 
+```python
+# config/resume_training.py
+init_from = 'resume'
+out_dir = 'your_checkpoint_dir'
+# ... other parameters from original training
+```
 ```sh
-python train_run.py --init_from=resume --out_dir=your_checkpoint_dir
+python train_run.py config/resume_training.py
 ```
 
 Checkpoints preserve:
@@ -567,16 +761,17 @@ The framework automatically finds the latest checkpoint (`ckpt_unmasking_XXXXX.p
 
 **Progressive Difficulty Example**:
 ```python
-unmasking_stages = [
+# In data/your_dataset/training_config.py
+UNMASKING_STAGES = [
     # Stage 0: Very easy - scattered 15% masking
     {"type": "sticky", "target_masked_ratio": 0.15, "p1_probability": 0.4, "p2_probability": 0.1, "val_loss_stale_count": 3},
-    
-    # Stage 1: Easy - small regions, 30% masking  
+
+    # Stage 1: Easy - small regions, 30% masking
     {"type": "sticky", "target_masked_ratio": 0.30, "p1_probability": 0.3, "p2_probability": 0.6, "val_loss_stale_count": 5},
-    
+
     # Stage 2: Medium - larger regions, 50% masking
     {"type": "sticky", "target_masked_ratio": 0.50, "p1_probability": 0.2, "p2_probability": 0.8, "val_loss_stale_count": 5},
-    
+
     # Stage 3: Hard - very large regions, 70% masking
     {"type": "sticky", "target_masked_ratio": 0.70, "p1_probability": 0.1, "p2_probability": 0.9, "val_loss_stale_count": 8},
 ]
@@ -584,10 +779,11 @@ unmasking_stages = [
 
 **Mixed Strategy Example**:
 ```python
-unmasking_stages = [
+# In data/your_dataset/training_config.py
+UNMASKING_STAGES = [
     # Start with random masking
     {"type": "random", "max_masked_ratio": 0.2, "val_loss_stale_count": 3},
-    
+
     # Progress to sticky masking
     {"type": "sticky", "target_masked_ratio": 0.3, "p1_probability": 0.3, "p2_probability": 0.7, "val_loss_stale_count": 5},
     {"type": "sticky", "target_masked_ratio": 0.5, "p1_probability": 0.2, "p2_probability": 0.8, "val_loss_stale_count": 8},
@@ -704,9 +900,9 @@ The framework includes several optimizations for efficient unmasking training:
 - **Stage caching**: Efficient validation across all difficulty levels
 
 **Hardware-Specific Tips**:
-- **CUDA**: Use `--dtype=float16`, `--compile=True`
-- **CPU**: Use `--compile=False`, reduce model size
-- **Apple Silicon**: Use `--device=mps` for GPU acceleration
+- **CUDA**: Set `dtype = 'float16'`, `compile = True` in config
+- **CPU**: Set `compile = False`, reduce model size in config
+- **Apple Silicon**: Set `device = 'mps'` for GPU acceleration
 - **Multi-GPU**: Framework supports DDP (set environment variables)
 
 ## Origin and Acknowledgements
@@ -716,11 +912,11 @@ This repository is derived from [nanoGPT](https://github.com/karpathy/nanoGPT) b
 Key modifications from the original:
 - **Bidirectional attention**: Allows attending to future tokens (essential for unmasking)
 - **Stage-based curriculum learning**: Automatic progression through difficulty levels
-- **Sophisticated masking strategies**: Sticky and random masking with fine-grained control
-- **Advanced validation systems**: Pre-created validation sets with per-stage evaluation
+- **Masking strategies**: Sticky and random masking with fine-grained control
+- **Validation systems**: Pre-created validation sets with per-stage evaluation
 - **Character-level focus**: Optimized for character-based tokenization
 - **Instability detection**: Automatic recovery from training issues
-- **Comprehensive monitoring**: Detailed metrics and logging
+- **Monitoring**: Detailed metrics and logging
 
 This work explores a different paradigm from autoregressive language modeling, building upon nanoGPT's clean, readable foundation while implementing curriculum learning approaches to discrete diffusion.
 
@@ -732,7 +928,7 @@ This work explores a different paradigm from autoregressive language modeling, b
 ```
 No unmasking stages defined, exiting...
 ```
-- Solution: Define `unmasking_stages` list in `train_run.py` around line 64
+- Solution: Define `UNMASKING_STAGES` list in your dataset's `training_config.py` file
 
 **Memory Issues**:
 ```
@@ -747,7 +943,7 @@ CUDA out of memory
 ```
 torch.compile() not supported
 ```
-- Add `--compile=False` flag
+- Set `compile = False` in your configuration file
 - More common on older PyTorch versions or CPU training
 
 **Training Instability**:
@@ -780,8 +976,8 @@ NaN detected in validation
 - Monitor per-stage validation losses
 
 **For Faster Training**:
-- Enable compilation: `--compile=True`
-- Use mixed precision: `--dtype=float16`
+- Enable compilation: `compile = True` in config
+- Use mixed precision: `dtype = 'float16'` in config
 - Larger batch sizes if memory allows
-- Use `--device=mps` on Apple Silicon
+- Use `device = 'mps'` on Apple Silicon
 

@@ -4,12 +4,12 @@ Simplified batch generation - just delegates to dataset interface
 from .dataset_interface import DatasetConfig
 
 
-def get_batch(split: str, dataset_config: DatasetConfig, iter_num: int, batch_size: int, block_size: int, validation_sample_idx=None):
+def get_batch(split: str, dataset_config: DatasetConfig, iter_num: int, batch_size: int, block_size: int, model_mode: str, validation_sample_idx=None):
     """Simplified batch loader - delegates to dataset interface"""
     if split == 'val':
         return dataset_config.get_validation_batch(iter_num, validation_sample_idx or 0)
     else:
-        return dataset_config.get_training_batch(iter_num, batch_size, block_size)
+        return dataset_config.get_training_batch(iter_num, batch_size, block_size, model_mode)
 
 
 # All other functions removed and moved to dataset preparation:
