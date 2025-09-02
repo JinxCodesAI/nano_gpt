@@ -116,11 +116,12 @@ class MaskingSimulator:
         
         # Apply target-driven sticky masking
         masked_x, mask = apply_target_driven_sticky_masking_gpu(
-            x, 
+            x,
             stage_config.target_masked_ratio,
             stage_config.p1_probability,
             stage_config.p2_probability,
-            ctx.mask_token_id
+            ctx.mask_token_id,
+            ctx.meta_vocab_size
         )
         
         # Calculate statistics

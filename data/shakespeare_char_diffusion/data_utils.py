@@ -38,34 +38,35 @@ def apply_random_masking_gpu(x, max_masked_ratio, mask_token_id, meta_vocab_size
     return corrupted_x, mask
 
 
-def apply_target_driven_sticky_masking_gpu(x, target_masked_ratio, p1_probability, p2_probability, mask_token_id):
+def apply_target_driven_sticky_masking_gpu(x, target_masked_ratio, p1_probability, p2_probability, mask_token_id, meta_vocab_size):
     """
     GPU-optimized target-driven sticky masking for unmasking training.
-    
+
     Args:
         x: Input tokens (batch_size, seq_len)
         target_masked_ratio: Target fraction of tokens to mask (0.0 to 1.0)
         p1_probability: Probability of masking when no neighbors are masked
         p2_probability: Probability of masking when neighbors are masked
         mask_token_id: Token ID to use for masking
-        
+        meta_vocab_size: Size of original vocabulary (for random token generation, excluding special tokens)
+
     Returns:
-        masked_x: Input with masked tokens replaced by mask_token_id
+        masked_x: Input with BERT-style corruption applied (80% mask token, 10% random, 10% original)
         mask: Boolean mask indicating which positions were masked
     """
     batch_size, seq_len = x.shape
     device = x.device
-    
+
     # Calculate target number of masked tokens per sequence
     target_masked_count = int(target_masked_ratio * seq_len)
-    
+
     if target_masked_count == 0:
         # No masking needed - return early
         return x.clone(), torch.zeros_like(x, dtype=torch.bool, device=device)
-    
-    # Start with no masks
-    masked_x = x.clone()
-    
+
+    # Build up the boolean mask of positions to corrupt (don't modify x yet)
+    final_mask = torch.zeros_like(x, dtype=torch.bool, device=device)
+
     # Pre-allocate tensors to avoid repeated allocations
     current_mask = torch.zeros_like(x, dtype=torch.bool, device=device)
     neighbor_masked = torch.zeros_like(x, dtype=torch.bool, device=device)
@@ -76,43 +77,42 @@ def apply_target_driven_sticky_masking_gpu(x, target_masked_ratio, p1_probabilit
     
     for round_idx in range(max_rounds):
         # Update current mask state
-        current_mask = (masked_x == mask_token_id)
-        
+        current_mask = final_mask.clone()
+
         # Check if we've reached target for all sequences (GPU-only operation)
         current_counts = current_mask.sum(dim=1)  # (batch_size,)
         sequences_need_more = current_counts < target_tensor
-        
+
         if not sequences_need_more.any():
             break  # All sequences reached target
-        
+
         # Find neighbor positions for sticky masking (reuse buffer)
         neighbor_masked.zero_()
-        
+
         # Check left and right neighbors (vectorized)
         neighbor_masked[:, 1:] |= current_mask[:, :-1]  # Left neighbor
         neighbor_masked[:, :-1] |= current_mask[:, 1:]  # Right neighbor
-        
+
         # Generate random values for masking decision (single GPU call)
         rand_vals = torch.rand_like(x, dtype=torch.float, device=device)
-        
+
         # Apply different probabilities based on neighbor status (vectorized)
         mask_probs = torch.where(neighbor_masked, p2_probability, p1_probability)
         new_masks = (rand_vals < mask_probs) & ~current_mask
-        
+
         # Only mask sequences that haven't reached target yet (vectorized)
         sequences_need_more_expanded = sequences_need_more.unsqueeze(1).expand(-1, seq_len)
         new_masks &= sequences_need_more_expanded
-        
-        # Apply new masks (vectorized)
-        masked_x[new_masks] = mask_token_id
+
+        # Add new masks to final mask (don't modify tokens yet)
+        final_mask |= new_masks
     
     # Final adjustment: remove excess masks with fully vectorized approach
-    final_mask = (masked_x == mask_token_id)
     final_counts = final_mask.sum(dim=1)  # (batch_size,)
-    
+
     # Only process sequences that exceeded target (minimize CPU-GPU sync)
     exceeded_sequences = torch.where(final_counts > target_tensor)[0]
-    
+
     if exceeded_sequences.numel() > 0:
         # Process exceeded sequences with minimal loops
         for batch_idx in exceeded_sequences:
@@ -121,16 +121,17 @@ def apply_target_driven_sticky_masking_gpu(x, target_masked_ratio, p1_probabilit
                 # Find masked positions (keep on GPU)
                 seq_mask = final_mask[batch_idx]
                 masked_positions = torch.where(seq_mask)[0]
-                
+
                 # Randomly select positions to unmask (single GPU operation)
                 perm_indices = torch.randperm(masked_positions.size(0), device=device)[:excess]
                 positions_to_unmask = masked_positions[perm_indices]
-                
-                # Restore original tokens (vectorized)
-                masked_x[batch_idx, positions_to_unmask] = x[batch_idx, positions_to_unmask]
-    
-    # Return final mask state
-    final_mask = (masked_x == mask_token_id)
+
+                # Remove from final mask (vectorized)
+                final_mask[batch_idx, positions_to_unmask] = False
+
+    # Apply BERT-style corruption to the final mask
+    masked_x = apply_bert_style_corruption_gpu(x, final_mask, mask_token_id, meta_vocab_size)
+
     return masked_x, final_mask
 
 
@@ -154,8 +155,8 @@ def apply_stage_masking(x, stage_config: Dict, mask_token_id, meta_vocab_size):
         return apply_random_masking_gpu(x, stage_config['max_masked_ratio'], mask_token_id, meta_vocab_size)
     elif stage_type == 'sticky':
         return apply_target_driven_sticky_masking_gpu(
-            x, stage_config['target_masked_ratio'], stage_config['p1_probability'], 
-            stage_config['p2_probability'], mask_token_id
+            x, stage_config['target_masked_ratio'], stage_config['p1_probability'],
+            stage_config['p2_probability'], mask_token_id, meta_vocab_size
         )
     else:
         raise ValueError(f"Unknown stage type: {stage_type}")
