@@ -361,11 +361,19 @@ class GPT(nn.Module):
             else:
                 state_dict = checkpoint
 
-            # Filter out head weights from pretrained checkpoint
+            # Filter out head weights from pretrained checkpoint and handle _orig_mod prefix
             transformer_state_dict = {}
             for k, v in state_dict.items():
-                if not k.startswith('lm_head') and not k.startswith('sequence_head'):
-                    transformer_state_dict[k] = v
+                # Remove _orig_mod prefix if present (from torch.compile)
+                clean_key = k
+                if k.startswith('_orig_mod.'):
+                    clean_key = k[len('_orig_mod.'):]
+
+                # Only include transformer weights, exclude heads
+                if (clean_key.startswith('transformer.') and
+                    not clean_key.startswith('lm_head') and
+                    not clean_key.startswith('sequence_head')):
+                    transformer_state_dict[clean_key] = v
 
             # Load transformer weights
             missing_keys, unexpected_keys = self.load_state_dict(transformer_state_dict, strict=False)
