@@ -74,9 +74,9 @@ num_token_classes = 2  # For token classification: number of classes (flexible, 
 
 # transfer learning config
 init_from_checkpoint = ""  # Path to pretrained checkpoint for transfer learning
-freeze_transformer = False  # For transfer learning: freeze transformer weights
+freeze_transformer = True  # For transfer learning: freeze transformer weights
 # dynamic unfreezing for two-stage training
-unfreeze_at_iteration = None  # Iteration to unfreeze transformer (e.g., 2000 for two-stage training)
+unfreeze_at_iteration = 300  # Iteration to unfreeze transformer (e.g., 2000 for two-stage training)
 unfreeze_lr_multiplier = 0.1  # Reduce learning rate when unfreezing to avoid instability
 # sequence scoring config
 unmasking_model_checkpoint = ""  # Path to pretrained unmasking model for sequence scoring
