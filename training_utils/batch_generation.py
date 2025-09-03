@@ -395,6 +395,9 @@ def get_batch_sequence_scoring(split, ctx: TrainingContext, validation_sample_id
     if split == 'val':
         # For now, fall through to training logic to apply the sequence scoring workflow
         # TODO: Could optimize by pre-creating sequence scoring validation sets
+        # DEBUG: Log validation batch generation
+        if validation_sample_idx is not None and validation_sample_idx < 3:
+            print(f"  DEBUG: Generating sequence_scoring validation batch {validation_sample_idx}")
         pass
 
     # Training data generation - identical to get_batch_unmasking until masking step
@@ -479,6 +482,10 @@ def get_batch_sequence_scoring(split, ctx: TrainingContext, validation_sample_id
     
     # Step 6: Masking ratios become our target scores (already 0-1 range)
     y = masking_ratios  # Shape: (batch_size,)
+
+    # DEBUG: Log target statistics for sequence scoring
+    if split == 'val' and validation_sample_idx is not None and validation_sample_idx < 3:
+        print(f"    DEBUG: Batch {validation_sample_idx} targets: mean={y.mean().item():.4f}, std={y.std().item():.4f}, range=[{y.min().item():.4f}, {y.max().item():.4f}]")
     
     # Return the actual mask that was used for masking (for correct logging statistics)
     # Need to pad mask to match x's shape (which includes CLS token)
