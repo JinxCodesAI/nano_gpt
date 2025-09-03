@@ -310,6 +310,16 @@ class GPT(nn.Module):
         assert config.block_size is not None
         self.config = config
 
+        # Debug counters for mask token encounters
+        self.mask_encounter_counters = {
+            'training_calls': 0,
+            'validation_calls': 0,
+            'masks_seen_training': 0,
+            'masks_seen_validation': 0,
+            'total_tokens_training': 0,
+            'total_tokens_validation': 0
+        }
+
         # Create transformer components - conditionally include position embeddings
         transformer_components = dict(
             wte = nn.Embedding(config.vocab_size, config.n_embd),
@@ -323,7 +333,7 @@ class GPT(nn.Module):
             transformer_components['wpe'] = nn.Embedding(config.block_size, config.n_embd)
         
         self.transformer = nn.ModuleDict(transformer_components)
-        
+
         # Create appropriate output head based on mode
         if self.config.mode == ModelMode.LANGUAGE_MODEL:
             # Language modeling: predict next token from vocabulary
@@ -344,11 +354,26 @@ class GPT(nn.Module):
                 nn.Linear(config.n_embd, 1, bias=False),
                 nn.Sigmoid()  # Ensure output is between 0 and 1
             )
-            # Use Xavier initialization for better gradient flow and diverse initial predictions
-            torch.nn.init.xavier_uniform_(self.sequence_head[0].weight)
-            print("Sequence scorer head: continuous score 0-1")
+            # Use much smaller initialization to prevent gradient explosion
+            # Initialize weights to small values around 0 for stable sigmoid gradients
+            with torch.no_grad():
+                self.sequence_head[0].weight.normal_(0.0, 0.01)  # Small std dev
+            print("Sequence scorer head: continuous score 0-1 (small init for stability)")
         else:
             raise ValueError(f"Unknown model mode: {self.config.mode}")
+
+        # Initialize all weights AFTER creating heads to preserve sequence head initialization
+        self.apply(self._init_weights)
+        # Apply special scaled init to the residual projections, per GPT-2 paper
+        for pn, p in self.named_parameters():
+            if pn.endswith('c_proj.weight'):
+                torch.nn.init.normal_(p, mean=0.0, std=0.02/math.sqrt(2 * config.n_layer))
+
+        # Re-initialize sequence head with small weights for stability (after general init)
+        if self.config.mode == ModelMode.SEQUENCE_SCORER:
+            with torch.no_grad():
+                self.sequence_head[0].weight.normal_(0.0, 0.01)  # Small std dev for stability
+            print("Re-initialized sequence head with small weights after general initialization")
 
         # Transfer learning support: load pretrained weights if specified
         if config.init_from_checkpoint is not None and config.init_from_checkpoint != "":
@@ -386,12 +411,16 @@ class GPT(nn.Module):
             if unexpected_keys:
                 print(f"  Unexpected (ignored): {unexpected_keys[:5]}{'...' if len(unexpected_keys) > 5 else ''}")
 
-        # init all weights
-        self.apply(self._init_weights)
-        # apply special scaled init to the residual projections, per GPT-2 paper
-        for pn, p in self.named_parameters():
-            if pn.endswith('c_proj.weight'):
-                torch.nn.init.normal_(p, mean=0.0, std=0.02/math.sqrt(2 * config.n_layer))
+            # Initialize CLS token embedding with small values for stability
+            if hasattr(config, 'mode') and str(config.mode) == 'ModelMode.SEQUENCE_SCORER':
+                cls_token_id = 66  # From debug logs
+                if cls_token_id < self.transformer.wte.weight.size(0):
+                    with torch.no_grad():
+                        # Initialize CLS token with very small values
+                        self.transformer.wte.weight[cls_token_id].normal_(0.0, 0.001)
+                        print(f"Initialized CLS token (ID {cls_token_id}) with small random values")
+
+        # Weight initialization already done before transfer learning - don't repeat
         
         # Transfer learning support: freeze transformer if requested
         if config.freeze_transformer:
@@ -399,6 +428,36 @@ class GPT(nn.Module):
 
         # report number of parameters
         print("number of parameters: %.2fM" % (self.get_num_params()/1e6,))
+
+        # DEBUG: Check parameter registration and gradient flow for sequence scoring
+        if hasattr(config, 'mode') and str(config.mode) == 'ModelMode.SEQUENCE_SCORER':
+            print(f"DEBUG: Sequence head detailed analysis:")
+            print(f"  sequence_head type: {type(self.sequence_head)}")
+            print(f"  sequence_head modules: {list(self.sequence_head.modules())}")
+
+            total_params = 0
+            trainable_params = 0
+            for name, param in self.sequence_head.named_parameters():
+                total_params += param.numel()
+                if param.requires_grad:
+                    trainable_params += param.numel()
+                print(f"  {name}: shape={param.shape}, numel={param.numel()}, requires_grad={param.requires_grad}")
+            print(f"  Total sequence head params: {total_params}, trainable: {trainable_params}")
+
+            # Check the linear layer specifically
+            linear_layer = self.sequence_head[0]
+            print(f"  Linear layer weight shape: {linear_layer.weight.shape}")
+            print(f"  Linear layer weight numel: {linear_layer.weight.numel()}")
+            print(f"  Linear layer bias: {linear_layer.bias}")
+
+            # Check CLS token embedding
+            cls_token_id = 70  # Updated from debug logs
+            if cls_token_id < self.transformer.wte.weight.size(0):
+                cls_embedding = self.transformer.wte.weight[cls_token_id]
+                cls_norm = cls_embedding.norm().item()
+                print(f"  CLS token (ID {cls_token_id}) embedding norm: {cls_norm:.4f}")
+            else:
+                print(f"  CLS token ID {cls_token_id} is out of vocab range ({self.transformer.wte.weight.size(0)})")
 
     def get_num_params(self, non_embedding=True):
         """
@@ -411,6 +470,27 @@ class GPT(nn.Module):
         if non_embedding and hasattr(self.transformer, 'wpe'):
             n_params -= self.transformer.wpe.weight.numel()
         return n_params
+
+    def log_mask_encounter_stats(self, prefix=""):
+        """Log mask token encounter statistics for debugging"""
+        c = self.mask_encounter_counters
+        print(f"{prefix}Mask encounter stats (SEQUENCE_SCORER mode only):")
+        print(f"  Training: {c['training_calls']} calls, {c['masks_seen_training']} masks in {c['total_tokens_training']} tokens")
+        print(f"  Validation: {c['validation_calls']} calls, {c['masks_seen_validation']} masks in {c['total_tokens_validation']} tokens")
+
+        if c['total_tokens_training'] > 0:
+            train_mask_ratio = c['masks_seen_training'] / c['total_tokens_training']
+            print(f"  Training mask ratio: {train_mask_ratio:.4f}")
+        if c['total_tokens_validation'] > 0:
+            val_mask_ratio = c['masks_seen_validation'] / c['total_tokens_validation']
+            print(f"  Validation mask ratio: {val_mask_ratio:.4f}")
+            if c['masks_seen_validation'] > 0:
+                print(f"  WARNING: Validation should have 0 masks in sequence_scoring mode!")
+
+    def reset_mask_encounter_stats(self):
+        """Reset mask encounter counters"""
+        for key in self.mask_encounter_counters:
+            self.mask_encounter_counters[key] = 0
 
     def freeze_transformer_weights(self):
         """Freeze transformer weights for feature extraction, keep heads trainable"""
@@ -486,6 +566,25 @@ class GPT(nn.Module):
         b, t = idx.size()
         assert t <= self.config.block_size, f"Cannot forward sequence of length {t}, block size is only {self.config.block_size}"
 
+        # Track mask token encounters for debugging - ONLY for sequence_scoring mode
+        if hasattr(self.config, 'mode') and str(self.config.mode) == 'ModelMode.SEQUENCE_SCORER':
+            is_training_mode = self.training
+            if is_training_mode:
+                self.mask_encounter_counters['training_calls'] += 1
+                self.mask_encounter_counters['total_tokens_training'] += b * t
+            else:
+                self.mask_encounter_counters['validation_calls'] += 1
+                self.mask_encounter_counters['total_tokens_validation'] += b * t
+
+            # Count mask tokens - use the actual mask_token_id = 65 from debug log
+            mask_token_id = 65  # From debug log: mask_token_id = 65
+            mask_count = (idx == mask_token_id).sum().item()
+            if mask_count > 0:
+                if is_training_mode:
+                    self.mask_encounter_counters['masks_seen_training'] += mask_count
+                else:
+                    self.mask_encounter_counters['masks_seen_validation'] += mask_count
+
         # forward the GPT model itself
         tok_emb = self.transformer.wte(idx) # token embeddings of shape (b, t, n_embd)
         
@@ -509,13 +608,29 @@ class GPT(nn.Module):
             logits = self.sequence_head(cls_output).squeeze(-1)  # (batch_size,) with sigmoid applied
 
             if targets is not None:
+                # DEBUG: Check for problematic values before loss computation
+                if self.training:
+                    if not hasattr(self, '_debug_iter_counter'):
+                        self._debug_iter_counter = 0
+                    self._debug_iter_counter += 1
+
+                    if self._debug_iter_counter % 20 == 0:  # Log every 20 iterations
+                        print(f"DEBUG: Sequence scorer values (iter {self._debug_iter_counter}):")
+                        print(f"  CLS output range: [{cls_output.min().item():.4f}, {cls_output.max().item():.4f}]")
+                        print(f"  CLS output mean/std: {cls_output.mean().item():.4f} ± {cls_output.std().item():.4f}")
+                        print(f"  Raw linear output (pre-sigmoid): [{(self.sequence_head[0](cls_output)).min().item():.4f}, {(self.sequence_head[0](cls_output)).max().item():.4f}]")
+                        print(f"  Predictions (post-sigmoid): [{logits.min().item():.6f}, {logits.max().item():.6f}]")
+                        print(f"  Targets: [{targets.min().item():.6f}, {targets.max().item():.6f}]")
+                        print(f"  Target mean/std: {targets.mean().item():.4f} ± {targets.std().item():.4f}")
+
                 # MSE loss for continuous score prediction (0-1 range)
                 loss = F.mse_loss(logits, targets.float())
 
+                if self.training and self._debug_iter_counter % 20 == 0:
+                    print(f"  MSE Loss: {loss.item():.6f}")
+
                 # DEBUG: Log sequence scoring details during training (every 200 iterations)
-                if self.training and hasattr(self, '_debug_iter_counter'):
-                    self._debug_iter_counter = getattr(self, '_debug_iter_counter', 0) + 1
-                    if self._debug_iter_counter % 200 == 0:
+                if self.training and self._debug_iter_counter % 200 == 0:
                         with torch.no_grad():
                             print(f"DEBUG: Sequence scorer forward pass (iter ~{self._debug_iter_counter}):")
                             print(f"  CLS output stats: mean={cls_output.mean().item():.4f}, std={cls_output.std().item():.4f}")
