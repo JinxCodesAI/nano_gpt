@@ -391,14 +391,16 @@ def get_batch_sequence_scoring(split, ctx: TrainingContext, validation_sample_id
     valid_indices_cache = get_valid_indices_cache()
     prefetch_queue = get_prefetch_queue()
 
-    # For validation, we need to create a modified validation batch with sequence scoring workflow
+    # For validation, use pre-created validation set
     if split == 'val':
-        # For now, fall through to training logic to apply the sequence scoring workflow
-        # TODO: Could optimize by pre-creating sequence scoring validation sets
-        # DEBUG: Log validation batch generation
-        if validation_sample_idx is not None and validation_sample_idx < 3:
-            print(f"  DEBUG: Generating sequence_scoring validation batch {validation_sample_idx}")
-        pass
+        from .validation_sets import get_sequence_scoring_validation_batch
+        if validation_sample_idx is not None:
+            # DEBUG: Log validation batch retrieval
+            if validation_sample_idx < 3:
+                print(f"  DEBUG: Retrieving sequence_scoring validation batch {validation_sample_idx}")
+            return get_sequence_scoring_validation_batch(training_ctx, validation_sample_idx)
+        else:
+            return get_sequence_scoring_validation_batch(training_ctx, 0)
 
     # Training data generation - identical to get_batch_unmasking until masking step
     if data_cache[split] is None:

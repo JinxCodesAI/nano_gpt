@@ -40,7 +40,9 @@ from .validation_sets import (
     get_unmasking_validation_batch,
     get_unmasking_training_batch_all_stages,
     create_remasking_validation_set,
-    get_remasking_validation_batch
+    get_remasking_validation_batch,
+    create_sequence_scoring_validation_set,
+    get_sequence_scoring_validation_batch
 )
 
 from .masking_strategies import (
@@ -95,9 +97,11 @@ __all__ = [
     # Validation set functions
     'create_unmasking_validation_set',
     'get_unmasking_validation_batch',
-    'get_unmasking_training_batch_all_stages', 
+    'get_unmasking_training_batch_all_stages',
     'create_remasking_validation_set',
     'get_remasking_validation_batch',
+    'create_sequence_scoring_validation_set',
+    'get_sequence_scoring_validation_batch',
     
     # Masking strategy functions
     'load_synthetic_model',

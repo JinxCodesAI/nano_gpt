@@ -21,9 +21,9 @@ from torch.distributed import init_process_group, destroy_process_group
 from model import GPTConfig, GPT, ModelMode
 from utils import Timer, log_masking_stats
 from training_utils import (
-    get_batch, estimate_loss, get_lr, load_synthetic_model, 
+    get_batch, estimate_loss, get_lr, load_synthetic_model,
     start_prefetch, stop_prefetch, TrainingContext, UnmaskingStage, update_stage_progress,
-    create_unmasking_validation_set, UnmaskingStageType, StickyStageConfig, RandomStageConfig, SpanStageConfig,
+    create_unmasking_validation_set, create_sequence_scoring_validation_set, UnmaskingStageType, StickyStageConfig, RandomStageConfig, SpanStageConfig,
     calculate_wrong_answer_entropy, get_current_entropy_penalty, update_entropy_multiplier_ema,
     apply_label_smoothing
 )
@@ -712,6 +712,30 @@ if training_ctx.training_type == 'unmasking':
     # Training batches will be generated fresh each time from all stages when flag is enabled
     if training_ctx.use_all_stages_for_training:
         print("Training will generate fresh batches from all stages each iteration")
+
+# Show initial configuration for sequence scoring training
+elif training_ctx.training_type == 'sequence_scoring':
+    print(f"\n*** SEQUENCE SCORING TRAINING INITIALIZED ***")
+    print(f"Using validation stages: {len(training_ctx.validation_stages)} stages configured")
+    for i, stage_config in enumerate(training_ctx.validation_stages):
+        stage_type = stage_config.config.get_stage_type()
+        print(f"  Stage {i}: {stage_type.value}")
+        if stage_type == UnmaskingStageType.STICKY:
+            config = stage_config.config
+            print(f"    Target masked ratio: {config.target_masked_ratio}")
+            print(f"    P1 probability: {config.p1_probability}")
+            print(f"    P2 probability: {config.p2_probability}")
+        elif stage_type == UnmaskingStageType.RANDOM:
+            config = stage_config.config
+            print(f"    Max masked ratio: {config.max_masked_ratio}")
+        elif stage_type == UnmaskingStageType.SPAN:
+            config = stage_config.config
+            print(f"    Spans count: {config.spans_count}")
+    print("*** SEQUENCE SCORING INITIALIZATION COMPLETE ***\n")
+
+    # Pre-create validation set using validation_stages
+    print("Pre-creating sequence scoring validation set...")
+    create_sequence_scoring_validation_set(training_ctx)
 
 print_and_flush("Starting training loop...")
 just_recovered = False

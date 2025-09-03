@@ -80,6 +80,10 @@ def estimate_loss(model, torch_ctx, timer, training_ctx: TrainingContext):
                     # Fix: pass validation_sample_idx to get different validation batches
                     X, Y, mask = get_batch(split, training_ctx, validation_sample_idx=k)
                     current_stage_idx = None
+                elif split == 'val' and training_ctx.training_type == 'sequence_scoring':
+                    # Fix: pass validation_sample_idx for consistent validation set
+                    X, Y, mask = get_batch(split, training_ctx, validation_sample_idx=k)
+                    current_stage_idx = None
                 else:
                     X, Y, mask = get_batch(split, training_ctx)
                     current_stage_idx = None

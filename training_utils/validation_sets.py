@@ -10,6 +10,9 @@ import torch
 from .training_config import TrainingContext, UnmaskingStageType
 from .data_loading import find_double_newline_indices, get_data_cache, get_valid_indices_cache, get_validation_caches, set_validation_caches
 
+# Global cache for sequence scoring validation set
+sequence_scoring_val_set = None
+
 
 def create_unmasking_validation_set(ctx: TrainingContext):
     """Create complete validation set with samples evenly distributed across all stages"""
@@ -227,6 +230,104 @@ def get_unmasking_training_batch_all_stages(ctx: TrainingContext):
     return final_masked_x, final_x, final_mask
 
 
+def create_sequence_scoring_validation_set(ctx: TrainingContext, force_recreate=False):
+    """Create complete validation set for sequence scoring training using validation_stages"""
+    val_batch_cache, progressive_val_cache, progressive_val_full_cache, unmasking_val_set, remasking_val_set = get_validation_caches()
+
+    # For sequence scoring, we'll store in a new cache variable (we'll need to extend the cache system)
+    # For now, let's create it fresh each time but with consistent seed
+    if not force_recreate:
+        print("Creating sequence scoring validation set...")
+    else:
+        print("Force recreating sequence scoring validation set...")
+
+    data_cache = get_data_cache()
+    valid_indices_cache = get_valid_indices_cache()
+
+    # Cache validation data if not already cached
+    if data_cache['val'] is None:
+        data_cache['val'] = np.memmap(os.path.join(ctx.data_dir, 'val.bin'), dtype=np.uint16, mode='r')
+        if ctx.use_paragraph_boundaries:
+            valid_indices_cache['val'] = find_double_newline_indices(data_cache['val'], ctx.meta_vocab_size, ctx.block_size)
+        else:
+            valid_indices_cache['val'] = np.array([])
+
+    data = data_cache['val']
+    valid_indices = valid_indices_cache['val']
+
+    # Use validation_stages instead of unmasking_stages
+    available_stages = ctx.validation_stages
+    if not available_stages:
+        raise ValueError("No validation_stages configured for sequence scoring validation")
+
+    num_stages = len(available_stages)
+    total_samples = ctx.eval_iters * ctx.batch_size
+    samples_per_stage = total_samples // num_stages
+    remainder = total_samples % num_stages
+
+    validation_batches = []
+
+    # Set consistent seed for validation set creation
+    torch.manual_seed(1337 + ctx.seed_offset + 1000)  # Different seed from unmasking validation
+
+    for stage_idx, stage_config in enumerate(available_stages):
+        stage_samples = samples_per_stage + (1 if stage_idx < remainder else 0)
+        print(f"  Stage {stage_idx}: {stage_samples} samples using {stage_config.config.get_stage_type().value}")
+
+        stage_batches = []
+        samples_generated = 0
+
+        while samples_generated < stage_samples:
+            batch_size = min(ctx.batch_size, stage_samples - samples_generated)
+
+            # Sample data indices from validation split
+            if len(valid_indices) == 0:
+                ix_np = torch.randint(len(data) - ctx.block_size, (batch_size,)).numpy()
+            else:
+                ix_indices = torch.randint(len(valid_indices), (batch_size,)).numpy()
+                ix_np = valid_indices[ix_indices]
+
+            # Load data with vectorized indexing
+            ix_expanded = ix_np[:, None] + np.arange(ctx.block_size)[None, :]  # (batch_size, block_size)
+            x_np = data[ix_expanded].astype(np.int64)
+
+            # Convert to tensor
+            x = torch.from_numpy(x_np)
+            if ctx.device_type == 'cuda':
+                x = x.pin_memory().to(ctx.device, non_blocking=True)
+            else:
+                x = x.to(ctx.device)
+
+            # Apply the same sequence scoring workflow as training
+            # Step 1: Create unmasked version using unmasking model
+            with torch.no_grad():
+                unmasked_logits, _ = ctx.unmasking_model(x, None)
+                unmasked_tokens = torch.argmax(unmasked_logits, dim=-1)
+
+            # Step 2: Apply masking strategy for this stage
+            mask = stage_config.apply_masking(x, ctx)
+
+            # Step 3: Create masked input
+            masked_x = x.clone()
+            masked_x[mask] = ctx.mask_token_id
+
+            # Step 4: Calculate masking ratios (targets)
+            masking_ratios = mask.float().mean(dim=1)
+
+            stage_batches.append((masked_x.clone(), masking_ratios.clone(), mask.clone()))
+            samples_generated += batch_size
+
+        validation_batches.extend(stage_batches)
+
+    torch.manual_seed(1337 + ctx.seed_offset)  # Reset seed
+
+    # Store in a global variable for now (we'll need to extend the cache system later)
+    global sequence_scoring_val_set
+    sequence_scoring_val_set = validation_batches
+
+    print(f"Sequence scoring validation set created: {len(validation_batches)} batches, {sum(b[0].size(0) for b in validation_batches)} total samples")
+
+
 def create_remasking_validation_set(ctx: TrainingContext, force_recreate=False):
     """Create complete validation set for remasking training with progressive corruption intensities"""
     from .masking_strategies import apply_corruption_gpu  # Import here to avoid circular dependency
@@ -342,6 +443,21 @@ def create_remasking_validation_set(ctx: TrainingContext, force_recreate=False):
     set_validation_caches(val_batch_cache, progressive_val_cache, progressive_val_full_cache, unmasking_val_set, remasking_val_set)
     
     print(f"Remasking validation set created: {len(validation_batches)} batches, {sum(b[0].size(0) for b in validation_batches)} total samples")
+
+
+def get_sequence_scoring_validation_batch(ctx: TrainingContext, batch_idx=None):
+    """Get a specific batch from the pre-created sequence scoring validation set"""
+    global sequence_scoring_val_set
+
+    if 'sequence_scoring_val_set' not in globals() or sequence_scoring_val_set is None:
+        create_sequence_scoring_validation_set(ctx, force_recreate=False)
+
+    if batch_idx is None:
+        batch_idx = 0
+
+    # Handle batch index wrapping
+    batch_idx = batch_idx % len(sequence_scoring_val_set)
+    return sequence_scoring_val_set[batch_idx]
 
 
 def get_remasking_validation_batch(ctx: TrainingContext, batch_idx=None):
