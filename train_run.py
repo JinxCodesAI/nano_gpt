@@ -1,3 +1,4 @@
+
 """
 Main training script runner for diffusion training.
 Uses train_utils.py for all function definitions.
@@ -1228,12 +1229,16 @@ while True:
             with torch.no_grad():
                 # Get predictions from the model
                 logits, _ = model(X, None)
-                if hasattr(model, 'sequence_head'):
-                    # For sequence scoring, we need the sequence head output
-                    predictions = model.sequence_head(logits[:, 0, :]).squeeze(-1)  # Use CLS token
-                else:
-                    # Fallback: use first token logits and apply sigmoid
-                    predictions = torch.sigmoid(logits[:, 0, 0])
+                if not hasattr(model, 'sequence_head'):
+                    raise RuntimeError(
+                        f"Model is missing 'sequence_head' attribute for sequence_scoring training! "
+                        f"This indicates a model architecture mismatch. Expected ModelMode.SEQUENCE_SCORER "
+                        f"but got model with mode {getattr(model.config, 'mode', 'unknown')}. "
+                        f"Check your checkpoint loading and model configuration."
+                    )
+
+                # For sequence scoring, logits IS already the final predictions (batch_size,)
+                predictions = logits  # Already processed through sequence_head in model.forward()
 
                 # Calculate relative error: abs(target - prediction) / target
                 # Avoid division by zero by adding small epsilon
