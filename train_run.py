@@ -76,11 +76,8 @@ num_token_classes = 2  # For token classification: number of classes (flexible, 
 init_from_checkpoint = ""  # Path to pretrained checkpoint for transfer learning
 
 # dynamic unfreezing for two-stage training
-unfreeze_at_iteration = 300  # Iteration to unfreeze transformer (e.g., 2000 for two-stage training)
+unfreeze_at_iteration = 1  # Iteration to unfreeze transformer (e.g., 2000 for two-stage training)
 unfreeze_lr_multiplier = 0.1  # Reduce learning rate when unfreezing to avoid instability
-
-# Auto-configure freezing: True only for sequence_scoring with unfreezing enabled
-freeze_transformer = (training_type == 'sequence_scoring' and unfreeze_at_iteration is not None)
 
 # sequence scoring config
 unmasking_model_checkpoint = ""  # Path to pretrained unmasking model for sequence scoring
@@ -120,6 +117,11 @@ start_iter_num = 0
 # -----------------------------------------------------------------------------
 config_keys = [k for k,v in globals().items() if not k.startswith('_') and isinstance(v, (int, float, bool, str))]
 exec(open('configurator.py').read()) # overrides from command line or config file
+
+# Auto-configure freezing: True only for sequence_scoring with unfreezing enabled
+freeze_transformer = (training_type == 'sequence_scoring' and unfreeze_at_iteration is not None)
+
+print_and_flush(f"Freeze transformer: {freeze_transformer} at {unfreeze_at_iteration}")
 
 if len(unmasking_stages) == 0 or unmasking_stages is None:
     print_and_flush("No unmasking stages defined, exiting...")

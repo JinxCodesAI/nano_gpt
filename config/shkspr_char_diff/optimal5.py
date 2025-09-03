@@ -3,8 +3,8 @@ init_from = 'scratch' # 'scratch' or 'resume'
 wandb_log = True # disabled by default
 wandb_project = 'experiments_diffusion'
 wandb_run_name = 'shkspr_char_diff_moderate_first' # 'run' + str(time.time())
-batch_size = 16
-gradient_accumulation_steps = 8
+batch_size = 192
+gradient_accumulation_steps = 32
 # data
 dataset = 'shakespeare_char'
 use_paragraph_boundaries = False # if True, start samples at paragraph boundaries (double newlines)
@@ -47,11 +47,11 @@ validation_stages = [
 ]
 
 # adamw optimizer
-learning_rate = 2e-4 # with baby networks can afford to go a bit higher
+learning_rate = 2e-6 # with baby networks can afford to go a bit higher
 max_iters = 8000
 warmup_iters = 2000 # how many steps to warm up for
 lr_decay_iters = 15000 # make equal to max_iters usually
-min_lr = 3e-5 # learning_rate / 10 usually
+min_lr = 3e-7 # learning_rate / 10 usually
 weight_decay=2e-2
 dropout = 0.2 # for pretraining 0 is good, for finetuning try 0.1+
 
