@@ -1280,14 +1280,7 @@ while True:
                 # Calculate absolute error: abs(target - prediction)
                 absolute_errors = torch.abs(Y - predictions)
 
-                # DEBUG: Log sequence scoring training details every log_interval
-                if iter_num % log_interval == 0:
-                    print(f"DEBUG: Sequence scoring training step {iter_num}:")
-                    print(f"  Input IDs (first 5 of batch 0): {X[0, :5].tolist()}")
-                    print(f"  Targets (first 5): {Y[:5].tolist()}")
-                    print(f"  Predictions (first 5): {predictions[:5].tolist()}")
-                    print(f"  Absolute errors (first 5): {absolute_errors[:5].tolist()}")
-                    print(f"  Loss: {loss.item():.6f}")
+
 
                     # Check optimizer state
                     if hasattr(optimizer, 'state') and len(optimizer.state) > 0:
