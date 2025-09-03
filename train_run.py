@@ -76,7 +76,7 @@ num_token_classes = 2  # For token classification: number of classes (flexible, 
 init_from_checkpoint = ""  # Path to pretrained checkpoint for transfer learning
 
 # dynamic unfreezing for two-stage training
-unfreeze_at_iteration = 1  # Iteration to unfreeze transformer (e.g., 2000 for two-stage training)
+unfreeze_at_iteration = 80  # Iteration to unfreeze transformer (e.g., 2000 for two-stage training)
 unfreeze_lr_multiplier = 1  # Reduce learning rate when unfreezing to avoid instability
 
 # sequence scoring config
@@ -748,21 +748,25 @@ while True:
         # Unfreeze transformer weights
         raw_model.unfreeze_transformer_weights()
 
-        # Reduce learning rate to avoid instability
+        # CRITICAL: Recreate optimizer to include newly unfrozen parameters
+        print("Recreating optimizer to include unfrozen transformer parameters")
+        current_lr = learning_rate * unfreeze_lr_multiplier if unfreeze_lr_multiplier < 1.0 else learning_rate
+        optimizer = raw_model.configure_optimizers(weight_decay, current_lr, (beta1, beta2), device_type)
+
         if unfreeze_lr_multiplier < 1.0:
-            old_lr = learning_rate
-            new_lr = old_lr * unfreeze_lr_multiplier
-            print(f"Reducing learning rate: {old_lr:.6f} -> {new_lr:.6f}")
-
-            # Update learning rate in optimizer
-            for param_group in optimizer.param_groups:
-                param_group['lr'] = new_lr
-
+            print(f"Using reduced learning rate: {current_lr:.6f} (multiplier: {unfreeze_lr_multiplier})")
             # Update base learning rate for scheduler
-            learning_rate = new_lr
+            learning_rate = current_lr
+
+        # Verify optimizer now tracks all parameters
+        optimizer_tensor_count = sum(len(group['params']) for group in optimizer.param_groups)
+        total_trainable_params = sum(p.numel() for p in raw_model.parameters() if p.requires_grad)
+        num_param_groups = len(optimizer.param_groups)
+        print(f"Optimizer now tracking {num_param_groups} parameter groups with {optimizer_tensor_count} parameter tensors ({total_trainable_params:,} individual parameters)")
 
         # Print parameter status
         raw_model.print_parameter_status()
+        print("*** UNFREEZING COMPLETE ***")
 
         # Log to wandb if enabled
         if wandb_log and master_process:
@@ -833,7 +837,11 @@ while True:
         stage_advanced = update_stage_progress(training_ctx, losses['val'])
         if stage_advanced:
             print(f"Advanced to stage {training_ctx.current_stage} - validation set remains consistent across all stages")
-        
+
+        # Log mask encounter statistics after validation
+        raw_model.log_mask_encounter_stats("  ")
+        raw_model.reset_mask_encounter_stats()
+
         print()  # Add blank line for readability
 
         if wandb_log and master_process and not eval_only:
@@ -1114,6 +1122,8 @@ while True:
             
             # Only warn about large gradients after initial iterations (when lr > 0)
             if iter_num > 10 and grad_norm > grad_clip * 10:
+                raw_model.log_mask_encounter_stats("  ")
+                raw_model.reset_mask_encounter_stats()
                 print(f"WARNING: Large gradient norm at iter {iter_num}: {grad_norm.item():.4f} (clip threshold: {grad_clip})")
         else:
             # Still check gradient norms even without clipping
@@ -1198,7 +1208,20 @@ while True:
             else:
                 print("*** RECOVERY FAILED - TERMINATING TRAINING ***")
                 break
-    
+
+    # GRADIENT DEBUGGING (before cleanup clears gradients)
+    if iter_num % log_interval == 0 and master_process and training_ctx.training_type == 'sequence_scoring':
+        # Check if gradients are being computed BEFORE cleanup
+        total_grad_norm = 0.0
+        param_count = 0
+        for name, param in raw_model.named_parameters():
+            if param.grad is not None:
+                param_grad_norm = param.grad.data.norm(2).item()
+                total_grad_norm += param_grad_norm ** 2
+                param_count += 1
+        total_grad_norm = total_grad_norm ** 0.5
+        print(f"  PRE-CLEANUP Gradient norm: {total_grad_norm:.6f} ({param_count} params with gradients)")
+
     # CLEANUP OPERATIONS
     with timer.time_function('cleanup_operations'):
         # flush the gradients as soon as we can, no need for this memory anymore
@@ -1266,20 +1289,10 @@ while True:
                     print(f"  Absolute errors (first 5): {absolute_errors[:5].tolist()}")
                     print(f"  Loss: {loss.item():.6f}")
 
-                    # Check if gradients are being computed
-                    total_grad_norm = 0.0
-                    param_count = 0
-                    for name, param in raw_model.named_parameters():
-                        if param.grad is not None:
-                            param_grad_norm = param.grad.data.norm(2).item()
-                            total_grad_norm += param_grad_norm ** 2
-                            param_count += 1
-                    total_grad_norm = total_grad_norm ** 0.5
-                    print(f"  Gradient norm: {total_grad_norm:.6f} ({param_count} params with gradients)")
-
                     # Check optimizer state
                     if hasattr(optimizer, 'state') and len(optimizer.state) > 0:
-                        print(f"  Optimizer has state for {len(optimizer.state)} parameters")
+                        optimizer_state_params = sum(p.numel() for p in optimizer.state.keys())
+                        print(f"  Optimizer has state for {len(optimizer.state)} parameter tensors ({optimizer_state_params:,} individual parameters)")
                     else:
                         print(f"  WARNING: Optimizer has no state!")
 
@@ -1328,6 +1341,11 @@ while True:
             val_forward_time = timer.get_average('validation_forward_pass') * 1000
             val_loss_time = timer.get_average('validation_loss_computation') * 1000
             print(f"  validation: {val_time:.2f}ms (data: {val_data_time:.2f}ms, forward: {val_forward_time:.2f}ms, loss: {val_loss_time:.2f}ms)")
+
+        # Log mask encounter statistics every log_interval
+        if iter_num % log_interval == 0:
+            raw_model.log_mask_encounter_stats("  ")
+            raw_model.reset_mask_encounter_stats()
 
         # Add masking statistics logging for unmasking only (disabled for sequence_scoring to reduce log noise)
         stage_config = training_ctx.get_current_stage_config()
