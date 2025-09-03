@@ -614,20 +614,8 @@ class GPT(nn.Module):
                         self._debug_iter_counter = 0
                     self._debug_iter_counter += 1
 
-                    if self._debug_iter_counter % 20 == 0:  # Log every 20 iterations
-                        print(f"DEBUG: Sequence scorer values (iter {self._debug_iter_counter}):")
-                        print(f"  CLS output range: [{cls_output.min().item():.4f}, {cls_output.max().item():.4f}]")
-                        print(f"  CLS output mean/std: {cls_output.mean().item():.4f} ± {cls_output.std().item():.4f}")
-                        print(f"  Raw linear output (pre-sigmoid): [{(self.sequence_head[0](cls_output)).min().item():.4f}, {(self.sequence_head[0](cls_output)).max().item():.4f}]")
-                        print(f"  Predictions (post-sigmoid): [{logits.min().item():.6f}, {logits.max().item():.6f}]")
-                        print(f"  Targets: [{targets.min().item():.6f}, {targets.max().item():.6f}]")
-                        print(f"  Target mean/std: {targets.mean().item():.4f} ± {targets.std().item():.4f}")
-
                 # MSE loss for continuous score prediction (0-1 range)
                 loss = F.mse_loss(logits, targets.float())
-
-                if self.training and self._debug_iter_counter % 20 == 0:
-                    print(f"  MSE Loss: {loss.item():.6f}")
 
                 # DEBUG: Log sequence scoring details during training (every 200 iterations)
                 if self.training and self._debug_iter_counter % 200 == 0:
