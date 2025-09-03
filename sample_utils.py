@@ -353,3 +353,38 @@ def calculate_selfconfidence_ratio(model, tokens, mask_token_id, device, ctx):
                                        torch.full_like(log_prob_sums, float('-inf')))
             
     return avg_log_probs.cpu().tolist()
+
+
+def calculate_sequence_scores(model, tokens, cls_token_id, device, ctx):
+    """
+    Calculate sequence-level scores using a SEQUENCE_SCORER model.
+
+    This function prepends CLS tokens to sequences and gets continuous 0-1 scores.
+    Lower scores indicate better quality (as specified: lower value = WIN).
+
+    Args:
+        model: The trained SEQUENCE_SCORER model
+        tokens: Generated token sequences (batch_size, seq_len)
+        cls_token_id: ID of the CLS token to prepend
+        device: Device to run on
+        ctx: Context manager for autocast
+
+    Returns:
+        List of sequence scores (0-1 range) for each sample in the batch
+    """
+    batch_size, seq_len = tokens.shape
+
+    # Prepend CLS token to each sequence
+    cls_tokens = torch.full((batch_size, 1), cls_token_id, dtype=tokens.dtype, device=device)
+    tokens_with_cls = torch.cat([cls_tokens, tokens], dim=1)  # (batch_size, seq_len + 1)
+
+    with torch.no_grad():
+        with ctx:
+            # Get sequence scores from the model
+            # For SEQUENCE_SCORER models, the forward pass returns scores directly
+            scores, _ = model(tokens_with_cls, None)  # scores shape: (batch_size,)
+
+            # Ensure scores are in valid range [0, 1] (should be guaranteed by sigmoid)
+            scores = torch.clamp(scores, 0.0, 1.0)
+
+    return scores.cpu().tolist()

@@ -3,8 +3,8 @@ init_from = 'scratch' # 'scratch' or 'resume'
 wandb_log = True # disabled by default
 wandb_project = 'experiments_diffusion'
 wandb_run_name = 'shkspr_char_diff_moderate_first' # 'run' + str(time.time())
-batch_size = 192
-gradient_accumulation_steps = 32
+batch_size = 16
+gradient_accumulation_steps = 16
 # data
 dataset = 'shakespeare_char'
 use_paragraph_boundaries = False # if True, start samples at paragraph boundaries (double newlines)
@@ -14,6 +14,7 @@ use_all_stages_for_training = True
 weight_loss_by_mask_ratio = True
 enable_entropy_penalty = False
 uncertainty_factor = 0.1
+unfreeze_at_iteration = 300
 
 # For unmasking: stage-based training with direct probability control
 
@@ -47,18 +48,17 @@ validation_stages = [
 ]
 
 # adamw optimizer
-learning_rate = 2e-6 # with baby networks can afford to go a bit higher
+learning_rate = 2e-5 # with baby networks can afford to go a bit higher
 max_iters = 8000
 warmup_iters = 2000 # how many steps to warm up for
 lr_decay_iters = 15000 # make equal to max_iters usually
-min_lr = 3e-7 # learning_rate / 10 usually
+min_lr = 2e-6 # learning_rate / 10 usually
 weight_decay=2e-2
 dropout = 0.2 # for pretraining 0 is good, for finetuning try 0.1+
 
 grad_clip = 0.0  # clip gradients at this value, or disable if == 0.0
 # learning rate decay settings
 decay_lr = True # it's just experiment, no need to decay
-compile = True
 
 max_entropy_penalty = 3 # loss = loss * (1 + current_entropy_penalty * wrong_answers_entropy)
 

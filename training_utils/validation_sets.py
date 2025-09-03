@@ -278,15 +278,15 @@ def create_sequence_scoring_validation_set(ctx: TrainingContext, force_recreate=
         while samples_generated < stage_samples:
             batch_size = min(ctx.batch_size, stage_samples - samples_generated)
 
-            # Sample data indices from validation split
+            # Sample data indices from validation split (leave room for CLS token)
             if len(valid_indices) == 0:
-                ix_np = torch.randint(len(data) - ctx.block_size, (batch_size,)).numpy()
+                ix_np = torch.randint(len(data) - (ctx.block_size - 1), (batch_size,)).numpy()
             else:
                 ix_indices = torch.randint(len(valid_indices), (batch_size,)).numpy()
                 ix_np = valid_indices[ix_indices]
 
-            # Load data with vectorized indexing
-            ix_expanded = ix_np[:, None] + np.arange(ctx.block_size)[None, :]  # (batch_size, block_size)
+            # Load data with vectorized indexing (block_size - 1 tokens to leave room for CLS)
+            ix_expanded = ix_np[:, None] + np.arange(ctx.block_size - 1)[None, :]  # (batch_size, block_size - 1)
             x_np = data[ix_expanded].astype(np.int64)
 
             # Convert to tensor
@@ -296,19 +296,35 @@ def create_sequence_scoring_validation_set(ctx: TrainingContext, force_recreate=
             else:
                 x = x.to(ctx.device)
 
-            # Apply the same sequence scoring workflow as training
-            # Step 1: Create unmasked version using unmasking model
-            with torch.no_grad():
-                unmasked_logits, _ = ctx.unmasking_model(x, None)
-                unmasked_tokens = torch.argmax(unmasked_logits, dim=-1)
-
-            # Step 2: Apply masking strategy for this stage using proper function
+            # Apply the EXACT same sequence scoring workflow as training
+            # Step 1: Apply masking strategy to clean text
             masked_x, mask = apply_stage_masking(x, stage_config, ctx.mask_token_id, ctx.meta_vocab_size)
 
-            # Step 3: Calculate masking ratios (targets)
+            # Step 2: Calculate masking ratios (targets)
             masking_ratios = mask.float().mean(dim=1)
 
-            stage_batches.append((masked_x.clone(), masking_ratios.clone(), mask.clone()))
+            # Step 3: Use unmasking model to reconstruct the masked sequences
+            ctx.unmasking_model.eval()
+            with torch.no_grad():
+                reconstructed_logits, _ = ctx.unmasking_model(masked_x, None)
+                reconstructed_tokens = torch.argmax(reconstructed_logits, dim=-1)
+
+                # Create final sequences: keep unmasked tokens, use predictions for masked tokens
+                final_sequences = x.clone()
+                final_sequences[mask] = reconstructed_tokens[mask]
+
+            # Step 4: Prepend [CLS] token to create input for sequence scorer
+            cls_token_id = ctx.cls_token_id
+            if cls_token_id is None:
+                raise ValueError("CLS token ID not set in training context for sequence scoring validation")
+            cls_tokens = torch.full((batch_size, 1), cls_token_id, device=ctx.device, dtype=torch.long)
+            final_input = torch.cat([cls_tokens, final_sequences], dim=1)  # Shape: (batch_size, block_size)
+
+            # Step 5: Create padded mask to match input shape (includes CLS token)
+            cls_mask = torch.zeros((batch_size, 1), device=ctx.device, dtype=torch.bool)
+            padded_mask = torch.cat([cls_mask, mask], dim=1)  # Shape: (batch_size, block_size)
+
+            stage_batches.append((final_input.clone(), masking_ratios.clone(), padded_mask.clone()))
             samples_generated += batch_size
 
         validation_batches.extend(stage_batches)

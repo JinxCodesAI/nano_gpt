@@ -2,7 +2,8 @@
 Model Quality Assessment Script for Diffusion Models
 
 Evaluates relative quality of multiple diffusion models through ELO rating system.
-Each model generates samples, rates other models' samples, and competes in tournaments.
+Each model generates samples, and a SEQUENCE_SCORER judge model rates all samples.
+Models compete in tournaments based on judge ratings (lower scores = better quality).
 """
 
 import os
@@ -13,11 +14,12 @@ import sys
 from collections import Counter, defaultdict
 from contextlib import nullcontext
 import torch
-from model import GPTConfig, GPT
+from model import GPTConfig, GPT, ModelMode
 from sample_utils import (
-    calculate_selfconfidence_ratio, 
-    predict_and_sample_tokens, 
-    apply_remasking_step, 
+    calculate_selfconfidence_ratio,
+    calculate_sequence_scores,
+    predict_and_sample_tokens,
+    apply_remasking_step,
     linear_remasking_schedule
 )
 from training_utils import TrainingContext
@@ -169,7 +171,7 @@ EVALUATION_CONFIG = {
         # 'model3.pt',
     ],
     'remasking_checkpoint_name': None,  # Optional: remasking_binary model checkpoint
-    'judge_model': '35.75_58.2_UM.pt',  # Which model to use as the single judge
+    'judge_model': '35.75_58.2_UM.pt',  # SEQUENCE_SCORER model to use as the single judge (lower scores = better)
     
     # Evaluation parameters
     'batch_size': 32,           # N samples per model per batch (generation)
@@ -222,6 +224,7 @@ class ModelLoader:
         self.vocab_info = None
         self.remasking_model = None
         self.judge_model_id = None
+        self.judge_model_type = None  # Will store ModelMode of judge model
         
     def load_all_models(self):
         """Load all model checkpoints and vocabulary"""
@@ -245,12 +248,21 @@ class ModelLoader:
         # Load optional remasking model
         self._load_remasking_model()
         
-        # Verify judge model was found
+        # Verify judge model was found and get its type
         if self.judge_model_id is None:
             raise ValueError(f"Judge model '{self.config['judge_model']}' not found in checkpoints list")
-        
+
+        # Determine judge model type
+        judge_model = self.models[self.judge_model_id]
+        self.judge_model_type = judge_model.config.mode
+        print(f"  Judge model type: {self.judge_model_type.value}")
+
+        # Validate judge model type
+        if self.judge_model_type != ModelMode.SEQUENCE_SCORER:
+            raise ValueError(f"Judge model must be SEQUENCE_SCORER type, but got {self.judge_model_type.value}")
+
         print(f"Successfully loaded {len(self.models)} models")
-        return self.models, self.vocab_info, self.remasking_model, self.judge_model_id
+        return self.models, self.vocab_info, self.remasking_model, self.judge_model_id, self.judge_model_type
     
     def _load_single_model(self, checkpoint_name, model_id):
         """Load a single model checkpoint"""
@@ -490,76 +502,84 @@ class ModelRater:
         ptdtype = {'float32': torch.float32, 'bfloat16': torch.bfloat16, 'float16': torch.float16}[config['dtype']]
         self.ctx = nullcontext() if device_type == 'cpu' else torch.amp.autocast(device_type=device_type, dtype=ptdtype)
     
-    def rate_samples_with_model(self, model, samples, rater_model_id, batch_size=None):
+    def rate_samples_with_model(self, model, samples, rater_model_id, model_type, batch_size=None):
         """Rate a list of samples using a specific model - GPU optimized with batching"""
         if batch_size is None:
             batch_size = self.config.get('rating_batch_size', 8)  # Default batch size for rating
-        
+
         ratings = []
-        
+
         with torch.no_grad():
             # Process samples in batches for GPU efficiency
             for i in range(0, len(samples), batch_size):
                 batch_samples = samples[i:i + batch_size]
-                
+
                 # Create batched tensor from all samples in this batch
                 batch_tokens = []
                 for sample in batch_samples:
                     batch_tokens.append(sample['tokens'])
-                
+
                 # Convert to tensor (batch_size, sequence_length)
                 tokens_tensor = torch.tensor(batch_tokens, device=self.config['device'])
-                
-                # Calculate self-confidence scores for entire batch
-                confidence_scores = calculate_selfconfidence_ratio(
-                    model=model,
-                    tokens=tokens_tensor,
-                    mask_token_id=self.vocab_info['mask_token_id'],
-                    device=self.config['device'],
-                    ctx=self.ctx
-                )
-                
+
+                # Calculate scores based on model type
+                if model_type == ModelMode.SEQUENCE_SCORER:
+                    # Use sequence scoring for SEQUENCE_SCORER models
+                    cls_token_id = model.config.cls_token_id
+                    if cls_token_id is None:
+                        raise ValueError("SEQUENCE_SCORER model must have cls_token_id configured")
+
+                    scores = calculate_sequence_scores(
+                        model=model,
+                        tokens=tokens_tensor,
+                        cls_token_id=cls_token_id,
+                        device=self.config['device'],
+                        ctx=self.ctx
+                    )
+                else:
+                    raise ValueError(f"Unsupported model type for rating: {model_type}")
+
                 # Store ratings for each sample in the batch
                 for j, sample in enumerate(batch_samples):
                     rating = {
                         'sample_model_id': sample['model_id'],
                         'sample_id': sample['sample_id'],
                         'rater_model_id': rater_model_id,
-                        'confidence_score': confidence_scores[j],  # j-th sample in batch
-                        'log_prob': confidence_scores[j]
+                        'confidence_score': scores[j],  # j-th sample in batch
+                        'log_prob': scores[j]  # Keep same field name for compatibility
                     }
                     ratings.append(rating)
-        
+
         return ratings
     
-    def rate_all_samples(self, models, all_samples, judge_model_id):
+    def rate_all_samples(self, models, all_samples, judge_model_id, judge_model_type):
         """Use only the specified judge model to rate all samples"""
         judge_checkpoint = self.config['judge_model']
         print(f"\n{'='*80}")
-        print(f"SINGLE-MODEL RATING PHASE ({judge_model_id} - {judge_checkpoint} as judge)")
+        print(f"SINGLE-MODEL RATING PHASE ({judge_model_id} - {judge_checkpoint} as {judge_model_type.value} judge)")
         print(f"{'='*80}")
-        
+
         if judge_model_id not in models:
             raise ValueError(f"Judge model {judge_model_id} not found in loaded models")
-        
+
         judge_model = models[judge_model_id]
         all_ratings = {}
-        
-        print(f"\n{judge_model_id} ({judge_checkpoint}) rating all samples...")
+
+        print(f"\n{judge_model_id} ({judge_checkpoint}) rating all samples using {judge_model_type.value} scoring...")
         model_ratings = {}
-        
+
         for sample_model_id, samples in all_samples.items():
             batch_size = self.config.get('rating_batch_size', 8)
             num_batches = (len(samples) + batch_size - 1) // batch_size
             print(f"  Rating {len(samples)} samples from {sample_model_id} (using {num_batches} batches of {batch_size})...")
-            
-            ratings = self.rate_samples_with_model(judge_model, samples, judge_model_id)
+
+            ratings = self.rate_samples_with_model(judge_model, samples, judge_model_id, judge_model_type)
             model_ratings[sample_model_id] = ratings
             print(f"  ✓ Completed rating {len(ratings)} samples from {sample_model_id}")
-        
+
         all_ratings[judge_model_id] = model_ratings
-        
-        print(f"\nRating phase complete - {judge_model_id} rated all samples")
+
+        print(f"\nRating phase complete - {judge_model_id} rated all samples using {judge_model_type.value}")
         return all_ratings
 
 
@@ -747,35 +767,38 @@ class ELOTracker:
 class TournamentManager:
     """Manages pairwise tournament comparisons"""
     
-    def __init__(self, config, elo_tracker):
+    def __init__(self, config, elo_tracker, judge_model_type):
         self.config = config
         self.elo_tracker = elo_tracker
+        self.judge_model_type = judge_model_type
         self.total_comparisons = 0
     
     def determine_winner(self, model1_ratings, model2_ratings):
-        """Determine winner based on model_7's confidence scores"""
-        # Get ratings from model_7 (the single judge)
+        """Determine winner based on judge model scores"""
+        # Get ratings from the single judge
         if len(model1_ratings) == 0 or len(model2_ratings) == 0:
             return 'DRAW'
-        
+
         # With single judge, we have one score per sample
         model1_score = model1_ratings[0]['confidence_score']
         model2_score = model2_ratings[0]['confidence_score']
-        
+
         # Calculate the absolute difference
         score_diff = abs(model1_score - model2_score)
-        
-        # Use a threshold based on the magnitude of scores
-        # If difference is less than 5% of the average absolute score, it's a draw
-        avg_abs_score = (abs(model1_score) + abs(model2_score)) / 2
-        threshold = 0.05 * avg_abs_score if avg_abs_score > 0 else 0.01  # Fallback threshold
-        
+
+        # Use fixed threshold for SEQUENCE_SCORER models (0-1 range)
+        # If difference is less than 0.2, it's a draw
+        threshold = 0.2
+
         if score_diff <= threshold:
             return 'DRAW'
-        elif model1_score > model2_score:  # Higher score (less negative) wins
-            return 'WIN'
         else:
-            return 'LOSE'
+            # For SEQUENCE_SCORER: lower score wins (as specified)
+            # Only SEQUENCE_SCORER models are supported as judges
+            if model1_score < model2_score:
+                return 'WIN'
+            else:
+                return 'LOSE'
     
     def _select_weighted_sample(self, model_id, samples):
         """Select a sample with weighting favoring less popular (less compared) samples"""
@@ -900,7 +923,7 @@ class ModelEvaluator:
         
         # Stage 1: Load models
         model_loader = ModelLoader(self.config)
-        models, vocab_info, remasking_model, judge_model_id = model_loader.load_all_models()
+        models, vocab_info, remasking_model, judge_model_id, judge_model_type = model_loader.load_all_models()
         
         # Stage 2: Generate samples
         sample_generator = SampleGenerator(self.config, vocab_info, remasking_model)
@@ -908,13 +931,13 @@ class ModelEvaluator:
         
         # Stage 3: Rate samples
         model_rater = ModelRater(self.config, vocab_info)
-        all_ratings = model_rater.rate_all_samples(models, all_samples, judge_model_id)
+        all_ratings = model_rater.rate_all_samples(models, all_samples, judge_model_id, judge_model_type)
         
         # Stage 4: Run tournaments
         elo_tracker = ELOTracker(model_loader.model_names)
         elo_tracker.initialize_sample_stats(all_samples)
-        
-        tournament_manager = TournamentManager(self.config, elo_tracker)
+
+        tournament_manager = TournamentManager(self.config, elo_tracker, judge_model_type)
         tournament_manager.run_tournaments(all_samples, all_ratings)
         
         # Stage 5: Generate results
