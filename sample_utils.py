@@ -374,9 +374,13 @@ def calculate_sequence_scores(model, tokens, cls_token_id, device, ctx):
     """
     batch_size, seq_len = tokens.shape
 
+    # Truncate last token to make room for CLS token (to fit within block_size)
+    # This ensures total length = seq_len (CLS + seq_len-1 content tokens)
+    tokens_truncated = tokens[:, :-1]  # (batch_size, seq_len - 1)
+
     # Prepend CLS token to each sequence
     cls_tokens = torch.full((batch_size, 1), cls_token_id, dtype=tokens.dtype, device=device)
-    tokens_with_cls = torch.cat([cls_tokens, tokens], dim=1)  # (batch_size, seq_len + 1)
+    tokens_with_cls = torch.cat([cls_tokens, tokens_truncated], dim=1)  # (batch_size, seq_len)
 
     with torch.no_grad():
         with ctx:

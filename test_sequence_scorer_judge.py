@@ -134,33 +134,36 @@ def test_winner_determination():
 
 
 def test_cls_token_prepending():
-    """Test that CLS tokens are properly prepended to sequences"""
-    print("\nTesting CLS token prepending...")
-    
+    """Test that CLS tokens are properly prepended with truncation"""
+    print("\nTesting CLS token prepending with truncation...")
+
     # Create test tokens
     original_tokens = torch.tensor([
         [1, 2, 3, 4, 5],
         [6, 7, 8, 9, 10]
     ])
-    
+
     cls_token_id = 66
     batch_size, seq_len = original_tokens.shape
-    
-    # Manually prepend CLS token (same logic as in calculate_sequence_scores)
+
+    # Manually prepend CLS token with truncation (same logic as in calculate_sequence_scores)
+    tokens_truncated = original_tokens[:, :-1]  # Remove last token
     cls_tokens = torch.full((batch_size, 1), cls_token_id, dtype=original_tokens.dtype)
-    tokens_with_cls = torch.cat([cls_tokens, original_tokens], dim=1)
-    
+    tokens_with_cls = torch.cat([cls_tokens, tokens_truncated], dim=1)
+
     print(f"  Original shape: {original_tokens.shape}")
+    print(f"  Truncated shape: {tokens_truncated.shape}")
     print(f"  With CLS shape: {tokens_with_cls.shape}")
     print(f"  CLS token ID: {cls_token_id}")
     print(f"  First column (CLS): {tokens_with_cls[:, 0].tolist()}")
-    
-    # Verify CLS token prepending
-    assert tokens_with_cls.shape == (batch_size, seq_len + 1), f"Expected shape {(batch_size, seq_len + 1)}, got {tokens_with_cls.shape}"
+    print(f"  Content after CLS: {tokens_with_cls[:, 1:].tolist()}")
+
+    # Verify CLS token prepending with truncation
+    assert tokens_with_cls.shape == (batch_size, seq_len), f"Expected shape {(batch_size, seq_len)}, got {tokens_with_cls.shape}"
     assert torch.all(tokens_with_cls[:, 0] == cls_token_id), "First column should be CLS tokens"
-    assert torch.all(tokens_with_cls[:, 1:] == original_tokens), "Rest should match original tokens"
-    
-    print("  ✓ CLS token prepending test passed!")
+    assert torch.all(tokens_with_cls[:, 1:] == tokens_truncated), "Rest should match truncated tokens"
+
+    print("  ✓ CLS token prepending with truncation test passed!")
     return True
 
 
@@ -179,7 +182,7 @@ def main():
         print("All tests passed! ✓")
         print("\nThe SEQUENCE_SCORER judge model implementation appears to be working correctly.")
         print("Key features verified:")
-        print("  - CLS token prepending")
+        print("  - CLS token prepending with truncation")
         print("  - Sequence score calculation (0-1 range)")
         print("  - Winner determination (lower score wins)")
         print("  - Draw detection (difference < 0.2)")

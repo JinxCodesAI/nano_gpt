@@ -807,8 +807,8 @@ class TournamentManager:
         score_diff = abs(model1_score - model2_score)
 
         # Use fixed threshold for SEQUENCE_SCORER models (0-1 range)
-        # If difference is less than 0.2, it's a draw
-        threshold = 0.2
+        # If difference is less than 0.1, it's a draw
+        threshold = 0.1
 
         if score_diff <= threshold:
             return 'DRAW'
@@ -971,16 +971,32 @@ class ModelEvaluator:
         print("FINAL RESULTS")
         print(f"{'='*80}")
         
-        # Model rankings
+        # Model rankings with win/loss/draw statistics
         rankings = elo_tracker.get_rankings()
         print("\nModel Rankings (by ELO rating):")
         print("-" * 50)
+
+        # Calculate win/loss/draw stats for each model
+        model_stats = {}
+        for model_id in rankings:
+            wins = losses = draws = 0
+            # Count wins/losses/draws from sample statistics
+            for (sample_model_id, sample_id), sample_stat in elo_tracker.sample_stats.items():
+                if sample_model_id == model_id:
+                    wins += sample_stat.wins
+                    losses += sample_stat.losses
+                    draws += sample_stat.draws
+            model_stats[model_id] = {'wins': wins, 'losses': losses, 'draws': draws}
+
         for i, model_id in enumerate(rankings):
             rating = elo_tracker.ratings[model_id]
             rounds = elo_tracker.num_rounds[model_id]
             checkpoint_name = self.config['checkpoints'][int(model_id.split('_')[1])]
+            stats = model_stats[model_id]
+
             print(f"{i+1}. {model_id} ({checkpoint_name})")
             print(f"   ELO: {rating:.1f} | Rounds: {rounds}")
+            print(f"   W:{stats['wins']} D:{stats['draws']} L:{stats['losses']} | Win Rate: {stats['wins']/(stats['wins']+stats['losses']+stats['draws'])*100:.1f}%")
         
         # Top samples
         top_samples = elo_tracker.get_top_samples(all_samples, 3)
@@ -1049,8 +1065,11 @@ class ModelEvaluator:
                 rating = elo_tracker.ratings[model_id]
                 rounds = elo_tracker.num_rounds[model_id]
                 checkpoint_name = self.config['checkpoints'][int(model_id.split('_')[1])]
+                stats = model_stats[model_id]
+
                 f.write(f"{i+1}. {model_id} ({checkpoint_name})\n")
                 f.write(f"   ELO: {rating:.1f} | Rounds: {rounds}\n")
+                f.write(f"   W:{stats['wins']} D:{stats['draws']} L:{stats['losses']} | Win Rate: {stats['wins']/(stats['wins']+stats['losses']+stats['draws'])*100:.1f}%\n")
             
             f.write(f"\nTop 3 Samples (by points):\n")
             f.write("=" * 100 + "\n")
