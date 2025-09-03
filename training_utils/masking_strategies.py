@@ -35,6 +35,65 @@ def apply_random_masking_gpu(x, max_masked_ratio, mask_token_id, meta_vocab_size
     return corrupted_x, mask
 
 
+def apply_span_masking_gpu(x, spans_count, mask_token_id, meta_vocab_size):
+    """
+    GPU-optimized span masking for unmasking training.
+    Masks spans_count continuous areas in the input.
+    
+    Args:
+        x: Input tokens (batch_size, seq_len)
+        spans_count: Number of continuous spans to mask
+        mask_token_id: Token ID to use for masking (NOT used for span masking as per requirement)
+        meta_vocab_size: Size of original vocabulary (NOT used for span masking)
+        
+    Returns:
+        masked_x: Input with masked spans directly replaced with mask_token_id (no BERT-style corruption)
+        mask: Boolean mask indicating which positions were masked
+    """
+    batch_size, seq_len = x.shape
+    device = x.device
+    
+    if spans_count <= 0 or seq_len <= 1:
+        # No masking needed - return original
+        return x.clone(), torch.zeros_like(x, dtype=torch.bool, device=device)
+    
+    # Generate all random positions at once: (batch_size, 2*spans_count)
+    random_positions = torch.rand(batch_size, 2 * spans_count, device=device)
+    
+    # Scale by sequence length and round down
+    scaled_positions = (random_positions * seq_len).long()
+    
+    # Sort the positions to get proper start/end pairs
+    sorted_positions, _ = torch.sort(scaled_positions, dim=1)
+    
+    # Split into start and end positions: (batch_size, spans_count)
+    start_positions = sorted_positions[:, 0::2]  # indices 0, 2, 4, ...
+    end_positions = sorted_positions[:, 1::2]    # indices 1, 3, 5, ...
+    
+    # Create position indices for all positions in sequence: (seq_len,)
+    position_indices = torch.arange(seq_len, device=device)
+    
+    # Expand dimensions for broadcasting: 
+    # position_indices: (1, 1, seq_len)
+    # start_positions: (batch_size, spans_count, 1) 
+    # end_positions: (batch_size, spans_count, 1)
+    position_indices = position_indices.unsqueeze(0).unsqueeze(0)
+    start_positions = start_positions.unsqueeze(2)
+    end_positions = end_positions.unsqueeze(2)
+    
+    # Create mask for each span: (batch_size, spans_count, seq_len)
+    span_masks = (position_indices >= start_positions) & (position_indices <= end_positions)
+    
+    # Combine all spans for each batch: (batch_size, seq_len)
+    mask = span_masks.any(dim=1)
+    
+    # Apply masking
+    masked_x = x.clone()
+    masked_x[mask] = mask_token_id
+    
+    return masked_x, mask
+
+
 def apply_stage_masking(x, stage_config: UnmaskingStage, mask_token_id, meta_vocab_size):
     """
     Apply masking based on stage configuration type.
@@ -60,6 +119,9 @@ def apply_stage_masking(x, stage_config: UnmaskingStage, mask_token_id, meta_voc
             x, config.target_masked_ratio, config.p1_probability,
             config.p2_probability, mask_token_id, meta_vocab_size
         )
+    elif stage_type == UnmaskingStageType.SPAN:
+        config = stage_config.config
+        return apply_span_masking_gpu(x, config.spans_count, mask_token_id, meta_vocab_size)
     else:
         raise ValueError(f"Unknown stage type: {stage_type}")
 

@@ -22,7 +22,7 @@ from utils import Timer, log_masking_stats
 from training_utils import (
     get_batch, estimate_loss, get_lr, load_synthetic_model, 
     start_prefetch, stop_prefetch, TrainingContext, UnmaskingStage, update_stage_progress,
-    create_unmasking_validation_set, UnmaskingStageType, StickyStageConfig, RandomStageConfig,
+    create_unmasking_validation_set, UnmaskingStageType, StickyStageConfig, RandomStageConfig, SpanStageConfig,
     calculate_wrong_answer_entropy, get_current_entropy_penalty, update_entropy_multiplier_ema,
     apply_label_smoothing
 )
@@ -231,6 +231,11 @@ if training_type == 'unmasking':
                 max_masked_ratio=stage['max_masked_ratio'],
                 val_loss_stale_count=stage['val_loss_stale_count']
             )
+        elif stage_type == 'span':
+            config = SpanStageConfig(
+                spans_count=stage['spans_count'],
+                val_loss_stale_count=stage['val_loss_stale_count']
+            )
         else:
             raise ValueError(f"Unknown stage type: {stage_type}")
         
@@ -252,6 +257,11 @@ if training_type == 'unmasking' and len(validation_stages) > 0:
         elif stage_type == 'random':
             config = RandomStageConfig(
                 max_masked_ratio=stage['max_masked_ratio'],
+                val_loss_stale_count=stage['val_loss_stale_count']
+            )
+        elif stage_type == 'span':
+            config = SpanStageConfig(
+                spans_count=stage['spans_count'],
                 val_loss_stale_count=stage['val_loss_stale_count']
             )
         else:
@@ -515,6 +525,9 @@ if training_ctx.training_type == 'unmasking':
     elif stage_type == UnmaskingStageType.RANDOM:
         config = stage_config.config
         print(f"  Max masked ratio: {config.max_masked_ratio}")
+    elif stage_type == UnmaskingStageType.SPAN:
+        config = stage_config.config
+        print(f"  Spans count: {config.spans_count}")
     print(f"  Val loss stale count limit: {stage_config.get_val_loss_stale_count()}")
     print(f"Total stages configured: {len(training_ctx.unmasking_stages)}")
     print("*** STAGE INITIALIZATION COMPLETE ***\n")
@@ -575,6 +588,9 @@ while True:
             elif stage_type == UnmaskingStageType.RANDOM:
                 config = stage_config.config
                 stage_info += f"max_ratio={config.max_masked_ratio:.1f}"
+            elif stage_type == UnmaskingStageType.SPAN:
+                config = stage_config.config
+                stage_info += f"spans_count={config.spans_count}"
             stage_info += f", stale_count={losses.get('val_loss_stale_count', 0)}"
             print_and_flush(stage_info)
 
@@ -1019,6 +1035,9 @@ while True:
             elif stage_type == UnmaskingStageType.RANDOM:
                 config = stage_config.config
                 stage_info += f", max={config.max_masked_ratio:.1f}"
+            elif stage_type == UnmaskingStageType.SPAN:
+                config = stage_config.config
+                stage_info += f", spans={config.spans_count}"
             print(stage_info)
         
         if wandb_log and master_process and not eval_only:

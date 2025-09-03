@@ -156,7 +156,6 @@ EVALUATION_CONFIG = {
     # Model configuration
     'checkpoints': [
         'optimal6_7800.pt',
-        'optimal5_8000.pt',
         'optimal5_6600.pt',
         'optimal5_2000.pt',
         'optimal3_7200.pt',
@@ -164,7 +163,7 @@ EVALUATION_CONFIG = {
         'optimal2_8000.pt',
         '35.75_58.2_UM.pt',
         'optimal2_6400.pt',
-        'optimal5_bert_6600.pt',
+        'optimal5_bert_8000.pt',
         'optimal_2400.pt',
         # Add more model checkpoints here for comparison
         # 'model2.pt',

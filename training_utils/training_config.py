@@ -13,6 +13,7 @@ class UnmaskingStageType(Enum):
     """Enumeration of available unmasking stage types"""
     STICKY = "sticky"
     RANDOM = "random"
+    SPAN = "span"
 
 
 @dataclass
@@ -47,9 +48,18 @@ class RandomStageConfig(BaseStageConfig):
 
 
 @dataclass
+class SpanStageConfig(BaseStageConfig):
+    """Configuration for span masking stages"""
+    spans_count: int
+    
+    def get_stage_type(self) -> UnmaskingStageType:
+        return UnmaskingStageType.SPAN
+
+
+@dataclass
 class UnmaskingStage:
     """Configuration for a single stage of unmasking training"""
-    config: Union[StickyStageConfig, RandomStageConfig]
+    config: Union[StickyStageConfig, RandomStageConfig, SpanStageConfig]
     
     def get_stage_type(self) -> UnmaskingStageType:
         return self.config.get_stage_type()

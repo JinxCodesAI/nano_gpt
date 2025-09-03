@@ -24,6 +24,7 @@ from .training_config import (
     BaseStageConfig,
     StickyStageConfig,
     RandomStageConfig,
+    SpanStageConfig,
     UnmaskingStage,
     TrainingContext
 )
@@ -79,6 +80,7 @@ __all__ = [
     'BaseStageConfig', 
     'StickyStageConfig',
     'RandomStageConfig',
+    'SpanStageConfig',
     'UnmaskingStage',
     'TrainingContext',
     
