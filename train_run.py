@@ -77,7 +77,7 @@ init_from_checkpoint = ""  # Path to pretrained checkpoint for transfer learning
 
 # dynamic unfreezing for two-stage training
 unfreeze_at_iteration = 1  # Iteration to unfreeze transformer (e.g., 2000 for two-stage training)
-unfreeze_lr_multiplier = 0.1  # Reduce learning rate when unfreezing to avoid instability
+unfreeze_lr_multiplier = 1  # Reduce learning rate when unfreezing to avoid instability
 
 # sequence scoring config
 unmasking_model_checkpoint = ""  # Path to pretrained unmasking model for sequence scoring
@@ -398,7 +398,7 @@ elif training_type == 'sequence_scoring':
         attention_type = 'bidirectional'
 
     # Ensure we have a CLS token ID within the reserved special token range
-    cls_token_id = meta_vocab_size + 1 if meta_vocab_size is not None else 70  # First special token after mask_token_id
+    cls_token_id = meta_vocab_size + 5 if meta_vocab_size is not None else 70  # First special token after mask_token_id
     print(f"Setting cls_token_id = {cls_token_id} (using reserved special token slot)")
 
     # Update training context with CLS token ID
