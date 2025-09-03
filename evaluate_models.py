@@ -171,7 +171,7 @@ EVALUATION_CONFIG = {
         # 'model3.pt',
     ],
     'remasking_checkpoint_name': None,  # Optional: remasking_binary model checkpoint
-    'judge_model': '35.75_58.2_UM.pt',  # SEQUENCE_SCORER model to use as the single judge (lower scores = better)
+    'judge_model': 'ckpt_sequence_scorer_1000_best.pt',  # '35.75_58.2_UM.pt',  # SEQUENCE_SCORER model to use as the single judge (lower scores = better)
     
     # Evaluation parameters
     'batch_size': 32,           # N samples per model per batch (generation)
@@ -239,23 +239,17 @@ class ModelLoader:
             self.model_names.append(model_id)
             model = self._load_single_model(checkpoint_name, model_id)
             self.models[model_id] = model
-            
-            # Track which model is the judge
+
+            # Track which model is the judge (if it's in the checkpoints list)
             if checkpoint_name == self.config['judge_model']:
                 self.judge_model_id = model_id
                 print(f"  ✓ {model_id} identified as judge model")
-            
+
         # Load optional remasking model
         self._load_remasking_model()
-        
-        # Verify judge model was found and get its type
-        if self.judge_model_id is None:
-            raise ValueError(f"Judge model '{self.config['judge_model']}' not found in checkpoints list")
 
-        # Determine judge model type
-        judge_model = self.models[self.judge_model_id]
-        self.judge_model_type = judge_model.config.mode
-        print(f"  Judge model type: {self.judge_model_type.value}")
+        # Load judge model (can be separate from evaluation models)
+        self._load_judge_model()
 
         # Validate judge model type
         if self.judge_model_type != ModelMode.SEQUENCE_SCORER:
@@ -413,6 +407,29 @@ class ModelLoader:
             
         print("Remasking model loaded (binary classification)")
 
+    def _load_judge_model(self):
+        """Load judge model (can be separate from evaluation models)"""
+        judge_checkpoint_name = self.config['judge_model']
+
+        # Check if judge model was already loaded as part of evaluation models
+        if self.judge_model_id is not None:
+            judge_model = self.models[self.judge_model_id]
+            self.judge_model_type = judge_model.config.mode
+            print(f"  Judge model type: {self.judge_model_type.value}")
+            return
+
+        # Load judge model separately
+        print(f"Loading separate judge model from {judge_checkpoint_name}...")
+        judge_model = self._load_single_model(judge_checkpoint_name, "judge")
+
+        # Store judge model separately (not in evaluation models)
+        self.judge_model_id = "judge"
+        self.models[self.judge_model_id] = judge_model
+        self.judge_model_type = judge_model.config.mode
+
+        print(f"  ✓ Separate judge model loaded")
+        print(f"  Judge model type: {self.judge_model_type.value}")
+
 
 class SampleGenerator:
     """Generates samples from loaded models using diffusion process"""
@@ -475,18 +492,21 @@ class SampleGenerator:
         return samples
     
     def generate_all_samples(self, models):
-        """Generate samples for all models"""
+        """Generate samples for all models (excluding judge model)"""
         print(f"\n{'='*80}")
         print("SAMPLE GENERATION PHASE")
         print(f"{'='*80}")
-        
+
         all_samples = {}
         for model_id, model in models.items():
+            # Skip judge model - it's only used for rating, not generation
+            if model_id == "judge":
+                continue
             all_samples[model_id] = self.generate_samples_for_model(model, model_id)
-            
+
         total_samples = sum(len(samples) for samples in all_samples.values())
-        print(f"\nGenerated {total_samples} total samples across {len(models)} models")
-        
+        print(f"\nGenerated {total_samples} total samples across {len(all_samples)} models")
+
         return all_samples
 
 
