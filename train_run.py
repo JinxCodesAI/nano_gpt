@@ -1223,7 +1223,27 @@ while True:
         total_time = dt * 1000
         unaccounted_time = total_time - measured_total
 
-        print(f"iter {iter_num}: loss {lossf:.4f}, time {dt*1000:.2f}ms, mfu {running_mfu*100:.2f}%")
+        # Calculate sequence scoring ratio for relative prediction error
+        if training_ctx.training_type == 'sequence_scoring' and Y.dim() == 1:
+            with torch.no_grad():
+                # Get predictions from the model
+                logits, _ = model(X, None)
+                if hasattr(model, 'sequence_head'):
+                    # For sequence scoring, we need the sequence head output
+                    predictions = model.sequence_head(logits[:, 0, :]).squeeze(-1)  # Use CLS token
+                else:
+                    # Fallback: use first token logits and apply sigmoid
+                    predictions = torch.sigmoid(logits[:, 0, 0])
+
+                # Calculate relative error: abs(target - prediction) / target
+                # Avoid division by zero by adding small epsilon
+                epsilon = 1e-8
+                relative_errors = torch.abs(Y - predictions) / (Y + epsilon)
+                avg_relative_error = relative_errors.mean().item()
+
+                print(f"iter {iter_num}: loss {lossf:.4f}, time {dt*1000:.2f}ms, mfu {running_mfu*100:.2f}%, ratio {avg_relative_error:.3f}")
+        else:
+            print(f"iter {iter_num}: loss {lossf:.4f}, time {dt*1000:.2f}ms, mfu {running_mfu*100:.2f}%")
         print(f"  data: {data_time:.1f}ms, grad_accum: {grad_accum_time:.1f}ms (fw: {forward_time:.1f}ms, bw: {backward_time:.1f}ms)")
         print(f"  grad_proc: {grad_proc_time:.1f}ms, optimizer: {optimizer_time:.1f}ms, param_check: {param_check_time:.1f}ms")
         print(f"  loss_proc: {loss_proc_time:.1f}ms, instability: {instability_time:.1f}ms")
