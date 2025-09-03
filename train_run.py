@@ -1246,6 +1246,10 @@ while True:
                 relative_errors = torch.abs(Y - predictions) / (Y + epsilon)
                 avg_relative_error = relative_errors.mean().item()
 
+                # Debug: Log actual values occasionally to verify calculation
+                if iter_num % 100 == 0:
+                    print(f"  DEBUG ratio calc: targets={Y[:3].tolist()}, predictions={predictions[:3].tolist()}, errors={relative_errors[:3].tolist()}")
+
                 print(f"iter {iter_num}: loss {lossf:.4f}, time {dt*1000:.2f}ms, mfu {running_mfu*100:.2f}%, ratio {avg_relative_error:.3f}")
         else:
             print(f"iter {iter_num}: loss {lossf:.4f}, time {dt*1000:.2f}ms, mfu {running_mfu*100:.2f}%")
