@@ -54,7 +54,10 @@ from .masking_strategies import (
 from .batch_generation import (
     get_batch,
     get_batch_unmasking,
-    get_batch_remasking_binary
+    get_batch_token_classification,
+    get_batch_sequence_scoring,
+    # Backward compatibility alias
+    get_batch_token_classification as get_batch_remasking_binary
 )
 
 from .model_evaluation import (

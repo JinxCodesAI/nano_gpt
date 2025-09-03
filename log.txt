@@ -1,0 +1,584 @@
+
+Starting training loop...
+
+--- Starting validation at iteration 0 ---
+W0903 14:45:32.217062 29400 site-packages\torch\_inductor\utils.py:1137] [0/0] Not enough SMs to use max_autotune_gemm mode
+W0903 14:45:33.142323 29400 site-packages\torch\_dynamo\convert_frame.py:1233] WON'T CONVERT forward E:\AI\projects\diffusion\model.py line 476 
+W0903 14:45:33.142323 29400 site-packages\torch\_dynamo\convert_frame.py:1233] due to:
+W0903 14:45:33.142323 29400 site-packages\torch\_dynamo\convert_frame.py:1233] Traceback (most recent call last):
+W0903 14:45:33.142323 29400 site-packages\torch\_dynamo\convert_frame.py:1233]   File "C:\Users\Adam\AppData\Local\Programs\Python\Python310\lib\site-packages\torch\_dynamo\convert_frame.py", line 1164, in __call__
+W0903 14:45:33.142323 29400 site-packages\torch\_dynamo\convert_frame.py:1233]     result = self._inner_convert(
+W0903 14:45:33.142323 29400 site-packages\torch\_dynamo\convert_frame.py:1233]   File "C:\Users\Adam\AppData\Local\Programs\Python\Python310\lib\site-packages\torch\_dynamo\convert_frame.py", line 547, in __call__
+W0903 14:45:33.142323 29400 site-packages\torch\_dynamo\convert_frame.py:1233]     return _compile(
+W0903 14:45:33.142323 29400 site-packages\torch\_dynamo\convert_frame.py:1233]   File "C:\Users\Adam\AppData\Local\Programs\Python\Python310\lib\site-packages\torch\_dynamo\convert_frame.py", line 986, in _compile
+W0903 14:45:33.142323 29400 site-packages\torch\_dynamo\convert_frame.py:1233]     guarded_code = compile_inner(code, one_graph, hooks, transform)
+W0903 14:45:33.142323 29400 site-packages\torch\_dynamo\convert_frame.py:1233]   File "C:\Users\Adam\AppData\Local\Programs\Python\Python310\lib\site-packages\torch\_dynamo\convert_frame.py", line 715, in compile_inner
+W0903 14:45:33.142323 29400 site-packages\torch\_dynamo\convert_frame.py:1233]     return _compile_inner(code, one_graph, hooks, transform)     
+W0903 14:45:33.142323 29400 site-packages\torch\_dynamo\convert_frame.py:1233]   File "C:\Users\Adam\AppData\Local\Programs\Python\Python310\lib\site-packages\torch\_utils_internal.py", line 95, in wrapper_function
+W0903 14:45:33.142323 29400 site-packages\torch\_dynamo\convert_frame.py:1233]     return function(*args, **kwargs)
+W0903 14:45:33.142323 29400 site-packages\torch\_dynamo\convert_frame.py:1233]   File "C:\Users\Adam\AppData\Local\Programs\Python\Python310\lib\site-packages\torch\_dynamo\convert_frame.py", line 750, in _compile_inner
+W0903 14:45:33.142323 29400 site-packages\torch\_dynamo\convert_frame.py:1233]     out_code = transform_code_object(code, transform)
+W0903 14:45:33.142323 29400 site-packages\torch\_dynamo\convert_frame.py:1233]   File "C:\Users\Adam\AppData\Local\Programs\Python\Python310\lib\site-packages\torch\_dynamo\bytecode_transformation.py", line 1361, in transform_code_object
+W0903 14:45:33.142323 29400 site-packages\torch\_dynamo\convert_frame.py:1233]     transformations(instructions, code_options)
+W0903 14:45:33.142323 29400 site-packages\torch\_dynamo\convert_frame.py:1233]   File "C:\Users\Adam\AppData\Local\Programs\Python\Python310\lib\site-packages\torch\_dynamo\convert_frame.py", line 231, in _fn
+W0903 14:45:33.142323 29400 site-packages\torch\_dynamo\convert_frame.py:1233]     return fn(*args, **kwargs)
+W0903 14:45:33.142323 29400 site-packages\torch\_dynamo\convert_frame.py:1233]   File "C:\Users\Adam\AppData\Local\Programs\Python\Python310\lib\site-packages\torch\_dynamo\convert_frame.py", line 662, in transform
+W0903 14:45:33.142323 29400 site-packages\torch\_dynamo\convert_frame.py:1233]     tracer.run()
+W0903 14:45:33.142323 29400 site-packages\torch\_dynamo\convert_frame.py:1233]   File "C:\Users\Adam\AppData\Local\Programs\Python\Python310\lib\site-packages\torch\_dynamo\symbolic_convert.py", line 2868, in run
+W0903 14:45:33.142323 29400 site-packages\torch\_dynamo\convert_frame.py:1233]     super().run()
+W0903 14:45:33.142323 29400 site-packages\torch\_dynamo\convert_frame.py:1233]   File "C:\Users\Adam\AppData\Local\Programs\Python\Python310\lib\site-packages\torch\_dynamo\symbolic_convert.py", line 1052, in run
+W0903 14:45:33.142323 29400 site-packages\torch\_dynamo\convert_frame.py:1233]     while self.step():
+W0903 14:45:33.142323 29400 site-packages\torch\_dynamo\convert_frame.py:1233]   File "C:\Users\Adam\AppData\Local\Programs\Python\Python310\lib\site-packages\torch\_dynamo\symbolic_convert.py", line 962, in step
+W0903 14:45:33.142323 29400 site-packages\torch\_dynamo\convert_frame.py:1233]     self.dispatch_table[inst.opcode](self, inst)
+W0903 14:45:33.142323 29400 site-packages\torch\_dynamo\convert_frame.py:1233]   File "C:\Users\Adam\AppData\Local\Programs\Python\Python310\lib\site-packages\torch\_dynamo\symbolic_convert.py", line 3048, in RETURN_VALUE
+W0903 14:45:33.142323 29400 site-packages\torch\_dynamo\convert_frame.py:1233]     self._return(inst)
+W0903 14:45:33.142323 29400 site-packages\torch\_dynamo\convert_frame.py:1233]   File "C:\Users\Adam\AppData\Local\Programs\Python\Python310\lib\site-packages\torch\_dynamo\symbolic_convert.py", line 3033, in _return
+W0903 14:45:33.142323 29400 site-packages\torch\_dynamo\convert_frame.py:1233]     self.output.compile_subgraph(
+W0903 14:45:33.142323 29400 site-packages\torch\_dynamo\convert_frame.py:1233]   File "C:\Users\Adam\AppData\Local\Programs\Python\Python310\lib\site-packages\torch\_dynamo\output_graph.py", line 1136, in compile_subgraph
+W0903 14:45:33.142323 29400 site-packages\torch\_dynamo\convert_frame.py:1233]     self.compile_and_call_fx_graph(
+W0903 14:45:33.142323 29400 site-packages\torch\_dynamo\convert_frame.py:1233]   File "C:\Users\Adam\AppData\Local\Programs\Python\Python310\lib\site-packages\torch\_dynamo\output_graph.py", line 1382, in compile_and_call_fx_graph
+W0903 14:45:33.142323 29400 site-packages\torch\_dynamo\convert_frame.py:1233]     compiled_fn = self.call_user_compiler(gm)
+W0903 14:45:33.142323 29400 site-packages\torch\_dynamo\convert_frame.py:1233]   File "C:\Users\Adam\AppData\Local\Programs\Python\Python310\lib\site-packages\torch\_dynamo\output_graph.py", line 1432, in call_user_compiler
+W0903 14:45:33.142323 29400 site-packages\torch\_dynamo\convert_frame.py:1233]     return self._call_user_compiler(gm)
+W0903 14:45:33.142323 29400 site-packages\torch\_dynamo\convert_frame.py:1233]   File "C:\Users\Adam\AppData\Local\Programs\Python\Python310\lib\site-packages\torch\_dynamo\output_graph.py", line 1483, in _call_user_compiler
+W0903 14:45:33.142323 29400 site-packages\torch\_dynamo\convert_frame.py:1233]     raise BackendCompilerFailed(self.compiler_fn, e).with_traceback(
+W0903 14:45:33.142323 29400 site-packages\torch\_dynamo\convert_frame.py:1233]   File "C:\Users\Adam\AppData\Local\Programs\Python\Python310\lib\site-packages\torch\_dynamo\output_graph.py", line 1462, in _call_user_compiler
+W0903 14:45:33.142323 29400 site-packages\torch\_dynamo\convert_frame.py:1233]     compiled_fn = compiler_fn(gm, self.example_inputs())
+W0903 14:45:33.142323 29400 site-packages\torch\_dynamo\convert_frame.py:1233]   File "C:\Users\Adam\AppData\Local\Programs\Python\Python310\lib\site-packages\torch\_dynamo\repro\after_dynamo.py", line 130, in __call__
+W0903 14:45:33.142323 29400 site-packages\torch\_dynamo\convert_frame.py:1233]     compiled_gm = compiler_fn(gm, example_inputs)
+W0903 14:45:33.142323 29400 site-packages\torch\_dynamo\convert_frame.py:1233]   File "C:\Users\Adam\AppData\Local\Programs\Python\Python310\lib\site-packages\torch\__init__.py", line 2340, in __call__
+W0903 14:45:33.142323 29400 site-packages\torch\_dynamo\convert_frame.py:1233]     return compile_fx(model_, inputs_, config_patches=self.config)
+W0903 14:45:33.142323 29400 site-packages\torch\_dynamo\convert_frame.py:1233]   File "C:\Users\Adam\AppData\Local\Programs\Python\Python310\lib\site-packages\torch\_inductor\compile_fx.py", line 1863, in compile_fx
+W0903 14:45:33.142323 29400 site-packages\torch\_dynamo\convert_frame.py:1233]     return aot_autograd(
+W0903 14:45:33.142323 29400 site-packages\torch\_dynamo\convert_frame.py:1233]   File "C:\Users\Adam\AppData\Local\Programs\Python\Python310\lib\site-packages\torch\_dynamo\backends\common.py", line 83, in __call__
+W0903 14:45:33.142323 29400 site-packages\torch\_dynamo\convert_frame.py:1233]     cg = aot_module_simplified(gm, example_inputs, **self.kwargs)W0903 14:45:33.142323 29400 site-packages\torch\_dynamo\convert_frame.py:1233]   File "C:\Users\Adam\AppData\Local\Programs\Python\Python310\lib\site-packages\torch\_functorch\aot_autograd.py", line 1155, in aot_module_simplified
+W0903 14:45:33.142323 29400 site-packages\torch\_dynamo\convert_frame.py:1233]     compiled_fn = dispatch_and_compile()
+W0903 14:45:33.142323 29400 site-packages\torch\_dynamo\convert_frame.py:1233]   File "C:\Users\Adam\AppData\Local\Programs\Python\Python310\lib\site-packages\torch\_functorch\aot_autograd.py", line 1131, in dispatch_and_compile
+W0903 14:45:33.142323 29400 site-packages\torch\_dynamo\convert_frame.py:1233]     compiled_fn, _ = create_aot_dispatcher_function(
+W0903 14:45:33.142323 29400 site-packages\torch\_dynamo\convert_frame.py:1233]   File "C:\Users\Adam\AppData\Local\Programs\Python\Python310\lib\site-packages\torch\_functorch\aot_autograd.py", line 580, in create_aot_dispatcher_function
+W0903 14:45:33.142323 29400 site-packages\torch\_dynamo\convert_frame.py:1233]     return _create_aot_dispatcher_function(
+W0903 14:45:33.142323 29400 site-packages\torch\_dynamo\convert_frame.py:1233]   File "C:\Users\Adam\AppData\Local\Programs\Python\Python310\lib\site-packages\torch\_functorch\aot_autograd.py", line 830, in _create_aot_dispatcher_function
+W0903 14:45:33.142323 29400 site-packages\torch\_dynamo\convert_frame.py:1233]     compiled_fn, fw_metadata = compiler_fn(
+W0903 14:45:33.142323 29400 site-packages\torch\_dynamo\convert_frame.py:1233]   File "C:\Users\Adam\AppData\Local\Programs\Python\Python310\lib\site-packages\torch\_functorch\_aot_autograd\jit_compile_runtime_wrappers.py", line 678, in aot_dispatch_autograd
+W0903 14:45:33.142323 29400 site-packages\torch\_dynamo\convert_frame.py:1233]     compiled_fw_func = aot_config.fw_compiler(fw_module, adjusted_flat_args)
+W0903 14:45:33.142323 29400 site-packages\torch\_dynamo\convert_frame.py:1233]   File "C:\Users\Adam\AppData\Local\Programs\Python\Python310\lib\site-packages\torch\_functorch\aot_autograd.py", line 489, in __call__
+W0903 14:45:33.142323 29400 site-packages\torch\_dynamo\convert_frame.py:1233]     return self.compiler_fn(gm, example_inputs)
+W0903 14:45:33.142323 29400 site-packages\torch\_dynamo\convert_frame.py:1233]   File "C:\Users\Adam\AppData\Local\Programs\Python\Python310\lib\site-packages\torch\_inductor\compile_fx.py", line 1741, in fw_compiler_base
+W0903 14:45:33.142323 29400 site-packages\torch\_dynamo\convert_frame.py:1233]     return inner_compile(
+W0903 14:45:33.142323 29400 site-packages\torch\_dynamo\convert_frame.py:1233]   File "C:\Users\Adam\AppData\Local\Programs\Python\Python310\lib\site-packages\torch\_inductor\compile_fx.py", line 569, in compile_fx_inner
+W0903 14:45:33.142323 29400 site-packages\torch\_dynamo\convert_frame.py:1233]     return wrap_compiler_debug(_compile_fx_inner, compiler_name="inductor")(
+W0903 14:45:33.142323 29400 site-packages\torch\_dynamo\convert_frame.py:1233]   File "C:\Users\Adam\AppData\Local\Programs\Python\Python310\lib\site-packages\torch\_dynamo\repro\after_aot.py", line 102, in debug_wrapper
+W0903 14:45:33.142323 29400 site-packages\torch\_dynamo\convert_frame.py:1233]     inner_compiled_fn = compiler_fn(gm, example_inputs)
+W0903 14:45:33.142323 29400 site-packages\torch\_dynamo\convert_frame.py:1233]   File "C:\Users\Adam\AppData\Local\Programs\Python\Python310\lib\site-packages\torch\_inductor\compile_fx.py", line 685, in _compile_fx_inner
+W0903 14:45:33.142323 29400 site-packages\torch\_dynamo\convert_frame.py:1233]     mb_compiled_graph = fx_codegen_and_compile(
+W0903 14:45:33.142323 29400 site-packages\torch\_dynamo\convert_frame.py:1233]   File "C:\Users\Adam\AppData\Local\Programs\Python\Python310\lib\site-packages\torch\_inductor\compile_fx.py", line 1129, in fx_codegen_and_compile
+W0903 14:45:33.142323 29400 site-packages\torch\_dynamo\convert_frame.py:1233]     return scheme.codegen_and_compile(gm, example_inputs, inputs_to_check, graph_kwargs)
+W0903 14:45:33.142323 29400 site-packages\torch\_dynamo\convert_frame.py:1233]   File "C:\Users\Adam\AppData\Local\Programs\Python\Python310\lib\site-packages\torch\_inductor\compile_fx.py", line 1044, in codegen_and_compile
+W0903 14:45:33.142323 29400 site-packages\torch\_dynamo\convert_frame.py:1233]     compiled_fn = graph.compile_to_module().call
+W0903 14:45:33.142323 29400 site-packages\torch\_dynamo\convert_frame.py:1233]   File "C:\Users\Adam\AppData\Local\Programs\Python\Python310\lib\site-packages\torch\_inductor\graph.py", line 2027, in compile_to_module
+W0903 14:45:33.142323 29400 site-packages\torch\_dynamo\convert_frame.py:1233]     return self._compile_to_module()
+W0903 14:45:33.142323 29400 site-packages\torch\_dynamo\convert_frame.py:1233]   File "C:\Users\Adam\AppData\Local\Programs\Python\Python310\lib\site-packages\torch\_inductor\graph.py", line 2033, in _compile_to_module
+W0903 14:45:33.142323 29400 site-packages\torch\_dynamo\convert_frame.py:1233]     self.codegen_with_cpp_wrapper() if self.cpp_wrapper else self.codegen()
+W0903 14:45:33.142323 29400 site-packages\torch\_dynamo\convert_frame.py:1233]   File "C:\Users\Adam\AppData\Local\Programs\Python\Python310\lib\site-packages\torch\_inductor\graph.py", line 1964, in codegen
+W0903 14:45:33.142323 29400 site-packages\torch\_dynamo\convert_frame.py:1233]     self.scheduler = Scheduler(self.operations)
+W0903 14:45:33.142323 29400 site-packages\torch\_dynamo\convert_frame.py:1233]   File "C:\Users\Adam\AppData\Local\Programs\Python\Python310\lib\site-packages\torch\_inductor\scheduler.py", line 1798, in __init__
+W0903 14:45:33.142323 29400 site-packages\torch\_dynamo\convert_frame.py:1233]     self._init(nodes)
+W0903 14:45:33.142323 29400 site-packages\torch\_dynamo\convert_frame.py:1233]   File "C:\Users\Adam\AppData\Local\Programs\Python\Python310\lib\site-packages\torch\_inductor\scheduler.py", line 1816, in _init
+W0903 14:45:33.142323 29400 site-packages\torch\_dynamo\convert_frame.py:1233]     self.nodes = [self.create_scheduler_node(n) for n in nodes]  
+W0903 14:45:33.142323 29400 site-packages\torch\_dynamo\convert_frame.py:1233]   File "C:\Users\Adam\AppData\Local\Programs\Python\Python310\lib\site-packages\torch\_inductor\scheduler.py", line 1816, in <listcomp>
+W0903 14:45:33.142323 29400 site-packages\torch\_dynamo\convert_frame.py:1233]     self.nodes = [self.create_scheduler_node(n) for n in nodes]  
+W0903 14:45:33.142323 29400 site-packages\torch\_dynamo\convert_frame.py:1233]   File "C:\Users\Adam\AppData\Local\Programs\Python\Python310\lib\site-packages\torch\_inductor\scheduler.py", line 1947, in create_scheduler_node
+W0903 14:45:33.142323 29400 site-packages\torch\_dynamo\convert_frame.py:1233]     return SchedulerNode(self, node)
+W0903 14:45:33.142323 29400 site-packages\torch\_dynamo\convert_frame.py:1233]   File "C:\Users\Adam\AppData\Local\Programs\Python\Python310\lib\site-packages\torch\_inductor\scheduler.py", line 893, in __init__
+W0903 14:45:33.142323 29400 site-packages\torch\_dynamo\convert_frame.py:1233]     self._compute_attrs()
+W0903 14:45:33.142323 29400 site-packages\torch\_dynamo\convert_frame.py:1233]   File "C:\Users\Adam\AppData\Local\Programs\Python\Python310\lib\site-packages\torch\_inductor\scheduler.py", line 907, in _compute_attrs
+W0903 14:45:33.142323 29400 site-packages\torch\_dynamo\convert_frame.py:1233]     group_fn = self.scheduler.get_backend(device).group_fn       
+W0903 14:45:33.142323 29400 site-packages\torch\_dynamo\convert_frame.py:1233]   File "C:\Users\Adam\AppData\Local\Programs\Python\Python310\lib\site-packages\torch\_inductor\scheduler.py", line 3441, in get_backend
+W0903 14:45:33.142323 29400 site-packages\torch\_dynamo\convert_frame.py:1233]     self.backends[device] = self.create_backend(device)
+W0903 14:45:33.142323 29400 site-packages\torch\_dynamo\convert_frame.py:1233]   File "C:\Users\Adam\AppData\Local\Programs\Python\Python310\lib\site-packages\torch\_inductor\scheduler.py", line 3432, in create_backend
+W0903 14:45:33.142323 29400 site-packages\torch\_dynamo\convert_frame.py:1233]     raise RuntimeError(
+W0903 14:45:33.142323 29400 site-packages\torch\_dynamo\convert_frame.py:1233] torch._dynamo.exc.BackendCompilerFailed: backend='inductor' raised:
+W0903 14:45:33.142323 29400 site-packages\torch\_dynamo\convert_frame.py:1233] RuntimeError: Cannot find a working triton installation. Either the package is not installed or it is too old. More information on installing Triton can be found at https://github.com/openai/triton
+W0903 14:45:33.142323 29400 site-packages\torch\_dynamo\convert_frame.py:1233]
+W0903 14:45:33.142323 29400 site-packages\torch\_dynamo\convert_frame.py:1233] Set TORCH_LOGS="+dynamo" and TORCHDYNAMO_VERBOSE=1 for more information
+W0903 14:45:33.142323 29400 site-packages\torch\_dynamo\convert_frame.py:1233]
+W0903 14:45:33.142323 29400 site-packages\torch\_dynamo\convert_frame.py:1233] Traceback (most recent call last):
+W0903 14:45:33.142323 29400 site-packages\torch\_dynamo\convert_frame.py:1233]   File "C:\Users\Adam\AppData\Local\Programs\Python\Python310\lib\site-packages\torch\_dynamo\convert_frame.py", line 1164, in __call__
+W0903 14:45:33.142323 29400 site-packages\torch\_dynamo\convert_frame.py:1233]     result = self._inner_convert(
+W0903 14:45:33.142323 29400 site-packages\torch\_dynamo\convert_frame.py:1233]   File "C:\Users\Adam\AppData\Local\Programs\Python\Python310\lib\site-packages\torch\_dynamo\convert_frame.py", line 547, in __call__
+W0903 14:45:33.142323 29400 site-packages\torch\_dynamo\convert_frame.py:1233]     return _compile(
+W0903 14:45:33.142323 29400 site-packages\torch\_dynamo\convert_frame.py:1233]   File "C:\Users\Adam\AppData\Local\Programs\Python\Python310\lib\site-packages\torch\_dynamo\convert_frame.py", line 986, in _compile
+W0903 14:45:33.142323 29400 site-packages\torch\_dynamo\convert_frame.py:1233]     guarded_code = compile_inner(code, one_graph, hooks, transform)
+W0903 14:45:33.142323 29400 site-packages\torch\_dynamo\convert_frame.py:1233]   File "C:\Users\Adam\AppData\Local\Programs\Python\Python310\lib\site-packages\torch\_dynamo\convert_frame.py", line 715, in compile_inner
+W0903 14:45:33.142323 29400 site-packages\torch\_dynamo\convert_frame.py:1233]     return _compile_inner(code, one_graph, hooks, transform)     
+W0903 14:45:33.142323 29400 site-packages\torch\_dynamo\convert_frame.py:1233]   File "C:\Users\Adam\AppData\Local\Programs\Python\Python310\lib\site-packages\torch\_utils_internal.py", line 95, in wrapper_function
+W0903 14:45:33.142323 29400 site-packages\torch\_dynamo\convert_frame.py:1233]     return function(*args, **kwargs)
+W0903 14:45:33.142323 29400 site-packages\torch\_dynamo\convert_frame.py:1233]   File "C:\Users\Adam\AppData\Local\Programs\Python\Python310\lib\site-packages\torch\_dynamo\convert_frame.py", line 750, in _compile_inner
+W0903 14:45:33.142323 29400 site-packages\torch\_dynamo\convert_frame.py:1233]     out_code = transform_code_object(code, transform)
+W0903 14:45:33.142323 29400 site-packages\torch\_dynamo\convert_frame.py:1233]   File "C:\Users\Adam\AppData\Local\Programs\Python\Python310\lib\site-packages\torch\_dynamo\bytecode_transformation.py", line 1361, in transform_code_object
+W0903 14:45:33.142323 29400 site-packages\torch\_dynamo\convert_frame.py:1233]     transformations(instructions, code_options)
+W0903 14:45:33.142323 29400 site-packages\torch\_dynamo\convert_frame.py:1233]   File "C:\Users\Adam\AppData\Local\Programs\Python\Python310\lib\site-packages\torch\_dynamo\convert_frame.py", line 231, in _fn
+W0903 14:45:33.142323 29400 site-packages\torch\_dynamo\convert_frame.py:1233]     return fn(*args, **kwargs)
+W0903 14:45:33.142323 29400 site-packages\torch\_dynamo\convert_frame.py:1233]   File "C:\Users\Adam\AppData\Local\Programs\Python\Python310\lib\site-packages\torch\_dynamo\convert_frame.py", line 662, in transform
+W0903 14:45:33.142323 29400 site-packages\torch\_dynamo\convert_frame.py:1233]     tracer.run()
+W0903 14:45:33.142323 29400 site-packages\torch\_dynamo\convert_frame.py:1233]   File "C:\Users\Adam\AppData\Local\Programs\Python\Python310\lib\site-packages\torch\_dynamo\symbolic_convert.py", line 2868, in run
+W0903 14:45:33.142323 29400 site-packages\torch\_dynamo\convert_frame.py:1233]     super().run()
+W0903 14:45:33.142323 29400 site-packages\torch\_dynamo\convert_frame.py:1233]   File "C:\Users\Adam\AppData\Local\Programs\Python\Python310\lib\site-packages\torch\_dynamo\symbolic_convert.py", line 1052, in run
+W0903 14:45:33.142323 29400 site-packages\torch\_dynamo\convert_frame.py:1233]     while self.step():
+W0903 14:45:33.142323 29400 site-packages\torch\_dynamo\convert_frame.py:1233]   File "C:\Users\Adam\AppData\Local\Programs\Python\Python310\lib\site-packages\torch\_dynamo\symbolic_convert.py", line 962, in step
+W0903 14:45:33.142323 29400 site-packages\torch\_dynamo\convert_frame.py:1233]     self.dispatch_table[inst.opcode](self, inst)
+W0903 14:45:33.142323 29400 site-packages\torch\_dynamo\convert_frame.py:1233]   File "C:\Users\Adam\AppData\Local\Programs\Python\Python310\lib\site-packages\torch\_dynamo\symbolic_convert.py", line 3048, in RETURN_VALUE
+W0903 14:45:33.142323 29400 site-packages\torch\_dynamo\convert_frame.py:1233]     self._return(inst)
+W0903 14:45:33.142323 29400 site-packages\torch\_dynamo\convert_frame.py:1233]   File "C:\Users\Adam\AppData\Local\Programs\Python\Python310\lib\site-packages\torch\_dynamo\symbolic_convert.py", line 3033, in _return
+W0903 14:45:33.142323 29400 site-packages\torch\_dynamo\convert_frame.py:1233]     self.output.compile_subgraph(
+W0903 14:45:33.142323 29400 site-packages\torch\_dynamo\convert_frame.py:1233]   File "C:\Users\Adam\AppData\Local\Programs\Python\Python310\lib\site-packages\torch\_dynamo\output_graph.py", line 1136, in compile_subgraph
+W0903 14:45:33.142323 29400 site-packages\torch\_dynamo\convert_frame.py:1233]     self.compile_and_call_fx_graph(
+W0903 14:45:33.142323 29400 site-packages\torch\_dynamo\convert_frame.py:1233]   File "C:\Users\Adam\AppData\Local\Programs\Python\Python310\lib\site-packages\torch\_dynamo\output_graph.py", line 1382, in compile_and_call_fx_graph
+W0903 14:45:33.142323 29400 site-packages\torch\_dynamo\convert_frame.py:1233]     compiled_fn = self.call_user_compiler(gm)
+W0903 14:45:33.142323 29400 site-packages\torch\_dynamo\convert_frame.py:1233]   File "C:\Users\Adam\AppData\Local\Programs\Python\Python310\lib\site-packages\torch\_dynamo\output_graph.py", line 1432, in call_user_compiler
+W0903 14:45:33.142323 29400 site-packages\torch\_dynamo\convert_frame.py:1233]     return self._call_user_compiler(gm)
+W0903 14:45:33.142323 29400 site-packages\torch\_dynamo\convert_frame.py:1233]   File "C:\Users\Adam\AppData\Local\Programs\Python\Python310\lib\site-packages\torch\_dynamo\output_graph.py", line 1483, in _call_user_compiler
+W0903 14:45:33.142323 29400 site-packages\torch\_dynamo\convert_frame.py:1233]     raise BackendCompilerFailed(self.compiler_fn, e).with_traceback(
+W0903 14:45:33.142323 29400 site-packages\torch\_dynamo\convert_frame.py:1233]   File "C:\Users\Adam\AppData\Local\Programs\Python\Python310\lib\site-packages\torch\_dynamo\output_graph.py", line 1462, in _call_user_compiler
+W0903 14:45:33.142323 29400 site-packages\torch\_dynamo\convert_frame.py:1233]     compiled_fn = compiler_fn(gm, self.example_inputs())
+W0903 14:45:33.142323 29400 site-packages\torch\_dynamo\convert_frame.py:1233]   File "C:\Users\Adam\AppData\Local\Programs\Python\Python310\lib\site-packages\torch\_dynamo\repro\after_dynamo.py", line 130, in __call__
+W0903 14:45:33.142323 29400 site-packages\torch\_dynamo\convert_frame.py:1233]     compiled_gm = compiler_fn(gm, example_inputs)
+W0903 14:45:33.142323 29400 site-packages\torch\_dynamo\convert_frame.py:1233]   File "C:\Users\Adam\AppData\Local\Programs\Python\Python310\lib\site-packages\torch\__init__.py", line 2340, in __call__
+W0903 14:45:33.142323 29400 site-packages\torch\_dynamo\convert_frame.py:1233]     return compile_fx(model_, inputs_, config_patches=self.config)
+W0903 14:45:33.142323 29400 site-packages\torch\_dynamo\convert_frame.py:1233]   File "C:\Users\Adam\AppData\Local\Programs\Python\Python310\lib\site-packages\torch\_inductor\compile_fx.py", line 1863, in compile_fx
+W0903 14:45:33.142323 29400 site-packages\torch\_dynamo\convert_frame.py:1233]     return aot_autograd(
+W0903 14:45:33.142323 29400 site-packages\torch\_dynamo\convert_frame.py:1233]   File "C:\Users\Adam\AppData\Local\Programs\Python\Python310\lib\site-packages\torch\_dynamo\backends\common.py", line 83, in __call__
+W0903 14:45:33.142323 29400 site-packages\torch\_dynamo\convert_frame.py:1233]     cg = aot_module_simplified(gm, example_inputs, **self.kwargs)W0903 14:45:33.142323 29400 site-packages\torch\_dynamo\convert_frame.py:1233]   File "C:\Users\Adam\AppData\Local\Programs\Python\Python310\lib\site-packages\torch\_functorch\aot_autograd.py", line 1155, in aot_module_simplified
+W0903 14:45:33.142323 29400 site-packages\torch\_dynamo\convert_frame.py:1233]     compiled_fn = dispatch_and_compile()
+W0903 14:45:33.142323 29400 site-packages\torch\_dynamo\convert_frame.py:1233]   File "C:\Users\Adam\AppData\Local\Programs\Python\Python310\lib\site-packages\torch\_functorch\aot_autograd.py", line 1131, in dispatch_and_compile
+W0903 14:45:33.142323 29400 site-packages\torch\_dynamo\convert_frame.py:1233]     compiled_fn, _ = create_aot_dispatcher_function(
+W0903 14:45:33.142323 29400 site-packages\torch\_dynamo\convert_frame.py:1233]   File "C:\Users\Adam\AppData\Local\Programs\Python\Python310\lib\site-packages\torch\_functorch\aot_autograd.py", line 580, in create_aot_dispatcher_function
+W0903 14:45:33.142323 29400 site-packages\torch\_dynamo\convert_frame.py:1233]     return _create_aot_dispatcher_function(
+W0903 14:45:33.142323 29400 site-packages\torch\_dynamo\convert_frame.py:1233]   File "C:\Users\Adam\AppData\Local\Programs\Python\Python310\lib\site-packages\torch\_functorch\aot_autograd.py", line 830, in _create_aot_dispatcher_function
+W0903 14:45:33.142323 29400 site-packages\torch\_dynamo\convert_frame.py:1233]     compiled_fn, fw_metadata = compiler_fn(
+W0903 14:45:33.142323 29400 site-packages\torch\_dynamo\convert_frame.py:1233]   File "C:\Users\Adam\AppData\Local\Programs\Python\Python310\lib\site-packages\torch\_functorch\_aot_autograd\jit_compile_runtime_wrappers.py", line 678, in aot_dispatch_autograd
+W0903 14:45:33.142323 29400 site-packages\torch\_dynamo\convert_frame.py:1233]     compiled_fw_func = aot_config.fw_compiler(fw_module, adjusted_flat_args)
+W0903 14:45:33.142323 29400 site-packages\torch\_dynamo\convert_frame.py:1233]   File "C:\Users\Adam\AppData\Local\Programs\Python\Python310\lib\site-packages\torch\_functorch\aot_autograd.py", line 489, in __call__
+W0903 14:45:33.142323 29400 site-packages\torch\_dynamo\convert_frame.py:1233]     return self.compiler_fn(gm, example_inputs)
+W0903 14:45:33.142323 29400 site-packages\torch\_dynamo\convert_frame.py:1233]   File "C:\Users\Adam\AppData\Local\Programs\Python\Python310\lib\site-packages\torch\_inductor\compile_fx.py", line 1741, in fw_compiler_base
+W0903 14:45:33.142323 29400 site-packages\torch\_dynamo\convert_frame.py:1233]     return inner_compile(
+W0903 14:45:33.142323 29400 site-packages\torch\_dynamo\convert_frame.py:1233]   File "C:\Users\Adam\AppData\Local\Programs\Python\Python310\lib\site-packages\torch\_inductor\compile_fx.py", line 569, in compile_fx_inner
+W0903 14:45:33.142323 29400 site-packages\torch\_dynamo\convert_frame.py:1233]     return wrap_compiler_debug(_compile_fx_inner, compiler_name="inductor")(
+W0903 14:45:33.142323 29400 site-packages\torch\_dynamo\convert_frame.py:1233]   File "C:\Users\Adam\AppData\Local\Programs\Python\Python310\lib\site-packages\torch\_dynamo\repro\after_aot.py", line 102, in debug_wrapper
+W0903 14:45:33.142323 29400 site-packages\torch\_dynamo\convert_frame.py:1233]     inner_compiled_fn = compiler_fn(gm, example_inputs)
+W0903 14:45:33.142323 29400 site-packages\torch\_dynamo\convert_frame.py:1233]   File "C:\Users\Adam\AppData\Local\Programs\Python\Python310\lib\site-packages\torch\_inductor\compile_fx.py", line 685, in _compile_fx_inner
+W0903 14:45:33.142323 29400 site-packages\torch\_dynamo\convert_frame.py:1233]     mb_compiled_graph = fx_codegen_and_compile(
+W0903 14:45:33.142323 29400 site-packages\torch\_dynamo\convert_frame.py:1233]   File "C:\Users\Adam\AppData\Local\Programs\Python\Python310\lib\site-packages\torch\_inductor\compile_fx.py", line 1129, in fx_codegen_and_compile
+W0903 14:45:33.142323 29400 site-packages\torch\_dynamo\convert_frame.py:1233]     return scheme.codegen_and_compile(gm, example_inputs, inputs_to_check, graph_kwargs)
+W0903 14:45:33.142323 29400 site-packages\torch\_dynamo\convert_frame.py:1233]   File "C:\Users\Adam\AppData\Local\Programs\Python\Python310\lib\site-packages\torch\_inductor\compile_fx.py", line 1044, in codegen_and_compile
+W0903 14:45:33.142323 29400 site-packages\torch\_dynamo\convert_frame.py:1233]     compiled_fn = graph.compile_to_module().call
+W0903 14:45:33.142323 29400 site-packages\torch\_dynamo\convert_frame.py:1233]   File "C:\Users\Adam\AppData\Local\Programs\Python\Python310\lib\site-packages\torch\_inductor\graph.py", line 2027, in compile_to_module
+W0903 14:45:33.142323 29400 site-packages\torch\_dynamo\convert_frame.py:1233]     return self._compile_to_module()
+W0903 14:45:33.142323 29400 site-packages\torch\_dynamo\convert_frame.py:1233]   File "C:\Users\Adam\AppData\Local\Programs\Python\Python310\lib\site-packages\torch\_inductor\graph.py", line 2033, in _compile_to_module
+W0903 14:45:33.142323 29400 site-packages\torch\_dynamo\convert_frame.py:1233]     self.codegen_with_cpp_wrapper() if self.cpp_wrapper else self.codegen()
+W0903 14:45:33.142323 29400 site-packages\torch\_dynamo\convert_frame.py:1233]   File "C:\Users\Adam\AppData\Local\Programs\Python\Python310\lib\site-packages\torch\_inductor\graph.py", line 1964, in codegen
+W0903 14:45:33.142323 29400 site-packages\torch\_dynamo\convert_frame.py:1233]     self.scheduler = Scheduler(self.operations)
+W0903 14:45:33.142323 29400 site-packages\torch\_dynamo\convert_frame.py:1233]   File "C:\Users\Adam\AppData\Local\Programs\Python\Python310\lib\site-packages\torch\_inductor\scheduler.py", line 1798, in __init__
+W0903 14:45:33.142323 29400 site-packages\torch\_dynamo\convert_frame.py:1233]     self._init(nodes)
+W0903 14:45:33.142323 29400 site-packages\torch\_dynamo\convert_frame.py:1233]   File "C:\Users\Adam\AppData\Local\Programs\Python\Python310\lib\site-packages\torch\_inductor\scheduler.py", line 1816, in _init
+W0903 14:45:33.142323 29400 site-packages\torch\_dynamo\convert_frame.py:1233]     self.nodes = [self.create_scheduler_node(n) for n in nodes]  
+W0903 14:45:33.142323 29400 site-packages\torch\_dynamo\convert_frame.py:1233]   File "C:\Users\Adam\AppData\Local\Programs\Python\Python310\lib\site-packages\torch\_inductor\scheduler.py", line 1816, in <listcomp>
+W0903 14:45:33.142323 29400 site-packages\torch\_dynamo\convert_frame.py:1233]     self.nodes = [self.create_scheduler_node(n) for n in nodes]  
+W0903 14:45:33.142323 29400 site-packages\torch\_dynamo\convert_frame.py:1233]   File "C:\Users\Adam\AppData\Local\Programs\Python\Python310\lib\site-packages\torch\_inductor\scheduler.py", line 1947, in create_scheduler_node
+W0903 14:45:33.142323 29400 site-packages\torch\_dynamo\convert_frame.py:1233]     return SchedulerNode(self, node)
+W0903 14:45:33.142323 29400 site-packages\torch\_dynamo\convert_frame.py:1233]   File "C:\Users\Adam\AppData\Local\Programs\Python\Python310\lib\site-packages\torch\_inductor\scheduler.py", line 893, in __init__
+W0903 14:45:33.142323 29400 site-packages\torch\_dynamo\convert_frame.py:1233]     self._compute_attrs()
+W0903 14:45:33.142323 29400 site-packages\torch\_dynamo\convert_frame.py:1233]   File "C:\Users\Adam\AppData\Local\Programs\Python\Python310\lib\site-packages\torch\_inductor\scheduler.py", line 907, in _compute_attrs
+W0903 14:45:33.142323 29400 site-packages\torch\_dynamo\convert_frame.py:1233]     group_fn = self.scheduler.get_backend(device).group_fn       
+W0903 14:45:33.142323 29400 site-packages\torch\_dynamo\convert_frame.py:1233]   File "C:\Users\Adam\AppData\Local\Programs\Python\Python310\lib\site-packages\torch\_inductor\scheduler.py", line 3441, in get_backend
+W0903 14:45:33.142323 29400 site-packages\torch\_dynamo\convert_frame.py:1233]     self.backends[device] = self.create_backend(device)
+W0903 14:45:33.142323 29400 site-packages\torch\_dynamo\convert_frame.py:1233]   File "C:\Users\Adam\AppData\Local\Programs\Python\Python310\lib\site-packages\torch\_inductor\scheduler.py", line 3432, in create_backend
+W0903 14:45:33.142323 29400 site-packages\torch\_dynamo\convert_frame.py:1233]     raise RuntimeError(
+W0903 14:45:33.142323 29400 site-packages\torch\_dynamo\convert_frame.py:1233] torch._dynamo.exc.BackendCompilerFailed: backend='inductor' raised:
+W0903 14:45:33.142323 29400 site-packages\torch\_dynamo\convert_frame.py:1233] RuntimeError: Cannot find a working triton installation. Either the package is not installed or it is too old. More information on installing Triton can be found at https://github.com/openai/triton
+W0903 14:45:33.142323 29400 site-packages\torch\_dynamo\convert_frame.py:1233]
+W0903 14:45:33.142323 29400 site-packages\torch\_dynamo\convert_frame.py:1233] Set TORCH_LOGS="+dynamo" and TORCHDYNAMO_VERBOSE=1 for more information
+W0903 14:45:33.142323 29400 site-packages\torch\_dynamo\convert_frame.py:1233]
+C:\actions-runner\_work\pytorch\pytorch\pytorch\aten\src\ATen\native\cuda\Indexing.cu:1422: block: [98,0,0], thread: [64,0,0] Assertion `srcIndex < srcSelectDimSize` failed.
+C:\actions-runner\_work\pytorch\pytorch\pytorch\aten\src\ATen\native\cuda\Indexing.cu:1422: block: [98,0,0], thread: [65,0,0] Assertion `srcIndex < srcSelectDimSize` failed.
+C:\actions-runner\_work\pytorch\pytorch\pytorch\aten\src\ATen\native\cuda\Indexing.cu:1422: block: [98,0,0], thread: [66,0,0] Assertion `srcIndex < srcSelectDimSize` failed.
+C:\actions-runner\_work\pytorch\pytorch\pytorch\aten\src\ATen\native\cuda\Indexing.cu:1422: block: [98,0,0], thread: [67,0,0] Assertion `srcIndex < srcSelectDimSize` failed.
+C:\actions-runner\_work\pytorch\pytorch\pytorch\aten\src\ATen\native\cuda\Indexing.cu:1422: block: [98,0,0], thread: [68,0,0] Assertion `srcIndex < srcSelectDimSize` failed.
+C:\actions-runner\_work\pytorch\pytorch\pytorch\aten\src\ATen\native\cuda\Indexing.cu:1422: block: [98,0,0], thread: [69,0,0] Assertion `srcIndex < srcSelectDimSize` failed.
+C:\actions-runner\_work\pytorch\pytorch\pytorch\aten\src\ATen\native\cuda\Indexing.cu:1422: block: [98,0,0], thread: [70,0,0] Assertion `srcIndex < srcSelectDimSize` failed.
+C:\actions-runner\_work\pytorch\pytorch\pytorch\aten\src\ATen\native\cuda\Indexing.cu:1422: block: [98,0,0], thread: [71,0,0] Assertion `srcIndex < srcSelectDimSize` failed.
+C:\actions-runner\_work\pytorch\pytorch\pytorch\aten\src\ATen\native\cuda\Indexing.cu:1422: block: [98,0,0], thread: [72,0,0] Assertion `srcIndex < srcSelectDimSize` failed.
+C:\actions-runner\_work\pytorch\pytorch\pytorch\aten\src\ATen\native\cuda\Indexing.cu:1422: block: [98,0,0], thread: [73,0,0] Assertion `srcIndex < srcSelectDimSize` failed.
+C:\actions-runner\_work\pytorch\pytorch\pytorch\aten\src\ATen\native\cuda\Indexing.cu:1422: block: [98,0,0], thread: [74,0,0] Assertion `srcIndex < srcSelectDimSize` failed.
+C:\actions-runner\_work\pytorch\pytorch\pytorch\aten\src\ATen\native\cuda\Indexing.cu:1422: block: [98,0,0], thread: [75,0,0] Assertion `srcIndex < srcSelectDimSize` failed.
+C:\actions-runner\_work\pytorch\pytorch\pytorch\aten\src\ATen\native\cuda\Indexing.cu:1422: block: [98,0,0], thread: [76,0,0] Assertion `srcIndex < srcSelectDimSize` failed.
+C:\actions-runner\_work\pytorch\pytorch\pytorch\aten\src\ATen\native\cuda\Indexing.cu:1422: block: [98,0,0], thread: [77,0,0] Assertion `srcIndex < srcSelectDimSize` failed.
+C:\actions-runner\_work\pytorch\pytorch\pytorch\aten\src\ATen\native\cuda\Indexing.cu:1422: block: [98,0,0], thread: [78,0,0] Assertion `srcIndex < srcSelectDimSize` failed.
+C:\actions-runner\_work\pytorch\pytorch\pytorch\aten\src\ATen\native\cuda\Indexing.cu:1422: block: [98,0,0], thread: [79,0,0] Assertion `srcIndex < srcSelectDimSize` failed.
+C:\actions-runner\_work\pytorch\pytorch\pytorch\aten\src\ATen\native\cuda\Indexing.cu:1422: block: [98,0,0], thread: [80,0,0] Assertion `srcIndex < srcSelectDimSize` failed.
+C:\actions-runner\_work\pytorch\pytorch\pytorch\aten\src\ATen\native\cuda\Indexing.cu:1422: block: [98,0,0], thread: [81,0,0] Assertion `srcIndex < srcSelectDimSize` failed.
+C:\actions-runner\_work\pytorch\pytorch\pytorch\aten\src\ATen\native\cuda\Indexing.cu:1422: block: [98,0,0], thread: [82,0,0] Assertion `srcIndex < srcSelectDimSize` failed.
+C:\actions-runner\_work\pytorch\pytorch\pytorch\aten\src\ATen\native\cuda\Indexing.cu:1422: block: [98,0,0], thread: [83,0,0] Assertion `srcIndex < srcSelectDimSize` failed.
+C:\actions-runner\_work\pytorch\pytorch\pytorch\aten\src\ATen\native\cuda\Indexing.cu:1422: block: [98,0,0], thread: [84,0,0] Assertion `srcIndex < srcSelectDimSize` failed.
+C:\actions-runner\_work\pytorch\pytorch\pytorch\aten\src\ATen\native\cuda\Indexing.cu:1422: block: [98,0,0], thread: [85,0,0] Assertion `srcIndex < srcSelectDimSize` failed.
+C:\actions-runner\_work\pytorch\pytorch\pytorch\aten\src\ATen\native\cuda\Indexing.cu:1422: block: [98,0,0], thread: [86,0,0] Assertion `srcIndex < srcSelectDimSize` failed.
+C:\actions-runner\_work\pytorch\pytorch\pytorch\aten\src\ATen\native\cuda\Indexing.cu:1422: block: [98,0,0], thread: [87,0,0] Assertion `srcIndex < srcSelectDimSize` failed.
+C:\actions-runner\_work\pytorch\pytorch\pytorch\aten\src\ATen\native\cuda\Indexing.cu:1422: block: [98,0,0], thread: [88,0,0] Assertion `srcIndex < srcSelectDimSize` failed.
+C:\actions-runner\_work\pytorch\pytorch\pytorch\aten\src\ATen\native\cuda\Indexing.cu:1422: block: [98,0,0], thread: [89,0,0] Assertion `srcIndex < srcSelectDimSize` failed.
+C:\actions-runner\_work\pytorch\pytorch\pytorch\aten\src\ATen\native\cuda\Indexing.cu:1422: block: [98,0,0], thread: [90,0,0] Assertion `srcIndex < srcSelectDimSize` failed.
+C:\actions-runner\_work\pytorch\pytorch\pytorch\aten\src\ATen\native\cuda\Indexing.cu:1422: block: [98,0,0], thread: [91,0,0] Assertion `srcIndex < srcSelectDimSize` failed.
+C:\actions-runner\_work\pytorch\pytorch\pytorch\aten\src\ATen\native\cuda\Indexing.cu:1422: block: [98,0,0], thread: [92,0,0] Assertion `srcIndex < srcSelectDimSize` failed.
+C:\actions-runner\_work\pytorch\pytorch\pytorch\aten\src\ATen\native\cuda\Indexing.cu:1422: block: [98,0,0], thread: [93,0,0] Assertion `srcIndex < srcSelectDimSize` failed.
+C:\actions-runner\_work\pytorch\pytorch\pytorch\aten\src\ATen\native\cuda\Indexing.cu:1422: block: [98,0,0], thread: [94,0,0] Assertion `srcIndex < srcSelectDimSize` failed.
+C:\actions-runner\_work\pytorch\pytorch\pytorch\aten\src\ATen\native\cuda\Indexing.cu:1422: block: [98,0,0], thread: [95,0,0] Assertion `srcIndex < srcSelectDimSize` failed.
+C:\actions-runner\_work\pytorch\pytorch\pytorch\aten\src\ATen\native\cuda\Indexing.cu:1422: block: [98,0,0], thread: [0,0,0] Assertion `srcIndex < srcSelectDimSize` failed.
+C:\actions-runner\_work\pytorch\pytorch\pytorch\aten\src\ATen\native\cuda\Indexing.cu:1422: block: [98,0,0], thread: [1,0,0] Assertion `srcIndex < srcSelectDimSize` failed.
+C:\actions-runner\_work\pytorch\pytorch\pytorch\aten\src\ATen\native\cuda\Indexing.cu:1422: block: [98,0,0], thread: [2,0,0] Assertion `srcIndex < srcSelectDimSize` failed.
+C:\actions-runner\_work\pytorch\pytorch\pytorch\aten\src\ATen\native\cuda\Indexing.cu:1422: block: [98,0,0], thread: [3,0,0] Assertion `srcIndex < srcSelectDimSize` failed.
+C:\actions-runner\_work\pytorch\pytorch\pytorch\aten\src\ATen\native\cuda\Indexing.cu:1422: block: [98,0,0], thread: [4,0,0] Assertion `srcIndex < srcSelectDimSize` failed.
+C:\actions-runner\_work\pytorch\pytorch\pytorch\aten\src\ATen\native\cuda\Indexing.cu:1422: block: [98,0,0], thread: [5,0,0] Assertion `srcIndex < srcSelectDimSize` failed.
+C:\actions-runner\_work\pytorch\pytorch\pytorch\aten\src\ATen\native\cuda\Indexing.cu:1422: block: [98,0,0], thread: [6,0,0] Assertion `srcIndex < srcSelectDimSize` failed.
+C:\actions-runner\_work\pytorch\pytorch\pytorch\aten\src\ATen\native\cuda\Indexing.cu:1422: block: [98,0,0], thread: [7,0,0] Assertion `srcIndex < srcSelectDimSize` failed.
+C:\actions-runner\_work\pytorch\pytorch\pytorch\aten\src\ATen\native\cuda\Indexing.cu:1422: block: [98,0,0], thread: [8,0,0] Assertion `srcIndex < srcSelectDimSize` failed.
+C:\actions-runner\_work\pytorch\pytorch\pytorch\aten\src\ATen\native\cuda\Indexing.cu:1422: block: [98,0,0], thread: [9,0,0] Assertion `srcIndex < srcSelectDimSize` failed.
+C:\actions-runner\_work\pytorch\pytorch\pytorch\aten\src\ATen\native\cuda\Indexing.cu:1422: block: [98,0,0], thread: [10,0,0] Assertion `srcIndex < srcSelectDimSize` failed.
+C:\actions-runner\_work\pytorch\pytorch\pytorch\aten\src\ATen\native\cuda\Indexing.cu:1422: block: [98,0,0], thread: [11,0,0] Assertion `srcIndex < srcSelectDimSize` failed.
+C:\actions-runner\_work\pytorch\pytorch\pytorch\aten\src\ATen\native\cuda\Indexing.cu:1422: block: [98,0,0], thread: [12,0,0] Assertion `srcIndex < srcSelectDimSize` failed.
+C:\actions-runner\_work\pytorch\pytorch\pytorch\aten\src\ATen\native\cuda\Indexing.cu:1422: block: [98,0,0], thread: [13,0,0] Assertion `srcIndex < srcSelectDimSize` failed.
+C:\actions-runner\_work\pytorch\pytorch\pytorch\aten\src\ATen\native\cuda\Indexing.cu:1422: block: [98,0,0], thread: [14,0,0] Assertion `srcIndex < srcSelectDimSize` failed.
+C:\actions-runner\_work\pytorch\pytorch\pytorch\aten\src\ATen\native\cuda\Indexing.cu:1422: block: [98,0,0], thread: [15,0,0] Assertion `srcIndex < srcSelectDimSize` failed.
+C:\actions-runner\_work\pytorch\pytorch\pytorch\aten\src\ATen\native\cuda\Indexing.cu:1422: block: [98,0,0], thread: [16,0,0] Assertion `srcIndex < srcSelectDimSize` failed.
+C:\actions-runner\_work\pytorch\pytorch\pytorch\aten\src\ATen\native\cuda\Indexing.cu:1422: block: [98,0,0], thread: [17,0,0] Assertion `srcIndex < srcSelectDimSize` failed.
+C:\actions-runner\_work\pytorch\pytorch\pytorch\aten\src\ATen\native\cuda\Indexing.cu:1422: block: [98,0,0], thread: [18,0,0] Assertion `srcIndex < srcSelectDimSize` failed.
+C:\actions-runner\_work\pytorch\pytorch\pytorch\aten\src\ATen\native\cuda\Indexing.cu:1422: block: [98,0,0], thread: [19,0,0] Assertion `srcIndex < srcSelectDimSize` failed.
+C:\actions-runner\_work\pytorch\pytorch\pytorch\aten\src\ATen\native\cuda\Indexing.cu:1422: block: [98,0,0], thread: [20,0,0] Assertion `srcIndex < srcSelectDimSize` failed.
+C:\actions-runner\_work\pytorch\pytorch\pytorch\aten\src\ATen\native\cuda\Indexing.cu:1422: block: [98,0,0], thread: [21,0,0] Assertion `srcIndex < srcSelectDimSize` failed.
+C:\actions-runner\_work\pytorch\pytorch\pytorch\aten\src\ATen\native\cuda\Indexing.cu:1422: block: [98,0,0], thread: [22,0,0] Assertion `srcIndex < srcSelectDimSize` failed.
+C:\actions-runner\_work\pytorch\pytorch\pytorch\aten\src\ATen\native\cuda\Indexing.cu:1422: block: [98,0,0], thread: [23,0,0] Assertion `srcIndex < srcSelectDimSize` failed.
+C:\actions-runner\_work\pytorch\pytorch\pytorch\aten\src\ATen\native\cuda\Indexing.cu:1422: block: [98,0,0], thread: [24,0,0] Assertion `srcIndex < srcSelectDimSize` failed.
+C:\actions-runner\_work\pytorch\pytorch\pytorch\aten\src\ATen\native\cuda\Indexing.cu:1422: block: [98,0,0], thread: [25,0,0] Assertion `srcIndex < srcSelectDimSize` failed.
+C:\actions-runner\_work\pytorch\pytorch\pytorch\aten\src\ATen\native\cuda\Indexing.cu:1422: block: [98,0,0], thread: [26,0,0] Assertion `srcIndex < srcSelectDimSize` failed.
+C:\actions-runner\_work\pytorch\pytorch\pytorch\aten\src\ATen\native\cuda\Indexing.cu:1422: block: [98,0,0], thread: [27,0,0] Assertion `srcIndex < srcSelectDimSize` failed.
+C:\actions-runner\_work\pytorch\pytorch\pytorch\aten\src\ATen\native\cuda\Indexing.cu:1422: block: [98,0,0], thread: [28,0,0] Assertion `srcIndex < srcSelectDimSize` failed.
+C:\actions-runner\_work\pytorch\pytorch\pytorch\aten\src\ATen\native\cuda\Indexing.cu:1422: block: [98,0,0], thread: [29,0,0] Assertion `srcIndex < srcSelectDimSize` failed.
+C:\actions-runner\_work\pytorch\pytorch\pytorch\aten\src\ATen\native\cuda\Indexing.cu:1422: block: [98,0,0], thread: [30,0,0] Assertion `srcIndex < srcSelectDimSize` failed.
+C:\actions-runner\_work\pytorch\pytorch\pytorch\aten\src\ATen\native\cuda\Indexing.cu:1422: block: [98,0,0], thread: [31,0,0] Assertion `srcIndex < srcSelectDimSize` failed.
+C:\actions-runner\_work\pytorch\pytorch\pytorch\aten\src\ATen\native\cuda\Indexing.cu:1422: block: [50,0,0], thread: [64,0,0] Assertion `srcIndex < srcSelectDimSize` failed.
+C:\actions-runner\_work\pytorch\pytorch\pytorch\aten\src\ATen\native\cuda\Indexing.cu:1422: block: [50,0,0], thread: [65,0,0] Assertion `srcIndex < srcSelectDimSize` failed.
+C:\actions-runner\_work\pytorch\pytorch\pytorch\aten\src\ATen\native\cuda\Indexing.cu:1422: block: [50,0,0], thread: [66,0,0] Assertion `srcIndex < srcSelectDimSize` failed.
+C:\actions-runner\_work\pytorch\pytorch\pytorch\aten\src\ATen\native\cuda\Indexing.cu:1422: block: [50,0,0], thread: [67,0,0] Assertion `srcIndex < srcSelectDimSize` failed.
+C:\actions-runner\_work\pytorch\pytorch\pytorch\aten\src\ATen\native\cuda\Indexing.cu:1422: block: [50,0,0], thread: [68,0,0] Assertion `srcIndex < srcSelectDimSize` failed.
+C:\actions-runner\_work\pytorch\pytorch\pytorch\aten\src\ATen\native\cuda\Indexing.cu:1422: block: [50,0,0], thread: [69,0,0] Assertion `srcIndex < srcSelectDimSize` failed.
+C:\actions-runner\_work\pytorch\pytorch\pytorch\aten\src\ATen\native\cuda\Indexing.cu:1422: block: [50,0,0], thread: [70,0,0] Assertion `srcIndex < srcSelectDimSize` failed.
+C:\actions-runner\_work\pytorch\pytorch\pytorch\aten\src\ATen\native\cuda\Indexing.cu:1422: block: [50,0,0], thread: [71,0,0] Assertion `srcIndex < srcSelectDimSize` failed.
+C:\actions-runner\_work\pytorch\pytorch\pytorch\aten\src\ATen\native\cuda\Indexing.cu:1422: block: [50,0,0], thread: [72,0,0] Assertion `srcIndex < srcSelectDimSize` failed.
+C:\actions-runner\_work\pytorch\pytorch\pytorch\aten\src\ATen\native\cuda\Indexing.cu:1422: block: [50,0,0], thread: [73,0,0] Assertion `srcIndex < srcSelectDimSize` failed.
+C:\actions-runner\_work\pytorch\pytorch\pytorch\aten\src\ATen\native\cuda\Indexing.cu:1422: block: [50,0,0], thread: [74,0,0] Assertion `srcIndex < srcSelectDimSize` failed.
+C:\actions-runner\_work\pytorch\pytorch\pytorch\aten\src\ATen\native\cuda\Indexing.cu:1422: block: [50,0,0], thread: [75,0,0] Assertion `srcIndex < srcSelectDimSize` failed.
+C:\actions-runner\_work\pytorch\pytorch\pytorch\aten\src\ATen\native\cuda\Indexing.cu:1422: block: [50,0,0], thread: [76,0,0] Assertion `srcIndex < srcSelectDimSize` failed.
+C:\actions-runner\_work\pytorch\pytorch\pytorch\aten\src\ATen\native\cuda\Indexing.cu:1422: block: [50,0,0], thread: [77,0,0] Assertion `srcIndex < srcSelectDimSize` failed.
+C:\actions-runner\_work\pytorch\pytorch\pytorch\aten\src\ATen\native\cuda\Indexing.cu:1422: block: [50,0,0], thread: [78,0,0] Assertion `srcIndex < srcSelectDimSize` failed.
+C:\actions-runner\_work\pytorch\pytorch\pytorch\aten\src\ATen\native\cuda\Indexing.cu:1422: block: [50,0,0], thread: [79,0,0] Assertion `srcIndex < srcSelectDimSize` failed.
+C:\actions-runner\_work\pytorch\pytorch\pytorch\aten\src\ATen\native\cuda\Indexing.cu:1422: block: [50,0,0], thread: [80,0,0] Assertion `srcIndex < srcSelectDimSize` failed.
+C:\actions-runner\_work\pytorch\pytorch\pytorch\aten\src\ATen\native\cuda\Indexing.cu:1422: block: [50,0,0], thread: [81,0,0] Assertion `srcIndex < srcSelectDimSize` failed.
+C:\actions-runner\_work\pytorch\pytorch\pytorch\aten\src\ATen\native\cuda\Indexing.cu:1422: block: [50,0,0], thread: [82,0,0] Assertion `srcIndex < srcSelectDimSize` failed.
+C:\actions-runner\_work\pytorch\pytorch\pytorch\aten\src\ATen\native\cuda\Indexing.cu:1422: block: [50,0,0], thread: [83,0,0] Assertion `srcIndex < srcSelectDimSize` failed.
+C:\actions-runner\_work\pytorch\pytorch\pytorch\aten\src\ATen\native\cuda\Indexing.cu:1422: block: [50,0,0], thread: [84,0,0] Assertion `srcIndex < srcSelectDimSize` failed.
+C:\actions-runner\_work\pytorch\pytorch\pytorch\aten\src\ATen\native\cuda\Indexing.cu:1422: block: [50,0,0], thread: [85,0,0] Assertion `srcIndex < srcSelectDimSize` failed.
+C:\actions-runner\_work\pytorch\pytorch\pytorch\aten\src\ATen\native\cuda\Indexing.cu:1422: block: [50,0,0], thread: [86,0,0] Assertion `srcIndex < srcSelectDimSize` failed.
+C:\actions-runner\_work\pytorch\pytorch\pytorch\aten\src\ATen\native\cuda\Indexing.cu:1422: block: [50,0,0], thread: [87,0,0] Assertion `srcIndex < srcSelectDimSize` failed.
+C:\actions-runner\_work\pytorch\pytorch\pytorch\aten\src\ATen\native\cuda\Indexing.cu:1422: block: [50,0,0], thread: [88,0,0] Assertion `srcIndex < srcSelectDimSize` failed.
+C:\actions-runner\_work\pytorch\pytorch\pytorch\aten\src\ATen\native\cuda\Indexing.cu:1422: block: [50,0,0], thread: [89,0,0] Assertion `srcIndex < srcSelectDimSize` failed.
+C:\actions-runner\_work\pytorch\pytorch\pytorch\aten\src\ATen\native\cuda\Indexing.cu:1422: block: [50,0,0], thread: [90,0,0] Assertion `srcIndex < srcSelectDimSize` failed.
+C:\actions-runner\_work\pytorch\pytorch\pytorch\aten\src\ATen\native\cuda\Indexing.cu:1422: block: [50,0,0], thread: [91,0,0] Assertion `srcIndex < srcSelectDimSize` failed.
+C:\actions-runner\_work\pytorch\pytorch\pytorch\aten\src\ATen\native\cuda\Indexing.cu:1422: block: [50,0,0], thread: [92,0,0] Assertion `srcIndex < srcSelectDimSize` failed.
+C:\actions-runner\_work\pytorch\pytorch\pytorch\aten\src\ATen\native\cuda\Indexing.cu:1422: block: [50,0,0], thread: [93,0,0] Assertion `srcIndex < srcSelectDimSize` failed.
+C:\actions-runner\_work\pytorch\pytorch\pytorch\aten\src\ATen\native\cuda\Indexing.cu:1422: block: [50,0,0], thread: [94,0,0] Assertion `srcIndex < srcSelectDimSize` failed.
+C:\actions-runner\_work\pytorch\pytorch\pytorch\aten\src\ATen\native\cuda\Indexing.cu:1422: block: [50,0,0], thread: [95,0,0] Assertion `srcIndex < srcSelectDimSize` failed.
+C:\actions-runner\_work\pytorch\pytorch\pytorch\aten\src\ATen\native\cuda\Indexing.cu:1422: block: [50,0,0], thread: [32,0,0] Assertion `srcIndex < srcSelectDimSize` failed.
+C:\actions-runner\_work\pytorch\pytorch\pytorch\aten\src\ATen\native\cuda\Indexing.cu:1422: block: [50,0,0], thread: [33,0,0] Assertion `srcIndex < srcSelectDimSize` failed.
+C:\actions-runner\_work\pytorch\pytorch\pytorch\aten\src\ATen\native\cuda\Indexing.cu:1422: block: [50,0,0], thread: [34,0,0] Assertion `srcIndex < srcSelectDimSize` failed.
+C:\actions-runner\_work\pytorch\pytorch\pytorch\aten\src\ATen\native\cuda\Indexing.cu:1422: block: [50,0,0], thread: [35,0,0] Assertion `srcIndex < srcSelectDimSize` failed.
+C:\actions-runner\_work\pytorch\pytorch\pytorch\aten\src\ATen\native\cuda\Indexing.cu:1422: block: [50,0,0], thread: [36,0,0] Assertion `srcIndex < srcSelectDimSize` failed.
+C:\actions-runner\_work\pytorch\pytorch\pytorch\aten\src\ATen\native\cuda\Indexing.cu:1422: block: [50,0,0], thread: [37,0,0] Assertion `srcIndex < srcSelectDimSize` failed.
+C:\actions-runner\_work\pytorch\pytorch\pytorch\aten\src\ATen\native\cuda\Indexing.cu:1422: block: [50,0,0], thread: [38,0,0] Assertion `srcIndex < srcSelectDimSize` failed.
+C:\actions-runner\_work\pytorch\pytorch\pytorch\aten\src\ATen\native\cuda\Indexing.cu:1422: block: [50,0,0], thread: [39,0,0] Assertion `srcIndex < srcSelectDimSize` failed.
+C:\actions-runner\_work\pytorch\pytorch\pytorch\aten\src\ATen\native\cuda\Indexing.cu:1422: block: [50,0,0], thread: [40,0,0] Assertion `srcIndex < srcSelectDimSize` failed.
+C:\actions-runner\_work\pytorch\pytorch\pytorch\aten\src\ATen\native\cuda\Indexing.cu:1422: block: [50,0,0], thread: [41,0,0] Assertion `srcIndex < srcSelectDimSize` failed.
+C:\actions-runner\_work\pytorch\pytorch\pytorch\aten\src\ATen\native\cuda\Indexing.cu:1422: block: [50,0,0], thread: [42,0,0] Assertion `srcIndex < srcSelectDimSize` failed.
+C:\actions-runner\_work\pytorch\pytorch\pytorch\aten\src\ATen\native\cuda\Indexing.cu:1422: block: [50,0,0], thread: [43,0,0] Assertion `srcIndex < srcSelectDimSize` failed.
+C:\actions-runner\_work\pytorch\pytorch\pytorch\aten\src\ATen\native\cuda\Indexing.cu:1422: block: [50,0,0], thread: [44,0,0] Assertion `srcIndex < srcSelectDimSize` failed.
+C:\actions-runner\_work\pytorch\pytorch\pytorch\aten\src\ATen\native\cuda\Indexing.cu:1422: block: [50,0,0], thread: [45,0,0] Assertion `srcIndex < srcSelectDimSize` failed.
+C:\actions-runner\_work\pytorch\pytorch\pytorch\aten\src\ATen\native\cuda\Indexing.cu:1422: block: [50,0,0], thread: [46,0,0] Assertion `srcIndex < srcSelectDimSize` failed.
+C:\actions-runner\_work\pytorch\pytorch\pytorch\aten\src\ATen\native\cuda\Indexing.cu:1422: block: [50,0,0], thread: [47,0,0] Assertion `srcIndex < srcSelectDimSize` failed.
+C:\actions-runner\_work\pytorch\pytorch\pytorch\aten\src\ATen\native\cuda\Indexing.cu:1422: block: [50,0,0], thread: [48,0,0] Assertion `srcIndex < srcSelectDimSize` failed.
+C:\actions-runner\_work\pytorch\pytorch\pytorch\aten\src\ATen\native\cuda\Indexing.cu:1422: block: [50,0,0], thread: [49,0,0] Assertion `srcIndex < srcSelectDimSize` failed.
+C:\actions-runner\_work\pytorch\pytorch\pytorch\aten\src\ATen\native\cuda\Indexing.cu:1422: block: [50,0,0], thread: [50,0,0] Assertion `srcIndex < srcSelectDimSize` failed.
+C:\actions-runner\_work\pytorch\pytorch\pytorch\aten\src\ATen\native\cuda\Indexing.cu:1422: block: [50,0,0], thread: [51,0,0] Assertion `srcIndex < srcSelectDimSize` failed.
+C:\actions-runner\_work\pytorch\pytorch\pytorch\aten\src\ATen\native\cuda\Indexing.cu:1422: block: [50,0,0], thread: [52,0,0] Assertion `srcIndex < srcSelectDimSize` failed.
+C:\actions-runner\_work\pytorch\pytorch\pytorch\aten\src\ATen\native\cuda\Indexing.cu:1422: block: [50,0,0], thread: [53,0,0] Assertion `srcIndex < srcSelectDimSize` failed.
+C:\actions-runner\_work\pytorch\pytorch\pytorch\aten\src\ATen\native\cuda\Indexing.cu:1422: block: [50,0,0], thread: [54,0,0] Assertion `srcIndex < srcSelectDimSize` failed.
+C:\actions-runner\_work\pytorch\pytorch\pytorch\aten\src\ATen\native\cuda\Indexing.cu:1422: block: [50,0,0], thread: [55,0,0] Assertion `srcIndex < srcSelectDimSize` failed.
+C:\actions-runner\_work\pytorch\pytorch\pytorch\aten\src\ATen\native\cuda\Indexing.cu:1422: block: [50,0,0], thread: [56,0,0] Assertion `srcIndex < srcSelectDimSize` failed.
+C:\actions-runner\_work\pytorch\pytorch\pytorch\aten\src\ATen\native\cuda\Indexing.cu:1422: block: [50,0,0], thread: [57,0,0] Assertion `srcIndex < srcSelectDimSize` failed.
+C:\actions-runner\_work\pytorch\pytorch\pytorch\aten\src\ATen\native\cuda\Indexing.cu:1422: block: [50,0,0], thread: [58,0,0] Assertion `srcIndex < srcSelectDimSize` failed.
+C:\actions-runner\_work\pytorch\pytorch\pytorch\aten\src\ATen\native\cuda\Indexing.cu:1422: block: [50,0,0], thread: [59,0,0] Assertion `srcIndex < srcSelectDimSize` failed.
+C:\actions-runner\_work\pytorch\pytorch\pytorch\aten\src\ATen\native\cuda\Indexing.cu:1422: block: [50,0,0], thread: [60,0,0] Assertion `srcIndex < srcSelectDimSize` failed.
+C:\actions-runner\_work\pytorch\pytorch\pytorch\aten\src\ATen\native\cuda\Indexing.cu:1422: block: [50,0,0], thread: [61,0,0] Assertion `srcIndex < srcSelectDimSize` failed.
+C:\actions-runner\_work\pytorch\pytorch\pytorch\aten\src\ATen\native\cuda\Indexing.cu:1422: block: [50,0,0], thread: [62,0,0] Assertion `srcIndex < srcSelectDimSize` failed.
+C:\actions-runner\_work\pytorch\pytorch\pytorch\aten\src\ATen\native\cuda\Indexing.cu:1422: block: [50,0,0], thread: [63,0,0] Assertion `srcIndex < srcSelectDimSize` failed.
+C:\actions-runner\_work\pytorch\pytorch\pytorch\aten\src\ATen\native\cuda\Indexing.cu:1422: block: [50,0,0], thread: [0,0,0] Assertion `srcIndex < srcSelectDimSize` failed.
+C:\actions-runner\_work\pytorch\pytorch\pytorch\aten\src\ATen\native\cuda\Indexing.cu:1422: block: [50,0,0], thread: [1,0,0] Assertion `srcIndex < srcSelectDimSize` failed.
+C:\actions-runner\_work\pytorch\pytorch\pytorch\aten\src\ATen\native\cuda\Indexing.cu:1422: block: [50,0,0], thread: [2,0,0] Assertion `srcIndex < srcSelectDimSize` failed.
+C:\actions-runner\_work\pytorch\pytorch\pytorch\aten\src\ATen\native\cuda\Indexing.cu:1422: block: [50,0,0], thread: [3,0,0] Assertion `srcIndex < srcSelectDimSize` failed.
+C:\actions-runner\_work\pytorch\pytorch\pytorch\aten\src\ATen\native\cuda\Indexing.cu:1422: block: [50,0,0], thread: [4,0,0] Assertion `srcIndex < srcSelectDimSize` failed.
+C:\actions-runner\_work\pytorch\pytorch\pytorch\aten\src\ATen\native\cuda\Indexing.cu:1422: block: [50,0,0], thread: [5,0,0] Assertion `srcIndex < srcSelectDimSize` failed.
+C:\actions-runner\_work\pytorch\pytorch\pytorch\aten\src\ATen\native\cuda\Indexing.cu:1422: block: [50,0,0], thread: [6,0,0] Assertion `srcIndex < srcSelectDimSize` failed.
+C:\actions-runner\_work\pytorch\pytorch\pytorch\aten\src\ATen\native\cuda\Indexing.cu:1422: block: [50,0,0], thread: [7,0,0] Assertion `srcIndex < srcSelectDimSize` failed.
+C:\actions-runner\_work\pytorch\pytorch\pytorch\aten\src\ATen\native\cuda\Indexing.cu:1422: block: [50,0,0], thread: [8,0,0] Assertion `srcIndex < srcSelectDimSize` failed.
+C:\actions-runner\_work\pytorch\pytorch\pytorch\aten\src\ATen\native\cuda\Indexing.cu:1422: block: [50,0,0], thread: [9,0,0] Assertion `srcIndex < srcSelectDimSize` failed.
+C:\actions-runner\_work\pytorch\pytorch\pytorch\aten\src\ATen\native\cuda\Indexing.cu:1422: block: [50,0,0], thread: [10,0,0] Assertion `srcIndex < srcSelectDimSize` failed.
+C:\actions-runner\_work\pytorch\pytorch\pytorch\aten\src\ATen\native\cuda\Indexing.cu:1422: block: [50,0,0], thread: [11,0,0] Assertion `srcIndex < srcSelectDimSize` failed.
+C:\actions-runner\_work\pytorch\pytorch\pytorch\aten\src\ATen\native\cuda\Indexing.cu:1422: block: [50,0,0], thread: [12,0,0] Assertion `srcIndex < srcSelectDimSize` failed.
+C:\actions-runner\_work\pytorch\pytorch\pytorch\aten\src\ATen\native\cuda\Indexing.cu:1422: block: [50,0,0], thread: [13,0,0] Assertion `srcIndex < srcSelectDimSize` failed.
+C:\actions-runner\_work\pytorch\pytorch\pytorch\aten\src\ATen\native\cuda\Indexing.cu:1422: block: [50,0,0], thread: [14,0,0] Assertion `srcIndex < srcSelectDimSize` failed.
+C:\actions-runner\_work\pytorch\pytorch\pytorch\aten\src\ATen\native\cuda\Indexing.cu:1422: block: [50,0,0], thread: [15,0,0] Assertion `srcIndex < srcSelectDimSize` failed.
+C:\actions-runner\_work\pytorch\pytorch\pytorch\aten\src\ATen\native\cuda\Indexing.cu:1422: block: [50,0,0], thread: [16,0,0] Assertion `srcIndex < srcSelectDimSize` failed.
+C:\actions-runner\_work\pytorch\pytorch\pytorch\aten\src\ATen\native\cuda\Indexing.cu:1422: block: [50,0,0], thread: [17,0,0] Assertion `srcIndex < srcSelectDimSize` failed.
+C:\actions-runner\_work\pytorch\pytorch\pytorch\aten\src\ATen\native\cuda\Indexing.cu:1422: block: [50,0,0], thread: [18,0,0] Assertion `srcIndex < srcSelectDimSize` failed.
+C:\actions-runner\_work\pytorch\pytorch\pytorch\aten\src\ATen\native\cuda\Indexing.cu:1422: block: [50,0,0], thread: [19,0,0] Assertion `srcIndex < srcSelectDimSize` failed.
+C:\actions-runner\_work\pytorch\pytorch\pytorch\aten\src\ATen\native\cuda\Indexing.cu:1422: block: [50,0,0], thread: [20,0,0] Assertion `srcIndex < srcSelectDimSize` failed.
+C:\actions-runner\_work\pytorch\pytorch\pytorch\aten\src\ATen\native\cuda\Indexing.cu:1422: block: [50,0,0], thread: [21,0,0] Assertion `srcIndex < srcSelectDimSize` failed.
+C:\actions-runner\_work\pytorch\pytorch\pytorch\aten\src\ATen\native\cuda\Indexing.cu:1422: block: [50,0,0], thread: [22,0,0] Assertion `srcIndex < srcSelectDimSize` failed.
+C:\actions-runner\_work\pytorch\pytorch\pytorch\aten\src\ATen\native\cuda\Indexing.cu:1422: block: [50,0,0], thread: [23,0,0] Assertion `srcIndex < srcSelectDimSize` failed.
+C:\actions-runner\_work\pytorch\pytorch\pytorch\aten\src\ATen\native\cuda\Indexing.cu:1422: block: [50,0,0], thread: [24,0,0] Assertion `srcIndex < srcSelectDimSize` failed.
+C:\actions-runner\_work\pytorch\pytorch\pytorch\aten\src\ATen\native\cuda\Indexing.cu:1422: block: [50,0,0], thread: [25,0,0] Assertion `srcIndex < srcSelectDimSize` failed.
+C:\actions-runner\_work\pytorch\pytorch\pytorch\aten\src\ATen\native\cuda\Indexing.cu:1422: block: [50,0,0], thread: [26,0,0] Assertion `srcIndex < srcSelectDimSize` failed.
+C:\actions-runner\_work\pytorch\pytorch\pytorch\aten\src\ATen\native\cuda\Indexing.cu:1422: block: [50,0,0], thread: [27,0,0] Assertion `srcIndex < srcSelectDimSize` failed.
+C:\actions-runner\_work\pytorch\pytorch\pytorch\aten\src\ATen\native\cuda\Indexing.cu:1422: block: [50,0,0], thread: [28,0,0] Assertion `srcIndex < srcSelectDimSize` failed.
+C:\actions-runner\_work\pytorch\pytorch\pytorch\aten\src\ATen\native\cuda\Indexing.cu:1422: block: [50,0,0], thread: [29,0,0] Assertion `srcIndex < srcSelectDimSize` failed.
+C:\actions-runner\_work\pytorch\pytorch\pytorch\aten\src\ATen\native\cuda\Indexing.cu:1422: block: [50,0,0], thread: [30,0,0] Assertion `srcIndex < srcSelectDimSize` failed.
+C:\actions-runner\_work\pytorch\pytorch\pytorch\aten\src\ATen\native\cuda\Indexing.cu:1422: block: [50,0,0], thread: [31,0,0] Assertion `srcIndex < srcSelectDimSize` failed.
+C:\actions-runner\_work\pytorch\pytorch\pytorch\aten\src\ATen\native\cuda\Indexing.cu:1422: block: [50,0,0], thread: [96,0,0] Assertion `srcIndex < srcSelectDimSize` failed.
+C:\actions-runner\_work\pytorch\pytorch\pytorch\aten\src\ATen\native\cuda\Indexing.cu:1422: block: [50,0,0], thread: [97,0,0] Assertion `srcIndex < srcSelectDimSize` failed.
+C:\actions-runner\_work\pytorch\pytorch\pytorch\aten\src\ATen\native\cuda\Indexing.cu:1422: block: [50,0,0], thread: [98,0,0] Assertion `srcIndex < srcSelectDimSize` failed.
+C:\actions-runner\_work\pytorch\pytorch\pytorch\aten\src\ATen\native\cuda\Indexing.cu:1422: block: [50,0,0], thread: [99,0,0] Assertion `srcIndex < srcSelectDimSize` failed.
+C:\actions-runner\_work\pytorch\pytorch\pytorch\aten\src\ATen\native\cuda\Indexing.cu:1422: block: [50,0,0], thread: [100,0,0] Assertion `srcIndex < srcSelectDimSize` failed.
+C:\actions-runner\_work\pytorch\pytorch\pytorch\aten\src\ATen\native\cuda\Indexing.cu:1422: block: [50,0,0], thread: [101,0,0] Assertion `srcIndex < srcSelectDimSize` failed.
+C:\actions-runner\_work\pytorch\pytorch\pytorch\aten\src\ATen\native\cuda\Indexing.cu:1422: block: [50,0,0], thread: [102,0,0] Assertion `srcIndex < srcSelectDimSize` failed.
+C:\actions-runner\_work\pytorch\pytorch\pytorch\aten\src\ATen\native\cuda\Indexing.cu:1422: block: [50,0,0], thread: [103,0,0] Assertion `srcIndex < srcSelectDimSize` failed.
+C:\actions-runner\_work\pytorch\pytorch\pytorch\aten\src\ATen\native\cuda\Indexing.cu:1422: block: [50,0,0], thread: [104,0,0] Assertion `srcIndex < srcSelectDimSize` failed.
+C:\actions-runner\_work\pytorch\pytorch\pytorch\aten\src\ATen\native\cuda\Indexing.cu:1422: block: [50,0,0], thread: [105,0,0] Assertion `srcIndex < srcSelectDimSize` failed.
+C:\actions-runner\_work\pytorch\pytorch\pytorch\aten\src\ATen\native\cuda\Indexing.cu:1422: block: [50,0,0], thread: [106,0,0] Assertion `srcIndex < srcSelectDimSize` failed.
+C:\actions-runner\_work\pytorch\pytorch\pytorch\aten\src\ATen\native\cuda\Indexing.cu:1422: block: [50,0,0], thread: [107,0,0] Assertion `srcIndex < srcSelectDimSize` failed.
+C:\actions-runner\_work\pytorch\pytorch\pytorch\aten\src\ATen\native\cuda\Indexing.cu:1422: block: [50,0,0], thread: [108,0,0] Assertion `srcIndex < srcSelectDimSize` failed.
+C:\actions-runner\_work\pytorch\pytorch\pytorch\aten\src\ATen\native\cuda\Indexing.cu:1422: block: [50,0,0], thread: [109,0,0] Assertion `srcIndex < srcSelectDimSize` failed.
+C:\actions-runner\_work\pytorch\pytorch\pytorch\aten\src\ATen\native\cuda\Indexing.cu:1422: block: [50,0,0], thread: [110,0,0] Assertion `srcIndex < srcSelectDimSize` failed.
+C:\actions-runner\_work\pytorch\pytorch\pytorch\aten\src\ATen\native\cuda\Indexing.cu:1422: block: [50,0,0], thread: [111,0,0] Assertion `srcIndex < srcSelectDimSize` failed.
+C:\actions-runner\_work\pytorch\pytorch\pytorch\aten\src\ATen\native\cuda\Indexing.cu:1422: block: [50,0,0], thread: [112,0,0] Assertion `srcIndex < srcSelectDimSize` failed.
+C:\actions-runner\_work\pytorch\pytorch\pytorch\aten\src\ATen\native\cuda\Indexing.cu:1422: block: [50,0,0], thread: [113,0,0] Assertion `srcIndex < srcSelectDimSize` failed.
+C:\actions-runner\_work\pytorch\pytorch\pytorch\aten\src\ATen\native\cuda\Indexing.cu:1422: block: [50,0,0], thread: [114,0,0] Assertion `srcIndex < srcSelectDimSize` failed.
+C:\actions-runner\_work\pytorch\pytorch\pytorch\aten\src\ATen\native\cuda\Indexing.cu:1422: block: [50,0,0], thread: [115,0,0] Assertion `srcIndex < srcSelectDimSize` failed.
+C:\actions-runner\_work\pytorch\pytorch\pytorch\aten\src\ATen\native\cuda\Indexing.cu:1422: block: [50,0,0], thread: [116,0,0] Assertion `srcIndex < srcSelectDimSize` failed.
+C:\actions-runner\_work\pytorch\pytorch\pytorch\aten\src\ATen\native\cuda\Indexing.cu:1422: block: [50,0,0], thread: [117,0,0] Assertion `srcIndex < srcSelectDimSize` failed.
+C:\actions-runner\_work\pytorch\pytorch\pytorch\aten\src\ATen\native\cuda\Indexing.cu:1422: block: [50,0,0], thread: [118,0,0] Assertion `srcIndex < srcSelectDimSize` failed.
+C:\actions-runner\_work\pytorch\pytorch\pytorch\aten\src\ATen\native\cuda\Indexing.cu:1422: block: [50,0,0], thread: [119,0,0] Assertion `srcIndex < srcSelectDimSize` failed.
+C:\actions-runner\_work\pytorch\pytorch\pytorch\aten\src\ATen\native\cuda\Indexing.cu:1422: block: [50,0,0], thread: [120,0,0] Assertion `srcIndex < srcSelectDimSize` failed.
+C:\actions-runner\_work\pytorch\pytorch\pytorch\aten\src\ATen\native\cuda\Indexing.cu:1422: block: [50,0,0], thread: [121,0,0] Assertion `srcIndex < srcSelectDimSize` failed.
+C:\actions-runner\_work\pytorch\pytorch\pytorch\aten\src\ATen\native\cuda\Indexing.cu:1422: block: [50,0,0], thread: [122,0,0] Assertion `srcIndex < srcSelectDimSize` failed.
+C:\actions-runner\_work\pytorch\pytorch\pytorch\aten\src\ATen\native\cuda\Indexing.cu:1422: block: [50,0,0], thread: [123,0,0] Assertion `srcIndex < srcSelectDimSize` failed.
+C:\actions-runner\_work\pytorch\pytorch\pytorch\aten\src\ATen\native\cuda\Indexing.cu:1422: block: [50,0,0], thread: [124,0,0] Assertion `srcIndex < srcSelectDimSize` failed.
+C:\actions-runner\_work\pytorch\pytorch\pytorch\aten\src\ATen\native\cuda\Indexing.cu:1422: block: [50,0,0], thread: [125,0,0] Assertion `srcIndex < srcSelectDimSize` failed.
+C:\actions-runner\_work\pytorch\pytorch\pytorch\aten\src\ATen\native\cuda\Indexing.cu:1422: block: [50,0,0], thread: [126,0,0] Assertion `srcIndex < srcSelectDimSize` failed.
+C:\actions-runner\_work\pytorch\pytorch\pytorch\aten\src\ATen\native\cuda\Indexing.cu:1422: block: [50,0,0], thread: [127,0,0] Assertion `srcIndex < srcSelectDimSize` failed.
+W0903 14:45:34.287669 29400 site-packages\torch\_dynamo\convert_frame.py:1233] WON'T CONVERT forward E:\AI\projects\diffusion\model.py line 261 
+W0903 14:45:34.287669 29400 site-packages\torch\_dynamo\convert_frame.py:1233] due to:
+W0903 14:45:34.287669 29400 site-packages\torch\_dynamo\convert_frame.py:1233] Traceback (most recent call last):
+W0903 14:45:34.287669 29400 site-packages\torch\_dynamo\convert_frame.py:1233]   File "C:\Users\Adam\AppData\Local\Programs\Python\Python310\lib\site-packages\torch\_dynamo\convert_frame.py", line 1164, in __call__
+W0903 14:45:34.287669 29400 site-packages\torch\_dynamo\convert_frame.py:1233]     result = self._inner_convert(
+W0903 14:45:34.287669 29400 site-packages\torch\_dynamo\convert_frame.py:1233]   File "C:\Users\Adam\AppData\Local\Programs\Python\Python310\lib\site-packages\torch\_dynamo\convert_frame.py", line 547, in __call__
+W0903 14:45:34.287669 29400 site-packages\torch\_dynamo\convert_frame.py:1233]     return _compile(
+W0903 14:45:34.287669 29400 site-packages\torch\_dynamo\convert_frame.py:1233]   File "C:\Users\Adam\AppData\Local\Programs\Python\Python310\lib\site-packages\torch\_dynamo\convert_frame.py", line 1036, in _compile
+W0903 14:45:34.287669 29400 site-packages\torch\_dynamo\convert_frame.py:1233]     raise InternalTorchDynamoError(
+W0903 14:45:34.287669 29400 site-packages\torch\_dynamo\convert_frame.py:1233]   File "C:\Users\Adam\AppData\Local\Programs\Python\Python310\lib\site-packages\torch\_dynamo\convert_frame.py", line 986, in _compile
+W0903 14:45:34.287669 29400 site-packages\torch\_dynamo\convert_frame.py:1233]     guarded_code = compile_inner(code, one_graph, hooks, transform)
+W0903 14:45:34.287669 29400 site-packages\torch\_dynamo\convert_frame.py:1233]   File "C:\Users\Adam\AppData\Local\Programs\Python\Python310\lib\site-packages\torch\_dynamo\convert_frame.py", line 715, in compile_inner
+W0903 14:45:34.287669 29400 site-packages\torch\_dynamo\convert_frame.py:1233]     return _compile_inner(code, one_graph, hooks, transform)     
+W0903 14:45:34.287669 29400 site-packages\torch\_dynamo\convert_frame.py:1233]   File "C:\Users\Adam\AppData\Local\Programs\Python\Python310\lib\site-packages\torch\_utils_internal.py", line 95, in wrapper_function
+W0903 14:45:34.287669 29400 site-packages\torch\_dynamo\convert_frame.py:1233]     return function(*args, **kwargs)
+W0903 14:45:34.287669 29400 site-packages\torch\_dynamo\convert_frame.py:1233]   File "C:\Users\Adam\AppData\Local\Programs\Python\Python310\lib\site-packages\torch\_dynamo\convert_frame.py", line 750, in _compile_inner
+W0903 14:45:34.287669 29400 site-packages\torch\_dynamo\convert_frame.py:1233]     out_code = transform_code_object(code, transform)
+W0903 14:45:34.287669 29400 site-packages\torch\_dynamo\convert_frame.py:1233]   File "C:\Users\Adam\AppData\Local\Programs\Python\Python310\lib\site-packages\torch\_dynamo\bytecode_transformation.py", line 1361, in transform_code_object
+W0903 14:45:34.287669 29400 site-packages\torch\_dynamo\convert_frame.py:1233]     transformations(instructions, code_options)
+W0903 14:45:34.287669 29400 site-packages\torch\_dynamo\convert_frame.py:1233]   File "C:\Users\Adam\AppData\Local\Programs\Python\Python310\lib\site-packages\torch\_dynamo\convert_frame.py", line 246, in _fn
+W0903 14:45:34.287669 29400 site-packages\torch\_dynamo\convert_frame.py:1233]     torch.cuda.set_rng_state(cuda_rng_state)
+W0903 14:45:34.287669 29400 site-packages\torch\_dynamo\convert_frame.py:1233]   File "C:\Users\Adam\AppData\Local\Programs\Python\Python310\lib\site-packages\torch\cuda\random.py", line 75, in set_rng_state
+W0903 14:45:34.287669 29400 site-packages\torch\_dynamo\convert_frame.py:1233]     _lazy_call(cb)
+W0903 14:45:34.287669 29400 site-packages\torch\_dynamo\convert_frame.py:1233]   File "C:\Users\Adam\AppData\Local\Programs\Python\Python310\lib\site-packages\torch\cuda\__init__.py", line 249, in _lazy_call
+W0903 14:45:34.287669 29400 site-packages\torch\_dynamo\convert_frame.py:1233]     callable()
+W0903 14:45:34.287669 29400 site-packages\torch\_dynamo\convert_frame.py:1233]   File "C:\Users\Adam\AppData\Local\Programs\Python\Python310\lib\site-packages\torch\cuda\random.py", line 73, in cb
+W0903 14:45:34.287669 29400 site-packages\torch\_dynamo\convert_frame.py:1233]     default_generator.set_state(new_state_copy)
+W0903 14:45:34.287669 29400 site-packages\torch\_dynamo\convert_frame.py:1233] torch._dynamo.exc.InternalTorchDynamoError: RuntimeError: CUDA error: device-side assert triggered
+W0903 14:45:34.287669 29400 site-packages\torch\_dynamo\convert_frame.py:1233] CUDA kernel errors might be asynchronously reported at some other API call, so the stacktrace below might be incorrect.
+W0903 14:45:34.287669 29400 site-packages\torch\_dynamo\convert_frame.py:1233] For debugging consider passing CUDA_LAUNCH_BLOCKING=1
+W0903 14:45:34.287669 29400 site-packages\torch\_dynamo\convert_frame.py:1233] Compile with `TORCH_USE_CUDA_DSA` to enable device-side assertions.
+W0903 14:45:34.287669 29400 site-packages\torch\_dynamo\convert_frame.py:1233]
+W0903 14:45:34.287669 29400 site-packages\torch\_dynamo\convert_frame.py:1233]
+W0903 14:45:34.287669 29400 site-packages\torch\_dynamo\convert_frame.py:1233] Traceback (most recent call last):
+W0903 14:45:34.287669 29400 site-packages\torch\_dynamo\convert_frame.py:1233]   File "C:\Users\Adam\AppData\Local\Programs\Python\Python310\lib\site-packages\torch\_dynamo\convert_frame.py", line 1164, in __call__
+W0903 14:45:34.287669 29400 site-packages\torch\_dynamo\convert_frame.py:1233]     result = self._inner_convert(
+W0903 14:45:34.287669 29400 site-packages\torch\_dynamo\convert_frame.py:1233]   File "C:\Users\Adam\AppData\Local\Programs\Python\Python310\lib\site-packages\torch\_dynamo\convert_frame.py", line 547, in __call__
+W0903 14:45:34.287669 29400 site-packages\torch\_dynamo\convert_frame.py:1233]     return _compile(
+W0903 14:45:34.287669 29400 site-packages\torch\_dynamo\convert_frame.py:1233]   File "C:\Users\Adam\AppData\Local\Programs\Python\Python310\lib\site-packages\torch\_dynamo\convert_frame.py", line 1036, in _compile
+W0903 14:45:34.287669 29400 site-packages\torch\_dynamo\convert_frame.py:1233]     raise InternalTorchDynamoError(
+W0903 14:45:34.287669 29400 site-packages\torch\_dynamo\convert_frame.py:1233]   File "C:\Users\Adam\AppData\Local\Programs\Python\Python310\lib\site-packages\torch\_dynamo\convert_frame.py", line 986, in _compile
+W0903 14:45:34.287669 29400 site-packages\torch\_dynamo\convert_frame.py:1233]     guarded_code = compile_inner(code, one_graph, hooks, transform)
+W0903 14:45:34.287669 29400 site-packages\torch\_dynamo\convert_frame.py:1233]   File "C:\Users\Adam\AppData\Local\Programs\Python\Python310\lib\site-packages\torch\_dynamo\convert_frame.py", line 715, in compile_inner
+W0903 14:45:34.287669 29400 site-packages\torch\_dynamo\convert_frame.py:1233]     return _compile_inner(code, one_graph, hooks, transform)     
+W0903 14:45:34.287669 29400 site-packages\torch\_dynamo\convert_frame.py:1233]   File "C:\Users\Adam\AppData\Local\Programs\Python\Python310\lib\site-packages\torch\_utils_internal.py", line 95, in wrapper_function
+W0903 14:45:34.287669 29400 site-packages\torch\_dynamo\convert_frame.py:1233]     return function(*args, **kwargs)
+W0903 14:45:34.287669 29400 site-packages\torch\_dynamo\convert_frame.py:1233]   File "C:\Users\Adam\AppData\Local\Programs\Python\Python310\lib\site-packages\torch\_dynamo\convert_frame.py", line 750, in _compile_inner
+W0903 14:45:34.287669 29400 site-packages\torch\_dynamo\convert_frame.py:1233]     out_code = transform_code_object(code, transform)
+W0903 14:45:34.287669 29400 site-packages\torch\_dynamo\convert_frame.py:1233]   File "C:\Users\Adam\AppData\Local\Programs\Python\Python310\lib\site-packages\torch\_dynamo\bytecode_transformation.py", line 1361, in transform_code_object
+W0903 14:45:34.287669 29400 site-packages\torch\_dynamo\convert_frame.py:1233]     transformations(instructions, code_options)
+W0903 14:45:34.287669 29400 site-packages\torch\_dynamo\convert_frame.py:1233]   File "C:\Users\Adam\AppData\Local\Programs\Python\Python310\lib\site-packages\torch\_dynamo\convert_frame.py", line 246, in _fn
+W0903 14:45:34.287669 29400 site-packages\torch\_dynamo\convert_frame.py:1233]     torch.cuda.set_rng_state(cuda_rng_state)
+W0903 14:45:34.287669 29400 site-packages\torch\_dynamo\convert_frame.py:1233]   File "C:\Users\Adam\AppData\Local\Programs\Python\Python310\lib\site-packages\torch\cuda\random.py", line 75, in set_rng_state
+W0903 14:45:34.287669 29400 site-packages\torch\_dynamo\convert_frame.py:1233]     _lazy_call(cb)
+W0903 14:45:34.287669 29400 site-packages\torch\_dynamo\convert_frame.py:1233]   File "C:\Users\Adam\AppData\Local\Programs\Python\Python310\lib\site-packages\torch\cuda\__init__.py", line 249, in _lazy_call
+W0903 14:45:34.287669 29400 site-packages\torch\_dynamo\convert_frame.py:1233]     callable()
+W0903 14:45:34.287669 29400 site-packages\torch\_dynamo\convert_frame.py:1233]   File "C:\Users\Adam\AppData\Local\Programs\Python\Python310\lib\site-packages\torch\cuda\random.py", line 73, in cb
+W0903 14:45:34.287669 29400 site-packages\torch\_dynamo\convert_frame.py:1233]     default_generator.set_state(new_state_copy)
+W0903 14:45:34.287669 29400 site-packages\torch\_dynamo\convert_frame.py:1233] torch._dynamo.exc.InternalTorchDynamoError: RuntimeError: CUDA error: device-side assert triggered
+W0903 14:45:34.287669 29400 site-packages\torch\_dynamo\convert_frame.py:1233] CUDA kernel errors might be asynchronously reported at some other API call, so the stacktrace below might be incorrect.
+W0903 14:45:34.287669 29400 site-packages\torch\_dynamo\convert_frame.py:1233] For debugging consider passing CUDA_LAUNCH_BLOCKING=1
+W0903 14:45:34.287669 29400 site-packages\torch\_dynamo\convert_frame.py:1233] Compile with `TORCH_USE_CUDA_DSA` to enable device-side assertions.
+W0903 14:45:34.287669 29400 site-packages\torch\_dynamo\convert_frame.py:1233]
+W0903 14:45:34.287669 29400 site-packages\torch\_dynamo\convert_frame.py:1233]
+W0903 14:45:34.308149 29400 site-packages\torch\_dynamo\convert_frame.py:1233] WON'T CONVERT forward E:\AI\projects\diffusion\model.py line 89 
+W0903 14:45:34.308149 29400 site-packages\torch\_dynamo\convert_frame.py:1233] due to:
+W0903 14:45:34.308149 29400 site-packages\torch\_dynamo\convert_frame.py:1233] Traceback (most recent call last):
+W0903 14:45:34.308149 29400 site-packages\torch\_dynamo\convert_frame.py:1233]   File "C:\Users\Adam\AppData\Local\Programs\Python\Python310\lib\site-packages\torch\_dynamo\convert_frame.py", line 1164, in __call__
+W0903 14:45:34.308149 29400 site-packages\torch\_dynamo\convert_frame.py:1233]     result = self._inner_convert(
+W0903 14:45:34.308149 29400 site-packages\torch\_dynamo\convert_frame.py:1233]   File "C:\Users\Adam\AppData\Local\Programs\Python\Python310\lib\site-packages\torch\_dynamo\convert_frame.py", line 547, in __call__
+W0903 14:45:34.308149 29400 site-packages\torch\_dynamo\convert_frame.py:1233]     return _compile(
+W0903 14:45:34.308149 29400 site-packages\torch\_dynamo\convert_frame.py:1233]   File "C:\Users\Adam\AppData\Local\Programs\Python\Python310\lib\site-packages\torch\_dynamo\convert_frame.py", line 1036, in _compile
+W0903 14:45:34.308149 29400 site-packages\torch\_dynamo\convert_frame.py:1233]     raise InternalTorchDynamoError(
+W0903 14:45:34.308149 29400 site-packages\torch\_dynamo\convert_frame.py:1233]   File "C:\Users\Adam\AppData\Local\Programs\Python\Python310\lib\site-packages\torch\_dynamo\convert_frame.py", line 986, in _compile
+W0903 14:45:34.308149 29400 site-packages\torch\_dynamo\convert_frame.py:1233]     guarded_code = compile_inner(code, one_graph, hooks, transform)
+W0903 14:45:34.308149 29400 site-packages\torch\_dynamo\convert_frame.py:1233]   File "C:\Users\Adam\AppData\Local\Programs\Python\Python310\lib\site-packages\torch\_dynamo\convert_frame.py", line 715, in compile_inner
+W0903 14:45:34.308149 29400 site-packages\torch\_dynamo\convert_frame.py:1233]     return _compile_inner(code, one_graph, hooks, transform)     
+W0903 14:45:34.308149 29400 site-packages\torch\_dynamo\convert_frame.py:1233]   File "C:\Users\Adam\AppData\Local\Programs\Python\Python310\lib\site-packages\torch\_utils_internal.py", line 95, in wrapper_function
+W0903 14:45:34.308149 29400 site-packages\torch\_dynamo\convert_frame.py:1233]     return function(*args, **kwargs)
+W0903 14:45:34.308149 29400 site-packages\torch\_dynamo\convert_frame.py:1233]   File "C:\Users\Adam\AppData\Local\Programs\Python\Python310\lib\site-packages\torch\_dynamo\convert_frame.py", line 750, in _compile_inner
+W0903 14:45:34.308149 29400 site-packages\torch\_dynamo\convert_frame.py:1233]     out_code = transform_code_object(code, transform)
+W0903 14:45:34.308149 29400 site-packages\torch\_dynamo\convert_frame.py:1233]   File "C:\Users\Adam\AppData\Local\Programs\Python\Python310\lib\site-packages\torch\_dynamo\bytecode_transformation.py", line 1361, in transform_code_object
+W0903 14:45:34.308149 29400 site-packages\torch\_dynamo\convert_frame.py:1233]     transformations(instructions, code_options)
+W0903 14:45:34.308149 29400 site-packages\torch\_dynamo\convert_frame.py:1233]   File "C:\Users\Adam\AppData\Local\Programs\Python\Python310\lib\site-packages\torch\_dynamo\convert_frame.py", line 220, in _fn
+W0903 14:45:34.308149 29400 site-packages\torch\_dynamo\convert_frame.py:1233]     cuda_rng_state = torch.cuda.get_rng_state()
+W0903 14:45:34.308149 29400 site-packages\torch\_dynamo\convert_frame.py:1233]   File "C:\Users\Adam\AppData\Local\Programs\Python\Python310\lib\site-packages\torch\cuda\random.py", line 42, in get_rng_state
+W0903 14:45:34.308149 29400 site-packages\torch\_dynamo\convert_frame.py:1233]     return default_generator.get_state()
+W0903 14:45:34.308149 29400 site-packages\torch\_dynamo\convert_frame.py:1233] torch._dynamo.exc.InternalTorchDynamoError: RuntimeError: CUDA error: device-side assert triggered
+W0903 14:45:34.308149 29400 site-packages\torch\_dynamo\convert_frame.py:1233] CUDA kernel errors might be asynchronously reported at some other API call, so the stacktrace below might be incorrect.
+W0903 14:45:34.308149 29400 site-packages\torch\_dynamo\convert_frame.py:1233] For debugging consider passing CUDA_LAUNCH_BLOCKING=1
+W0903 14:45:34.308149 29400 site-packages\torch\_dynamo\convert_frame.py:1233] Compile with `TORCH_USE_CUDA_DSA` to enable device-side assertions.
+W0903 14:45:34.308149 29400 site-packages\torch\_dynamo\convert_frame.py:1233]
+W0903 14:45:34.308149 29400 site-packages\torch\_dynamo\convert_frame.py:1233]
+W0903 14:45:34.308149 29400 site-packages\torch\_dynamo\convert_frame.py:1233] Traceback (most recent call last):
+W0903 14:45:34.308149 29400 site-packages\torch\_dynamo\convert_frame.py:1233]   File "C:\Users\Adam\AppData\Local\Programs\Python\Python310\lib\site-packages\torch\_dynamo\convert_frame.py", line 1164, in __call__
+W0903 14:45:34.308149 29400 site-packages\torch\_dynamo\convert_frame.py:1233]     result = self._inner_convert(
+W0903 14:45:34.308149 29400 site-packages\torch\_dynamo\convert_frame.py:1233]   File "C:\Users\Adam\AppData\Local\Programs\Python\Python310\lib\site-packages\torch\_dynamo\convert_frame.py", line 547, in __call__
+W0903 14:45:34.308149 29400 site-packages\torch\_dynamo\convert_frame.py:1233]     return _compile(
+W0903 14:45:34.308149 29400 site-packages\torch\_dynamo\convert_frame.py:1233]   File "C:\Users\Adam\AppData\Local\Programs\Python\Python310\lib\site-packages\torch\_dynamo\convert_frame.py", line 1036, in _compile
+W0903 14:45:34.308149 29400 site-packages\torch\_dynamo\convert_frame.py:1233]     raise InternalTorchDynamoError(
+W0903 14:45:34.308149 29400 site-packages\torch\_dynamo\convert_frame.py:1233]   File "C:\Users\Adam\AppData\Local\Programs\Python\Python310\lib\site-packages\torch\_dynamo\convert_frame.py", line 986, in _compile
+W0903 14:45:34.308149 29400 site-packages\torch\_dynamo\convert_frame.py:1233]     guarded_code = compile_inner(code, one_graph, hooks, transform)
+W0903 14:45:34.308149 29400 site-packages\torch\_dynamo\convert_frame.py:1233]   File "C:\Users\Adam\AppData\Local\Programs\Python\Python310\lib\site-packages\torch\_dynamo\convert_frame.py", line 715, in compile_inner
+W0903 14:45:34.308149 29400 site-packages\torch\_dynamo\convert_frame.py:1233]     return _compile_inner(code, one_graph, hooks, transform)     
+W0903 14:45:34.308149 29400 site-packages\torch\_dynamo\convert_frame.py:1233]   File "C:\Users\Adam\AppData\Local\Programs\Python\Python310\lib\site-packages\torch\_utils_internal.py", line 95, in wrapper_function
+W0903 14:45:34.308149 29400 site-packages\torch\_dynamo\convert_frame.py:1233]     return function(*args, **kwargs)
+W0903 14:45:34.308149 29400 site-packages\torch\_dynamo\convert_frame.py:1233]   File "C:\Users\Adam\AppData\Local\Programs\Python\Python310\lib\site-packages\torch\_dynamo\convert_frame.py", line 750, in _compile_inner
+W0903 14:45:34.308149 29400 site-packages\torch\_dynamo\convert_frame.py:1233]     out_code = transform_code_object(code, transform)
+W0903 14:45:34.308149 29400 site-packages\torch\_dynamo\convert_frame.py:1233]   File "C:\Users\Adam\AppData\Local\Programs\Python\Python310\lib\site-packages\torch\_dynamo\bytecode_transformation.py", line 1361, in transform_code_object
+W0903 14:45:34.308149 29400 site-packages\torch\_dynamo\convert_frame.py:1233]     transformations(instructions, code_options)
+W0903 14:45:34.308149 29400 site-packages\torch\_dynamo\convert_frame.py:1233]   File "C:\Users\Adam\AppData\Local\Programs\Python\Python310\lib\site-packages\torch\_dynamo\convert_frame.py", line 220, in _fn
+W0903 14:45:34.308149 29400 site-packages\torch\_dynamo\convert_frame.py:1233]     cuda_rng_state = torch.cuda.get_rng_state()
+W0903 14:45:34.308149 29400 site-packages\torch\_dynamo\convert_frame.py:1233]   File "C:\Users\Adam\AppData\Local\Programs\Python\Python310\lib\site-packages\torch\cuda\random.py", line 42, in get_rng_state
+W0903 14:45:34.308149 29400 site-packages\torch\_dynamo\convert_frame.py:1233]     return default_generator.get_state()
+W0903 14:45:34.308149 29400 site-packages\torch\_dynamo\convert_frame.py:1233] torch._dynamo.exc.InternalTorchDynamoError: RuntimeError: CUDA error: device-side assert triggered
+W0903 14:45:34.308149 29400 site-packages\torch\_dynamo\convert_frame.py:1233] CUDA kernel errors might be asynchronously reported at some other API call, so the stacktrace below might be incorrect.
+W0903 14:45:34.308149 29400 site-packages\torch\_dynamo\convert_frame.py:1233] For debugging consider passing CUDA_LAUNCH_BLOCKING=1
+W0903 14:45:34.308149 29400 site-packages\torch\_dynamo\convert_frame.py:1233] Compile with `TORCH_USE_CUDA_DSA` to enable device-side assertions.
+W0903 14:45:34.308149 29400 site-packages\torch\_dynamo\convert_frame.py:1233]
+W0903 14:45:34.308149 29400 site-packages\torch\_dynamo\convert_frame.py:1233]
+Traceback (most recent call last):
+  File "E:\AI\projects\diffusion\train_run.py", line 764, in <module>
+    losses = estimate_loss(model, ctx, timer, training_ctx)
+  File "E:\AI\projects\diffusion\training_utils\model_evaluation.py", line 98, in estimate_loss
+    logits, loss = model(X, Y)
+  File "C:\Users\Adam\AppData\Local\Programs\Python\Python310\lib\site-packages\torch\nn\modules\module.py", line 1739, in _wrapped_call_impl   
+    return self._call_impl(*args, **kwargs)
+  File "C:\Users\Adam\AppData\Local\Programs\Python\Python310\lib\site-packages\torch\nn\modules\module.py", line 1750, in _call_impl
+    return forward_call(*args, **kwargs)
+  File "C:\Users\Adam\AppData\Local\Programs\Python\Python310\lib\site-packages\torch\_dynamo\eval_frame.py", line 574, in _fn
+    return fn(*args, **kwargs)
+  File "C:\Users\Adam\AppData\Local\Programs\Python\Python310\lib\site-packages\torch\nn\modules\module.py", line 1739, in _wrapped_call_impl   
+    return self._call_impl(*args, **kwargs)
+  File "C:\Users\Adam\AppData\Local\Programs\Python\Python310\lib\site-packages\torch\nn\modules\module.py", line 1750, in _call_impl
+    return forward_call(*args, **kwargs)
+  File "E:\AI\projects\diffusion\model.py", line 494, in forward
+    x = block(x)
+  File "C:\Users\Adam\AppData\Local\Programs\Python\Python310\lib\site-packages\torch\nn\modules\module.py", line 1739, in _wrapped_call_impl   
+    return self._call_impl(*args, **kwargs)
+  File "C:\Users\Adam\AppData\Local\Programs\Python\Python310\lib\site-packages\torch\nn\modules\module.py", line 1750, in _call_impl
+    return forward_call(*args, **kwargs)
+  File "E:\AI\projects\diffusion\model.py", line 262, in forward
+    x = x + self.attn(self.ln_1(x))
+  File "C:\Users\Adam\AppData\Local\Programs\Python\Python310\lib\site-packages\torch\nn\modules\module.py", line 1739, in _wrapped_call_impl   
+    return self._call_impl(*args, **kwargs)
+  File "C:\Users\Adam\AppData\Local\Programs\Python\Python310\lib\site-packages\torch\nn\modules\module.py", line 1750, in _call_impl
+    return forward_call(*args, **kwargs)
+  File "E:\AI\projects\diffusion\model.py", line 90, in forward
+    return F.layer_norm(input, self.weight.shape, self.weight, self.bias, 1e-5)
+  File "C:\Users\Adam\AppData\Local\Programs\Python\Python310\lib\site-packages\torch\nn\functional.py", line 2910, in layer_norm
+    return torch.layer_norm(
+RuntimeError: CUDA error: device-side assert triggered
+CUDA kernel errors might be asynchronously reported at some other API call, so the stacktrace below might be incorrect.
+For debugging consider passing CUDA_LAUNCH_BLOCKING=1
+Compile with `TORCH_USE_CUDA_DSA` to enable device-side assertions.
+
+Traceback (most recent call last):
+  File "E:\AI\projects\diffusion\train_run.py", line 764, in <module>
+    losses = estimate_loss(model, ctx, timer, training_ctx)
+  File "E:\AI\projects\diffusion\training_utils\model_evaluation.py", line 98, in estimate_loss
+    logits, loss = model(X, Y)
+  File "C:\Users\Adam\AppData\Local\Programs\Python\Python310\lib\site-packages\torch\nn\modules\module.py", line 1739, in _wrapped_call_impl   
+    return self._call_impl(*args, **kwargs)
+  File "C:\Users\Adam\AppData\Local\Programs\Python\Python310\lib\site-packages\torch\nn\modules\module.py", line 1750, in _call_impl
+    return forward_call(*args, **kwargs)
+  File "C:\Users\Adam\AppData\Local\Programs\Python\Python310\lib\site-packages\torch\_dynamo\eval_frame.py", line 574, in _fn
+    return fn(*args, **kwargs)
+  File "C:\Users\Adam\AppData\Local\Programs\Python\Python310\lib\site-packages\torch\nn\modules\module.py", line 1739, in _wrapped_call_impl   
+    return self._call_impl(*args, **kwargs)
+  File "C:\Users\Adam\AppData\Local\Programs\Python\Python310\lib\site-packages\torch\nn\modules\module.py", line 1750, in _call_impl
+    return forward_call(*args, **kwargs)
+  File "E:\AI\projects\diffusion\model.py", line 494, in forward
+    x = block(x)
+  File "C:\Users\Adam\AppData\Local\Programs\Python\Python310\lib\site-packages\torch\nn\modules\module.py", line 1739, in _wrapped_call_impl   
+    return self._call_impl(*args, **kwargs)
+  File "C:\Users\Adam\AppData\Local\Programs\Python\Python310\lib\site-packages\torch\nn\modules\module.py", line 1750, in _call_impl
+    return forward_call(*args, **kwargs)
+  File "E:\AI\projects\diffusion\model.py", line 262, in forward
+    x = x + self.attn(self.ln_1(x))
+  File "C:\Users\Adam\AppData\Local\Programs\Python\Python310\lib\site-packages\torch\nn\modules\module.py", line 1739, in _wrapped_call_impl    
+    return self._call_impl(*args, **kwargs)
+  File "C:\Users\Adam\AppData\Local\Programs\Python\Python310\lib\site-packages\torch\nn\modules\module.py", line 1750, in _call_impl
+    return forward_call(*args, **kwargs)
+  File "E:\AI\projects\diffusion\model.py", line 90, in forward
+    return F.layer_norm(input, self.weight.shape, self.weight, self.bias, 1e-5)
+  File "C:\Users\Adam\AppData\Local\Programs\Python\Python310\lib\site-packages\torch\nn\functional.py", line 2910, in layer_norm
+    return torch.layer_norm(
+RuntimeError: CUDA error: device-side assert triggered
+CUDA kernel errors might be asynchronously reported at some other API call, so the stacktrace below might be incorrect.
+For debugging consider passing CUDA_LAUNCH_BLOCKING=1
+Compile with `TORCH_USE_CUDA_DSA` to enable device-side assertions.

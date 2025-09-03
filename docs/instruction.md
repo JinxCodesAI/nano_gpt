@@ -85,6 +85,10 @@ class GPTConfig:
     freeze_transformer: bool = False  # If True, freeze all transformer weights (feature extraction)
     init_from_checkpoint: str = None  # Path to pretrained checkpoint for transfer learning
 
+    # Dynamic unfreezing support for two-stage training
+    unfreeze_at_iteration: int = None  # Iteration at which to unfreeze transformer (None = never unfreeze)
+    unfreeze_lr_multiplier: float = 0.1  # Learning rate multiplier when unfreezing (to avoid instability)
+
     def __post_init__(self):
         # Enforce bidirectional attention for classification tasks
         if self.mode in [ModelMode.TOKEN_CLASSIFIER, ModelMode.SEQUENCE_SCORER]:
@@ -123,6 +127,10 @@ else:
 
 # Transfer learning support: freeze transformer if requested
 if config.freeze_transformer:
+    self.freeze_transformer_weights()
+
+def freeze_transformer_weights(self):
+    """Freeze transformer weights for feature extraction, keep heads trainable"""
     print("Freezing transformer weights for feature extraction")
     for param in self.transformer.parameters():
         param.requires_grad = False
@@ -133,6 +141,53 @@ if config.freeze_transformer:
     if hasattr(self, 'sequence_head'):
         for param in self.sequence_head.parameters():
             param.requires_grad = True
+
+def unfreeze_transformer_weights(self):
+    """Unfreeze all transformer weights for fine-tuning"""
+    print("Unfreezing transformer weights for fine-tuning")
+    for param in self.transformer.parameters():
+        param.requires_grad = True
+    # Heads remain trainable
+    if hasattr(self, 'lm_head'):
+        for param in self.lm_head.parameters():
+            param.requires_grad = True
+    if hasattr(self, 'sequence_head'):
+        for param in self.sequence_head.parameters():
+            param.requires_grad = True
+
+def get_frozen_status(self):
+    """Check if transformer weights are currently frozen"""
+    if not hasattr(self, 'transformer'):
+        return False
+
+    # Check if any transformer parameter requires grad
+    for param in self.transformer.parameters():
+        if param.requires_grad:
+            return False
+    return True
+
+def print_parameter_status(self):
+    """Print detailed parameter status for debugging"""
+    transformer_params = sum(p.numel() for p in self.transformer.parameters())
+    transformer_trainable = sum(p.numel() for p in self.transformer.parameters() if p.requires_grad)
+
+    head_params = 0
+    head_trainable = 0
+    if hasattr(self, 'lm_head'):
+        head_params += sum(p.numel() for p in self.lm_head.parameters())
+        head_trainable += sum(p.numel() for p in self.lm_head.parameters() if p.requires_grad)
+    if hasattr(self, 'sequence_head'):
+        head_params += sum(p.numel() for p in self.sequence_head.parameters())
+        head_trainable += sum(p.numel() for p in self.sequence_head.parameters() if p.requires_grad)
+
+    total_params = transformer_params + head_params
+    total_trainable = transformer_trainable + head_trainable
+
+    print(f"Parameter Status:")
+    print(f"  Transformer: {transformer_trainable:,}/{transformer_params:,} trainable ({100*transformer_trainable/transformer_params:.1f}%)")
+    print(f"  Head: {head_trainable:,}/{head_params:,} trainable ({100*head_trainable/head_params:.1f}%)")
+    print(f"  Total: {total_trainable:,}/{total_params:,} trainable ({100*total_trainable/total_params:.1f}%)")
+    print(f"  Frozen status: {'Frozen' if self.get_frozen_status() else 'Unfrozen'}")
 ```
 
 #### Step 4: Update GPT.forward Method
@@ -222,6 +277,11 @@ else:
 training_type: str = 'unmasking'  # Options: 'unmasking', 'token_classification', 'sequence_scoring'
 num_token_classes: int = 2  # Number of classes for token classification (flexible)
 freeze_transformer: bool = False  # For transfer learning: freeze transformer, train only head
+
+# Dynamic unfreezing parameters for two-stage training
+unfreeze_at_iteration: int = None  # Iteration at which to unfreeze transformer (None = never unfreeze)
+unfreeze_lr_multiplier: float = 0.1  # Learning rate multiplier when unfreezing
+transformer_frozen: bool = False  # Track current frozen state (set automatically)
 ```
 
 #### Step 6: Update Batch Generation
@@ -364,6 +424,10 @@ training_type = 'sequence_scoring'  # Options: 'unmasking', 'token_classificatio
 num_token_classes = 2  # For token classification: number of classes (flexible)
 freeze_transformer = False  # For transfer learning: freeze transformer weights
 init_from_checkpoint = None  # Path to pretrained checkpoint for transfer learning
+
+# Dynamic unfreezing for two-stage training
+unfreeze_at_iteration = None  # Iteration to unfreeze transformer (e.g., 2000 for two-stage training)
+unfreeze_lr_multiplier = 0.1  # Reduce learning rate when unfreezing to avoid instability
 ```
 
 #### Step 8: Update Configuration System
@@ -439,6 +503,62 @@ if init_from_checkpoint is not None:
     # Add to model args
     model_args['init_from_checkpoint'] = init_from_checkpoint
     model_args['freeze_transformer'] = freeze_transformer
+    model_args['unfreeze_at_iteration'] = unfreeze_at_iteration
+    model_args['unfreeze_lr_multiplier'] = unfreeze_lr_multiplier
+```
+
+#### Step 11: Add Dynamic Unfreezing to Training Loop
+**File**: `train_run.py`
+**Location**: In the main training loop, before optimizer step
+
+**Add unfreezing logic**:
+```python
+# Dynamic unfreezing logic - add this in the training loop before optimizer step
+if (unfreeze_at_iteration is not None and
+    iter_num == unfreeze_at_iteration and
+    hasattr(raw_model, 'get_frozen_status') and
+    raw_model.get_frozen_status()):
+
+    print(f"\n*** DYNAMIC UNFREEZING at iteration {iter_num} ***")
+    print("Switching from feature extraction to fine-tuning mode")
+
+    # Unfreeze transformer weights
+    raw_model.unfreeze_transformer_weights()
+
+    # Reduce learning rate to avoid instability
+    if unfreeze_lr_multiplier < 1.0:
+        old_lr = learning_rate
+        new_lr = old_lr * unfreeze_lr_multiplier
+        print(f"Reducing learning rate: {old_lr:.6f} -> {new_lr:.6f}")
+
+        # Update learning rate in optimizer
+        for param_group in optimizer.param_groups:
+            param_group['lr'] = new_lr
+
+        # Update base learning rate for scheduler
+        learning_rate = new_lr
+
+    # Print parameter status
+    raw_model.print_parameter_status()
+
+    # Log to wandb if enabled
+    if wandb_log and master_process:
+        wandb.log({
+            "unfreezing_iteration": iter_num,
+            "old_lr": old_lr if unfreeze_lr_multiplier < 1.0 else learning_rate,
+            "new_lr": learning_rate,
+            "lr_multiplier": unfreeze_lr_multiplier
+        })
+
+    print("*** UNFREEZING COMPLETE ***\n")
+```
+
+**Add initialization tracking**:
+```python
+# Add this after model initialization to track frozen state
+if freeze_transformer and hasattr(raw_model, 'get_frozen_status'):
+    print(f"Initial frozen status: {raw_model.get_frozen_status()}")
+    raw_model.print_parameter_status()
 ```
 
 ---
@@ -629,6 +749,11 @@ learning_rate = 5e-4
 init_from_checkpoint = 'out/ckpt_unmasking_5000.pt'  # Path to pretrained model
 freeze_transformer = False  # False = fine-tuning, True = feature extraction
 
+# Two-stage training (optional) - first freeze, then unfreeze
+# freeze_transformer = True  # Start with frozen transformer
+# unfreeze_at_iteration = 2000  # Unfreeze after 2000 iterations
+# unfreeze_lr_multiplier = 0.1  # Reduce LR when unfreezing
+
 # Output
 out_dir = 'out_token_classification'
 wandb_project = 'token_classification'
@@ -665,6 +790,11 @@ min_lr = 5e-5
 init_from_checkpoint = 'out/ckpt_unmasking_10000.pt'  # Use pretrained language model
 freeze_transformer = False  # Fine-tune entire model
 
+# Two-stage training example for sequence scoring
+# freeze_transformer = True  # Start with frozen transformer (feature extraction)
+# unfreeze_at_iteration = 1500  # Unfreeze after 1500 iterations for fine-tuning
+# unfreeze_lr_multiplier = 0.05  # Very conservative LR reduction for scoring tasks
+
 # Data configuration
 dataset = 'your_quality_dataset'
 use_paragraph_boundaries = True
@@ -678,6 +808,58 @@ log_interval = 10
 out_dir = 'out_sequence_scoring'
 wandb_project = 'sequence_scoring'
 wandb_run_name = 'quality_scorer_v1'
+```
+
+**File**: `configs/two_stage_training_example.py`
+```python
+"""
+Example configuration for two-stage training workflow:
+1. Stage 1: Feature extraction (frozen transformer, train only head)
+2. Stage 2: Fine-tuning (unfreeze transformer, train entire model)
+"""
+
+# Model configuration
+n_layer = 6
+n_head = 6
+n_embd = 384
+dropout = 0.1
+bias = False
+attention_type = 'bidirectional'  # Required for classification
+use_rope = True
+
+# Training configuration
+training_type = 'token_classification'  # or 'sequence_scoring'
+num_token_classes = 2  # For token classification
+batch_size = 16
+block_size = 1024
+max_iters = 5000  # Total iterations for both stages
+learning_rate = 1e-3  # Initial learning rate
+
+# Two-stage transfer learning
+init_from_checkpoint = 'out/ckpt_unmasking_10000.pt'  # Pretrained language model
+freeze_transformer = True  # Stage 1: Start with frozen transformer
+unfreeze_at_iteration = 2000  # Stage 2: Unfreeze after 2000 iterations
+unfreeze_lr_multiplier = 0.1  # Reduce LR by 10x when unfreezing
+
+# Learning rate schedule
+warmup_iters = 500  # Warm up for stage 1
+lr_decay_iters = 4500  # Decay after unfreezing
+min_lr = 1e-5
+
+# Evaluation
+eval_interval = 200
+eval_iters = 20
+log_interval = 50
+
+# Output
+out_dir = 'out_two_stage_training'
+wandb_project = 'two_stage_training'
+wandb_run_name = 'frozen_then_finetune_v1'
+
+# Expected workflow:
+# Iterations 0-2000: Feature extraction (frozen transformer, LR=1e-3)
+# Iteration 2000: Automatic unfreezing + LR reduction to 1e-4
+# Iterations 2000-5000: Fine-tuning (full model, LR=1e-4 -> 1e-5)
 ```
 
 #### Step 15: Update Training Script Validation
@@ -749,6 +931,9 @@ elif training_type == 'unmasking':
 - [ ] **Configuration validation** for all modes
 - [ ] **Evaluation metrics** for sequence scoring
 - [ ] **Transfer learning integration** for loading pretrained weights
+- [ ] **Dynamic freezing/unfreezing methods** in model class
+- [ ] **Two-stage training configuration** parameters
+- [ ] **Training loop unfreezing logic** with learning rate adjustment
 
 ### 🧪 Testing Strategy
 
@@ -773,6 +958,11 @@ python train_run.py --training_type=token_classification --num_token_classes=2 \
 # With transfer learning (fine-tuning)
 python train_run.py --training_type=token_classification --num_token_classes=2 \
     --init_from_checkpoint=out/ckpt_unmasking_5000.pt --freeze_transformer=False
+
+# Two-stage training (feature extraction -> fine-tuning)
+python train_run.py --training_type=token_classification --num_token_classes=2 \
+    --init_from_checkpoint=out/ckpt_unmasking_5000.pt --freeze_transformer=True \
+    --unfreeze_at_iteration=2000 --unfreeze_lr_multiplier=0.1 --max_iters=5000
 ```
 
 #### Test Mode 3 (Sequence Scoring)
@@ -783,6 +973,11 @@ python train_run.py --training_type=sequence_scoring --attention_type=bidirectio
 # With transfer learning (recommended)
 python train_run.py --training_type=sequence_scoring --block_size=512 \
     --init_from_checkpoint=out/ckpt_unmasking_10000.pt --freeze_transformer=False
+
+# Two-stage training for sequence scoring
+python train_run.py --training_type=sequence_scoring --block_size=512 \
+    --init_from_checkpoint=out/ckpt_unmasking_10000.pt --freeze_transformer=True \
+    --unfreeze_at_iteration=1500 --unfreeze_lr_multiplier=0.05 --max_iters=4000
 ```
 
 ---
@@ -833,8 +1028,18 @@ python train_run.py --training_type=sequence_scoring --block_size=512 \
 ### 6. **Transfer Learning Support**
 - **Feature Extraction**: Freeze transformer, train only classification head
 - **Fine-tuning**: Load pretrained weights, train entire model
+- **Two-stage Training**: Start frozen, automatically unfreeze at specified iteration
+- **Dynamic Learning Rate**: Automatic LR reduction when unfreezing to prevent instability
 - **Checkpoint Loading**: Automatic filtering of incompatible head weights
+- **Parameter Monitoring**: Built-in methods to track frozen/unfrozen status
 - **Backward Compatibility**: Existing checkpoints remain loadable
+
+### 7. **Two-Stage Training Workflow**
+- **Stage 1**: Feature extraction with frozen transformer (fast convergence on head)
+- **Stage 2**: Fine-tuning with unfrozen transformer (full model optimization)
+- **Automatic Transition**: Configurable iteration-based unfreezing
+- **Learning Rate Management**: Automatic LR reduction to prevent gradient explosion
+- **Progress Monitoring**: Detailed logging of parameter status and transitions
 
 ---
 
@@ -847,3 +1052,184 @@ python train_run.py --training_type=sequence_scoring --block_size=512 \
 5. **Add comprehensive unit tests** for new functionality
 
 This implementation plan maintains the sophisticated infrastructure you've already built while cleanly extending it to support the three distinct training paradigms you need.
+
+---
+
+## Additional Files That Need Updates
+
+### Phase 6: Update Inference and Evaluation Scripts
+
+#### Step 16: Update sample.py for Multi-Mode Support
+**File**: `sample.py`
+**Location**: Model loading section (lines 388-450)
+
+**Issues to fix**:
+1. **Binary classification detection** - Line 428 uses `binary_classification` parameter
+2. **Model loading** - Needs to handle new `mode` parameter
+3. **Backward compatibility** - Should work with both old and new checkpoints
+
+**Add import** (after line 11):
+```python
+from model import GPTConfig, GPT, ModelMode
+```
+
+**Update remasking model loading** (replace lines 427-430):
+```python
+# Verify it's a token classification model (backward compatibility)
+is_token_classifier = False
+if 'mode' in remasking_model_args:
+    # New multi-mode system
+    is_token_classifier = (remasking_model_args['mode'] == ModelMode.TOKEN_CLASSIFIER.value or
+                          remasking_model_args['mode'] == 'token_classifier')
+elif remasking_model_args.get('binary_classification', False):
+    # Legacy binary classification system
+    is_token_classifier = True
+    # Convert to new format for consistency
+    remasking_model_args['mode'] = ModelMode.TOKEN_CLASSIFIER.value
+    remasking_model_args['num_token_classes'] = 2
+
+if not is_token_classifier:
+    print("Warning: Remasking model is not a token classifier, skipping")
+    remasking_model = None
+else:
+    print(f"Remasking model detected as token classifier")
+```
+
+**Add backward compatibility for main model** (after line 396):
+```python
+# Add backward compatibility for mode parameter
+if 'mode' not in model_args:
+    if model_args.get('binary_classification', False):
+        model_args['mode'] = ModelMode.TOKEN_CLASSIFIER.value
+        model_args['num_token_classes'] = 2
+        print("Legacy binary classification model detected, converting to TOKEN_CLASSIFIER mode")
+    else:
+        model_args['mode'] = ModelMode.LANGUAGE_MODEL.value
+        print("Legacy model detected, setting to LANGUAGE_MODEL mode")
+
+# Ensure num_token_classes is set for token classifiers
+if model_args.get('mode') == ModelMode.TOKEN_CLASSIFIER.value and 'num_token_classes' not in model_args:
+    model_args['num_token_classes'] = 2  # Default to binary for backward compatibility
+```
+
+#### Step 17: Update evaluate_models.py for Multi-Mode Support
+**File**: `evaluate_models.py`
+**Location**: Multiple locations
+
+**Add import** (after line 16):
+```python
+from model import GPTConfig, GPT, ModelMode
+```
+
+**Update ModelLoader._load_single_model** (after line 272):
+```python
+# Add backward compatibility for mode parameter
+if 'mode' not in model_args:
+    if model_args.get('binary_classification', False):
+        model_args['mode'] = ModelMode.TOKEN_CLASSIFIER.value
+        model_args['num_token_classes'] = 2
+        print(f"  {model_id}: Legacy binary classification model, converting to TOKEN_CLASSIFIER")
+    else:
+        model_args['mode'] = ModelMode.LANGUAGE_MODEL.value
+        print(f"  {model_id}: Legacy model, setting to LANGUAGE_MODEL mode")
+
+# Ensure num_token_classes is set for token classifiers
+if model_args.get('mode') == ModelMode.TOKEN_CLASSIFIER.value and 'num_token_classes' not in model_args:
+    model_args['num_token_classes'] = 2
+```
+
+**Update remasking model loading** (replace lines 382-385):
+```python
+# Verify it's a token classification model (backward compatibility)
+is_token_classifier = False
+if 'mode' in remasking_model_args:
+    # New multi-mode system
+    is_token_classifier = (remasking_model_args['mode'] == ModelMode.TOKEN_CLASSIFIER.value or
+                          remasking_model_args['mode'] == 'token_classifier')
+elif remasking_model_args.get('binary_classification', False):
+    # Legacy binary classification system
+    is_token_classifier = True
+    remasking_model_args['mode'] = ModelMode.TOKEN_CLASSIFIER.value
+    remasking_model_args['num_token_classes'] = 2
+
+if not is_token_classifier:
+    print("Warning: Remasking model is not a token classifier, skipping")
+    return
+```
+
+#### Step 18: Update masking_simulator.py (Optional)
+**File**: `masking_simulator.py`
+**Location**: No changes needed
+
+**Status**: ✅ **No changes required**
+- This file only simulates masking behavior and doesn't load actual model checkpoints
+- It works with `TrainingContext` which is already compatible with the new system
+- The file focuses on unmasking training simulation, which remains unchanged
+
+---
+
+### Phase 7: Testing and Validation
+
+#### Step 19: Test Backward Compatibility
+**Test old checkpoints with new system**:
+
+```bash
+# Test old language model checkpoint
+python sample.py --checkpoint_name=old_language_model.pt
+
+# Test old binary classification checkpoint
+python sample.py --remasking_checkpoint_name=old_remasking_binary.pt
+
+# Test evaluation with mixed old/new checkpoints
+python evaluate_models.py
+```
+
+#### Step 20: Test New Multi-Mode Functionality
+**Test new multi-mode checkpoints**:
+
+```bash
+# Test token classifier with 3 classes
+python sample.py --remasking_checkpoint_name=new_token_classifier_3class.pt
+
+# Test sequence scorer
+python sample.py --checkpoint_name=new_sequence_scorer.pt
+
+# Test evaluation with new models
+python evaluate_models.py
+```
+
+---
+
+## Updated Implementation Checklist
+
+### ✅ Already Working (No Changes Needed)
+- [x] **Mode 1: Language Modeling** - Fully implemented as `training_type = 'unmasking'`
+- [x] **Bidirectional attention** - Already supported
+- [x] **Modular training utilities** - Well-structured in `training_utils/`
+- [x] **Batch generation infrastructure** - Sophisticated caching and prefetching
+- [x] **Model evaluation system** - Comprehensive loss estimation
+- [x] **masking_simulator.py** - Only simulates masking, no model loading needed
+
+### 🔧 Needs Implementation (New Work)
+- [ ] **ModelMode enum** in `model.py`
+- [ ] **Updated GPTConfig** with mode selection, transfer learning, and validation
+- [ ] **Mode-specific model heads** in `GPT.__init__` with transfer learning support
+- [ ] **Mode-specific forward pass** in `GPT.forward`
+- [ ] **Refactor token classification** from binary to flexible multi-class
+- [ ] **Sequence scoring batch generation** function
+- [ ] **Dataset interface** for sequence-level labels
+- [ ] **Training script updates** for mode selection and transfer learning
+- [ ] **Configuration validation** for all modes
+- [ ] **Evaluation metrics** for sequence scoring
+- [ ] **Transfer learning integration** for loading pretrained weights
+- [ ] **Dynamic freezing/unfreezing methods** in model class
+- [ ] **Two-stage training configuration** parameters
+- [ ] **Training loop unfreezing logic** with learning rate adjustment
+- [ ] **sample.py backward compatibility** for old checkpoints
+- [ ] **evaluate_models.py backward compatibility** for old checkpoints
+
+### 🔄 Backward Compatibility Strategy
+- **Old checkpoints** with `binary_classification=True` → automatically convert to `TOKEN_CLASSIFIER` mode
+- **Old checkpoints** without mode → automatically set to `LANGUAGE_MODEL` mode
+- **Mixed environments** → new system can load and use old checkpoints seamlessly
+- **Gradual migration** → can update training while keeping existing inference scripts working

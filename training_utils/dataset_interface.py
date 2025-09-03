@@ -311,3 +311,71 @@ class DatasetConfig:
             raise NotImplementedError(f"General dataset {self.dataset_name} with mode {primary_mode} requires training-specific preparation.")
 
         return x, y, mask
+
+
+class SequenceDatasetInterface:
+    """Interface for loading sequence-level classification datasets"""
+
+    def __init__(self, data_dir: str, dataset_name: str = "quality_scores"):
+        self.data_dir = data_dir
+        self.dataset_name = dataset_name
+        self.labels_cache = {}
+
+    def load_sequence_labels(self, split: str) -> Dict[int, float]:
+        """
+        Load sequence-level labels for the given split.
+
+        Expected format: JSON file with mapping from sequence_index -> label
+        {
+            "0": 0.85,
+            "1": 0.23,
+            "2": 0.91,
+            ...
+        }
+        """
+        if split in self.labels_cache:
+            return self.labels_cache[split]
+
+        labels_file = os.path.join(self.data_dir, f"{split}_labels.json")
+
+        if not os.path.exists(labels_file):
+            print(f"WARNING: No labels file found at {labels_file}")
+            print("Using random labels for demonstration purposes")
+            # Generate random labels as fallback
+            data_file = os.path.join(self.data_dir, f"{split}.bin")
+            if os.path.exists(data_file):
+                data = np.memmap(data_file, dtype=np.uint16, mode='r')
+                num_sequences = len(data) // 1024  # Approximate
+                labels = {i: np.random.random() for i in range(num_sequences)}
+            else:
+                labels = {}
+        else:
+            import json
+            with open(labels_file, 'r') as f:
+                labels = json.load(f)
+                # Convert string keys to int, values to float
+                labels = {int(k): float(v) for k, v in labels.items()}
+
+        self.labels_cache[split] = labels
+        return labels
+
+    def get_label_for_sequence(self, split: str, sequence_idx: int) -> float:
+        """Get label for a specific sequence index"""
+        labels = self.load_sequence_labels(split)
+        return labels.get(sequence_idx, 0.5)  # Default to neutral score
+
+    def get_labels_stats(self, split: str) -> Dict[str, float]:
+        """Get statistics about the labels distribution"""
+        labels = self.load_sequence_labels(split)
+        values = list(labels.values())
+
+        if not values:
+            return {"count": 0, "mean": 0.0, "std": 0.0, "min": 0.0, "max": 0.0}
+
+        return {
+            "count": len(values),
+            "mean": np.mean(values),
+            "std": np.std(values),
+            "min": np.min(values),
+            "max": np.max(values)
+        }

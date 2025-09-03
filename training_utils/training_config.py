@@ -71,11 +71,24 @@ class UnmaskingStage:
 @dataclass
 class TrainingContext:
     """Configuration class for training parameters to avoid long parameter lists"""
-    # Training configuration
-    training_type: str = 'remasking'
+    # Training configuration  
+    training_type: str = 'unmasking'  # Options: 'unmasking', 'token_classification', 'sequence_scoring', 'remasking_binary' (backward compatibility)
+    num_token_classes: int = 2  # Number of classes for token classification (flexible, not just binary)
     batch_size: int = 16
     block_size: int = 1024
     max_iters: int = 12000  # Maximum training iterations
+
+    # Transfer learning support
+    freeze_transformer: bool = False  # For transfer learning: freeze transformer, train only head
+    init_from_checkpoint: str = None  # Path to pretrained checkpoint for transfer learning
+
+    # Dynamic unfreezing parameters for two-stage training
+    unfreeze_at_iteration: int = None  # Iteration at which to unfreeze transformer (None = never unfreeze)
+    unfreeze_lr_multiplier: float = 0.1  # Learning rate multiplier when unfreezing
+    transformer_frozen: bool = False  # Track current frozen state (set automatically)
+    
+    # Sequence scoring support - reference to unmasking model for reconstruction
+    unmasking_model = None  # Pretrained unmasking model for sequence reconstruction
     
     # Device configuration
     device: str = 'cuda'
@@ -96,6 +109,7 @@ class TrainingContext:
     remask_good_id: int = None
     remask_wrong_id: int = None
     extended_vocab_size: int = None
+    cls_token_id: int = None  # For sequence scoring mode
     
     # Training iteration and stage tracking
     iter_num: int = 0
@@ -163,7 +177,7 @@ class TrainingContext:
     
     def get_current_stage_config(self) -> UnmaskingStage:
         """Get configuration for current unmasking stage"""
-        if self.training_type != 'unmasking' or not self.unmasking_stages:
+        if self.training_type not in ['unmasking', 'sequence_scoring'] or not self.unmasking_stages:
             return None
         
         if self.current_stage >= len(self.unmasking_stages):

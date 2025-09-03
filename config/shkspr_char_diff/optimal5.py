@@ -9,7 +9,7 @@ gradient_accumulation_steps = 8
 dataset = 'shakespeare_char'
 use_paragraph_boundaries = False # if True, start samples at paragraph boundaries (double newlines)
 # diffusion training config
-training_type = 'unmasking'  # 'unmasking', 'remasking', or 'remasking_binary' - type of training
+# training_type = 'unmasking'  # 'unmasking', 'remasking', or 'remasking_binary' - type of training
 use_all_stages_for_training = True
 weight_loss_by_mask_ratio = True
 enable_entropy_penalty = False
@@ -21,9 +21,9 @@ unmasking_stages = [
     {'type':'sticky','target_masked_ratio': 0.4, 'p1_probability': 0.15, 'p2_probability': 0.3, 'val_loss_stale_count': 6},
     {'type':'sticky','target_masked_ratio': 0.6, 'p1_probability': 0.1, 'p2_probability': 0.5, 'val_loss_stale_count': 8},
     {'type':'random','max_masked_ratio': 0.5, 'val_loss_stale_count': 10},
-    {'type':'span','spans_count': 200, 'val_loss_stale_count': 10},
     {'type':'sticky','target_masked_ratio': 0.6, 'p1_probability': 0.3, 'p2_probability': 0.1, 'val_loss_stale_count': 8},
-    {'type':'span','spans_count': 30, 'val_loss_stale_count': 10},
+    {'type':'sticky','target_masked_ratio': 0.6, 'p1_probability': 0.1, 'p2_probability': 0.5, 'val_loss_stale_count': 8},
+    {'type':'random','max_masked_ratio': 0.2, 'val_loss_stale_count': 10},
     {'type':'sticky','target_masked_ratio': 0.55, 'p1_probability': 0.1, 'p2_probability': 0.6, 'val_loss_stale_count': 10},
     {'type':'sticky','target_masked_ratio': 0.9, 'p1_probability': 0.1, 'p2_probability': 0.9, 'val_loss_stale_count': 20},
 ]
@@ -58,6 +58,7 @@ dropout = 0.2 # for pretraining 0 is good, for finetuning try 0.1+
 grad_clip = 0.0  # clip gradients at this value, or disable if == 0.0
 # learning rate decay settings
 decay_lr = True # it's just experiment, no need to decay
+compile = True
 
 max_entropy_penalty = 3 # loss = loss * (1 + current_entropy_penalty * wrong_answers_entropy)
 

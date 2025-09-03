@@ -146,7 +146,9 @@ def apply_target_driven_sticky_masking_gpu(x, target_masked_ratio, p1_probabilit
     device = x.device
     
     # Calculate target number of masked tokens per sequence
-    target_masked_count = int(target_masked_ratio * seq_len)
+    # Use math.ceil to ensure we never get 0 when target_masked_ratio > 0
+    import math
+    target_masked_count = max(1, math.ceil(target_masked_ratio * seq_len)) if target_masked_ratio > 0 else 0
     
     if target_masked_count == 0:
         # No masking needed - return early

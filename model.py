@@ -10,10 +10,17 @@ https://github.com/huggingface/transformers/blob/main/src/transformers/models/gp
 import math
 import inspect
 from dataclasses import dataclass
+from enum import Enum
 
 import torch
 import torch.nn as nn
 from torch.nn import functional as F
+
+class ModelMode(Enum):
+    """Defines the three operational modes for the transformer model"""
+    LANGUAGE_MODEL = "language_model"      # Unmasking/reconstruction (current 'unmasking')
+    TOKEN_CLASSIFIER = "token_classifier"  # Per-token multi-class classification (refactored from 'remasking_binary')
+    SEQUENCE_SCORER = "sequence_scorer"    # Sequence-level scoring 0-1 (new)
 
 class RotaryPositionalEmbedding(nn.Module):
     """
@@ -267,7 +274,33 @@ class GPTConfig:
     bias: bool = True # True: bias in Linears and LayerNorms, like GPT-2. False: a bit better and faster
     attention_type: str = 'causal' # 'causal' or 'bidirectional' - type of attention to use
     use_rope: bool = True # Use Rotary Position Embeddings instead of absolute position embeddings
-    binary_classification: bool = False # True: use binary classification head (2 outputs), False: use language model head (vocab_size outputs)
+    mode: ModelMode = ModelMode.LANGUAGE_MODEL
+    num_token_classes: int = 2  # Number of classes for token classification (flexible, not just binary)
+    cls_token_id: int = None  # Special token ID for [CLS] token in sequence scoring
+
+    # Transfer learning support
+    freeze_transformer: bool = False  # If True, freeze all transformer weights (feature extraction)
+    init_from_checkpoint: str = None  # Path to pretrained checkpoint for transfer learning
+
+    # Dynamic unfreezing support for two-stage training
+    unfreeze_at_iteration: int = None  # Iteration at which to unfreeze transformer (None = never unfreeze)
+    unfreeze_lr_multiplier: float = 0.1  # Learning rate multiplier when unfreezing (to avoid instability)
+
+    # Backward compatibility
+    binary_classification: bool = False  # Legacy parameter for backward compatibility
+
+    def __post_init__(self):
+        # Handle backward compatibility
+        if self.binary_classification and self.mode == ModelMode.LANGUAGE_MODEL:
+            print("WARNING: binary_classification=True detected, converting to TOKEN_CLASSIFIER mode")
+            self.mode = ModelMode.TOKEN_CLASSIFIER
+            self.num_token_classes = 2
+
+        # Enforce bidirectional attention for classification tasks
+        if self.mode in [ModelMode.TOKEN_CLASSIFIER, ModelMode.SEQUENCE_SCORER]:
+            if self.attention_type != 'bidirectional':
+                print(f"WARNING: {self.mode.value} requires bidirectional attention. Changing from '{self.attention_type}' to 'bidirectional'")
+                self.attention_type = 'bidirectional'
 
 class GPT(nn.Module):
 
@@ -291,16 +324,59 @@ class GPT(nn.Module):
         
         self.transformer = nn.ModuleDict(transformer_components)
         
-        # Choose between language model head and binary classification head
-        if config.binary_classification:
-            self.lm_head = nn.Linear(config.n_embd, 2, bias=False)  # Binary classifier: 2 outputs
-        else:
+        # Create appropriate output head based on mode
+        if self.config.mode == ModelMode.LANGUAGE_MODEL:
+            # Language modeling: predict next token from vocabulary
             self.lm_head = nn.Linear(config.n_embd, config.vocab_size, bias=False)
+            # Weight tying for language modeling
             # with weight tying when using torch.compile() some warnings get generated:
             # "UserWarning: functional_call was passed multiple values for tied weights.
             # This behavior is deprecated and will be an error in future versions"
             # not 100% sure what this is, so far seems to be harmless. TODO investigate
             self.transformer.wte.weight = self.lm_head.weight # https://paperswithcode.com/method/weight-tying
+        elif self.config.mode == ModelMode.TOKEN_CLASSIFIER:
+            # Token-level classification: flexible number of classes per token
+            self.lm_head = nn.Linear(config.n_embd, config.num_token_classes, bias=False)
+            print(f"Token classifier head: {config.num_token_classes} classes per token")
+        elif self.config.mode == ModelMode.SEQUENCE_SCORER:
+            # Sequence-level scoring: single continuous score 0-1 from [CLS] token
+            self.sequence_head = nn.Sequential(
+                nn.Linear(config.n_embd, 1, bias=False),
+                nn.Sigmoid()  # Ensure output is between 0 and 1
+            )
+            # Use Xavier initialization for better gradient flow and diverse initial predictions
+            torch.nn.init.xavier_uniform_(self.sequence_head[0].weight)
+            print("Sequence scorer head: continuous score 0-1")
+        else:
+            raise ValueError(f"Unknown model mode: {self.config.mode}")
+
+        # Transfer learning support: load pretrained weights if specified
+        if config.init_from_checkpoint is not None and config.init_from_checkpoint != "":
+            print(f"Loading pretrained weights from {config.init_from_checkpoint}")
+            checkpoint = torch.load(config.init_from_checkpoint, map_location='cpu', weights_only=False)
+
+            # Load transformer weights (excluding heads)
+            if 'model' in checkpoint:
+                state_dict = checkpoint['model']
+            else:
+                state_dict = checkpoint
+
+            # Filter out head weights from pretrained checkpoint
+            transformer_state_dict = {}
+            for k, v in state_dict.items():
+                if not k.startswith('lm_head') and not k.startswith('sequence_head'):
+                    transformer_state_dict[k] = v
+
+            # Load transformer weights
+            missing_keys, unexpected_keys = self.load_state_dict(transformer_state_dict, strict=False)
+            print(f"Loaded pretrained transformer weights:")
+            print(f"  Missing keys: {len(missing_keys)} (expected for new heads)")
+            print(f"  Unexpected keys: {len(unexpected_keys)}")
+
+            if missing_keys:
+                print(f"  Missing (will be randomly initialized): {missing_keys[:5]}{'...' if len(missing_keys) > 5 else ''}")
+            if unexpected_keys:
+                print(f"  Unexpected (ignored): {unexpected_keys[:5]}{'...' if len(unexpected_keys) > 5 else ''}")
 
         # init all weights
         self.apply(self._init_weights)
@@ -309,10 +385,9 @@ class GPT(nn.Module):
             if pn.endswith('c_proj.weight'):
                 torch.nn.init.normal_(p, mean=0.0, std=0.02/math.sqrt(2 * config.n_layer))
         
-        # Special initialization for binary classification head (after general init)
-        if config.binary_classification:
-            # Initialize with much smaller weights to prevent gradient explosion
-            torch.nn.init.normal_(self.lm_head.weight, mean=0.0, std=0.002)  # Very small std
+        # Transfer learning support: freeze transformer if requested
+        if config.freeze_transformer:
+            self.freeze_transformer_weights()
 
         # report number of parameters
         print("number of parameters: %.2fM" % (self.get_num_params()/1e6,))
@@ -328,6 +403,67 @@ class GPT(nn.Module):
         if non_embedding and hasattr(self.transformer, 'wpe'):
             n_params -= self.transformer.wpe.weight.numel()
         return n_params
+
+    def freeze_transformer_weights(self):
+        """Freeze transformer weights for feature extraction, keep heads trainable"""
+        print("Freezing transformer weights for feature extraction")
+        for param in self.transformer.parameters():
+            param.requires_grad = False
+        # Keep head trainable
+        if hasattr(self, 'lm_head'):
+            for param in self.lm_head.parameters():
+                param.requires_grad = True
+        if hasattr(self, 'sequence_head'):
+            for param in self.sequence_head.parameters():
+                param.requires_grad = True
+
+    def unfreeze_transformer_weights(self):
+        """Unfreeze all transformer weights for fine-tuning"""
+        print("Unfreezing transformer weights for fine-tuning")
+        for param in self.transformer.parameters():
+            param.requires_grad = True
+        # Heads remain trainable
+        if hasattr(self, 'lm_head'):
+            for param in self.lm_head.parameters():
+                param.requires_grad = True
+        if hasattr(self, 'sequence_head'):
+            for param in self.sequence_head.parameters():
+                param.requires_grad = True
+
+    def get_frozen_status(self):
+        """Check if transformer weights are currently frozen"""
+        if not hasattr(self, 'transformer'):
+            return False
+
+        # Check if any transformer parameter requires grad
+        for param in self.transformer.parameters():
+            if param.requires_grad:
+                return False
+        return True
+
+    def print_parameter_status(self):
+        """Print detailed parameter status for debugging"""
+        transformer_params = sum(p.numel() for p in self.transformer.parameters())
+        transformer_trainable = sum(p.numel() for p in self.transformer.parameters() if p.requires_grad)
+
+        head_params = 0
+        head_trainable = 0
+        if hasattr(self, 'lm_head'):
+            head_params += sum(p.numel() for p in self.lm_head.parameters())
+            head_trainable += sum(p.numel() for p in self.lm_head.parameters() if p.requires_grad)
+        if hasattr(self, 'sequence_head'):
+            head_params += sum(p.numel() for p in self.sequence_head.parameters())
+            head_trainable += sum(p.numel() for p in self.sequence_head.parameters() if p.requires_grad)
+
+        total_params = transformer_params + head_params
+        total_trainable = transformer_trainable + head_trainable
+
+        print(f"Parameter Status:")
+        print(f"  Transformer: {transformer_trainable:,}/{transformer_params:,} trainable ({100*transformer_trainable/transformer_params:.1f}%)")
+        if head_params > 0:
+            print(f"  Head: {head_trainable:,}/{head_params:,} trainable ({100*head_trainable/head_params:.1f}%)")
+        print(f"  Total: {total_trainable:,}/{total_params:,} trainable ({100*total_trainable/total_params:.1f}%)")
+        print(f"  Frozen status: {'Frozen' if self.get_frozen_status() else 'Unfrozen'}")
 
     def _init_weights(self, module):
         if isinstance(module, nn.Linear):
@@ -358,61 +494,71 @@ class GPT(nn.Module):
             x = block(x)
         x = self.transformer.ln_f(x)
 
-        if targets is not None:
-            # Training: always compute logits for all positions
-            logits = self.lm_head(x)
-            
-            if self.config.binary_classification:
-                # For binary classification, targets can be class indices or probability distributions
-                if targets.dim() == 3:
-                    # Probability distributions (batch_size, seq_len, num_classes)
-                    # Cross-entropy can handle soft targets directly
-                    loss = F.cross_entropy(logits.view(-1, 2), targets.view(-1, 2))
-                else:
-                    # Hard targets: 0 or 1 class indices
-                    # Calculate dynamic class weights to handle class imbalance
-                    flattened_targets = targets.view(-1)
-                    valid_targets = flattened_targets[flattened_targets != -1]  # exclude ignore_index
-                    
-                    if len(valid_targets) > 0:
-                        unique, counts = torch.unique(valid_targets, return_counts=True)
-                        n_samples = len(valid_targets)
-                        n_classes = 2
-                        
-                        # Create balanced class weights: n_samples / (n_classes * class_count)
-                        class_weights = torch.zeros(2, device=targets.device, dtype=logits.dtype)
-                        for cls, count in zip(unique, counts):
-                            class_weights[cls] = n_samples / (n_classes * count)
-                        
-                        loss = F.cross_entropy(logits.view(-1, 2), flattened_targets, 
-                                             weight=class_weights, ignore_index=-1)
-                    else:
-                        # Fallback if no valid targets (shouldn't happen in practice)
-                        print(f"WARNING: No valid targets found for class weighting, using unweighted loss")
-                        loss = F.cross_entropy(logits.view(-1, 2), flattened_targets, ignore_index=-1)
+        # Mode-specific forward pass and loss computation
+        if self.config.mode == ModelMode.SEQUENCE_SCORER:
+            # Extract [CLS] token representation (first token)
+            cls_output = x[:, 0, :]  # (batch_size, n_embd)
+            logits = self.sequence_head(cls_output).squeeze(-1)  # (batch_size,) with sigmoid applied
+
+            if targets is not None:
+                # MSE loss for continuous score prediction (0-1 range)
+                loss = F.mse_loss(logits, targets.float())
             else:
-                # For language modeling, targets can be token IDs or probability distributions
-                if targets.dim() == 3:
-                    # Probability distributions (batch_size, seq_len, vocab_size)
-                    # Cross-entropy can handle soft targets directly
-                    loss = F.cross_entropy(logits.view(-1, logits.size(-1)), targets.view(-1, logits.size(-1)))
-                else:
-                    # Token IDs (batch_size, seq_len)
-                    loss = F.cross_entropy(logits.view(-1, logits.size(-1)), targets.view(-1), ignore_index=-1)
-        else:
-            # Inference: behavior depends on attention type and classification mode
-            if self.config.binary_classification:
-                # For binary classification, always compute all positions
+                loss = None
+
+        elif self.config.mode in [ModelMode.LANGUAGE_MODEL, ModelMode.TOKEN_CLASSIFIER]:
+            # Token-level predictions for all positions
+            if targets is not None:
+                # Training: compute logits for all positions
                 logits = self.lm_head(x)
             else:
-                attention_type = getattr(self.config, 'attention_type', 'causal')
-                if attention_type == 'causal':
-                    # For causal attention (autoregressive), optimize by only computing last position
-                    logits = self.lm_head(x[:, [-1], :]) # note: using list [-1] to preserve the time dim
+                # Inference: optimize based on attention type
+                if self.config.mode == ModelMode.LANGUAGE_MODEL and getattr(self.config, 'attention_type', 'causal') == 'causal':
+                    # Causal language modeling: only need last position for generation
+                    logits = self.lm_head(x[:, [-1], :])
                 else:
-                    # For bidirectional attention (diffusion), we need logits for all positions
-                    logits = self.lm_head(x)  # Compute logits for all positions
-            loss = None
+                    # Token classification or bidirectional: need all positions
+                    logits = self.lm_head(x)
+
+            if targets is not None:
+                if self.config.mode == ModelMode.TOKEN_CLASSIFIER:
+                    # Multi-class token classification with flexible number of classes
+                    num_classes = self.config.num_token_classes
+
+                    if targets.dim() == 3:
+                        # Soft targets (probability distributions)
+                        loss = F.cross_entropy(logits.view(-1, num_classes), targets.view(-1, num_classes))
+                    else:
+                        # Hard targets with optional dynamic class weighting
+                        flattened_targets = targets.view(-1)
+                        valid_targets = flattened_targets[flattened_targets != -1]
+
+                        if len(valid_targets) > 0 and num_classes > 1:
+                            # Dynamic class weighting for imbalanced datasets
+                            unique, counts = torch.unique(valid_targets, return_counts=True)
+                            n_samples = len(valid_targets)
+
+                            class_weights = torch.zeros(num_classes, device=targets.device, dtype=logits.dtype)
+                            for cls, count in zip(unique, counts):
+                                if cls < num_classes:  # Ensure class index is valid
+                                    class_weights[cls] = n_samples / (num_classes * count)
+
+                            loss = F.cross_entropy(logits.view(-1, num_classes), flattened_targets,
+                                                 weight=class_weights, ignore_index=-1)
+                        else:
+                            loss = F.cross_entropy(logits.view(-1, num_classes), flattened_targets, ignore_index=-1)
+                else:
+                    # Language modeling loss
+                    if targets.dim() == 3:
+                        # Soft targets (label smoothing)
+                        loss = F.cross_entropy(logits.view(-1, logits.size(-1)), targets.view(-1, logits.size(-1)))
+                    else:
+                        # Hard targets
+                        loss = F.cross_entropy(logits.view(-1, logits.size(-1)), targets.view(-1), ignore_index=-1)
+            else:
+                loss = None
+        else:
+            raise ValueError(f"Unknown model mode: {self.config.mode}")
 
         return logits, loss
 

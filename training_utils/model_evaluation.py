@@ -229,6 +229,12 @@ def estimate_loss(model, torch_ctx, timer, training_ctx: TrainingContext):
                         # Track most likely prediction accuracy for all positions
                         correct_predictions = (predictions_flat == targets_flat).cpu().tolist()
                         most_likely_correct.extend(correct_predictions)
+                    elif training_ctx.training_type == 'sequence_scoring':
+                        # For sequence scoring, we don't use token-level statistics
+                        # The meaningful comparison is MSE vs random baseline (handled later)
+                        # Y contains continuous targets (masking ratios), logits contains predictions
+                        # Store the current batch's MSE for later aggregation (already computed as 'loss')
+                        pass
                     else:
                         # For unmasking, compute on masked positions only
                         mask_flat = mask.view(-1)  # (batch_size * seq_len,)
@@ -403,6 +409,15 @@ def estimate_loss(model, torch_ctx, timer, training_ctx: TrainingContext):
                     prob_ratio = avg_model_prob / random_prob
                     out[f'{split}_model_vs_random'] = prob_ratio
                     out[f'{split}_avg_correct_prob'] = avg_model_prob
+                elif training_ctx.training_type == 'sequence_scoring':
+                    # For sequence scoring, compare MSE against random baseline
+                    # Random baseline for continuous 0-1 targets: E[(random - target)²] = 1/12 ≈ 0.083
+                    random_mse_baseline = 1.0 / 12.0  # Variance of uniform distribution [0,1]
+                    current_mse = out[split]  # Current validation loss is MSE
+                    improvement_ratio = random_mse_baseline / max(current_mse, 1e-10)  # Avoid division by zero
+                    out[f'{split}_model_vs_random'] = improvement_ratio
+                    out[f'{split}_avg_mse'] = current_mse
+                    out[f'{split}_random_mse_baseline'] = random_mse_baseline
                 else:
                     raise ValueError(f"Unsupported training type: {training_ctx.training_type}")
 

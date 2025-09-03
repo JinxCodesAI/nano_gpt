@@ -17,7 +17,7 @@ import torch
 from torch.nn.parallel import DistributedDataParallel as DDP
 from torch.distributed import init_process_group, destroy_process_group
 
-from model import GPTConfig, GPT
+from model import GPTConfig, GPT, ModelMode
 from utils import Timer, log_masking_stats
 from training_utils import (
     get_batch, estimate_loss, get_lr, load_synthetic_model, 
@@ -67,6 +67,19 @@ gradient_accumulation_steps = 1 # used to simulate larger batch sizes
 batch_size = 16 # if gradient_accumulation_steps > 1, this is the micro-batch size
 block_size = 1024
 use_paragraph_boundaries = False # if True, start samples at paragraph boundaries (double newlines)
+# training mode config - support for all 3 modes
+training_type = 'unmasking'  # Options: 'unmasking', 'token_classification', 'sequence_scoring', 'remasking_binary' (backward compatibility)
+num_token_classes = 2  # For token classification: number of classes (flexible, not just binary)
+
+# transfer learning config
+init_from_checkpoint = ""  # Path to pretrained checkpoint for transfer learning
+freeze_transformer = False  # For transfer learning: freeze transformer weights
+# dynamic unfreezing for two-stage training
+unfreeze_at_iteration = None  # Iteration to unfreeze transformer (e.g., 2000 for two-stage training)
+unfreeze_lr_multiplier = 0.1  # Reduce learning rate when unfreezing to avoid instability
+# sequence scoring config
+unmasking_model_checkpoint = ""  # Path to pretrained unmasking model for sequence scoring
+
 # unmasking training config
 unmasking_stages = [] # override in config file
 validation_stages = [] # override in config file
@@ -96,7 +109,7 @@ backend = 'nccl' # 'nccl', 'gloo', etc.
 # system
 device = 'cuda' # examples: 'cpu', 'cuda', 'cuda:0', 'cuda:1' etc., or try 'mps' on macbooks
 dtype = 'float16'
-compile = True # use PyTorch 2.0 to compile the model to be faster
+compile = False # use PyTorch 2.0 to compile the model to be faster - disabled due to Triton issues
 start_iter_num = 0
 
 # -----------------------------------------------------------------------------
@@ -215,7 +228,7 @@ else:
 # Create training context with all parameters
 # Convert unmasking_stages dict to UnmaskingStage objects
 unmasking_stage_objects = None
-if training_type == 'unmasking':
+if training_type in ['unmasking', 'sequence_scoring']:
     unmasking_stage_objects = []
     for stage in unmasking_stages:
         stage_type = stage['type']
@@ -243,7 +256,7 @@ if training_type == 'unmasking':
 
 # Convert validation_stages dict to UnmaskingStage objects (if different from training stages)
 validation_stage_objects = None
-if training_type == 'unmasking' and len(validation_stages) > 0:
+if training_type in ['unmasking', 'sequence_scoring'] and len(validation_stages) > 0:
     validation_stage_objects = []
     for stage in validation_stages:
         stage_type = stage['type']
@@ -271,6 +284,7 @@ if training_type == 'unmasking' and len(validation_stages) > 0:
 
 training_ctx = TrainingContext(
     training_type=training_type,
+    num_token_classes=num_token_classes,
     batch_size=batch_size,
     block_size=block_size,
     max_iters=max_iters,
@@ -295,8 +309,52 @@ training_ctx = TrainingContext(
     enable_entropy_penalty=enable_entropy_penalty,
     max_entropy_penalty=max_entropy_penalty,
     entropy_penalty_start_iter=entropy_penalty_start_iter,
-    uncertainty_factor=uncertainty_factor
+    uncertainty_factor=uncertainty_factor,
+    # transfer learning parameters
+    freeze_transformer=freeze_transformer,
+    init_from_checkpoint=init_from_checkpoint,
+    unfreeze_at_iteration=unfreeze_at_iteration,
+    unfreeze_lr_multiplier=unfreeze_lr_multiplier
 )
+
+# Load unmasking model for sequence scoring if required
+if training_type == 'sequence_scoring':
+    print(f"Loading unmasking model for sequence scoring from {unmasking_model_checkpoint}")
+    
+    # Load the unmasking model checkpoint
+    unmasking_checkpoint = torch.load(unmasking_model_checkpoint, map_location=device, weights_only=False)
+    unmasking_model_args = unmasking_checkpoint['model_args']
+    
+    # Create unmasking model with same architecture
+    unmasking_gptconf = GPTConfig(**unmasking_model_args)
+    unmasking_model = GPT(unmasking_gptconf)
+    
+    # Load the state dict
+    unmasking_state_dict = unmasking_checkpoint['model']
+    # Handle potential _orig_mod prefix issues
+    unwanted_prefix = '_orig_mod.'
+    for k, v in list(unmasking_state_dict.items()):
+        if k.startswith(unwanted_prefix):
+            unmasking_state_dict[k[len(unwanted_prefix):]] = unmasking_state_dict.pop(k)
+    
+    unmasking_model.load_state_dict(unmasking_state_dict)
+    unmasking_model.to(device)
+    unmasking_model.eval()  # Set to eval mode for inference
+    
+    # Add to training context
+    training_ctx.unmasking_model = unmasking_model
+    
+    print(f"Unmasking model loaded successfully:")
+    print(f"  - Model parameters: {unmasking_model.get_num_params()/1e6:.2f}M")
+    print(f"  - Vocab size: {unmasking_model_args.get('vocab_size', 'unknown')}")
+    print(f"  - Block size: {unmasking_model_args.get('block_size', 'unknown')}")
+    
+    # Verify compatibility
+    if unmasking_model_args.get('vocab_size') != extended_vocab_size:
+        print(f"WARNING: Unmasking model vocab size ({unmasking_model_args.get('vocab_size')}) != current vocab size ({extended_vocab_size})")
+    
+    if unmasking_model_args.get('block_size', 1024) < (block_size - 1):
+        print(f"WARNING: Unmasking model block size ({unmasking_model_args.get('block_size')}) < required size ({block_size - 1})")
 
 # Apply restored training context state if resuming from checkpoint
 print(f"DEBUG: init_from='{init_from}', checkpoint_training_context={checkpoint_training_context}")
@@ -310,9 +368,79 @@ if init_from == 'resume' and checkpoint_training_context is not None:
 else:
     print(f"DEBUG: NOT applying training context. init_from='{init_from}', checkpoint_training_context={checkpoint_training_context is not None}")
 
+# mode validation and configuration
+cls_token_id = None
+
+# Add validation for token classification mode
+if training_type in ['token_classification', 'remasking_binary']:
+    if attention_type != 'bidirectional':
+        print("WARNING: Token classification requires bidirectional attention")
+        attention_type = 'bidirectional'
+
+    print(f"Token classification mode enabled:")
+    print(f"  - Attention type: {attention_type}")
+    print(f"  - Number of classes: {num_token_classes}")
+
+    # Set model mode
+    model_mode = ModelMode.TOKEN_CLASSIFIER
+
+# Add validation for sequence scoring mode
+elif training_type == 'sequence_scoring':
+    if attention_type != 'bidirectional':
+        print("WARNING: Sequence scoring requires bidirectional attention")
+        attention_type = 'bidirectional'
+
+    # Ensure we have a CLS token ID within the reserved special token range
+    cls_token_id = meta_vocab_size + 1 if meta_vocab_size is not None else 70  # First special token after mask_token_id
+    print(f"Setting cls_token_id = {cls_token_id} (using reserved special token slot)")
+
+    # Update training context with CLS token ID
+    training_ctx.cls_token_id = cls_token_id
+
+    # Validate unmasking model checkpoint for sequence scoring
+    if unmasking_model_checkpoint is None:
+        raise ValueError("Sequence scoring requires unmasking_model_checkpoint to be specified")
+    
+    if not os.path.exists(unmasking_model_checkpoint):
+        raise FileNotFoundError(f"Unmasking model checkpoint not found: {unmasking_model_checkpoint}")
+
+    print(f"Sequence scoring mode enabled:")
+    print(f"  - Attention type: {attention_type}")
+    print(f"  - CLS token ID: {cls_token_id}")
+    print(f"  - Block size: {block_size} (includes CLS token)")
+    print(f"  - Unmasking model: {unmasking_model_checkpoint}")
+
+    # Set model mode
+    model_mode = ModelMode.SEQUENCE_SCORER
+
+# Language modeling mode (default)
+elif training_type == 'unmasking':
+    print(f"Language modeling mode enabled (unmasking)")
+    model_mode = ModelMode.LANGUAGE_MODEL
+else:
+    raise ValueError(f"Unknown training type: {training_type}")
+
+# Transfer learning validation
+if init_from_checkpoint is not None and init_from_checkpoint != "":
+    if not os.path.exists(init_from_checkpoint):
+        raise FileNotFoundError(f"Transfer learning checkpoint not found: {init_from_checkpoint}")
+
+    print(f"Transfer learning enabled:")
+    print(f"  Checkpoint: {init_from_checkpoint}")
+    print(f"  Freeze transformer: {freeze_transformer}")
+
+    if freeze_transformer:
+        print("  Mode: Feature extraction (frozen transformer + trainable head)")
+    else:
+        print("  Mode: Fine-tuning (all weights trainable)")
+
 # model init
 model_args = dict(n_layer=n_layer, n_head=n_head, n_embd=n_embd, block_size=block_size,
-                  bias=bias, vocab_size=None, dropout=dropout, attention_type=attention_type, use_rope=use_rope) # start with model_args from command line
+                  bias=bias, vocab_size=None, dropout=dropout, attention_type=attention_type, 
+                  use_rope=use_rope, mode=model_mode, num_token_classes=num_token_classes, 
+                  cls_token_id=cls_token_id, freeze_transformer=freeze_transformer,
+                  init_from_checkpoint=init_from_checkpoint, unfreeze_at_iteration=unfreeze_at_iteration,
+                  unfreeze_lr_multiplier=unfreeze_lr_multiplier) # start with model_args from command line
 if init_from == 'scratch':
     # init a new model from scratch
     print_and_flush("Initializing a new model from scratch")
@@ -321,23 +449,42 @@ if init_from == 'scratch':
     gptconf = GPTConfig(**model_args)
     model = GPT(gptconf)
 elif init_from == 'resume':
-    print_and_flush(f"Resuming unmasking training from {out_dir}")
+    print_and_flush(f"Resuming {training_type} training from {out_dir}")
     # resume training from a checkpoint.
-    # Find the latest unmasking checkpoint file
+    # Find the latest checkpoint file for the current training type
     if ckpt_filename is None:
         import glob
-        ckpt_pattern = os.path.join(out_dir, 'ckpt_*unmasking*.pt')
+        
+        # Generate checkpoint pattern based on training type
+        if training_type == 'unmasking':
+            ckpt_pattern = os.path.join(out_dir, 'ckpt_unmasking_*.pt')
+            fallback_pattern = os.path.join(out_dir, 'ckpt_*unmasking*.pt')  # backward compatibility
+        elif training_type in ['token_classification', 'remasking_binary']:
+            ckpt_pattern = os.path.join(out_dir, 'ckpt_token_classifier_*.pt')
+            fallback_pattern = os.path.join(out_dir, 'ckpt_*remasking*.pt')  # backward compatibility
+        elif training_type == 'sequence_scoring':
+            ckpt_pattern = os.path.join(out_dir, 'ckpt_sequence_scorer_*.pt')
+            fallback_pattern = None
+        else:
+            ckpt_pattern = os.path.join(out_dir, f'ckpt_{training_type}_*.pt')
+            fallback_pattern = None
+        
         ckpt_files = glob.glob(ckpt_pattern)
+        
+        # Try fallback pattern if no files found
+        if not ckpt_files and fallback_pattern:
+            ckpt_files = glob.glob(fallback_pattern)
+        
         if not ckpt_files:
-            # Fallback to old naming convention
+            # Final fallback to old naming convention
             ckpt_path = os.path.join(out_dir, 'ckpt.pt')
             if not os.path.exists(ckpt_path):
-                raise FileNotFoundError(f"No unmasking checkpoint files found in {out_dir}")
+                raise FileNotFoundError(f"No {training_type} checkpoint files found in {out_dir}")
         else:
             # Extract iteration numbers and find the latest
             def extract_iter_num(filename):
                 basename = os.path.basename(filename)
-                # Extract number from ckpt_unmasking_XXX.pt
+                # Extract number from ckpt_{type}_{XXX}.pt
                 parts = basename.split('_')
                 for part in parts:
                     if part.replace('.pt', '').isdigit():
@@ -430,13 +577,31 @@ def reload_from_checkpoint():
     
     print(f"\n*** RELOADING FROM CHECKPOINT ***")
     
-    # Find the latest unmasking checkpoint file
+    # Find the latest checkpoint file for the current training type
     import glob
-    ckpt_pattern = os.path.join(out_dir, 'ckpt_*unmasking*.pt')
+    
+    # Generate checkpoint pattern based on training type
+    if training_type == 'unmasking':
+        ckpt_pattern = os.path.join(out_dir, 'ckpt_unmasking_*.pt')
+        fallback_pattern = os.path.join(out_dir, 'ckpt_*unmasking*.pt')  # backward compatibility
+    elif training_type in ['token_classification', 'remasking_binary']:
+        ckpt_pattern = os.path.join(out_dir, 'ckpt_token_classifier_*.pt')
+        fallback_pattern = os.path.join(out_dir, 'ckpt_*remasking*.pt')  # backward compatibility
+    elif training_type == 'sequence_scoring':
+        ckpt_pattern = os.path.join(out_dir, 'ckpt_sequence_scorer_*.pt')
+        fallback_pattern = None
+    else:
+        ckpt_pattern = os.path.join(out_dir, f'ckpt_{training_type}_*.pt')
+        fallback_pattern = None
+    
     ckpt_files = glob.glob(ckpt_pattern)
     
+    # Try fallback pattern if no files found
+    if not ckpt_files and fallback_pattern:
+        ckpt_files = glob.glob(fallback_pattern)
+    
     if not ckpt_files:
-        print("No unmasking checkpoint files found for recovery - cannot continue")
+        print(f"No {training_type} checkpoint files found for recovery - cannot continue")
         return False
     
     # Extract iteration numbers and find the latest
@@ -505,10 +670,17 @@ def reload_from_checkpoint():
 
 # training loop
 X, Y, mask = get_batch('train', training_ctx) # fetch the very first batch
+
+
 t0 = time.time()
 local_iter_num = 0 # number of iterations in the lifetime of this process
 raw_model = model.module if ddp else model # unwrap DDP container if needed
 running_mfu = -1.0
+
+# Add initialization tracking for frozen state
+if freeze_transformer and hasattr(raw_model, 'get_frozen_status'):
+    print(f"Initial frozen status: {raw_model.get_frozen_status()}")
+    raw_model.print_parameter_status()
 
 # Show initial stage configuration for unmasking training
 if training_ctx.training_type == 'unmasking':
@@ -548,6 +720,45 @@ while True:
     lr = get_lr(iter_num, training_ctx) if decay_lr else learning_rate
     for param_group in optimizer.param_groups:
         param_group['lr'] = lr
+
+    # Dynamic unfreezing logic - add this in the training loop before validation
+    if (unfreeze_at_iteration is not None and
+        iter_num == unfreeze_at_iteration and
+        hasattr(raw_model, 'get_frozen_status') and
+        raw_model.get_frozen_status()):
+
+        print(f"\n*** DYNAMIC UNFREEZING at iteration {iter_num} ***")
+        print("Switching from feature extraction to fine-tuning mode")
+
+        # Unfreeze transformer weights
+        raw_model.unfreeze_transformer_weights()
+
+        # Reduce learning rate to avoid instability
+        if unfreeze_lr_multiplier < 1.0:
+            old_lr = learning_rate
+            new_lr = old_lr * unfreeze_lr_multiplier
+            print(f"Reducing learning rate: {old_lr:.6f} -> {new_lr:.6f}")
+
+            # Update learning rate in optimizer
+            for param_group in optimizer.param_groups:
+                param_group['lr'] = new_lr
+
+            # Update base learning rate for scheduler
+            learning_rate = new_lr
+
+        # Print parameter status
+        raw_model.print_parameter_status()
+
+        # Log to wandb if enabled
+        if wandb_log and master_process:
+            wandb.log({
+                "unfreezing_iteration": iter_num,
+                "old_lr": old_lr if unfreeze_lr_multiplier < 1.0 else learning_rate,
+                "new_lr": learning_rate,
+                "lr_multiplier": unfreeze_lr_multiplier
+            })
+
+        print("*** UNFREEZING COMPLETE ***\n")
 
     # evaluate the loss on train/val sets and write checkpoints
     if (iter_num % eval_interval == 0 and master_process and not just_recovered) or eval_only:
@@ -659,7 +870,15 @@ while True:
                     'best_val_loss_for_stage': training_ctx.best_val_loss_this_stage,
                     'entropy_multiplier_ema': training_ctx.entropy_multiplier_ema
                 }
-                ckpt_filename = f'ckpt_unmasking_{iter_num}.pt'
+                # Generate checkpoint filename based on training type
+                if training_type == 'unmasking':
+                    ckpt_filename = f'ckpt_unmasking_{iter_num}.pt'
+                elif training_type in ['token_classification', 'remasking_binary']:
+                    ckpt_filename = f'ckpt_token_classifier_{iter_num}.pt'
+                elif training_type == 'sequence_scoring':
+                    ckpt_filename = f'ckpt_sequence_scorer_{iter_num}.pt'
+                else:
+                    ckpt_filename = f'ckpt_{training_type}_{iter_num}.pt'  # fallback
                     
                 if start_iter_num != iter_num:
                     print(f"saving checkpoint to {out_dir}/{ckpt_filename}")
@@ -818,6 +1037,8 @@ while True:
             # Update training context with current iteration for the next batch
             training_ctx.iter_num = iter_num
             X, Y, mask = get_batch('train', training_ctx)
+            
+            
             # backward pass, with gradient scaling if training in fp16
             with timer.time_function('backward_pass'):
                 scaler.scale(loss).backward()
@@ -1009,6 +1230,15 @@ while True:
         print(f"  cleanup: {cleanup_time:.1f}ms, gpu_sync: {gpu_sync_time:.1f}ms")
         print(f"  measured: {measured_total:.1f}ms, unaccounted: {unaccounted_time:.1f}ms ({unaccounted_time/total_time*100:.1f}%)")
         
+        # Log mask statistics for unmasking only (disabled for sequence_scoring to reduce log noise)
+        if training_ctx.training_type == 'unmasking' and mask is not None:
+            mask_counts_per_seq = mask.sum(dim=1).cpu()
+            mask_mean = mask_counts_per_seq.float().mean().item()
+            mask_var = mask_counts_per_seq.float().var().item() if mask_counts_per_seq.numel() > 1 else 0.0
+            mask_min = mask_counts_per_seq.min().item()
+            mask_max = mask_counts_per_seq.max().item()
+            print(f"  mask_counts ({training_ctx.training_type}): mean={mask_mean:.6f}, var={mask_var:.6f}, min={mask_min:.6f}, max={mask_max:.6f}")
+        
         # Add entropy penalty logging if enabled
         if training_ctx.enable_entropy_penalty:
             current_entropy_penalty = get_current_entropy_penalty(iter_num, training_ctx)
@@ -1023,9 +1253,9 @@ while True:
             val_loss_time = timer.get_average('validation_loss_computation') * 1000
             print(f"  validation: {val_time:.2f}ms (data: {val_data_time:.2f}ms, forward: {val_forward_time:.2f}ms, loss: {val_loss_time:.2f}ms)")
 
-        # Add masking statistics logging for unmasking
+        # Add masking statistics logging for unmasking only (disabled for sequence_scoring to reduce log noise)
         stage_config = training_ctx.get_current_stage_config()
-        if stage_config and iter_num % (log_interval * 10) == 0:
+        if stage_config and iter_num % (log_interval * 10) == 0 and training_ctx.training_type != 'sequence_scoring':
             mask_ratio = mask.float().mean().item()
             stage_type = stage_config.get_stage_type()
             stage_info = f"Masking: stage={training_ctx.current_stage} ({stage_type.value}), actual_ratio={mask_ratio:.3f}"

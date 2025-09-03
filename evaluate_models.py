@@ -155,11 +155,10 @@ def diffusion_generate(model, batch_size, total_length, iterations, remasking_mo
 EVALUATION_CONFIG = {
     # Model configuration
     'checkpoints': [
-        'optimal6_7800.pt',
+        'optimal5_bert_8000_better.pt',
         'optimal5_6600.pt',
         'optimal5_2000.pt',
-        'optimal3_7200.pt',
-        'optimal3_5000.pt',
+        'optimal_5_8000_span.pt',
         'optimal2_8000.pt',
         '35.75_58.2_UM.pt',
         'optimal2_6400.pt',
@@ -177,7 +176,7 @@ EVALUATION_CONFIG = {
     'rating_batch_size': 64,    # Batch size for rating samples (GPU optimization)
     'num_challenges': 1000,     # P tournament rounds before stopping
     'sequence_length': 1024,   # Total length of generated sequence
-    'seed': 42,
+    'seed': -1,
     'device': 'cuda',
     'dtype': 'float16',
     'compile': False,
