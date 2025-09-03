@@ -398,9 +398,9 @@ def get_batch_sequence_scoring(split, ctx: TrainingContext, validation_sample_id
             # DEBUG: Log validation batch retrieval
             if validation_sample_idx < 3:
                 print(f"  DEBUG: Retrieving sequence_scoring validation batch {validation_sample_idx}")
-            return get_sequence_scoring_validation_batch(training_ctx, validation_sample_idx)
+            return get_sequence_scoring_validation_batch(ctx, validation_sample_idx)
         else:
-            return get_sequence_scoring_validation_batch(training_ctx, 0)
+            return get_sequence_scoring_validation_batch(ctx, 0)
 
     # Training data generation - identical to get_batch_unmasking until masking step
     if data_cache[split] is None:
