@@ -1240,17 +1240,15 @@ while True:
                 # For sequence scoring, logits IS already the final predictions (batch_size,)
                 predictions = logits  # Already processed through sequence_head in model.forward()
 
-                # Calculate relative error: abs(target - prediction) / target
-                # Avoid division by zero by adding small epsilon
-                epsilon = 1e-8
-                relative_errors = torch.abs(Y - predictions) / (Y + epsilon)
-                avg_relative_error = relative_errors.mean().item()
+                # Calculate absolute error: abs(target - prediction)
+                absolute_errors = torch.abs(Y - predictions)
+                avg_absolute_error = absolute_errors.mean().item()
 
                 # Debug: Log actual values occasionally to verify calculation
                 if iter_num % 100 == 0:
-                    print(f"  DEBUG ratio calc: targets={Y[:3].tolist()}, predictions={predictions[:3].tolist()}, errors={relative_errors[:3].tolist()}")
+                    print(f"  DEBUG ratio calc: targets={Y[:3].tolist()}, predictions={predictions[:3].tolist()}, errors={absolute_errors[:3].tolist()}")
 
-                print(f"iter {iter_num}: loss {lossf:.4f}, time {dt*1000:.2f}ms, mfu {running_mfu*100:.2f}%, ratio {avg_relative_error:.3f}")
+                print(f"iter {iter_num}: loss {lossf:.4f}, time {dt*1000:.2f}ms, mfu {running_mfu*100:.2f}%, ratio {avg_absolute_error:.3f}")
         else:
             print(f"iter {iter_num}: loss {lossf:.4f}, time {dt*1000:.2f}ms, mfu {running_mfu*100:.2f}%")
         print(f"  data: {data_time:.1f}ms, grad_accum: {grad_accum_time:.1f}ms (fw: {forward_time:.1f}ms, bw: {backward_time:.1f}ms)")
