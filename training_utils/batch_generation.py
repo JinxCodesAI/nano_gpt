@@ -395,9 +395,6 @@ def get_batch_sequence_scoring(split, ctx: TrainingContext, validation_sample_id
     if split == 'val':
         from .validation_sets import get_sequence_scoring_validation_batch
         if validation_sample_idx is not None:
-            # DEBUG: Log validation batch retrieval
-            if validation_sample_idx < 3:
-                print(f"  DEBUG: Retrieving sequence_scoring validation batch {validation_sample_idx}")
             return get_sequence_scoring_validation_batch(ctx, validation_sample_idx)
         else:
             return get_sequence_scoring_validation_batch(ctx, 0)

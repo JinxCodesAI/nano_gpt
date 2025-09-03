@@ -238,10 +238,7 @@ def create_sequence_scoring_validation_set(ctx: TrainingContext, force_recreate=
 
     # For sequence scoring, we'll store in a new cache variable (we'll need to extend the cache system)
     # For now, let's create it fresh each time but with consistent seed
-    if not force_recreate:
-        print("Creating sequence scoring validation set...")
-    else:
-        print("Force recreating sequence scoring validation set...")
+    # Removed verbose logging for cleaner output
 
     data_cache = get_data_cache()
     valid_indices_cache = get_valid_indices_cache()
@@ -274,7 +271,6 @@ def create_sequence_scoring_validation_set(ctx: TrainingContext, force_recreate=
 
     for stage_idx, stage_config in enumerate(available_stages):
         stage_samples = samples_per_stage + (1 if stage_idx < remainder else 0)
-        print(f"  Stage {stage_idx}: {stage_samples} samples using {stage_config.config.get_stage_type().value}")
 
         stage_batches = []
         samples_generated = 0
@@ -322,8 +318,6 @@ def create_sequence_scoring_validation_set(ctx: TrainingContext, force_recreate=
     # Store in a global variable for now (we'll need to extend the cache system later)
     global sequence_scoring_val_set
     sequence_scoring_val_set = validation_batches
-
-    print(f"Sequence scoring validation set created: {len(validation_batches)} batches, {sum(b[0].size(0) for b in validation_batches)} total samples")
 
 
 def create_remasking_validation_set(ctx: TrainingContext, force_recreate=False):

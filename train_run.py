@@ -715,26 +715,9 @@ if training_ctx.training_type == 'unmasking':
 
 # Show initial configuration for sequence scoring training
 elif training_ctx.training_type == 'sequence_scoring':
-    print(f"\n*** SEQUENCE SCORING TRAINING INITIALIZED ***")
-    print(f"Using validation stages: {len(training_ctx.validation_stages)} stages configured")
-    for i, stage_config in enumerate(training_ctx.validation_stages):
-        stage_type = stage_config.config.get_stage_type()
-        print(f"  Stage {i}: {stage_type.value}")
-        if stage_type == UnmaskingStageType.STICKY:
-            config = stage_config.config
-            print(f"    Target masked ratio: {config.target_masked_ratio}")
-            print(f"    P1 probability: {config.p1_probability}")
-            print(f"    P2 probability: {config.p2_probability}")
-        elif stage_type == UnmaskingStageType.RANDOM:
-            config = stage_config.config
-            print(f"    Max masked ratio: {config.max_masked_ratio}")
-        elif stage_type == UnmaskingStageType.SPAN:
-            config = stage_config.config
-            print(f"    Spans count: {config.spans_count}")
-    print("*** SEQUENCE SCORING INITIALIZATION COMPLETE ***\n")
+    print(f"Sequence scoring training initialized with {len(training_ctx.validation_stages)} validation stages")
 
     # Pre-create validation set using validation_stages
-    print("Pre-creating sequence scoring validation set...")
     create_sequence_scoring_validation_set(training_ctx)
 
 print_and_flush("Starting training loop...")
@@ -1267,10 +1250,6 @@ while True:
                 # Calculate absolute error: abs(target - prediction)
                 absolute_errors = torch.abs(Y - predictions)
                 avg_absolute_error = absolute_errors.mean().item()
-
-                # Debug: Log actual values occasionally to verify calculation
-                if iter_num % 100 == 0:
-                    print(f"  DEBUG ratio calc: targets={Y[:3].tolist()}, predictions={predictions[:3].tolist()}, errors={absolute_errors[:3].tolist()}")
 
                 print(f"iter {iter_num}: loss {lossf:.4f}, time {dt*1000:.2f}ms, mfu {running_mfu*100:.2f}%, ratio {avg_absolute_error:.3f}")
         else:
