@@ -232,6 +232,8 @@ def get_unmasking_training_batch_all_stages(ctx: TrainingContext):
 
 def create_sequence_scoring_validation_set(ctx: TrainingContext, force_recreate=False):
     """Create complete validation set for sequence scoring training using validation_stages"""
+    from .masking_strategies import apply_stage_masking  # Import here to avoid circular dependency
+
     val_batch_cache, progressive_val_cache, progressive_val_full_cache, unmasking_val_set, remasking_val_set = get_validation_caches()
 
     # For sequence scoring, we'll store in a new cache variable (we'll need to extend the cache system)
@@ -304,14 +306,10 @@ def create_sequence_scoring_validation_set(ctx: TrainingContext, force_recreate=
                 unmasked_logits, _ = ctx.unmasking_model(x, None)
                 unmasked_tokens = torch.argmax(unmasked_logits, dim=-1)
 
-            # Step 2: Apply masking strategy for this stage
-            mask = stage_config.apply_masking(x, ctx)
+            # Step 2: Apply masking strategy for this stage using proper function
+            masked_x, mask = apply_stage_masking(x, stage_config, ctx.mask_token_id, ctx.meta_vocab_size)
 
-            # Step 3: Create masked input
-            masked_x = x.clone()
-            masked_x[mask] = ctx.mask_token_id
-
-            # Step 4: Calculate masking ratios (targets)
+            # Step 3: Calculate masking ratios (targets)
             masking_ratios = mask.float().mean(dim=1)
 
             stage_batches.append((masked_x.clone(), masking_ratios.clone(), mask.clone()))
