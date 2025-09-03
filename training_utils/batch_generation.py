@@ -378,9 +378,13 @@ def get_batch_sequence_scoring(split, ctx: TrainingContext, validation_sample_id
     3. Use unmasking_model to reconstruct masked sequences
     4. Return reconstructed sequences with [CLS] token and masking ratios as targets
     """
-    
+
     if ctx.unmasking_model is None:
         raise ValueError("Sequence scoring requires unmasking_model in TrainingContext")
+
+    # DEBUG: Log function entry
+    if split == 'train' and ctx.iter_num % 200 == 0:
+        print(f"DEBUG: get_batch_sequence_scoring called for {split}, iter={ctx.iter_num}, validation_idx={validation_sample_idx}")
     
     # Step 1: Sample sequences and apply masking (reuse unmasking logic)
     # Use existing data loading infrastructure from unmasking
@@ -482,10 +486,18 @@ def get_batch_sequence_scoring(split, ctx: TrainingContext, validation_sample_id
     # Step 6: Masking ratios become our target scores (already 0-1 range)
     y = masking_ratios  # Shape: (batch_size,)
 
-    # DEBUG: Log target statistics for sequence scoring
+    # DEBUG: Enhanced logging for sequence scoring
     if split == 'val' and validation_sample_idx is not None and validation_sample_idx < 3:
         print(f"    DEBUG: Batch {validation_sample_idx} targets: mean={y.mean().item():.4f}, std={y.std().item():.4f}, range=[{y.min().item():.4f}, {y.max().item():.4f}]")
-    
+
+    # DEBUG: Log training batch details every validation interval
+    if split == 'train' and ctx.iter_num % 200 == 0:
+        print(f"DEBUG: Sequence scoring training batch generated:")
+        print(f"  Input shape: {x.shape}, Target shape: {y.shape}")
+        print(f"  CLS token ID: {cls_token_id}, first 5 tokens: {x[0, :5].tolist()}")
+        print(f"  Target masking ratios (first 5): {y[:5].tolist()}")
+        print(f"  Target stats: mean={y.mean().item():.4f}, std={y.std().item():.4f}, range=[{y.min().item():.4f}, {y.max().item():.4f}]")
+
     # Return the actual mask that was used for masking (for correct logging statistics)
     # Need to pad mask to match x's shape (which includes CLS token)
     cls_mask = torch.zeros((ctx.batch_size, 1), device=ctx.device, dtype=torch.bool)

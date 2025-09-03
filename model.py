@@ -511,6 +511,20 @@ class GPT(nn.Module):
             if targets is not None:
                 # MSE loss for continuous score prediction (0-1 range)
                 loss = F.mse_loss(logits, targets.float())
+
+                # DEBUG: Log sequence scoring details during training (every 200 iterations)
+                if self.training and hasattr(self, '_debug_iter_counter'):
+                    self._debug_iter_counter = getattr(self, '_debug_iter_counter', 0) + 1
+                    if self._debug_iter_counter % 200 == 0:
+                        with torch.no_grad():
+                            print(f"DEBUG: Sequence scorer forward pass (iter ~{self._debug_iter_counter}):")
+                            print(f"  CLS output stats: mean={cls_output.mean().item():.4f}, std={cls_output.std().item():.4f}")
+                            print(f"  Predictions (first 5): {logits[:5].tolist()}")
+                            print(f"  Targets (first 5): {targets[:5].tolist()}")
+                            print(f"  Loss: {loss.item():.6f}")
+                            print(f"  Prediction stats: mean={logits.mean().item():.4f}, std={logits.std().item():.4f}")
+                elif not hasattr(self, '_debug_iter_counter'):
+                    self._debug_iter_counter = 0
             else:
                 loss = None
 

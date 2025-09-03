@@ -400,6 +400,7 @@ elif training_type == 'sequence_scoring':
     # Ensure we have a CLS token ID within the reserved special token range
     cls_token_id = meta_vocab_size + 5 if meta_vocab_size is not None else 70  # First special token after mask_token_id
     print(f"Setting cls_token_id = {cls_token_id} (using reserved special token slot)")
+    print(f"DEBUG: meta_vocab_size = {meta_vocab_size}, mask_token_id = {mask_token_id}, extended_vocab_size = {extended_vocab_size}")
 
     # Update training context with CLS token ID
     training_ctx.cls_token_id = cls_token_id
@@ -1255,6 +1256,45 @@ while True:
 
                 # Calculate absolute error: abs(target - prediction)
                 absolute_errors = torch.abs(Y - predictions)
+
+                # DEBUG: Log sequence scoring training details every log_interval
+                if iter_num % log_interval == 0:
+                    print(f"DEBUG: Sequence scoring training step {iter_num}:")
+                    print(f"  Input IDs (first 5 of batch 0): {X[0, :5].tolist()}")
+                    print(f"  Targets (first 5): {Y[:5].tolist()}")
+                    print(f"  Predictions (first 5): {predictions[:5].tolist()}")
+                    print(f"  Absolute errors (first 5): {absolute_errors[:5].tolist()}")
+                    print(f"  Loss: {loss.item():.6f}")
+
+                    # Check if gradients are being computed
+                    total_grad_norm = 0.0
+                    param_count = 0
+                    for name, param in raw_model.named_parameters():
+                        if param.grad is not None:
+                            param_grad_norm = param.grad.data.norm(2).item()
+                            total_grad_norm += param_grad_norm ** 2
+                            param_count += 1
+                    total_grad_norm = total_grad_norm ** 0.5
+                    print(f"  Gradient norm: {total_grad_norm:.6f} ({param_count} params with gradients)")
+
+                    # Check optimizer state
+                    if hasattr(optimizer, 'state') and len(optimizer.state) > 0:
+                        print(f"  Optimizer has state for {len(optimizer.state)} parameters")
+                    else:
+                        print(f"  WARNING: Optimizer has no state!")
+
+                    # Check if parameters are actually changing
+                    if hasattr(raw_model, '_last_param_snapshot'):
+                        param_changes = 0
+                        for name, param in raw_model.named_parameters():
+                            if name in raw_model._last_param_snapshot:
+                                old_param = raw_model._last_param_snapshot[name]
+                                if not torch.equal(param.data, old_param):
+                                    param_changes += 1
+                        print(f"  Parameters changed since last check: {param_changes}")
+
+                    # Store current parameters for next comparison
+                    raw_model._last_param_snapshot = {name: param.data.clone() for name, param in raw_model.named_parameters()}
                 avg_absolute_error = absolute_errors.mean().item()
 
                 print(f"iter {iter_num}: loss {lossf:.4f}, time {dt*1000:.2f}ms, mfu {running_mfu*100:.2f}%, ratio {avg_absolute_error:.3f}")
