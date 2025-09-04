@@ -11,6 +11,7 @@ import pickle
 import math
 import random
 import sys
+import numpy as np
 from collections import Counter, defaultdict
 from contextlib import nullcontext
 import torch
@@ -51,6 +52,70 @@ class ModuleMapper:
         if 'train_utils' in sys.modules and 'training_utils' in sys.modules:
             if sys.modules['train_utils'] is sys.modules['training_utils']:
                 del sys.modules['train_utils']
+
+
+class GroundTruthModel:
+    """
+    A fake model that generates samples by taking them from validation set.
+    This serves as ground truth baseline in tournament comparisons.
+    """
+
+    def __init__(self, config, vocab_info):
+        self.config = config
+        self.vocab_info = vocab_info
+        self.validation_data = None
+        self.sample_index = 0
+        self._load_validation_data()
+
+    def _load_validation_data(self):
+        """Load validation data from val.bin file"""
+        # Determine dataset name from vocab_info
+        dataset_name = self.vocab_info.get('dataset_name', 'shakespeare_char')
+        data_dir = os.path.join('data', dataset_name)
+        val_path = os.path.join(data_dir, 'val.bin')
+
+        if not os.path.exists(val_path):
+            raise FileNotFoundError(f"Validation data not found: {val_path}")
+
+        # Load validation data using memory mapping for efficiency
+        self.validation_data = np.memmap(val_path, dtype=np.uint16, mode='r')
+        print(f"Ground truth model loaded validation data: {len(self.validation_data)} tokens from {val_path}")
+
+    def generate_samples(self, batch_size, sequence_length):
+        """Generate samples by extracting sequences from validation data"""
+        if self.validation_data is None:
+            raise RuntimeError("Validation data not loaded")
+
+        if len(self.validation_data) < sequence_length:
+            raise ValueError(f"Validation data ({len(self.validation_data)} tokens) is shorter than sequence_length ({sequence_length})")
+
+        samples = []
+        max_start_idx = len(self.validation_data) - sequence_length
+
+        if max_start_idx <= 0:
+            raise ValueError(f"Validation data too short for sequence length {sequence_length}")
+
+        for i in range(batch_size):
+            # Use deterministic sampling with wraparound to ensure reproducibility
+            # Spread samples across the validation set to get diverse examples
+            start_idx = (self.sample_index + i * 1000) % max_start_idx
+
+            # Extract sequence from validation data
+            sequence = self.validation_data[start_idx:start_idx + sequence_length]
+            sample_tokens = sequence.astype(np.int64).tolist()
+            sample_text = self.vocab_info['decode'](sample_tokens)
+
+            samples.append({
+                'tokens': sample_tokens,
+                'text': sample_text,
+                'model_id': 'ground_truth',
+                'sample_id': i
+            })
+
+        # Update sample index for next batch to avoid repetition
+        self.sample_index = (self.sample_index + batch_size * 1000) % max_start_idx
+
+        return samples
 
 
 def diffusion_generate(model, batch_size, total_length, iterations, remasking_model, mask_token_id,
@@ -157,6 +222,7 @@ def diffusion_generate(model, batch_size, total_length, iterations, remasking_mo
 EVALUATION_CONFIG = {
     # Model configuration
     'checkpoints': [
+        'ground_truth',  # Ground truth baseline using validation data
         'optimal5_bert_8000_better.pt',
         'optimal5_6600.pt',
         'optimal5_2000.pt',
@@ -174,10 +240,10 @@ EVALUATION_CONFIG = {
     'judge_model': 'ckpt_sequence_scorer_1000_best.pt',  # '35.75_58.2_UM.pt',  # SEQUENCE_SCORER model to use as the single judge (lower scores = better)
     
     # Evaluation parameters
-    'batch_size': 32,           # N samples per model per batch (generation)
-    'rating_batch_size': 64,    # Batch size for rating samples (GPU optimization)
-    'num_challenges': 1000,     # P tournament rounds before stopping
-    'sequence_length': 1024,   # Total length of generated sequence
+    'batch_size': 32,           # N samples per model per batch (generation) - reduced for testing
+    'rating_batch_size': 64,    # Batch size for rating samples (GPU optimization) - reduced for testing
+    'num_challenges': 1000,     # P tournament rounds before stopping - reduced for testing
+    'sequence_length': 1024,   # Total length of generated sequence - reduced for testing
     'seed': -1,
     'device': 'cuda',
     'dtype': 'float16',
@@ -216,7 +282,7 @@ if EVALUATION_CONFIG['schedule_type'] == 'custom':
 
 class ModelLoader:
     """Handles loading and managing multiple model checkpoints"""
-    
+
     def __init__(self, config):
         self.config = config
         self.models = {}
@@ -225,6 +291,7 @@ class ModelLoader:
         self.remasking_model = None
         self.judge_model_id = None
         self.judge_model_type = None  # Will store ModelMode of judge model
+        self.ground_truth_models = {}  # Store ground truth models separately
         
     def load_all_models(self):
         """Load all model checkpoints and vocabulary"""
@@ -237,13 +304,23 @@ class ModelLoader:
         for i, checkpoint_name in enumerate(self.config['checkpoints']):
             model_id = f"model_{i}"
             self.model_names.append(model_id)
-            model = self._load_single_model(checkpoint_name, model_id)
-            self.models[model_id] = model
 
-            # Track which model is the judge (if it's in the checkpoints list)
-            if checkpoint_name == self.config['judge_model']:
-                self.judge_model_id = model_id
-                print(f"  ✓ {model_id} identified as judge model")
+            # Check if this is a ground truth model
+            if checkpoint_name == 'ground_truth':
+                # Create ground truth model
+                ground_truth_model = GroundTruthModel(self.config, self.vocab_info)
+                self.models[model_id] = ground_truth_model
+                self.ground_truth_models[model_id] = ground_truth_model
+                print(f"  ✓ {model_id} loaded as ground truth model")
+            else:
+                # Load regular model checkpoint
+                model = self._load_single_model(checkpoint_name, model_id)
+                self.models[model_id] = model
+
+                # Track which model is the judge (if it's in the checkpoints list)
+                if checkpoint_name == self.config['judge_model']:
+                    self.judge_model_id = model_id
+                    print(f"  ✓ {model_id} identified as judge model")
 
         # Load optional remasking model
         self._load_remasking_model()
@@ -294,10 +371,19 @@ class ModelLoader:
         return model
     
     def _load_vocabulary(self):
-        """Load vocabulary information from the first model"""
+        """Load vocabulary information from the first real model (skip ground_truth)"""
+        # Find first non-ground_truth checkpoint for vocabulary loading
+        first_real_checkpoint = None
+        for checkpoint_name in self.config['checkpoints']:
+            if checkpoint_name != 'ground_truth':
+                first_real_checkpoint = checkpoint_name
+                break
+
+        if first_real_checkpoint is None:
+            raise ValueError("No real model checkpoints found - need at least one non-ground_truth model for vocabulary loading")
+
         # Use same vocabulary loading logic as sample.py
-        first_checkpoint_name = self.config['checkpoints'][0]
-        ckpt_path = os.path.join(self.config['out_dir'], first_checkpoint_name)
+        ckpt_path = os.path.join(self.config['out_dir'], first_real_checkpoint)
         with ModuleMapper():
             checkpoint = torch.load(ckpt_path, map_location=self.config['device'], weights_only=False)
         
@@ -314,7 +400,7 @@ class ModelLoader:
                     pass
         
         if not dataset_name:
-            if 'shakespeare' in first_checkpoint_name.lower():
+            if 'shakespeare' in first_real_checkpoint.lower():
                 dataset_name = 'shakespeare_char'
             else:
                 dataset_name = 'shakespeare_char'
@@ -447,7 +533,18 @@ class SampleGenerator:
     def generate_samples_for_model(self, model, model_id):
         """Generate samples for a single model"""
         print(f"\nGenerating samples for {model_id}...")
-        
+
+        # Check if this is a ground truth model
+        if isinstance(model, GroundTruthModel):
+            # Use ground truth model's generate_samples method
+            samples = model.generate_samples(
+                batch_size=self.config['batch_size'],
+                sequence_length=self.config['sequence_length']
+            )
+            print(f"Generated {len(samples)} ground truth samples for {model_id}")
+            return samples
+
+        # Regular diffusion model generation
         with torch.no_grad():
             with self.ctx:
                 generated_tokens = diffusion_generate(
@@ -475,7 +572,7 @@ class SampleGenerator:
                     repetition_window=self.config['repetition_window'],
                     log_debug=False
                 )
-        
+
         # Convert to list of samples
         samples = []
         for i in range(self.config['batch_size']):
@@ -487,7 +584,7 @@ class SampleGenerator:
                 'model_id': model_id,
                 'sample_id': i
             })
-        
+
         print(f"Generated {len(samples)} samples for {model_id}")
         return samples
     
@@ -994,7 +1091,11 @@ class ModelEvaluator:
             checkpoint_name = self.config['checkpoints'][int(model_id.split('_')[1])]
             stats = model_stats[model_id]
 
-            print(f"{i+1}. {model_id} ({checkpoint_name})")
+            # Special display for ground truth model
+            if checkpoint_name == 'ground_truth':
+                print(f"{i+1}. {model_id} (Ground Truth Baseline)")
+            else:
+                print(f"{i+1}. {model_id} ({checkpoint_name})")
             print(f"   ELO: {rating:.1f} | Rounds: {rounds}")
             print(f"   W:{stats['wins']} D:{stats['draws']} L:{stats['losses']} | Win Rate: {stats['wins']/(stats['wins']+stats['losses']+stats['draws'])*100:.1f}%")
         
@@ -1067,7 +1168,11 @@ class ModelEvaluator:
                 checkpoint_name = self.config['checkpoints'][int(model_id.split('_')[1])]
                 stats = model_stats[model_id]
 
-                f.write(f"{i+1}. {model_id} ({checkpoint_name})\n")
+                # Special display for ground truth model
+                if checkpoint_name == 'ground_truth':
+                    f.write(f"{i+1}. {model_id} (Ground Truth Baseline)\n")
+                else:
+                    f.write(f"{i+1}. {model_id} ({checkpoint_name})\n")
                 f.write(f"   ELO: {rating:.1f} | Rounds: {rounds}\n")
                 f.write(f"   W:{stats['wins']} D:{stats['draws']} L:{stats['losses']} | Win Rate: {stats['wins']/(stats['wins']+stats['losses']+stats['draws'])*100:.1f}%\n")
             
