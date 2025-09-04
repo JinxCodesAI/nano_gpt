@@ -17,7 +17,6 @@ Usage:
     python completion_variance_analysis.py --language_model out/ckpt_unmasking_1000.pt \
                                           --scoring_model out/ckpt_sequence_scorer_500.pt \
                                           --batch_size 8 \
-                                          --num_samples 10 \
                                           --mask_ratio 0.3
 """
 
@@ -37,7 +36,7 @@ from collections import Counter
 from model import GPTConfig, GPT, ModelMode
 from sample_utils import nucleus_sample, predict_and_sample_tokens, calculate_sequence_scores
 from training_utils.data_loading_utils import load_memmap_data, sample_indices_random, vectorized_data_loading
-from training_utils.masking_strategies import apply_random_masking_gpu
+from training_utils.masking_strategies import apply_random_masking_gpu, apply_span_masking_gpu, apply_target_driven_sticky_masking_gpu
 
 
 def parse_arguments():
@@ -66,6 +65,17 @@ def parse_arguments():
                        help='Length of sequences to work with')
     parser.add_argument('--mask_ratio', type=float, default=0.3,
                        help='Fraction of tokens to mask (0.0 to 1.0)')
+
+    # Masking strategy parameters
+    parser.add_argument('--masking_strategy', type=str, default='random',
+                       choices=['random', 'span', 'sticky'],
+                       help='Masking strategy to use')
+    parser.add_argument('--spans_count', type=int, default=3,
+                       help='Number of spans to mask (for span masking strategy)')
+    parser.add_argument('--p1_probability', type=float, default=None,
+                       help='Probability of masking when no neighbors are masked (sticky masking). Default: mask_ratio/20')
+    parser.add_argument('--p2_probability', type=float, default=None,
+                       help='Probability of masking when neighbors are masked (sticky masking). Default: mask_ratio/5')
 
     # Generation quality parameters
     parser.add_argument('--temperature', type=float, default=1.0,
@@ -111,9 +121,6 @@ class CompletionVarianceAnalyzer:
         self.scoring_model = None
         self.vocab_info = None
         self.training_data = None
-        
-        # Results storage
-        self.results = []
         
     def load_vocabulary(self) -> Dict[str, Any]:
         """Load vocabulary metadata from dataset"""
@@ -219,7 +226,7 @@ class CompletionVarianceAnalyzer:
             print(f"Training data loaded: {len(self.training_data)} tokens")
     
     def sample_and_mask_data(self) -> Tuple[torch.Tensor, torch.Tensor]:
-        """Sample data from training set and apply random masking"""
+        """Sample data from training set and apply selected masking strategy"""
         # Sample random starting position
         max_start = len(self.training_data) - self.args.sequence_length
         if max_start <= 0:
@@ -234,16 +241,46 @@ class CompletionVarianceAnalyzer:
         original_tokens = torch.from_numpy(sequence_data.astype(np.int64)).to(self.device)
         original_tokens = original_tokens.unsqueeze(0)  # Add batch dimension
 
-        # Apply random masking
-        masked_tokens, mask = apply_random_masking_gpu(
-            original_tokens,
-            self.args.mask_ratio,
-            self.vocab_info['mask_token_id'],
-            self.vocab_info['vocab_size']
-        )
+        # Apply selected masking strategy
+        if self.args.masking_strategy == 'random':
+            masked_tokens, mask = apply_random_masking_gpu(
+                original_tokens,
+                self.args.mask_ratio,
+                self.vocab_info['mask_token_id'],
+                self.vocab_info['vocab_size']
+            )
+            strategy_info = f"random (ratio={self.args.mask_ratio})"
+
+        elif self.args.masking_strategy == 'span':
+            masked_tokens, mask = apply_span_masking_gpu(
+                original_tokens,
+                self.args.spans_count,
+                self.vocab_info['mask_token_id'],
+                self.vocab_info['vocab_size']
+            )
+            strategy_info = f"span (spans={self.args.spans_count})"
+
+        elif self.args.masking_strategy == 'sticky':
+            # Set default probabilities if not provided
+            p1_prob = self.args.p1_probability if self.args.p1_probability is not None else self.args.mask_ratio / 20
+            p2_prob = self.args.p2_probability if self.args.p2_probability is not None else self.args.mask_ratio / 5
+
+            masked_tokens, mask = apply_target_driven_sticky_masking_gpu(
+                original_tokens,
+                self.args.mask_ratio,
+                p1_prob,
+                p2_prob,
+                self.vocab_info['mask_token_id'],
+                self.vocab_info['vocab_size']
+            )
+            strategy_info = f"sticky (target={self.args.mask_ratio}, p1={p1_prob:.4f}, p2={p2_prob:.4f})"
+
+        else:
+            raise ValueError(f"Unknown masking strategy: {self.args.masking_strategy}")
 
         if self.args.verbose:
             num_masked = mask.sum().item()
+            print(f"Masking strategy: {strategy_info}")
             print(f"Masked {num_masked}/{self.args.sequence_length} tokens ({num_masked/self.args.sequence_length*100:.1f}%)")
             if self.args.debug:
                 # Show masked sequence
@@ -433,7 +470,16 @@ class CompletionVarianceAnalyzer:
         print(f"Scoring model: {self.args.scoring_model}")
         print(f"Dataset: {self.args.dataset}")
         print(f"Batch size: {self.args.batch_size}")
-        print(f"Mask ratio: {self.args.mask_ratio}")
+        print(f"Masking strategy: {self.args.masking_strategy}")
+        if self.args.masking_strategy == 'random':
+            print(f"Mask ratio: {self.args.mask_ratio}")
+        elif self.args.masking_strategy == 'span':
+            print(f"Spans count: {self.args.spans_count}")
+        elif self.args.masking_strategy == 'sticky':
+            p1_prob = self.args.p1_probability if self.args.p1_probability is not None else self.args.mask_ratio / 20
+            p2_prob = self.args.p2_probability if self.args.p2_probability is not None else self.args.mask_ratio / 5
+            print(f"Target mask ratio: {self.args.mask_ratio}")
+            print(f"P1 probability: {p1_prob:.4f}, P2 probability: {p2_prob:.4f}")
         print()
 
         # Set random seed
@@ -459,7 +505,7 @@ class CompletionVarianceAnalyzer:
         # Sample and mask data
         masked_tokens, mask = self.sample_and_mask_data()
 
-        # Generate multiple completions from the same input
+        # Generate multiple completions
         completions = self.generate_completions(masked_tokens, mask)
 
         # Rate completions with scoring model
