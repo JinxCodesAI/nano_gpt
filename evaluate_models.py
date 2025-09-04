@@ -237,7 +237,7 @@ EVALUATION_CONFIG = {
         # 'model3.pt',
     ],
     'remasking_checkpoint_name': None,  # Optional: remasking_binary model checkpoint
-    'judge_model': 'ckpt_sequence_scorer_1000_best.pt',  # '35.75_58.2_UM.pt',  # SEQUENCE_SCORER model to use as the single judge (lower scores = better)
+    'judge_model': '1400_1.pt',  # '35.75_58.2_UM.pt',  # SEQUENCE_SCORER model to use as the single judge (lower scores = better)
     
     # Evaluation parameters
     'batch_size': 32,           # N samples per model per batch (generation) - reduced for testing
@@ -846,27 +846,32 @@ class ELOTracker:
         return sample_scores
     
     def get_top_samples(self, all_samples, n=3):
-        """Get top N samples by points"""
-        return self._get_samples_by_rank(all_samples, n, reverse=True)
-    
+        """Get top N samples by points (excluding ground truth)"""
+        return self._get_samples_by_rank(all_samples, n, reverse=True, exclude_ground_truth=True)
+
     def get_worst_samples(self, all_samples, n=3):
-        """Get worst N samples by points"""
-        return self._get_samples_by_rank(all_samples, n, reverse=False)
+        """Get worst N samples by points (excluding ground truth)"""
+        return self._get_samples_by_rank(all_samples, n, reverse=False, exclude_ground_truth=True)
     
-    def _get_samples_by_rank(self, all_samples, n, reverse=True):
+    def _get_samples_by_rank(self, all_samples, n, reverse=True, exclude_ground_truth=False):
         """Get samples ranked by points and win rate"""
         sample_scores = []
-        
+
         for (model_id, sample_id), stats in self.sample_stats.items():
             if stats.comparisons > 0:  # Only samples that participated in comparisons
                 # Find the actual sample data
                 sample_data = None
-                for sample in all_samples[model_id]:
-                    if sample['sample_id'] == sample_id:
-                        sample_data = sample
-                        break
-                
+                if model_id in all_samples:
+                    for sample in all_samples[model_id]:
+                        if sample['sample_id'] == sample_id:
+                            sample_data = sample
+                            break
+
                 if sample_data:
+                    # Skip ground truth samples if requested
+                    if exclude_ground_truth and sample_data.get('model_id') == 'ground_truth':
+                        continue
+
                     sample_scores.append({
                         'model_id': model_id,
                         'sample_id': sample_id,
@@ -875,7 +880,7 @@ class ELOTracker:
                         'stats': stats,
                         'points': stats.get_points()
                     })
-        
+
         # Sort by average points per comparison, then by total points as tiebreaker
         sample_scores.sort(key=lambda x: (x['points'] / x['stats'].comparisons if x['stats'].comparisons > 0 else 0, x['points']), reverse=reverse)
         return sample_scores[:n]
