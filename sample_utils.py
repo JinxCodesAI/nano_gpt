@@ -82,19 +82,22 @@ def nucleus_sample(logits, top_p=1.0, temperature=1.0, recent_tokens=None, repet
         return torch.multinomial(probs, num_samples=1).squeeze(-1)
 
 
-def apply_remasking(tokens, remask_ratio, remasking_model, randomness_strength, mask_token_id, device, verbose=False):
+def apply_remasking(tokens, remask_ratio, remasking_model, randomness_strength, mask_token_id, device,
+                   base_model=None, intelligent_remasking=False, verbose=False):
     """
-    Apply remasking using either random selection or model-guided selection
-    
+    Apply remasking using random, model-guided, or intelligent selfmasking selection
+
     Args:
         tokens: Current token sequence (batch_size, seq_len)
         remask_ratio: Fraction of tokens to remask
-        remasking_model: Optional remasking_binary model
+        remasking_model: Optional separate remasking model
         randomness_strength: Balance between random (1.0) and model-guided (0.0)
         mask_token_id: ID of mask token
         device: Device to run on
+        base_model: Base model for intelligent remasking when remasking_model is None
+        intelligent_remasking: Enable selfmasking using base_model
         verbose: Whether to print debug info
-    
+
     Returns:
         tokens: Updated token sequence with remasked positions
     """
@@ -117,23 +120,67 @@ def apply_remasking(tokens, remask_ratio, remasking_model, randomness_strength, 
         return tokens
     
     if remasking_model is None:
-        # Pure random remasking
-        if verbose:
-            avg_additional = additional_masks_needed.float().mean().item()
-            avg_currently_masked = currently_masked.float().mean().item()
-            print(f"  Using pure random remasking: adding {avg_additional:.1f} masks (currently {avg_currently_masked:.1f}/{seq_len}, target {target_masked})")
-        
-        for batch_idx in range(batch_size):
-            num_additional = additional_masks_needed[batch_idx].item()
-            if num_additional > 0:
-                # Only select from unmasked positions
-                unmasked_positions = (tokens[batch_idx] != mask_token_id)
-                unmasked_indices = torch.where(unmasked_positions)[0]
-                if len(unmasked_indices) > 0:
-                    num_to_select = min(num_additional, len(unmasked_indices))
-                    selected_positions = torch.randperm(len(unmasked_indices), device=device)[:num_to_select]
-                    remask_indices = unmasked_indices[selected_positions]
-                    tokens[batch_idx, remask_indices] = mask_token_id
+        if intelligent_remasking and base_model is not None:
+            # SELFMASKING: Use base model to identify surprising tokens
+            if verbose:
+                avg_additional = additional_masks_needed.float().mean().item()
+                avg_currently_masked = currently_masked.float().mean().item()
+                print(f"  Using intelligent selfmasking: randomness={randomness_strength:.2f}, adding {avg_additional:.1f} masks (currently {avg_currently_masked:.1f}/{seq_len}, target {target_masked})")
+
+            with torch.no_grad():
+                # Get base model predictions for current tokens
+                dummy_targets = torch.zeros_like(tokens)
+                logits, _ = base_model(tokens, dummy_targets)
+
+                # Calculate surprise scores: 1 - P(current_token)
+                probs = torch.softmax(logits, dim=-1)  # (batch_size, seq_len, vocab_size)
+                current_token_probs = probs.gather(2, tokens.unsqueeze(-1)).squeeze(-1)  # (batch_size, seq_len)
+                surprise_scores = 1 - current_token_probs  # Higher = more surprising
+
+                for batch_idx in range(batch_size):
+                    num_additional = additional_masks_needed[batch_idx].item()
+                    if num_additional > 0:
+                        # Only consider unmasked positions for remasking
+                        unmasked_positions = (tokens[batch_idx] != mask_token_id)
+                        unmasked_indices = torch.where(unmasked_positions)[0]
+
+                        if len(unmasked_indices) > 0:
+                            # Get scores for unmasked positions only
+                            model_scores = surprise_scores[batch_idx, unmasked_indices]
+                            random_scores = torch.rand(len(unmasked_indices), device=device)
+
+                            # Combine random and model scores
+                            combined_scores = (randomness_strength * random_scores +
+                                             (1 - randomness_strength) * model_scores)
+
+                            # Select top positions by combined score
+                            num_to_select = min(num_additional, len(unmasked_indices))
+                            _, top_indices = torch.topk(combined_scores, num_to_select)
+                            remask_indices = unmasked_indices[top_indices]
+                            tokens[batch_idx, remask_indices] = mask_token_id
+
+                            if verbose and batch_idx == 0:  # Show stats for first sample
+                                avg_surprise = model_scores[top_indices].mean().item()
+                                avg_random = random_scores[top_indices].mean().item()
+                                print(f"    Selected tokens - avg surprise: {avg_surprise:.3f}, avg random: {avg_random:.3f}")
+        else:
+            # Pure random remasking (fallback)
+            if verbose:
+                avg_additional = additional_masks_needed.float().mean().item()
+                avg_currently_masked = currently_masked.float().mean().item()
+                print(f"  Using pure random remasking: adding {avg_additional:.1f} masks (currently {avg_currently_masked:.1f}/{seq_len}, target {target_masked})")
+
+            for batch_idx in range(batch_size):
+                num_additional = additional_masks_needed[batch_idx].item()
+                if num_additional > 0:
+                    # Only select from unmasked positions
+                    unmasked_positions = (tokens[batch_idx] != mask_token_id)
+                    unmasked_indices = torch.where(unmasked_positions)[0]
+                    if len(unmasked_indices) > 0:
+                        num_to_select = min(num_additional, len(unmasked_indices))
+                        selected_positions = torch.randperm(len(unmasked_indices), device=device)[:num_to_select]
+                        remask_indices = unmasked_indices[selected_positions]
+                        tokens[batch_idx, remask_indices] = mask_token_id
     else:
         # Model-guided remasking with randomness
         if verbose:
@@ -256,11 +303,11 @@ def predict_and_sample_tokens(model, tokens, mask_token_id, temperature, top_p, 
 
 
 def apply_remasking_step(tokens, prediction_tokens, iteration, iterations, schedule_type, masking_ratios,
-                        start_ratio, end_ratio, remasking_model, randomness_strength, mask_token_id, 
-                        device, verbose=False):
+                        start_ratio, end_ratio, remasking_model, randomness_strength, mask_token_id,
+                        device, base_model=None, intelligent_remasking=False, verbose=False):
     """
-    Apply remasking step with scheduling
-    
+    Apply remasking step with scheduling and intelligent remasking support
+
     Args:
         tokens: Current token sequence
         prediction_tokens: Tokens after prediction (for tracking)
@@ -274,8 +321,10 @@ def apply_remasking_step(tokens, prediction_tokens, iteration, iterations, sched
         randomness_strength: Balance between random and model-guided remasking
         mask_token_id: ID of mask token
         device: Device to run on
+        base_model: Base model for intelligent remasking when remasking_model is None
+        intelligent_remasking: Enable selfmasking using base_model
         verbose: Whether to print progress
-        
+
     Returns:
         Updated tokens after remasking
     """
@@ -289,8 +338,8 @@ def apply_remasking_step(tokens, prediction_tokens, iteration, iterations, sched
     # Debug: Track masks before remasking (using actual prediction results)
     masks_before = (prediction_tokens == mask_token_id).sum().item()
     
-    tokens = apply_remasking(tokens, remask_ratio, remasking_model, randomness_strength, 
-                           mask_token_id, device, verbose)
+    tokens = apply_remasking(tokens, remask_ratio, remasking_model, randomness_strength,
+                           mask_token_id, device, base_model, intelligent_remasking, verbose)
     
     # Debug: Track masks after remasking
     if verbose:
