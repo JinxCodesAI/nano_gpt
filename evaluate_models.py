@@ -1096,6 +1096,13 @@ class ModelEvaluator:
             checkpoint_name = self.config['checkpoints'][int(model_id.split('_')[1])]
             stats = model_stats[model_id]
 
+            # Calculate judge model score statistics for this model
+            judge_scores = []
+            judge_model_id = list(all_ratings.keys())[0]  # Get the single judge model
+            if model_id in all_ratings[judge_model_id]:
+                for sample_rating in all_ratings[judge_model_id][model_id]:
+                    judge_scores.append(sample_rating['confidence_score'])
+
             # Special display for ground truth model
             if checkpoint_name == 'ground_truth':
                 print(f"{i+1}. {model_id} (Ground Truth Baseline)")
@@ -1103,6 +1110,13 @@ class ModelEvaluator:
                 print(f"{i+1}. {model_id} ({checkpoint_name})")
             print(f"   ELO: {rating:.1f} | Rounds: {rounds}")
             print(f"   W:{stats['wins']} D:{stats['draws']} L:{stats['losses']} | Win Rate: {stats['wins']/(stats['wins']+stats['losses']+stats['draws'])*100:.1f}%")
+
+            # Add judge model score statistics
+            if judge_scores:
+                avg_score = sum(judge_scores) / len(judge_scores)
+                min_score = min(judge_scores)
+                max_score = max(judge_scores)
+                print(f"   Judge Scores - Avg: {avg_score:.3f} | Lowest: {min_score:.3f} | Highest: {max_score:.3f}")
         
         # Top samples
         top_samples = elo_tracker.get_top_samples(all_samples, 3)
@@ -1173,6 +1187,13 @@ class ModelEvaluator:
                 checkpoint_name = self.config['checkpoints'][int(model_id.split('_')[1])]
                 stats = model_stats[model_id]
 
+                # Calculate judge model score statistics for this model
+                judge_scores = []
+                judge_model_id = list(all_ratings.keys())[0]  # Get the single judge model
+                if model_id in all_ratings[judge_model_id]:
+                    for sample_rating in all_ratings[judge_model_id][model_id]:
+                        judge_scores.append(sample_rating['confidence_score'])
+
                 # Special display for ground truth model
                 if checkpoint_name == 'ground_truth':
                     f.write(f"{i+1}. {model_id} (Ground Truth Baseline)\n")
@@ -1180,6 +1201,13 @@ class ModelEvaluator:
                     f.write(f"{i+1}. {model_id} ({checkpoint_name})\n")
                 f.write(f"   ELO: {rating:.1f} | Rounds: {rounds}\n")
                 f.write(f"   W:{stats['wins']} D:{stats['draws']} L:{stats['losses']} | Win Rate: {stats['wins']/(stats['wins']+stats['losses']+stats['draws'])*100:.1f}%\n")
+
+                # Add judge model score statistics to file
+                if judge_scores:
+                    avg_score = sum(judge_scores) / len(judge_scores)
+                    min_score = min(judge_scores)
+                    max_score = max(judge_scores)
+                    f.write(f"   Judge Scores - Avg: {avg_score:.3f} | Lowest: {min_score:.3f} | Highest: {max_score:.3f}\n")
             
             f.write(f"\nTop 3 Samples (by points):\n")
             f.write("=" * 100 + "\n")
