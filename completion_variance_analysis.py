@@ -257,31 +257,38 @@ class CompletionVarianceAnalyzer:
         return masked_tokens, mask
 
     def generate_completions(self, masked_tokens: torch.Tensor, mask: torch.Tensor) -> List[torch.Tensor]:
-        """Generate multiple independent completions from the same masked input"""
+        """Generate multiple independent completions from the same masked input (optimized)"""
         completions = []
 
-        for i in range(self.args.batch_size):
-            # Set different seed for each completion to ensure diversity
-            torch.manual_seed(self.args.seed + i * 1000)
+        # Process completions in smaller batches to manage memory
+        completion_batch_size = min(self.args.batch_size, 4)  # Process max 4 at a time
 
-            # Create a copy of the masked tokens for this completion
-            current_tokens = masked_tokens.clone()
+        for batch_start in range(0, self.args.batch_size, completion_batch_size):
+            batch_end = min(batch_start + completion_batch_size, self.args.batch_size)
+            current_batch_size = batch_end - batch_start
 
-            # Generate completion using iterative demasking
+            # Create batch of masked tokens for this sub-batch
+            batch_tokens = masked_tokens.repeat(current_batch_size, 1)
+
+            # Set different seeds for each completion in the batch
+            for i in range(current_batch_size):
+                torch.manual_seed(self.args.seed + (batch_start + i) * 1000)
+
+            # Generate completions using iterative demasking
             for iteration in range(self.args.diffusion_iterations):
                 # Find currently masked positions
-                current_mask = (current_tokens == self.vocab_info['mask_token_id'])
+                current_mask = (batch_tokens == self.vocab_info['mask_token_id'])
 
                 if not current_mask.any():
                     break  # No more masked tokens
 
                 with torch.no_grad():
                     with self.ctx:
-                        # Get predictions for masked positions
-                        logits, _ = self.language_model(current_tokens, None)
+                        # Get predictions for all sequences in the batch
+                        logits, _ = self.language_model(batch_tokens, None)
 
                         # Sample new tokens for masked positions
-                        for batch_idx in range(current_tokens.shape[0]):
+                        for batch_idx in range(current_batch_size):
                             mask_positions = current_mask[batch_idx]
                             if mask_positions.any():
                                 masked_logits = logits[batch_idx, mask_positions]
@@ -294,44 +301,45 @@ class CompletionVarianceAnalyzer:
                                     vocab_size=self.vocab_info['vocab_size']
                                 )
 
-                                current_tokens[batch_idx, mask_positions] = new_tokens
+                                batch_tokens[batch_idx, mask_positions] = new_tokens
 
                 # For simplicity, unmask all tokens at once (could implement gradual unmasking)
                 break
 
-            completions.append(current_tokens.clone())
+            # Add completions from this batch
+            for i in range(current_batch_size):
+                completions.append(batch_tokens[i:i+1].clone())  # Keep batch dimension
 
-            if self.args.debug and i < 3:  # Show first few completions
-                completion_text = self.vocab_info['decode'](current_tokens[0].tolist())
-                print(f"  Completion {i}: {completion_text[:100]}{'...' if len(completion_text) > 100 else ''}")
+                if self.args.debug and (batch_start + i) < 3:  # Show first few completions
+                    completion_text = self.vocab_info['decode'](batch_tokens[i].tolist())
+                    print(f"  Completion {batch_start + i}: {completion_text[:100]}{'...' if len(completion_text) > 100 else ''}")
 
         return completions
 
     def rate_completions(self, completions: List[torch.Tensor]) -> List[float]:
-        """Rate all completions using the scoring model"""
-        ratings = []
+        """Rate all completions using the scoring model (optimized batch processing)"""
+        if not completions:
+            return []
 
-        for i, completion in enumerate(completions):
-            with torch.no_grad():
-                with self.ctx:
-                    # Calculate sequence score using the scoring model
-                    scores = calculate_sequence_scores(
-                        model=self.scoring_model,
-                        tokens=completion,
-                        cls_token_id=self.vocab_info['cls_token_id'],
-                        device=self.device,
-                        ctx=self.ctx
-                    )
+        # Batch all completions together for efficient GPU processing
+        batch_tokens = torch.cat(completions, dim=0)  # Shape: (batch_size * num_completions, seq_len)
 
-                    # scores is a list with one score per sequence in the batch
-                    # Since we're processing one completion at a time, take the first score
-                    rating = scores[0] if scores else 0.0
-                    ratings.append(rating)
+        with torch.no_grad():
+            with self.ctx:
+                # Calculate sequence scores for all completions at once
+                scores = calculate_sequence_scores(
+                    model=self.scoring_model,
+                    tokens=batch_tokens,
+                    cls_token_id=self.vocab_info['cls_token_id'],
+                    device=self.device,
+                    ctx=self.ctx
+                )
 
-                    if self.args.debug and i < 3:
-                        print(f"  Completion {i} rating: {rating:.4f}")
+                if self.args.debug:
+                    for i, score in enumerate(scores[:3]):  # Show first 3
+                        print(f"  Completion {i} rating: {score:.4f}")
 
-        return ratings
+        return scores
 
     def check_completion_diversity(self, completions: List[torch.Tensor]) -> Dict[str, Any]:
         """Check if completions are actually different from each other"""
@@ -534,18 +542,21 @@ class CompletionVarianceAnalyzer:
             # Analyze rating variance
             variance_stats = self.analyze_rating_variance(ratings, diversity_stats)
 
-            # Store results
+            # Store results (without storing large tensors to save memory)
             self.results.append({
                 'sample_idx': sample_idx,
                 'ratings': ratings,
                 'diversity_stats': diversity_stats,
                 'variance_stats': variance_stats,
-                'masked_tokens': masked_tokens.cpu(),
-                'completions': [c.cpu() for c in completions]
+                # Don't store tensors to save memory - they're not needed for final analysis
             })
 
             # Print sample results
             self.print_sample_results(sample_idx, ratings, diversity_stats, variance_stats)
+
+            # Clean up GPU memory
+            if self.device_type == 'cuda':
+                torch.cuda.empty_cache()
 
         # Print overall results
         self.print_overall_results()
