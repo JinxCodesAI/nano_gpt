@@ -169,25 +169,6 @@ generated_tokens = diffusion_generate(
 **Changes Needed**:
 1. Pass `base_model=model` and `intelligent_remasking=self.config['intelligent_remasking']` to `diffusion_generate()`
 
-### Phase 4: Testing and Validation
-
-#### Step 4.1: Unit Tests
-Create tests to verify:
-1. `randomness_strength = 1.0` produces random-like remasking
-2. `randomness_strength = 0.0` selects tokens with lowest model confidence
-3. `randomness_strength = 0.4` produces mixed behavior
-4. Backward compatibility with existing remasking models
-
-#### Step 4.2: Integration Tests
-1. Test `sample.py` with different `randomness_strength` values
-2. Test `evaluate_models.py` produces different results with different `randomness_strength` values
-3. Verify model evaluation rankings change appropriately
-
-#### Step 4.3: Performance Tests
-1. Measure performance impact of intelligent remasking
-2. Ensure GPU memory usage remains acceptable
-3. Compare generation quality with and without intelligent remasking
-
 ## Implementation Order
 
 1. **Start with `sample_utils.py`** - Core functionality
