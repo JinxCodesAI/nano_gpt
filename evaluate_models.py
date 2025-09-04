@@ -237,21 +237,21 @@ EVALUATION_CONFIG = {
         # 'model3.pt',
     ],
     'remasking_checkpoint_name': None,  # Optional: remasking_binary model checkpoint
-    'judge_model': '1400_1.pt',  # '35.75_58.2_UM.pt',  # SEQUENCE_SCORER model to use as the single judge (lower scores = better)
+    'judge_model': '1600_2_scorer.pt',  # '35.75_58.2_UM.pt',  # SEQUENCE_SCORER model to use as the single judge (lower scores = better)
     
     # Evaluation parameters
     'batch_size': 32,           # N samples per model per batch (generation) - reduced for testing
     'rating_batch_size': 64,    # Batch size for rating samples (GPU optimization) - reduced for testing
     'num_challenges': 1000,     # P tournament rounds before stopping - reduced for testing
     'sequence_length': 1024,   # Total length of generated sequence - reduced for testing
-    'seed': -1,
+    'seed': 234,
     'device': 'cuda',
     'dtype': 'float16',
     'compile': False,
     
     # Generation parameters (copied from sample.py)
-    'temperature': 1.0,
-    'top_p': 0.8,
+    'temperature': 0.8,
+    'top_p': 0.95,
     'repetition_penalty': 1.0,
     'repetition_window': 10,
     'diffusion_iterations': 25,
