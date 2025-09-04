@@ -455,9 +455,16 @@ class CompletionVarianceAnalyzer:
             print(f"Token differences: mean={variance_stats['mean_token_differences']:.1f}, max={variance_stats['max_token_differences']:.0f}")
 
         if self.args.debug and 'text_differences' in diversity_stats:
-            print("Completion texts:")
-            for i, text in enumerate(diversity_stats['text_differences'][:3]):  # Show first 3
-                print(f"  {i}: {text[:80]}{'...' if len(text) > 80 else ''}")
+            # Find best and worst completions by rating
+            ratings_array = np.array(ratings)
+            best_idx = np.argmin(ratings_array)  # Lower score = better for sequence scorer
+            worst_idx = np.argmax(ratings_array)  # Higher score = worse for sequence scorer
+
+            print(f"\nBest completion (rating: {ratings[best_idx]:.4f}):")
+            print(f"  {diversity_stats['text_differences'][best_idx]}")
+
+            print(f"\nWorst completion (rating: {ratings[worst_idx]:.4f}):")
+            print(f"  {diversity_stats['text_differences'][worst_idx]}")
 
         print()
 
