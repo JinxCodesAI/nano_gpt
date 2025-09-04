@@ -262,7 +262,7 @@ EVALUATION_CONFIG = {
     'diffusion_iterations': 25,
     'start_ratio': 0.99,
     'end_ratio': 0.05,
-    'randomness_strength': 1.0,
+    'randomness_strength': 0,
     'intelligent_remasking': True,  # Enable selfmasking for consistent evaluation
 
     # Schedule parameters
