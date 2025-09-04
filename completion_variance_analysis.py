@@ -60,22 +60,18 @@ def parse_arguments():
                        help='Directory containing model checkpoints')
     
     # Generation parameters
-    parser.add_argument('--batch_size', type=int, default=8,
-                       help='Number of independent completions to generate per input')
-    parser.add_argument('--num_samples', type=int, default=10,
-                       help='Number of different masked inputs to test')
-    parser.add_argument('--sequence_length', type=int, default=256,
+    parser.add_argument('--batch_size', type=int, default=64,
+                       help='Number of independent completions to generate from same input')
+    parser.add_argument('--sequence_length', type=int, default=1024,
                        help='Length of sequences to work with')
     parser.add_argument('--mask_ratio', type=float, default=0.3,
                        help='Fraction of tokens to mask (0.0 to 1.0)')
-    
+
     # Generation quality parameters
     parser.add_argument('--temperature', type=float, default=1.0,
                        help='Temperature for sampling (higher = more random)')
     parser.add_argument('--top_p', type=float, default=1.0,
                        help='Nucleus sampling parameter (1.0 = disabled)')
-    parser.add_argument('--diffusion_iterations', type=int, default=10,
-                       help='Number of diffusion iterations for completion')
     
     # Analysis parameters
     parser.add_argument('--seed', type=int, default=42,
@@ -222,15 +218,15 @@ class CompletionVarianceAnalyzer:
         if self.args.verbose:
             print(f"Training data loaded: {len(self.training_data)} tokens")
     
-    def sample_and_mask_data(self, sample_idx: int) -> Tuple[torch.Tensor, torch.Tensor]:
+    def sample_and_mask_data(self) -> Tuple[torch.Tensor, torch.Tensor]:
         """Sample data from training set and apply random masking"""
         # Sample random starting position
         max_start = len(self.training_data) - self.args.sequence_length
         if max_start <= 0:
             raise ValueError(f"Training data too short for sequence length {self.args.sequence_length}")
 
-        # Use deterministic sampling based on sample_idx for reproducibility
-        torch.manual_seed(self.args.seed + sample_idx)
+        # Use deterministic sampling for reproducibility
+        torch.manual_seed(self.args.seed)
         start_idx = torch.randint(0, max_start, (1,)).item()
 
         # Extract sequence
@@ -248,7 +244,7 @@ class CompletionVarianceAnalyzer:
 
         if self.args.verbose:
             num_masked = mask.sum().item()
-            print(f"Sample {sample_idx}: masked {num_masked}/{self.args.sequence_length} tokens ({num_masked/self.args.sequence_length*100:.1f}%)")
+            print(f"Masked {num_masked}/{self.args.sequence_length} tokens ({num_masked/self.args.sequence_length*100:.1f}%)")
             if self.args.debug:
                 # Show masked sequence
                 masked_text = self.vocab_info['decode'](masked_tokens[0].tolist())
@@ -256,80 +252,55 @@ class CompletionVarianceAnalyzer:
 
         return masked_tokens, mask
 
-    def generate_completions(self, masked_tokens: torch.Tensor, mask: torch.Tensor) -> List[torch.Tensor]:
-        """Generate multiple independent completions from the same masked input (optimized)"""
-        completions = []
+    def generate_completions(self, masked_tokens: torch.Tensor, mask: torch.Tensor) -> torch.Tensor:
+        """Generate multiple independent completions from the same masked input"""
+        # Create batch by repeating the same masked input
+        batch_tokens = masked_tokens.repeat(self.args.batch_size, 1)
 
-        # Process completions in smaller batches to manage memory
-        completion_batch_size = min(self.args.batch_size, 4)  # Process max 4 at a time
+        # Find masked positions
+        current_mask = (batch_tokens == self.vocab_info['mask_token_id'])
 
-        for batch_start in range(0, self.args.batch_size, completion_batch_size):
-            batch_end = min(batch_start + completion_batch_size, self.args.batch_size)
-            current_batch_size = batch_end - batch_start
+        if not current_mask.any():
+            if self.args.verbose:
+                print("No masked tokens found!")
+            return batch_tokens
 
-            # Create batch of masked tokens for this sub-batch
-            batch_tokens = masked_tokens.repeat(current_batch_size, 1)
+        with torch.no_grad():
+            with self.ctx:
+                # Single forward pass for all completions
+                logits, _ = self.language_model(batch_tokens, None)
 
-            # Set different seeds for each completion in the batch
-            for i in range(current_batch_size):
-                torch.manual_seed(self.args.seed + (batch_start + i) * 1000)
+                # Sample new tokens for masked positions in each sequence
+                for batch_idx in range(self.args.batch_size):
+                    mask_positions = current_mask[batch_idx]
+                    if mask_positions.any():
+                        masked_logits = logits[batch_idx, mask_positions]
 
-            # Generate completions using iterative demasking
-            for iteration in range(self.args.diffusion_iterations):
-                # Find currently masked positions
-                current_mask = (batch_tokens == self.vocab_info['mask_token_id'])
+                        # Apply temperature and nucleus sampling
+                        new_tokens = nucleus_sample(
+                            masked_logits,
+                            top_p=self.args.top_p,
+                            temperature=self.args.temperature,
+                            vocab_size=self.vocab_info['vocab_size']
+                        )
 
-                if not current_mask.any():
-                    break  # No more masked tokens
+                        batch_tokens[batch_idx, mask_positions] = new_tokens
 
-                with torch.no_grad():
-                    with self.ctx:
-                        # Get predictions for all sequences in the batch
-                        logits, _ = self.language_model(batch_tokens, None)
+        if self.args.debug:
+            for i in range(min(3, self.args.batch_size)):  # Show first few completions
+                completion_text = self.vocab_info['decode'](batch_tokens[i].tolist())
+                print(f"  Completion {i}: {completion_text[:100]}{'...' if len(completion_text) > 100 else ''}")
 
-                        # Sample new tokens for masked positions
-                        for batch_idx in range(current_batch_size):
-                            mask_positions = current_mask[batch_idx]
-                            if mask_positions.any():
-                                masked_logits = logits[batch_idx, mask_positions]
+        return batch_tokens
 
-                                # Apply temperature and nucleus sampling
-                                new_tokens = nucleus_sample(
-                                    masked_logits,
-                                    top_p=self.args.top_p,
-                                    temperature=self.args.temperature,
-                                    vocab_size=self.vocab_info['vocab_size']
-                                )
-
-                                batch_tokens[batch_idx, mask_positions] = new_tokens
-
-                # For simplicity, unmask all tokens at once (could implement gradual unmasking)
-                break
-
-            # Add completions from this batch
-            for i in range(current_batch_size):
-                completions.append(batch_tokens[i:i+1].clone())  # Keep batch dimension
-
-                if self.args.debug and (batch_start + i) < 3:  # Show first few completions
-                    completion_text = self.vocab_info['decode'](batch_tokens[i].tolist())
-                    print(f"  Completion {batch_start + i}: {completion_text[:100]}{'...' if len(completion_text) > 100 else ''}")
-
-        return completions
-
-    def rate_completions(self, completions: List[torch.Tensor]) -> List[float]:
-        """Rate all completions using the scoring model (optimized batch processing)"""
-        if not completions:
-            return []
-
-        # Batch all completions together for efficient GPU processing
-        batch_tokens = torch.cat(completions, dim=0)  # Shape: (batch_size * num_completions, seq_len)
-
+    def rate_completions(self, completions: torch.Tensor) -> List[float]:
+        """Rate all completions using the scoring model"""
         with torch.no_grad():
             with self.ctx:
                 # Calculate sequence scores for all completions at once
                 scores = calculate_sequence_scores(
                     model=self.scoring_model,
-                    tokens=batch_tokens,
+                    tokens=completions,
                     cls_token_id=self.vocab_info['cls_token_id'],
                     device=self.device,
                     ctx=self.ctx
@@ -341,25 +312,23 @@ class CompletionVarianceAnalyzer:
 
         return scores
 
-    def check_completion_diversity(self, completions: List[torch.Tensor]) -> Dict[str, Any]:
+    def check_completion_diversity(self, completions: torch.Tensor) -> Dict[str, Any]:
         """Check if completions are actually different from each other"""
+        batch_size = completions.shape[0]
         diversity_stats = {
             'unique_completions': 0,
-            'total_completions': len(completions),
+            'total_completions': batch_size,
             'diversity_ratio': 0.0,
             'token_differences': [],
             'text_differences': []
         }
 
-        if not completions:
-            return diversity_stats
-
         # Convert completions to text for comparison
         completion_texts = []
         completion_tokens = []
 
-        for completion in completions:
-            tokens = completion[0].tolist()  # Remove batch dimension
+        for i in range(batch_size):
+            tokens = completions[i].tolist()
             text = self.vocab_info['decode'](tokens)
             completion_texts.append(text)
             completion_tokens.append(tokens)
@@ -436,61 +405,26 @@ class CompletionVarianceAnalyzer:
 
         return variance_stats
 
-    def print_sample_results(self, sample_idx: int, ratings: List[float],
-                           diversity_stats: Dict[str, Any], variance_stats: Dict[str, Any]):
-        """Print results for a single sample"""
-        print(f"Sample {sample_idx + 1} Results:")
-        print(f"  Ratings: {[f'{r:.4f}' for r in ratings]}")
-        print(f"  Mean ± Std: {variance_stats['mean_rating']:.4f} ± {variance_stats['std_rating']:.4f}")
-        print(f"  Range: [{variance_stats['min_rating']:.4f}, {variance_stats['max_rating']:.4f}] (span: {variance_stats['range_rating']:.4f})")
-        print(f"  Coefficient of Variation: {variance_stats['cv_rating']:.4f}")
-        print(f"  Diversity: {diversity_stats['unique_completions']}/{diversity_stats['total_completions']} unique ({diversity_stats['diversity_ratio']:.2f})")
+    def print_results(self, ratings: List[float], diversity_stats: Dict[str, Any], variance_stats: Dict[str, Any]):
+        """Print analysis results"""
+        print("=== Results ===")
+        print(f"Ratings: {[f'{r:.4f}' for r in ratings]}")
+        print(f"Mean ± Std: {variance_stats['mean_rating']:.4f} ± {variance_stats['std_rating']:.4f}")
+        print(f"Range: [{variance_stats['min_rating']:.4f}, {variance_stats['max_rating']:.4f}] (span: {variance_stats['range_rating']:.4f})")
+        print(f"Coefficient of Variation: {variance_stats['cv_rating']:.4f}")
+        print(f"Diversity: {diversity_stats['unique_completions']}/{diversity_stats['total_completions']} unique ({diversity_stats['diversity_ratio']:.2f})")
 
         if diversity_stats['token_differences']:
-            print(f"  Token differences: mean={variance_stats['mean_token_differences']:.1f}, max={variance_stats['max_token_differences']:.0f}")
+            print(f"Token differences: mean={variance_stats['mean_token_differences']:.1f}, max={variance_stats['max_token_differences']:.0f}")
 
         if self.args.debug and 'text_differences' in diversity_stats:
-            print("  Completion texts:")
+            print("Completion texts:")
             for i, text in enumerate(diversity_stats['text_differences'][:3]):  # Show first 3
-                print(f"    {i}: {text[:80]}{'...' if len(text) > 80 else ''}")
+                print(f"  {i}: {text[:80]}{'...' if len(text) > 80 else ''}")
 
         print()
 
-    def print_overall_results(self):
-        """Print overall analysis results"""
-        if not self.results:
-            print("No results to analyze.")
-            return
 
-        print("=== Overall Analysis Results ===")
-
-        # Aggregate statistics across all samples
-        all_rating_stds = [r['variance_stats']['std_rating'] for r in self.results]
-        all_rating_ranges = [r['variance_stats']['range_rating'] for r in self.results]
-        all_rating_cvs = [r['variance_stats']['cv_rating'] for r in self.results if np.isfinite(r['variance_stats']['cv_rating'])]
-        all_diversity_ratios = [r['diversity_stats']['diversity_ratio'] for r in self.results]
-
-        print(f"Analyzed {len(self.results)} samples with {self.args.batch_size} completions each")
-        print()
-
-        print("Rating Variance Statistics:")
-        print(f"  Standard deviation - Mean: {np.mean(all_rating_stds):.4f}, Std: {np.std(all_rating_stds):.4f}")
-        print(f"  Range - Mean: {np.mean(all_rating_ranges):.4f}, Std: {np.std(all_rating_ranges):.4f}")
-        if all_rating_cvs:
-            print(f"  Coefficient of Variation - Mean: {np.mean(all_rating_cvs):.4f}, Std: {np.std(all_rating_cvs):.4f}")
-        print()
-
-        print("Completion Diversity Statistics:")
-        print(f"  Diversity ratio - Mean: {np.mean(all_diversity_ratios):.4f}, Std: {np.std(all_diversity_ratios):.4f}")
-        print(f"  Samples with all unique completions: {sum(1 for r in all_diversity_ratios if r == 1.0)}/{len(all_diversity_ratios)}")
-        print(f"  Samples with no diversity (all identical): {sum(1 for r in all_diversity_ratios if r == 0.0)}/{len(all_diversity_ratios)}")
-        print()
-
-        # Correlation between diversity and rating variance
-        if len(all_diversity_ratios) > 1 and len(all_rating_stds) > 1:
-            correlation = np.corrcoef(all_diversity_ratios, all_rating_stds)[0, 1]
-            print(f"Correlation between diversity and rating variance: {correlation:.4f}")
-            print()
 
     def run_analysis(self):
         """Run the complete variance analysis"""
@@ -499,7 +433,6 @@ class CompletionVarianceAnalyzer:
         print(f"Scoring model: {self.args.scoring_model}")
         print(f"Dataset: {self.args.dataset}")
         print(f"Batch size: {self.args.batch_size}")
-        print(f"Number of samples: {self.args.num_samples}")
         print(f"Mask ratio: {self.args.mask_ratio}")
         print()
 
@@ -523,43 +456,23 @@ class CompletionVarianceAnalyzer:
         print("All components loaded successfully!")
         print()
 
-        # Main analysis loop
-        for sample_idx in range(self.args.num_samples):
-            print(f"Processing sample {sample_idx + 1}/{self.args.num_samples}...")
+        # Sample and mask data
+        masked_tokens, mask = self.sample_and_mask_data()
 
-            # Sample and mask data
-            masked_tokens, mask = self.sample_and_mask_data(sample_idx)
+        # Generate multiple completions from the same input
+        completions = self.generate_completions(masked_tokens, mask)
 
-            # Generate multiple completions
-            completions = self.generate_completions(masked_tokens, mask)
+        # Rate completions with scoring model
+        ratings = self.rate_completions(completions)
 
-            # Rate completions with scoring model
-            ratings = self.rate_completions(completions)
+        # Check completion diversity
+        diversity_stats = self.check_completion_diversity(completions)
 
-            # Check completion diversity
-            diversity_stats = self.check_completion_diversity(completions)
+        # Analyze rating variance
+        variance_stats = self.analyze_rating_variance(ratings, diversity_stats)
 
-            # Analyze rating variance
-            variance_stats = self.analyze_rating_variance(ratings, diversity_stats)
-
-            # Store results (without storing large tensors to save memory)
-            self.results.append({
-                'sample_idx': sample_idx,
-                'ratings': ratings,
-                'diversity_stats': diversity_stats,
-                'variance_stats': variance_stats,
-                # Don't store tensors to save memory - they're not needed for final analysis
-            })
-
-            # Print sample results
-            self.print_sample_results(sample_idx, ratings, diversity_stats, variance_stats)
-
-            # Clean up GPU memory
-            if self.device_type == 'cuda':
-                torch.cuda.empty_cache()
-
-        # Print overall results
-        self.print_overall_results()
+        # Print results
+        self.print_results(ratings, diversity_stats, variance_stats)
 
 
 def main():
