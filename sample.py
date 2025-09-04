@@ -43,6 +43,9 @@ masking_ratios = [0.85,0.816,0.782,0.748,0.714,0.68,0.646,0.612,0.578,0.544,0.51
 # Remasking parameters (only used if remasking model is available)
 randomness_strength = 0.4 # Balance between random (1.0) and model-guided (0.0) remasking
 
+# Intelligent remasking parameters
+intelligent_remasking = True  # Enable selfmasking when no remasking model is available
+
 if seed == -1:
     seed = int.from_bytes(os.urandom(4), byteorder='little')
 
@@ -61,12 +64,14 @@ if schedule_type == 'custom':
 
 
 
-def log_generation_start(batch_size, iterations, total_length, remasking_model, randomness_strength):
+def log_generation_start(batch_size, iterations, total_length, remasking_model, randomness_strength, intelligent_remasking=False):
     """Log generation start information"""
     print(f"Starting diffusion generation: {batch_size} samples, {iterations} iterations")
     print(f"Total length: {total_length} (all tokens start masked)")
     if remasking_model is not None:
         print(f"Using remasking_binary model with randomness_strength={randomness_strength}")
+    elif intelligent_remasking:
+        print(f"Using intelligent selfmasking with randomness_strength={randomness_strength}")
     else:
         print("Using pure random remasking")
     print("=" * 80)
@@ -286,8 +291,8 @@ def log_iteration_summary(iteration, tokens, mask_token_id, itos, stoi):
 
 def diffusion_generate(model, batch_size, total_length, iterations, remasking_model, mask_token_id,
                       randomness_strength, decode_fn, decode_mask_fn, verbose=True, temperature=1.0,
-                      top_p=1.0, schedule_type='linear', masking_ratios=None, repetition_penalty=1.0, 
-                      repetition_window=10, log_debug=False):
+                      top_p=1.0, schedule_type='linear', masking_ratios=None, repetition_penalty=1.0,
+                      repetition_window=10, log_debug=False, intelligent_remasking=False):
     """
     Generate text samples using diffusion-based iterative demasking
 
@@ -306,6 +311,7 @@ def diffusion_generate(model, batch_size, total_length, iterations, remasking_mo
         top_p: Nucleus sampling parameter (1.0 = disabled, <1.0 = only sample from top cumulative probability mass)
         schedule_type: 'linear' or 'custom' - type of masking schedule to use
         masking_ratios: Array of masking ratios for 'custom' schedule (overrides iterations)
+        intelligent_remasking: Enable selfmasking using base model when remasking_model is None
 
     Returns:
         Generated tokens (batch_size, total_length)
@@ -314,7 +320,7 @@ def diffusion_generate(model, batch_size, total_length, iterations, remasking_mo
     tokens = torch.full((batch_size, total_length), mask_token_id, dtype=torch.long, device=device)
     
     if verbose:
-        log_generation_start(batch_size, iterations, total_length, remasking_model, randomness_strength)
+        log_generation_start(batch_size, iterations, total_length, remasking_model, randomness_strength, intelligent_remasking)
     
     for iteration in range(iterations):
         if verbose:
@@ -357,6 +363,8 @@ def diffusion_generate(model, batch_size, total_length, iterations, remasking_mo
                 randomness_strength=randomness_strength,
                 mask_token_id=mask_token_id,
                 device=device,
+                base_model=model,
+                intelligent_remasking=intelligent_remasking,
                 verbose=verbose
             )
             
@@ -532,7 +540,8 @@ with torch.no_grad():
             masking_ratios=masking_ratios,
             repetition_penalty=repetition_penalty,
             repetition_window=repetition_window,
-            log_debug=log_debug
+            log_debug=log_debug,
+            intelligent_remasking=intelligent_remasking
         )
         
         # Calculate self-confidence scores for all samples
