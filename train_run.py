@@ -1279,31 +1279,28 @@ while True:
 
                 # Calculate absolute error: abs(target - prediction)
                 absolute_errors = torch.abs(Y - predictions)
+                # Check optimizer state
+                if hasattr(optimizer, 'state') and len(optimizer.state) > 0:
+                    optimizer_state_params = sum(p.numel() for p in optimizer.state.keys())
+                    print(f"  Optimizer has state for {len(optimizer.state)} parameter tensors ({optimizer_state_params:,} individual parameters)")
+                else:
+                    print(f"  WARNING: Optimizer has no state!")
 
+                # Check if parameters are actually changing
+                if hasattr(raw_model, '_last_param_snapshot'):
+                    param_changes = 0
+                    for name, param in raw_model.named_parameters():
+                        if name in raw_model._last_param_snapshot:
+                            old_param = raw_model._last_param_snapshot[name]
+                            if not torch.equal(param.data, old_param):
+                                param_changes += 1
+                    print(f"  Parameters changed since last check: {param_changes}")
 
+                # Store current parameters for next comparison
+            raw_model._last_param_snapshot = {name: param.data.clone() for name, param in raw_model.named_parameters()}
+            avg_absolute_error = absolute_errors.mean().item()
 
-                    # Check optimizer state
-                    if hasattr(optimizer, 'state') and len(optimizer.state) > 0:
-                        optimizer_state_params = sum(p.numel() for p in optimizer.state.keys())
-                        print(f"  Optimizer has state for {len(optimizer.state)} parameter tensors ({optimizer_state_params:,} individual parameters)")
-                    else:
-                        print(f"  WARNING: Optimizer has no state!")
-
-                    # Check if parameters are actually changing
-                    if hasattr(raw_model, '_last_param_snapshot'):
-                        param_changes = 0
-                        for name, param in raw_model.named_parameters():
-                            if name in raw_model._last_param_snapshot:
-                                old_param = raw_model._last_param_snapshot[name]
-                                if not torch.equal(param.data, old_param):
-                                    param_changes += 1
-                        print(f"  Parameters changed since last check: {param_changes}")
-
-                    # Store current parameters for next comparison
-                    raw_model._last_param_snapshot = {name: param.data.clone() for name, param in raw_model.named_parameters()}
-                avg_absolute_error = absolute_errors.mean().item()
-
-                print(f"iter {iter_num}: loss {lossf:.4f}, time {dt*1000:.2f}ms, mfu {running_mfu*100:.2f}%, ratio {avg_absolute_error:.3f}")
+            print(f"iter {iter_num}: loss {lossf:.4f}, time {dt*1000:.2f}ms, mfu {running_mfu*100:.2f}%, ratio {avg_absolute_error:.3f}")
         else:
             print(f"iter {iter_num}: loss {lossf:.4f}, time {dt*1000:.2f}ms, mfu {running_mfu*100:.2f}%")
         print(f"  data: {data_time:.1f}ms, grad_accum: {grad_accum_time:.1f}ms (fw: {forward_time:.1f}ms, bw: {backward_time:.1f}ms)")
