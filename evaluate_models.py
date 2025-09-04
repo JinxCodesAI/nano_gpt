@@ -121,8 +121,8 @@ class GroundTruthModel:
 def diffusion_generate(model, batch_size, total_length, iterations, remasking_model, mask_token_id,
                       randomness_strength, decode_fn, decode_mask_fn, device, vocab_size, itos, stoi,
                       start_ratio=0.99, end_ratio=0.05, verbose=True, temperature=1.0,
-                      top_p=1.0, schedule_type='linear', masking_ratios=None, repetition_penalty=1.0, 
-                      repetition_window=10, log_debug=False):
+                      top_p=1.0, schedule_type='linear', masking_ratios=None, repetition_penalty=1.0,
+                      repetition_window=10, log_debug=False, intelligent_remasking=False):
     """
     Generate text samples using diffusion-based iterative demasking
     
@@ -152,7 +152,8 @@ def diffusion_generate(model, batch_size, total_length, iterations, remasking_mo
         repetition_penalty: Penalty for repeating recent tokens
         repetition_window: Window size for repetition penalty
         log_debug: Whether to do detailed debug logging
-        
+        intelligent_remasking: Enable selfmasking using base model when remasking_model is None
+
     Returns:
         Generated tokens (batch_size, total_length)
     """
@@ -164,6 +165,8 @@ def diffusion_generate(model, batch_size, total_length, iterations, remasking_mo
         print(f"Total length: {total_length} (all tokens start masked)")
         if remasking_model is not None:
             print(f"Using remasking_binary model with randomness_strength={randomness_strength}")
+        elif intelligent_remasking:
+            print(f"Using intelligent selfmasking with randomness_strength={randomness_strength}")
         else:
             print("Using pure random remasking")
         print("=" * 80)
@@ -209,6 +212,8 @@ def diffusion_generate(model, batch_size, total_length, iterations, remasking_mo
                 randomness_strength=randomness_strength,
                 mask_token_id=mask_token_id,
                 device=device,
+                base_model=model,
+                intelligent_remasking=intelligent_remasking,
                 verbose=verbose
             )
         
@@ -258,7 +263,8 @@ EVALUATION_CONFIG = {
     'start_ratio': 0.99,
     'end_ratio': 0.05,
     'randomness_strength': 1.0,
-    
+    'intelligent_remasking': True,  # Enable selfmasking for consistent evaluation
+
     # Schedule parameters
     'schedule_type': 'custom',
     'masking_ratios': [0.85,0.816,0.782,0.748,0.714,0.68,0.646,0.612,0.578,0.544,0.51,0.476,0.442,0.408,0.374,0.34,0.306,0.272,0.238,0.204,0.17,0.136,0.102,0.068,0.034],
@@ -570,7 +576,8 @@ class SampleGenerator:
                     masking_ratios=self.config.get('masking_ratios'),
                     repetition_penalty=self.config['repetition_penalty'],
                     repetition_window=self.config['repetition_window'],
-                    log_debug=False
+                    log_debug=False,
+                    intelligent_remasking=self.config['intelligent_remasking']
                 )
 
         # Convert to list of samples
