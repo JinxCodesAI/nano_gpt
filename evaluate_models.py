@@ -11,6 +11,7 @@ import pickle
 import math
 import random
 import sys
+import time
 import numpy as np
 from collections import Counter, defaultdict
 from contextlib import nullcontext
@@ -525,20 +526,27 @@ class ModelLoader:
 
 class SampleGenerator:
     """Generates samples from loaded models using diffusion process"""
-    
+
     def __init__(self, config, vocab_info, remasking_model=None):
         self.config = config
         self.vocab_info = vocab_info
         self.remasking_model = remasking_model
-        
+
         # Set up device and dtype context
         device_type = 'cuda' if 'cuda' in config['device'] else 'cpu'
         ptdtype = {'float32': torch.float32, 'bfloat16': torch.bfloat16, 'float16': torch.float16}[config['dtype']]
         self.ctx = nullcontext() if device_type == 'cpu' else torch.amp.autocast(device_type=device_type, dtype=ptdtype)
+
+        # Timing tracking
+        self.model_generation_times = {}  # Track time per model
+        self.total_generation_time = 0.0
     
     def generate_samples_for_model(self, model, model_id):
         """Generate samples for a single model"""
         print(f"\nGenerating samples for {model_id}...")
+
+        # Start timing for this model
+        model_start_time = time.time()
 
         # Check if this is a ground truth model
         if isinstance(model, GroundTruthModel):
@@ -547,7 +555,10 @@ class SampleGenerator:
                 batch_size=self.config['batch_size'],
                 sequence_length=self.config['sequence_length']
             )
-            print(f"Generated {len(samples)} ground truth samples for {model_id}")
+            # Record timing for ground truth model
+            model_end_time = time.time()
+            self.model_generation_times[model_id] = model_end_time - model_start_time
+            print(f"Generated {len(samples)} ground truth samples for {model_id} in {self.model_generation_times[model_id]:.2f}s")
             return samples
 
         # Regular diffusion model generation
@@ -580,6 +591,10 @@ class SampleGenerator:
                     intelligent_remasking=self.config['intelligent_remasking']
                 )
 
+        # Record timing for diffusion model
+        model_end_time = time.time()
+        self.model_generation_times[model_id] = model_end_time - model_start_time
+
         # Convert to list of samples
         samples = []
         for i in range(self.config['batch_size']):
@@ -592,7 +607,7 @@ class SampleGenerator:
                 'sample_id': i
             })
 
-        print(f"Generated {len(samples)} samples for {model_id}")
+        print(f"Generated {len(samples)} samples for {model_id} in {self.model_generation_times[model_id]:.2f}s")
         return samples
     
     def generate_all_samples(self, models):
@@ -601,6 +616,9 @@ class SampleGenerator:
         print("SAMPLE GENERATION PHASE")
         print(f"{'='*80}")
 
+        # Start timing for entire generation phase
+        phase_start_time = time.time()
+
         all_samples = {}
         for model_id, model in models.items():
             # Skip judge model - it's only used for rating, not generation
@@ -608,10 +626,76 @@ class SampleGenerator:
                 continue
             all_samples[model_id] = self.generate_samples_for_model(model, model_id)
 
+        # End timing for entire generation phase
+        phase_end_time = time.time()
+        self.total_generation_time = phase_end_time - phase_start_time
+
         total_samples = sum(len(samples) for samples in all_samples.values())
         print(f"\nGenerated {total_samples} total samples across {len(all_samples)} models")
 
+        # Calculate and display tokens per second metrics
+        self._display_tokens_per_second_metrics(all_samples)
+
         return all_samples
+
+    def _display_tokens_per_second_metrics(self, all_samples):
+        """Calculate and display tokens per second metrics"""
+        if self.total_generation_time <= 0:
+            print("Warning: No valid generation time recorded")
+            return
+
+        # Count models (excluding ground truth for step-based calculation)
+        num_models = len(all_samples)
+        num_diffusion_models = sum(1 for model_id in all_samples.keys()
+                                 if not any('ground_truth' in str(sample.get('model_id', ''))
+                                          for sample in all_samples[model_id]))
+
+        # Calculate total tokens generated (final tokens) - ONLY from diffusion models
+        total_final_tokens = 0
+        for model_id, samples in all_samples.items():
+            # Check if this is a ground truth model by looking at the first sample
+            if samples and 'ground_truth' in str(samples[0].get('model_id', '')):
+                # Skip ground truth model tokens - they don't use diffusion
+                continue
+            else:
+                # Count tokens from diffusion models only
+                for sample in samples:
+                    total_final_tokens += len(sample['tokens'])
+
+        # Calculate total unmasking operations (every step tokens)
+        # For ground truth models: 0 operations (they don't use diffusion)
+        # For diffusion models: batch_size * iterations per model
+        total_unmasking_operations = 0
+        for model_id, samples in all_samples.items():
+            # Check if this is a ground truth model by looking at the first sample
+            if samples and 'ground_truth' in str(samples[0].get('model_id', '')):
+                # Ground truth model: no unmasking operations
+                continue
+            else:
+                # Diffusion model: batch_size * sequence_length * iterations
+                batch_size = len(samples)
+                sequence_length = self.config['sequence_length']
+                iterations = self.config['diffusion_iterations']
+                total_unmasking_operations += batch_size * sequence_length * iterations
+
+        # Calculate metrics
+        final_tokens_per_sec = total_final_tokens / self.total_generation_time
+        step_tokens_per_sec = total_unmasking_operations / self.total_generation_time
+
+        print(f"\n{'='*60}")
+        print("TOKENS PER SECOND METRICS")
+        print(f"{'='*60}")
+        print(f"Total generation time: {self.total_generation_time:.2f}s")
+        print(f"Total models processed: {num_models} ({num_diffusion_models} diffusion + {num_models - num_diffusion_models} ground truth)")
+        print(f"")
+        print(f"1) Final tokens/sec (diffusion models only):")
+        print(f"   Total final tokens generated: {total_final_tokens:,}")
+        print(f"   Rate: {final_tokens_per_sec:.1f} tokens/sec")
+        print(f"")
+        print(f"2) Every step tokens/sec (diffusion models only):")
+        print(f"   Total unmasking operations: {total_unmasking_operations:,}")
+        print(f"   Rate: {step_tokens_per_sec:.1f} operations/sec")
+        print(f"{'='*60}")
 
 
 class ModelRater:
