@@ -567,8 +567,8 @@ while True:
                     if training_ctx.judge_model is not None:
                         from training_utils.loss_processing import calculate_predicted_masking_ratio, calculate_wrongness_factor
 
-                        # Get predicted masking ratios from judge model
-                        predicted_masking_ratios = calculate_predicted_masking_ratio(Y, mask, training_ctx, ctx)
+                        # Get predicted masking ratios from judge model (reuse existing logits)
+                        predicted_masking_ratios = calculate_predicted_masking_ratio(logits, Y, mask, training_ctx, ctx)
 
                         # Calculate real masking ratios
                         real_masking_ratios = mask.float().mean(dim=1)  # (batch_size,) - ratio per sample

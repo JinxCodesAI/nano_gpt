@@ -57,14 +57,18 @@ def calculate_per_sample_losses(logits, targets, mask):
 
     return per_sample_losses, per_sample_mask_counts
 
-def calculate_predicted_masking_ratio(original_sequences, mask, training_ctx, ctx):
+def calculate_predicted_masking_ratio(logits, original_sequences, mask, training_ctx, ctx):
     """
     Calculate predicted masking ratio using judge model.
 
+    This function reuses the already-computed logits from the main model (which is the unmasking model
+    in unmasking training) to avoid redundant forward passes.
+
     Args:
+        logits: (batch_size, seq_len, vocab_size) - already computed logits from main model
         original_sequences: (batch_size, seq_len) - original clean sequences
         mask: (batch_size, seq_len) - boolean mask indicating masked positions
-        training_ctx: TrainingContext with judge_model and unmasking_model
+        training_ctx: TrainingContext with judge_model
         ctx: Autocast context for inference
 
     Returns:
@@ -74,29 +78,18 @@ def calculate_predicted_masking_ratio(original_sequences, mask, training_ctx, ct
         # If no judge model, return ones (no wrongness factor scaling)
         return torch.ones(original_sequences.shape[0], device=original_sequences.device)
 
-    if training_ctx.unmasking_model is None:
-        raise ValueError("Judge model requires unmasking_model for reconstruction")
-
     batch_size, seq_len = original_sequences.shape
 
-    # Step 1: Create masked input for unmasking model
-    masked_sequences = original_sequences.clone()
-    masked_sequences[mask] = training_ctx.mask_token_id
-
-    # Step 2: Use unmasking model to reconstruct masked sequences
-    training_ctx.unmasking_model.eval()
+    # Step 1: Use already computed logits to get reconstructed tokens (GPU efficient)
     with torch.no_grad():
-        # Forward pass through unmasking model
-        reconstructed_logits, _ = training_ctx.unmasking_model(masked_sequences, None)
-
-        # Get most likely tokens for reconstruction
-        reconstructed_tokens = torch.argmax(reconstructed_logits, dim=-1)
+        # Get most likely tokens for reconstruction from existing logits
+        reconstructed_tokens = torch.argmax(logits, dim=-1)  # (batch_size, seq_len)
 
         # Create final sequences: keep unmasked tokens, use predictions for masked tokens
         final_sequences = original_sequences.clone()
         final_sequences[mask] = reconstructed_tokens[mask]
 
-    # Step 3: Use existing calculate_sequence_scores function to get predictions
+    # Step 2: Use existing calculate_sequence_scores function to get predictions
     from sample_utils import calculate_sequence_scores
 
     cls_token_id = training_ctx.cls_token_id
@@ -104,7 +97,7 @@ def calculate_predicted_masking_ratio(original_sequences, mask, training_ctx, ct
         # Use a default CLS token ID if not set
         cls_token_id = training_ctx.extended_vocab_size - 1
 
-    # Get predicted scores using the existing function
+    # Get predicted scores using the existing function (batch processing)
     predicted_scores = calculate_sequence_scores(
         training_ctx.judge_model,
         final_sequences,
@@ -113,7 +106,7 @@ def calculate_predicted_masking_ratio(original_sequences, mask, training_ctx, ct
         ctx
     )
 
-    # Convert list to tensor
+    # Convert list to tensor (GPU efficient)
     predicted_ratios = torch.tensor(predicted_scores, device=original_sequences.device, dtype=torch.float32)
 
     return predicted_ratios
