@@ -162,9 +162,7 @@ def main():
     generate_batches(val_ids, args.batch_size, args.block_size, args.target_size,
                     args.batches_per_file, val_batches, output_dir, 'val')
 
-    # Also save the legacy bin files for compatibility
-    train_ids.tofile(os.path.join(output_dir, 'train.bin'))
-    val_ids.tofile(os.path.join(output_dir, 'val.bin'))
+    # Legacy bin files are no longer needed - only batch files are supported
 
     # save the meta information as well, to help us encode/decode later
     meta = {
