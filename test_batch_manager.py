@@ -19,6 +19,7 @@ class TestBatchManager:
         self.temp_dir = tempfile.mkdtemp()
         self.batch_size = 4
         self.block_size = 8
+        self.target_size = 8
         self.device_type = 'cpu'
         
     def teardown_method(self):
@@ -35,7 +36,7 @@ class TestBatchManager:
         metadata = {
             'batch_size': self.batch_size,
             'block_size': self.block_size,
-            'target_size': self.block_size
+            'target_size': self.target_size
         }
         
         data = {
@@ -48,22 +49,18 @@ class TestBatchManager:
         torch.save(data, filepath)
         return filepath
     
-    def _create_legacy_data_file(self, split, size=1000):
-        """Create a legacy .bin data file for testing backward compatibility."""
-        data = np.random.randint(0, 1000, size=size, dtype=np.uint16)
-        filepath = os.path.join(self.temp_dir, f'{split}.bin')
-        data.tofile(filepath)
-        return filepath
+
     
     def test_initialization(self):
         """Test BatchManager initialization."""
         batch_manager = BatchManager(
-            self.temp_dir, self.batch_size, self.block_size, self.device_type
+            self.temp_dir, self.batch_size, self.block_size, self.target_size, self.device_type
         )
-        
+
         assert batch_manager.data_dir == self.temp_dir
         assert batch_manager.batch_size == self.batch_size
         assert batch_manager.block_size == self.block_size
+        assert batch_manager.target_size == self.target_size
         assert batch_manager.device_type == self.device_type
         assert not batch_manager._initialized
     
@@ -74,7 +71,7 @@ class TestBatchManager:
         self._create_test_batch_file('val', 0)
         
         batch_manager = BatchManager(
-            self.temp_dir, self.batch_size, self.block_size, self.device_type
+            self.temp_dir, self.batch_size, self.block_size, self.target_size, self.device_type
         )
         
         device = torch.device('cpu')
@@ -99,7 +96,7 @@ class TestBatchManager:
         self._create_test_batch_file('val', 0, num_batches=1)
         
         batch_manager = BatchManager(
-            self.temp_dir, self.batch_size, self.block_size, self.device_type
+            self.temp_dir, self.batch_size, self.block_size, self.target_size, self.device_type
         )
         
         device = torch.device('cpu')
@@ -113,27 +110,20 @@ class TestBatchManager:
         stats = batch_manager.get_stats()
         assert stats['current_train_file'] == 1
     
-    def test_legacy_fallback(self):
-        """Test fallback to legacy .bin files when no batch files exist."""
-        # Create legacy data files
-        self._create_legacy_data_file('train', size=1000)
-        self._create_legacy_data_file('val', size=1000)
-        
+    def test_missing_batch_files_error(self):
+        """Test that missing batch files raise appropriate error."""
         batch_manager = BatchManager(
-            self.temp_dir, self.batch_size, self.block_size, self.device_type
+            self.temp_dir, self.batch_size, self.block_size, self.target_size, self.device_type
         )
-        
+
         device = torch.device('cpu')
-        
-        # Test that legacy loading works
-        x, y = batch_manager.get_batch('train', device)
-        assert x.shape == (self.batch_size, self.block_size)
-        assert y.shape == (self.batch_size, self.block_size)
-        
-        # Test val split
-        x_val, y_val = batch_manager.get_batch('val', device)
-        assert x_val.shape == (self.batch_size, self.block_size)
-        assert y_val.shape == (self.batch_size, self.block_size)
+
+        # Test that missing files raise FileNotFoundError
+        with pytest.raises(FileNotFoundError) as exc_info:
+            batch_manager.get_batch('train', device)
+
+        assert "No pre-computed batch files found" in str(exc_info.value)
+        assert "train" in str(exc_info.value)
     
     def test_metadata_validation(self):
         """Test metadata validation warnings."""
@@ -142,11 +132,11 @@ class TestBatchManager:
         x_data = torch.randint(0, 1000, (total_samples, self.block_size))
         y_data = torch.randint(0, 1000, (total_samples, self.block_size))
 
-        # Wrong batch_size in metadata
+        # Wrong batch_size and target_size in metadata
         metadata = {
             'batch_size': self.batch_size + 1,  # Different from manager
             'block_size': self.block_size,
-            'target_size': self.block_size
+            'target_size': self.target_size + 1  # Different from manager
         }
 
         data = {'x': x_data, 'y': y_data, 'metadata': metadata}
@@ -157,7 +147,7 @@ class TestBatchManager:
         self._create_test_batch_file('val', 0)
 
         batch_manager = BatchManager(
-            self.temp_dir, self.batch_size, self.block_size, self.device_type
+            self.temp_dir, self.batch_size, self.block_size, self.target_size, self.device_type
         )
 
         device = torch.device('cpu')
@@ -173,7 +163,7 @@ class TestBatchManager:
         self._create_test_batch_file('val', 0)
         
         batch_manager = BatchManager(
-            self.temp_dir, self.batch_size, self.block_size, self.device_type
+            self.temp_dir, self.batch_size, self.block_size, self.target_size, self.device_type
         )
         
         device = torch.device('cpu')
@@ -203,7 +193,7 @@ class TestBatchManager:
         self._create_test_batch_file('val', 0)
         
         batch_manager = BatchManager(
-            self.temp_dir, self.batch_size, self.block_size, self.device_type
+            self.temp_dir, self.batch_size, self.block_size, self.target_size, self.device_type
         )
         
         device = torch.device('cpu')

@@ -49,6 +49,7 @@ dataset = 'openwebtext'
 gradient_accumulation_steps = 5 * 8 # used to simulate larger batch sizes
 batch_size = 12 # if gradient_accumulation_steps > 1, this is the micro-batch size
 block_size = 1024
+target_size = None # target sequence length, defaults to block_size if None
 # model
 n_layer = 12
 n_head = 12
@@ -116,7 +117,7 @@ ctx = nullcontext() if device_type == 'cpu' else torch.amp.autocast(device_type=
 data_dir = os.path.join('data', dataset)
 
 # initialize batch manager
-batch_manager = BatchManager(data_dir, batch_size, block_size, device_type)
+batch_manager = BatchManager(data_dir, batch_size, block_size, target_size, device_type)
 
 # init these up here, can override if init_from='resume' (i.e. from a checkpoint)
 iter_num = 0
