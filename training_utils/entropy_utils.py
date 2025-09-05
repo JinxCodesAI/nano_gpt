@@ -8,63 +8,114 @@ import torch
 from .training_config import TrainingContext
 
 
-def calculate_wrong_answer_entropy(logits, targets, vocab_size):
+def _calculate_wrong_answer_entropy_per_position(logits, targets, vocab_size, mask=None):
     """
-    Calculate entropy of wrong answer distributions for entropy penalty.
-    
+    Calculate entropy of wrong answer distributions per position (internal function).
+
     HIGH entropy (uniform wrong answers) = GOOD (high signal-to-noise ratio)
     LOW entropy (concentrated wrong answers) = BAD (low signal-to-noise ratio)
-    
+
     Args:
         logits: Model logits (batch_size, seq_len, vocab_size)
         targets: Target tokens (batch_size, seq_len)
         vocab_size: Size of vocabulary
-        
+        mask: Optional boolean mask (batch_size, seq_len) - only calculate for masked positions
+
     Returns:
-        avg_entropy: Average entropy of wrong answer distributions across all positions
+        per_sample_entropies: (batch_size,) - entropy per sample (averaged over valid positions)
     """
     batch_size, seq_len, vocab_size = logits.shape
     device = logits.device
     epsilon = 1e-9 # Use a slightly larger epsilon for stability
-    
+
     # Get probabilities from logits
     probs = torch.nn.functional.softmax(logits, dim=-1)
-    
+
+    # Apply mask if provided
+    if mask is not None:
+        # Zero out probabilities for non-masked positions
+        probs = probs * mask.unsqueeze(-1).float()
+
     # Flatten for easier processing
     probs_flat = probs.view(-1, vocab_size)
     targets_flat = targets.view(-1)
-    
-    # --- START FIX ---
-    
+
     # Create a mask to zero out the correct answer probabilities
     wrong_probs = probs_flat.clone()
     wrong_probs[range(len(targets_flat)), targets_flat] = 0.0
-    
+
     # Calculate the sum of the remaining "wrong" probabilities
     # This sum is (1.0 - p_correct)
     sum_wrong_probs = wrong_probs.sum(dim=1, keepdim=True)
-    
+
     # Avoid division by zero for positions where p_correct was close to 1.0
     # If sum_wrong_probs is near zero, entropy is also zero, so we can ignore these.
     # We create a mask for safe normalization.
     safe_mask = sum_wrong_probs.squeeze() > epsilon
-    
-    if not safe_mask.any():
-        # Handle the edge case where no positions have significant wrong probabilities
-        return torch.tensor(0.0, device=device)
-        
-    # Re-normalize the wrong probabilities so they sum to 1
-    # This creates a true probability distribution over the incorrect tokens
-    normalized_wrong_probs = wrong_probs[safe_mask] / sum_wrong_probs[safe_mask]
-    
-    # Calculate entropy on the properly normalized distribution
-    log_probs = torch.log(normalized_wrong_probs + epsilon)
-    entropies = -(normalized_wrong_probs * log_probs).sum(dim=1)
-    
-    # --- END FIX ---
-    
-    # Return average entropy across all valid positions
-    return entropies.mean()
+
+    # Initialize entropies for all positions
+    position_entropies = torch.zeros(batch_size * seq_len, device=device)
+
+    if safe_mask.any():
+        # Re-normalize the wrong probabilities so they sum to 1
+        # This creates a true probability distribution over the incorrect tokens
+        normalized_wrong_probs = wrong_probs[safe_mask] / sum_wrong_probs[safe_mask]
+
+        # Calculate entropy on the properly normalized distribution
+        log_probs = torch.log(normalized_wrong_probs + epsilon)
+        entropies = -(normalized_wrong_probs * log_probs).sum(dim=1)
+
+        # Assign entropies to the safe positions
+        position_entropies[safe_mask] = entropies
+
+    # Reshape back to (batch_size, seq_len)
+    position_entropies = position_entropies.view(batch_size, seq_len)
+
+    # Apply mask for averaging if provided
+    if mask is not None:
+        # Only average over masked positions
+        masked_entropies = position_entropies * mask.float()
+        mask_counts = mask.float().sum(dim=1)
+        # Avoid division by zero
+        mask_counts = torch.clamp(mask_counts, min=1.0)
+        per_sample_entropies = masked_entropies.sum(dim=1) / mask_counts
+    else:
+        # Average over all positions
+        per_sample_entropies = position_entropies.mean(dim=1)
+
+    return per_sample_entropies
+
+
+def calculate_wrong_answer_entropy(logits, targets, vocab_size):
+    """
+    Calculate average entropy of wrong answer distributions across all positions.
+
+    Args:
+        logits: Model logits (batch_size, seq_len, vocab_size)
+        targets: Target tokens (batch_size, seq_len)
+        vocab_size: Size of vocabulary
+
+    Returns:
+        avg_entropy: Average entropy of wrong answer distributions across all positions
+    """
+    per_sample_entropies = _calculate_wrong_answer_entropy_per_position(logits, targets, vocab_size)
+    return per_sample_entropies.mean()
+
+
+def calculate_wrong_answer_entropy_per_sample(logits, targets, mask, vocab_size):
+    """
+    Calculate entropy of wrong answer distributions per sample.
+
+    Args:
+        logits: Model logits (batch_size, seq_len, vocab_size)
+        targets: Target tokens (batch_size, seq_len)
+        mask: Boolean mask (batch_size, seq_len) - only calculate for masked positions
+        vocab_size: Size of vocabulary
+
+    Returns:
+        per_sample_entropies: (batch_size,) - entropy per sample
+    """
+    return _calculate_wrong_answer_entropy_per_position(logits, targets, vocab_size, mask)
 
 
 def get_current_entropy_penalty(iter_num, ctx: TrainingContext):
@@ -92,50 +143,6 @@ def get_current_entropy_penalty(iter_num, ctx: TrainingContext):
     progress = max(0.0, min(1.0, progress))  # Clamp to [0, 1]
     
     return progress * ctx.max_entropy_penalty
-
-
-def calculate_wrong_answer_entropy_per_sample(logits, targets, mask, vocab_size):
-    """
-    Calculate entropy of wrong answer distributions per sample (reuses existing logic).
-
-    Args:
-        logits: Model logits (batch_size, seq_len, vocab_size)
-        targets: Target tokens (batch_size, seq_len)
-        mask: Boolean mask (batch_size, seq_len) - only calculate for masked positions
-        vocab_size: Size of vocabulary
-
-    Returns:
-        per_sample_entropies: (batch_size,) - entropy per sample
-    """
-    batch_size, seq_len, vocab_size_logits = logits.shape
-    device = logits.device
-    per_sample_entropies = torch.zeros(batch_size, device=device)
-
-    for sample_idx in range(batch_size):
-        sample_mask = mask[sample_idx]  # (seq_len,)
-        if not sample_mask.any():
-            continue
-
-        # Extract masked positions for this sample
-        sample_logits = logits[sample_idx:sample_idx+1, :, :]  # Keep batch dim: (1, seq_len, vocab_size)
-        sample_targets = targets[sample_idx:sample_idx+1, :]   # Keep batch dim: (1, seq_len)
-        sample_mask_expanded = sample_mask.unsqueeze(0)        # (1, seq_len)
-
-        # Apply mask to get only masked positions
-        masked_logits = sample_logits[:, sample_mask, :]       # (1, num_masked_positions, vocab_size)
-        masked_targets = sample_targets[:, sample_mask]        # (1, num_masked_positions)
-
-        # Reuse existing entropy calculation logic
-        if masked_logits.numel() > 0:
-            # Reshape to match existing function expectations
-            reshaped_logits = masked_logits.view(1, -1, vocab_size_logits)
-            reshaped_targets = masked_targets.view(1, -1)
-
-            # Call existing function (it will return scalar for this single sample)
-            sample_entropy = calculate_wrong_answer_entropy(reshaped_logits, reshaped_targets, vocab_size)
-            per_sample_entropies[sample_idx] = sample_entropy
-
-    return per_sample_entropies
 
 
 def update_entropy_multiplier_ema(ctx: TrainingContext, current_multiplier: float):

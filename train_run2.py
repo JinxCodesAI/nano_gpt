@@ -34,6 +34,8 @@ from training_utils import (
     StickyStageConfig, RandomStageConfig, SpanStageConfig, create_stage_objects,
     calculate_wrong_answer_entropy, get_current_entropy_penalty, update_entropy_multiplier_ema,
     apply_label_smoothing,
+    # Loss processing functions
+    calculate_per_sample_losses, apply_per_sample_modifications,
     # New refactoring modules
     CheckpointManager, InstabilityDetector, TrainingLogger, ModelInitializer, SourceCodePrinter
 )
@@ -530,8 +532,6 @@ while True:
 
                 # Apply masking for unmasking training (per-sample processing)
                 if training_ctx.training_type == 'unmasking' and mask.any():
-                    from training_utils.loss_processing import calculate_per_sample_losses, apply_per_sample_modifications
-
                     # Step 1: Get per-sample losses without aggregation (replaces reduction='mean')
                     per_sample_losses, per_sample_mask_counts = calculate_per_sample_losses(logits, Y, mask)
 
