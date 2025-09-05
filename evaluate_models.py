@@ -243,14 +243,14 @@ EVALUATION_CONFIG = {
         # 'model3.pt',
     ],
     'remasking_checkpoint_name': None,  # Optional: remasking_binary model checkpoint
-    'judge_model': '1600_2_scorer.pt',  # '35.75_58.2_UM.pt',  # SEQUENCE_SCORER model to use as the single judge (lower scores = better)
+    'judge_model': '1800_4_scorer.pt',  # '35.75_58.2_UM.pt',  # SEQUENCE_SCORER model to use as the single judge (lower scores = better)
     
     # Evaluation parameters
     'batch_size': 32,           # N samples per model per batch (generation) - reduced for testing
     'rating_batch_size': 64,    # Batch size for rating samples (GPU optimization) - reduced for testing
     'num_challenges': 1000,     # P tournament rounds before stopping - reduced for testing
     'sequence_length': 1024,   # Total length of generated sequence - reduced for testing
-    'seed': 234,
+    'seed': 65434,
     'device': 'cuda',
     'dtype': 'float16',
     'compile': False,
@@ -263,11 +263,11 @@ EVALUATION_CONFIG = {
     'diffusion_iterations': 25,
     'start_ratio': 0.99,
     'end_ratio': 0.05,
-    'randomness_strength': 0,
+    'randomness_strength': 0.0,
     'intelligent_remasking': True,  # Enable selfmasking for consistent evaluation
 
     # Schedule parameters
-    'schedule_type': 'custom',
+    'schedule_type': 'linear',
     'masking_ratios': [0.85,0.816,0.782,0.748,0.714,0.68,0.646,0.612,0.578,0.544,0.51,0.476,0.442,0.408,0.374,0.34,0.306,0.272,0.238,0.204,0.17,0.136,0.102,0.068,0.034],
     
     # Output configuration
@@ -978,13 +978,20 @@ class ELOTracker:
 
 
 class TournamentManager:
-    """Manages pairwise tournament comparisons"""
-    
+    """Manages pairwise tournament comparisons using round-robin system"""
+
     def __init__(self, config, elo_tracker, judge_model_type):
         self.config = config
         self.elo_tracker = elo_tracker
         self.judge_model_type = judge_model_type
         self.total_comparisons = 0
+
+        # Round-robin tournament state
+        self.model_pairs = []  # List of all possible model pairs
+        self.pair_matches = {}  # Track matches per pair: {(model1, model2): count}
+        self.current_pair_index = 0  # Current position in round-robin cycle
+        self.matches_per_pair = 0  # Target matches per pair
+        self.total_target_matches = 0  # Total target matches for tournament
     
     def determine_winner(self, model1_ratings, model2_ratings):
         """Determine winner based on judge model scores"""
@@ -1001,7 +1008,7 @@ class TournamentManager:
 
         # Use fixed threshold for SEQUENCE_SCORER models (0-1 range)
         # If difference is less than 0.1, it's a draw
-        threshold = 0.1
+        threshold = 0.01
 
         if score_diff <= threshold:
             return 'DRAW'
@@ -1046,14 +1053,85 @@ class TournamentManager:
         
         # Fallback (should not happen)
         return len(samples) - 1
-    
+
+    def _initialize_round_robin(self, model_names):
+        """Initialize round-robin tournament structure"""
+        # Generate all possible model pairs
+        self.model_pairs = []
+        for i, model1 in enumerate(model_names):
+            for j, model2 in enumerate(model_names):
+                if i < j:  # Avoid duplicates and self-matches
+                    self.model_pairs.append((model1, model2))
+
+        # Calculate matches per pair to achieve target rounds per model
+        num_models = len(model_names)
+        if num_models < 2:
+            raise ValueError("Need at least 2 models for tournament")
+
+        # Each model should play num_challenges rounds total
+        # With (num_models - 1) opponents, each pair should play:
+        # num_challenges / (num_models - 1) matches
+        self.matches_per_pair = max(1, self.config['num_challenges'] // (num_models - 1))
+
+        # Adjust to ensure each model gets exactly num_challenges rounds
+        # Total matches per model = matches_per_pair * (num_models - 1)
+        # If this doesn't equal num_challenges, we need to distribute extra matches
+        matches_per_model = self.matches_per_pair * (num_models - 1)
+        extra_matches_needed = self.config['num_challenges'] - matches_per_model
+
+        # Initialize pair match counters
+        self.pair_matches = {pair: self.matches_per_pair for pair in self.model_pairs}
+
+        # Distribute extra matches evenly across pairs
+        if extra_matches_needed > 0:
+            pairs_to_boost = self.model_pairs[:extra_matches_needed]
+            for pair in pairs_to_boost:
+                self.pair_matches[pair] += 1
+
+        # Calculate total target matches
+        self.total_target_matches = sum(self.pair_matches.values())
+
+        print(f"Round-robin tournament initialized:")
+        print(f"  Models: {num_models}")
+        print(f"  Model pairs: {len(self.model_pairs)}")
+        print(f"  Base matches per pair: {self.matches_per_pair}")
+        print(f"  Total target matches: {self.total_target_matches}")
+        print(f"  Expected rounds per model: ~{self.config['num_challenges']}")
+
+    def _get_next_matchup(self):
+        """Get the next model pair for tournament using round-robin scheduling"""
+        if not self.model_pairs:
+            return None, None
+
+        # Find a pair that still needs matches
+        attempts = 0
+        while attempts < len(self.model_pairs):
+            current_pair = self.model_pairs[self.current_pair_index]
+
+            # Check if this pair still needs matches
+            if self.pair_matches[current_pair] > 0:
+                # Decrement the match count for this pair
+                self.pair_matches[current_pair] -= 1
+
+                # Move to next pair for next time
+                self.current_pair_index = (self.current_pair_index + 1) % len(self.model_pairs)
+
+                return current_pair[0], current_pair[1]
+
+            # This pair is done, move to next
+            self.current_pair_index = (self.current_pair_index + 1) % len(self.model_pairs)
+            attempts += 1
+
+        # No more matches needed
+        return None, None
+
     def run_single_tournament(self, all_samples, all_ratings):
-        """Run a single tournament round"""
-        model_names = list(all_samples.keys())
-        
-        # Generate random matchup
-        model1_id = random.choice(model_names)
-        model2_id = random.choice([m for m in model_names if m != model1_id])
+        """Run a single tournament round using round-robin scheduling"""
+        # Get next matchup from round-robin schedule
+        model1_id, model2_id = self._get_next_matchup()
+
+        if model1_id is None or model2_id is None:
+            return False  # Tournament is complete
         
         # Use weighted selection to favor less popular samples
         sample1_id = self._select_weighted_sample(model1_id, all_samples[model1_id])
@@ -1101,25 +1179,42 @@ class TournamentManager:
         return True
     
     def run_tournaments(self, all_samples, all_ratings):
-        """Run tournaments until stopping criteria met"""
+        """Run round-robin tournaments until all scheduled matches are complete"""
         print(f"\n{'='*80}")
-        print("TOURNAMENT PHASE")
+        print("ROUND-ROBIN TOURNAMENT PHASE")
         print(f"{'='*80}")
-        
-        print(f"Running tournaments until all models have {self.config['num_challenges']} matches...")
-        
-        while True:
-            # Check if all models have enough rounds
-            min_rounds = min(self.elo_tracker.num_rounds.values())
-            if min_rounds >= self.config['num_challenges']:
-                break
-            
+
+        # Initialize round-robin tournament structure
+        model_names = list(all_samples.keys())
+        self._initialize_round_robin(model_names)
+
+        print(f"Running {self.total_target_matches} scheduled matches...")
+
+        matches_completed = 0
+        while matches_completed < self.total_target_matches:
             # Run a single tournament
             success = self.run_single_tournament(all_samples, all_ratings)
-            if not success and self.total_comparisons > 0:
-                print("Warning: Could not generate valid comparison, continuing...")
-        
-        print(f"\nTournament phase complete: {self.total_comparisons} total comparisons")
+            if success:
+                matches_completed += 1
+                if self.config['verbose'] and matches_completed % 50 == 0:
+                    print(f"  Completed {matches_completed}/{self.total_target_matches} matches...")
+            else:
+                # All scheduled matches are complete
+                break
+
+        # Verify that all models have equal rounds
+        rounds_per_model = list(self.elo_tracker.num_rounds.values())
+        min_rounds = min(rounds_per_model)
+        max_rounds = max(rounds_per_model)
+
+        print(f"\nRound-robin tournament complete:")
+        print(f"  Total matches: {self.total_comparisons}")
+        print(f"  Rounds per model: min={min_rounds}, max={max_rounds}")
+
+        if max_rounds - min_rounds > 1:
+            print(f"  Warning: Round imbalance detected (difference: {max_rounds - min_rounds})")
+        else:
+            print(f"  ✓ Balanced tournament: all models within 1 round of each other")
 
 
 class ModelEvaluator:
