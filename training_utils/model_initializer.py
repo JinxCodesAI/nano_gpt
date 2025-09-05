@@ -149,7 +149,61 @@ class ModelInitializer:
             print(f"WARNING: Unmasking model block size ({unmasking_model_args.get('block_size')}) < required size ({block_size - 1})")
         
         return unmasking_model
-    
+
+    def load_judge_model(self, checkpoint_path: str, extended_vocab_size: int,
+                        block_size: int) -> GPT:
+        """
+        Load judge model for wrongness_factor calculation.
+
+        Args:
+            checkpoint_path: Path to judge model checkpoint
+            extended_vocab_size: Expected vocabulary size
+            block_size: Expected block size
+
+        Returns:
+            Loaded judge model (sequence_scoring type)
+        """
+        print(f"Loading judge model for wrongness_factor calculation from {checkpoint_path}")
+
+        # Load the judge model checkpoint
+        judge_checkpoint = torch.load(checkpoint_path, map_location=self.device, weights_only=False)
+        judge_model_args = judge_checkpoint['model_args']
+
+        # Verify it's a sequence scoring model
+        if judge_model_args.get('mode') != ModelMode.SEQUENCE_SCORER:
+            print(f"WARNING: Judge model mode is {judge_model_args.get('mode')}, expected SEQUENCE_SCORER")
+
+        # Create judge model with same architecture
+        judge_gptconf = GPTConfig(**judge_model_args)
+        judge_model = GPT(judge_gptconf)
+
+        # Load the state dict
+        judge_state_dict = judge_checkpoint['model']
+        # Handle potential _orig_mod prefix issues
+        unwanted_prefix = '_orig_mod.'
+        for k, v in list(judge_state_dict.items()):
+            if k.startswith(unwanted_prefix):
+                judge_state_dict[k[len(unwanted_prefix):]] = judge_state_dict.pop(k)
+
+        judge_model.load_state_dict(judge_state_dict)
+        judge_model.to(self.device)
+        judge_model.eval()  # Set to eval mode for inference
+
+        print(f"Judge model loaded successfully:")
+        print(f"  - Model parameters: {judge_model.get_num_params()/1e6:.2f}M")
+        print(f"  - Vocab size: {judge_model_args.get('vocab_size', 'unknown')}")
+        print(f"  - Block size: {judge_model_args.get('block_size', 'unknown')}")
+        print(f"  - Mode: {judge_model_args.get('mode', 'unknown')}")
+
+        # Verify compatibility
+        if judge_model_args.get('vocab_size') != extended_vocab_size:
+            print(f"WARNING: Judge model vocab size ({judge_model_args.get('vocab_size')}) != current vocab size ({extended_vocab_size})")
+
+        if judge_model_args.get('block_size', 1024) < (block_size - 1):
+            print(f"WARNING: Judge model block size ({judge_model_args.get('block_size')}) < required size ({block_size - 1})")
+
+        return judge_model
+
     def setup_transfer_learning(self, model: GPT, init_from_checkpoint: str) -> GPT:
         """
         Setup transfer learning from a pretrained checkpoint.

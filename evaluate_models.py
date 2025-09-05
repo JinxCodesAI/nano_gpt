@@ -257,13 +257,13 @@ EVALUATION_CONFIG = {
     
     # Generation parameters (copied from sample.py)
     'temperature': 0.8,
-    'top_p': 0.95,
+    'top_p': 1,
     'repetition_penalty': 1.0,
     'repetition_window': 10,
     'diffusion_iterations': 25,
     'start_ratio': 0.99,
     'end_ratio': 0.05,
-    'randomness_strength': 0.0,
+    'randomness_strength': 0.4,
     'intelligent_remasking': True,  # Enable selfmasking for consistent evaluation
 
     # Schedule parameters

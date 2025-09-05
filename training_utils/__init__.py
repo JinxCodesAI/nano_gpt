@@ -147,6 +147,8 @@ __all__ = [
     # Loss processing functions
     'calculate_per_sample_losses',
     'apply_per_sample_modifications',
+    'calculate_predicted_masking_ratio',
+    'calculate_wrongness_factor',
 
     # Refactoring modules
     'CheckpointManager',

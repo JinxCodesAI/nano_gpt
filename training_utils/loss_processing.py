@@ -57,6 +57,95 @@ def calculate_per_sample_losses(logits, targets, mask):
 
     return per_sample_losses, per_sample_mask_counts
 
+def calculate_predicted_masking_ratio(original_sequences, mask, training_ctx, ctx):
+    """
+    Calculate predicted masking ratio using judge model.
+
+    Args:
+        original_sequences: (batch_size, seq_len) - original clean sequences
+        mask: (batch_size, seq_len) - boolean mask indicating masked positions
+        training_ctx: TrainingContext with judge_model and unmasking_model
+        ctx: Autocast context for inference
+
+    Returns:
+        predicted_masking_ratios: (batch_size,) - predicted masking ratios from judge model
+    """
+    if training_ctx.judge_model is None:
+        # If no judge model, return ones (no wrongness factor scaling)
+        return torch.ones(original_sequences.shape[0], device=original_sequences.device)
+
+    if training_ctx.unmasking_model is None:
+        raise ValueError("Judge model requires unmasking_model for reconstruction")
+
+    batch_size, seq_len = original_sequences.shape
+
+    # Step 1: Create masked input for unmasking model
+    masked_sequences = original_sequences.clone()
+    masked_sequences[mask] = training_ctx.mask_token_id
+
+    # Step 2: Use unmasking model to reconstruct masked sequences
+    training_ctx.unmasking_model.eval()
+    with torch.no_grad():
+        # Forward pass through unmasking model
+        reconstructed_logits, _ = training_ctx.unmasking_model(masked_sequences, None)
+
+        # Get most likely tokens for reconstruction
+        reconstructed_tokens = torch.argmax(reconstructed_logits, dim=-1)
+
+        # Create final sequences: keep unmasked tokens, use predictions for masked tokens
+        final_sequences = original_sequences.clone()
+        final_sequences[mask] = reconstructed_tokens[mask]
+
+    # Step 3: Use existing calculate_sequence_scores function to get predictions
+    from sample_utils import calculate_sequence_scores
+
+    cls_token_id = training_ctx.cls_token_id
+    if cls_token_id is None:
+        # Use a default CLS token ID if not set
+        cls_token_id = training_ctx.extended_vocab_size - 1
+
+    # Get predicted scores using the existing function
+    predicted_scores = calculate_sequence_scores(
+        training_ctx.judge_model,
+        final_sequences,
+        cls_token_id,
+        training_ctx.device,
+        ctx
+    )
+
+    # Convert list to tensor
+    predicted_ratios = torch.tensor(predicted_scores, device=original_sequences.device, dtype=torch.float32)
+
+    return predicted_ratios
+
+def calculate_wrongness_factor(predicted_masking_ratio, real_masking_ratio):
+    """
+    Calculate wrongness factor using the formula:
+    wrongness_factor = predicted_masking_ratio / clamp((real_masking_ratio + 0.1), max=1)
+
+    This gives a factor in range (0, 10) where:
+    - Values > 1 indicate the judge model predicted higher masking than actual (overestimate)
+    - Values < 1 indicate the judge model predicted lower masking than actual (underestimate)
+    - Values around 1 indicate good prediction accuracy
+
+    Args:
+        predicted_masking_ratio: (batch_size,) - predicted ratios from judge model [0, 1]
+        real_masking_ratio: (batch_size,) - actual masking ratios from mask [0, 1]
+
+    Returns:
+        wrongness_factor: (batch_size,) - wrongness scaling factors [0, 10]
+    """
+    # Clamp denominator to avoid division by very small numbers and cap at 1.0
+    clamped_real_ratio = torch.clamp(real_masking_ratio + 0.1, max=1.0)
+
+    # Calculate wrongness factor
+    wrongness_factor = predicted_masking_ratio / clamped_real_ratio
+
+    # Ensure result is in reasonable range [0, 10]
+    wrongness_factor = torch.clamp(wrongness_factor, min=0.0, max=10.0)
+
+    return wrongness_factor
+
 def apply_per_sample_modifications(per_sample_losses, logits, targets, mask, training_ctx, iter_num, wrongness_factor=None):
     """
     Apply per-sample modifications: entropy penalty and wrongness factor scaling.

@@ -36,6 +36,7 @@ from training_utils import (
     apply_label_smoothing,
     # Loss processing functions
     calculate_per_sample_losses, apply_per_sample_modifications,
+    calculate_predicted_masking_ratio, calculate_wrongness_factor,
     # New refactoring modules
     CheckpointManager, InstabilityDetector, TrainingLogger, ModelInitializer, SourceCodePrinter
 )
@@ -90,6 +91,10 @@ unfreeze_lr_multiplier = 1
 
 # Sequence scoring config
 unmasking_model_checkpoint = ""
+
+# Judge model config (for wrongness_factor calculation)
+judge_model_checkpoint = ""
+enable_judge_model = False
 
 # Unmasking training config
 unmasking_stages = []
@@ -288,6 +293,21 @@ if training_type == 'sequence_scoring':
         unmasking_model_checkpoint, extended_vocab_size, block_size
     )
     training_ctx.unmasking_model = unmasking_model
+
+# Load judge model for wrongness_factor calculation if enabled
+if enable_judge_model and judge_model_checkpoint:
+    if not os.path.exists(judge_model_checkpoint):
+        raise FileNotFoundError(f"Judge model checkpoint not found: {judge_model_checkpoint}")
+
+    judge_model = model_initializer.load_judge_model(
+        judge_model_checkpoint, extended_vocab_size, block_size
+    )
+    training_ctx.judge_model = judge_model
+    print(f"Judge model enabled for wrongness_factor calculation")
+else:
+    training_ctx.judge_model = None
+    if enable_judge_model:
+        print("WARNING: enable_judge_model=True but no judge_model_checkpoint specified")
 
 # Apply restored training context state if resuming
 if init_from == 'resume' and checkpoint_training_context is not None:
@@ -543,9 +563,26 @@ while True:
                         weights[valid_ratios] = (1.0 / mask_ratios[valid_ratios]) ** 0.5
                         per_sample_losses = per_sample_losses * weights
 
-                    # Step 3: Get external wrongness factor (replace with your actual implementation)
-                    wrongness_factor = getattr(training_ctx, 'wrongness_factor', None)
-                    if wrongness_factor is None:
+                    # Step 3: Calculate wrongness factor using judge model
+                    if training_ctx.judge_model is not None:
+                        from training_utils.loss_processing import calculate_predicted_masking_ratio, calculate_wrongness_factor
+
+                        # Get predicted masking ratios from judge model
+                        predicted_masking_ratios = calculate_predicted_masking_ratio(Y, mask, training_ctx, ctx)
+
+                        # Calculate real masking ratios
+                        real_masking_ratios = mask.float().mean(dim=1)  # (batch_size,) - ratio per sample
+
+                        # Calculate wrongness factor using the formula
+                        wrongness_factor = calculate_wrongness_factor(predicted_masking_ratios, real_masking_ratios)
+
+                        # Debug logging (only occasionally to avoid spam)
+                        if iter_num % 100 == 0:
+                            print(f"  Judge model - Predicted: {predicted_masking_ratios.mean().item():.3f}±{predicted_masking_ratios.std().item():.3f}, "
+                                  f"Real: {real_masking_ratios.mean().item():.3f}±{real_masking_ratios.std().item():.3f}, "
+                                  f"Wrongness: {wrongness_factor.mean().item():.3f}±{wrongness_factor.std().item():.3f}")
+                    else:
+                        # Fallback: use all ones (no scaling)
                         wrongness_factor = torch.ones(training_ctx.batch_size, device=logits.device)
 
                     # Step 4: Apply per-sample modifications (entropy penalty + wrongness factor)

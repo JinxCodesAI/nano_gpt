@@ -123,6 +123,7 @@ class TrainingContext:
     
     # Sequence scoring support - reference to unmasking model for reconstruction
     unmasking_model = None  # Pretrained unmasking model for sequence reconstruction
+    judge_model = None  # Judge model for wrongness_factor calculation
     
     # Device configuration
     device: str = 'cuda'
