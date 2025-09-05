@@ -555,19 +555,20 @@ while True:
                             per_sample_losses, logits, Y, mask, training_ctx, iter_num, wrongness_factor
                         )
 
-                    # Step 5: Final aggregation to scalar loss (replaces the original reduction='mean')
+                    # Step 5: Keep per-sample losses as array until the very end
                     valid_samples = per_sample_mask_counts > 0
                     if valid_samples.any():
-                        loss = modified_per_sample_losses[valid_samples].mean()
+                        per_sample_losses_final = modified_per_sample_losses[valid_samples]
                     else:
-                        loss = torch.tensor(0.0, device=logits.device, requires_grad=True)
+                        per_sample_losses_final = torch.tensor([0.0], device=logits.device, requires_grad=True)
 
                 else:
                     if training_ctx.training_type == 'unmasking':
-                        loss = torch.tensor(0.0, device=logits.device, requires_grad=True)
+                        per_sample_losses_final = torch.tensor([0.0], device=logits.device, requires_grad=True)
 
-                # Final loss stability check
-                if not instability_detector.check_loss_stability(loss, iter_num, "final"):
+                # Final loss stability check (use mean for stability check only)
+                loss_for_stability_check = per_sample_losses_final.mean()
+                if not instability_detector.check_loss_stability(loss_for_stability_check, iter_num, "final"):
                     success, X, Y, mask = instability_detector.attempt_recovery(
                         model, optimizer, training_ctx, scaler, get_batch
                     )
@@ -580,7 +581,8 @@ while True:
                     else:
                         break
 
-                loss = loss / gradient_accumulation_steps
+                # Final aggregation to scalar loss - delayed until the very last moment
+                loss = per_sample_losses_final.mean() / gradient_accumulation_steps
 
             # Get next batch while model is doing forward pass
             with timer.time_function('data_generation'):
