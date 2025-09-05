@@ -111,23 +111,108 @@ device_type = 'cuda' if 'cuda' in device else 'cpu' # for later use in torch.aut
 ptdtype = {'float32': torch.float32, 'bfloat16': torch.bfloat16, 'float16': torch.float16}[dtype]
 ctx = nullcontext() if device_type == 'cpu' else torch.amp.autocast(device_type=device_type, dtype=ptdtype)
 
-# poor man's data loader
+# data loader with pre-computed batches
 data_dir = os.path.join('data', dataset)
+
+# Global variables for batch file management
+_batch_files = {'train': [], 'val': []}
+_current_file_idx = {'train': 0, 'val': 0}
+_current_batch_idx = {'train': 0, 'val': 0}
+_loaded_data = {'train': None, 'val': None}
+
+def _initialize_batch_files():
+    """Initialize the list of available batch files for each split."""
+    import glob
+
+    for split in ['train', 'val']:
+        pattern = os.path.join(data_dir, f'{split}_batches_*.pt')
+        files = sorted(glob.glob(pattern))
+        if not files:
+            # Fallback to legacy mode if no batch files found
+            print(f"Warning: No pre-computed batch files found for {split}. Using legacy mode.")
+            return False
+        _batch_files[split] = files
+        print(f"Found {len(files)} {split} batch files")
+    return True
+
+def _load_batch_file(split, file_idx):
+    """Load a specific batch file."""
+    if file_idx >= len(_batch_files[split]):
+        file_idx = 0  # Circular reading
+
+    filepath = _batch_files[split][file_idx]
+    data = torch.load(filepath, map_location='cpu')
+
+    # Validate metadata matches current training config
+    metadata = data['metadata']
+    if metadata['batch_size'] != batch_size:
+        print(f"Warning: Batch file batch_size ({metadata['batch_size']}) != training batch_size ({batch_size})")
+    if metadata['block_size'] != block_size:
+        print(f"Warning: Batch file block_size ({metadata['block_size']}) != training block_size ({block_size})")
+
+    return data
+
 def get_batch(split):
-    # We recreate np.memmap every batch to avoid a memory leak, as per
-    # https://stackoverflow.com/questions/45132940/numpy-memmap-memory-usage-want-to-iterate-once/61472122#61472122
-    if split == 'train':
-        data = np.memmap(os.path.join(data_dir, 'train.bin'), dtype=np.uint16, mode='r')
-    else:
-        data = np.memmap(os.path.join(data_dir, 'val.bin'), dtype=np.uint16, mode='r')
-    ix = torch.randint(len(data) - block_size, (batch_size,))
-    x = torch.stack([torch.from_numpy((data[i:i+block_size]).astype(np.int64)) for i in ix])
-    y = torch.stack([torch.from_numpy((data[i+1:i+1+block_size]).astype(np.int64)) for i in ix])
+    """Load pre-computed batch data with circular reading, with backward compatibility."""
+    global _current_file_idx, _current_batch_idx, _loaded_data
+
+    # Initialize batch files on first call
+    if not _batch_files['train'] and not _batch_files['val']:
+        if not _initialize_batch_files():
+            # Fallback to legacy implementation for backward compatibility
+            if split == 'train':
+                data = np.memmap(os.path.join(data_dir, 'train.bin'), dtype=np.uint16, mode='r')
+            else:
+                data = np.memmap(os.path.join(data_dir, 'val.bin'), dtype=np.uint16, mode='r')
+            ix = torch.randint(len(data) - block_size, (batch_size,))
+            x = torch.stack([torch.from_numpy((data[i:i+block_size]).astype(np.int64)) for i in ix])
+            y = torch.stack([torch.from_numpy((data[i+1:i+1+block_size]).astype(np.int64)) for i in ix])
+            if device_type == 'cuda':
+                x, y = x.pin_memory().to(device, non_blocking=True), y.pin_memory().to(device, non_blocking=True)
+            else:
+                x, y = x.to(device), y.to(device)
+            return x, y
+
+    # Check if we need to load a new file
+    if _loaded_data[split] is None:
+        _loaded_data[split] = _load_batch_file(split, _current_file_idx[split])
+        _current_batch_idx[split] = 0
+
+    # Get current batch
+    data = _loaded_data[split]
+    x_data = data['x']
+    y_data = data['y']
+
+    # Calculate batch boundaries
+    start_idx = _current_batch_idx[split] * batch_size
+    end_idx = min(start_idx + batch_size, x_data.shape[0])
+
+    # Check if we need to move to next file
+    if start_idx >= x_data.shape[0]:
+        # Move to next file (circular)
+        _current_file_idx[split] = (_current_file_idx[split] + 1) % len(_batch_files[split])
+        _loaded_data[split] = _load_batch_file(split, _current_file_idx[split])
+        _current_batch_idx[split] = 0
+
+        # Get batch from new file
+        x_data = _loaded_data[split]['x']
+        y_data = _loaded_data[split]['y']
+        start_idx = 0
+        end_idx = min(batch_size, x_data.shape[0])
+
+    # Extract batch
+    x = x_data[start_idx:end_idx]
+    y = y_data[start_idx:end_idx]
+
+    # Move to next batch for next call
+    _current_batch_idx[split] += 1
+
+    # Move to device
     if device_type == 'cuda':
-        # pin arrays x,y, which allows us to move them to GPU asynchronously (non_blocking=True)
         x, y = x.pin_memory().to(device, non_blocking=True), y.pin_memory().to(device, non_blocking=True)
     else:
         x, y = x.to(device), y.to(device)
+
     return x, y
 
 # init these up here, can override if init_from='resume' (i.e. from a checkpoint)
