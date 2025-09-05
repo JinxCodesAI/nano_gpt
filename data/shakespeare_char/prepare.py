@@ -149,7 +149,7 @@ def main():
 
     # Calculate validation batches (10% of total)
     val_batches = max(1, args.total_batches // 10)
-    train_batches = args.total_batches - val_batches
+    train_batches = args.total_batches
 
     print(f"  train_batches: {train_batches}")
     print(f"  val_batches: {val_batches}")
