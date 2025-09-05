@@ -125,17 +125,21 @@ def calculate_wrongness_factor(predicted_masking_ratio, real_masking_ratio):
     Calculate wrongness factor using the formula:
     wrongness_factor = predicted_masking_ratio / clamp((real_masking_ratio + 0.1), max=1)
 
-    This gives a factor in range (0, 10) where:
+    The returned array is normalized to have an average of 1.0, preserving relative differences
+    while ensuring the overall scaling factor is neutral.
+
+    This gives a factor where:
     - Values > 1 indicate the judge model predicted higher masking than actual (overestimate)
     - Values < 1 indicate the judge model predicted lower masking than actual (underestimate)
     - Values around 1 indicate good prediction accuracy
+    - The batch average is always 1.0
 
     Args:
         predicted_masking_ratio: (batch_size,) - predicted ratios from judge model [0, 1]
         real_masking_ratio: (batch_size,) - actual masking ratios from mask [0, 1]
 
     Returns:
-        wrongness_factor: (batch_size,) - wrongness scaling factors [0, 10]
+        wrongness_factor: (batch_size,) - normalized wrongness scaling factors with average=1.0
     """
     # Clamp denominator to avoid division by very small numbers and cap at 1.0
     clamped_real_ratio = torch.clamp(real_masking_ratio + 0.1, max=1.0)
@@ -145,6 +149,14 @@ def calculate_wrongness_factor(predicted_masking_ratio, real_masking_ratio):
 
     # Ensure result is in reasonable range [0, 10]
     wrongness_factor = torch.clamp(wrongness_factor, min=0.0, max=10.0)
+
+    # Normalize to have average of 1.0
+    current_mean = torch.mean(wrongness_factor)
+    if current_mean > 1e-8:  # Avoid division by zero
+        wrongness_factor = wrongness_factor / current_mean
+    else:
+        # If all values are essentially zero, return ones
+        wrongness_factor = torch.ones_like(wrongness_factor)
 
     return wrongness_factor
 
