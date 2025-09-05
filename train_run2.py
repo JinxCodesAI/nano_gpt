@@ -564,26 +564,27 @@ while True:
                         per_sample_losses = per_sample_losses * weights
 
                     # Step 3: Calculate wrongness factor using judge model
-                    if training_ctx.judge_model is not None:
-                        from training_utils.loss_processing import calculate_predicted_masking_ratio, calculate_wrongness_factor
+                    with timer.time_function('judge_model_calculation'):
+                        if training_ctx.judge_model is not None:
+                            from training_utils.loss_processing import calculate_predicted_masking_ratio, calculate_wrongness_factor
 
-                        # Get predicted masking ratios from judge model (reuse existing logits)
-                        predicted_masking_ratios = calculate_predicted_masking_ratio(logits, Y, mask, training_ctx, ctx)
+                            # Get predicted masking ratios from judge model (reuse existing logits)
+                            predicted_masking_ratios = calculate_predicted_masking_ratio(logits, Y, mask, training_ctx, ctx)
 
-                        # Calculate real masking ratios
-                        real_masking_ratios = mask.float().mean(dim=1)  # (batch_size,) - ratio per sample
+                            # Calculate real masking ratios
+                            real_masking_ratios = mask.float().mean(dim=1)  # (batch_size,) - ratio per sample
 
-                        # Calculate wrongness factor using the formula
-                        wrongness_factor = calculate_wrongness_factor(predicted_masking_ratios, real_masking_ratios)
+                            # Calculate wrongness factor using the formula
+                            wrongness_factor = calculate_wrongness_factor(predicted_masking_ratios, real_masking_ratios)
 
-                        # Debug logging (only occasionally to avoid spam)
-                        if iter_num % 100 == 0:
-                            print(f"  Judge model - Predicted: {predicted_masking_ratios.mean().item():.3f}±{predicted_masking_ratios.std().item():.3f}, "
-                                  f"Real: {real_masking_ratios.mean().item():.3f}±{real_masking_ratios.std().item():.3f}, "
-                                  f"Wrongness: {wrongness_factor.mean().item():.3f}±{wrongness_factor.std().item():.3f}")
-                    else:
-                        # Fallback: use all ones (no scaling)
-                        wrongness_factor = torch.ones(training_ctx.batch_size, device=logits.device)
+                            # Debug logging (only occasionally to avoid spam)
+                            if iter_num % 100 == 0:
+                                print(f"  Judge model - Predicted: {predicted_masking_ratios.mean().item():.3f}±{predicted_masking_ratios.std().item():.3f}, "
+                                      f"Real: {real_masking_ratios.mean().item():.3f}±{real_masking_ratios.std().item():.3f}, "
+                                      f"Wrongness: {wrongness_factor.mean().item():.3f}±{wrongness_factor.std().item():.3f}")
+                        else:
+                            # Fallback: use all ones (no scaling)
+                            wrongness_factor = torch.ones(training_ctx.batch_size, device=logits.device)
 
                     # Step 4: Apply per-sample modifications (entropy penalty + wrongness factor)
                     # This moves entropy penalty calculation BEFORE aggregation

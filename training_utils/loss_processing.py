@@ -76,9 +76,18 @@ def calculate_predicted_masking_ratio(logits, original_sequences, mask, training
     """
     if training_ctx.judge_model is None:
         # If no judge model, return ones (no wrongness factor scaling)
-        return torch.ones(original_sequences.shape[0], device=original_sequences.device)
+        batch_size = original_sequences.shape[0]
+        return torch.ones(batch_size, device=original_sequences.device)
 
-    batch_size, seq_len = original_sequences.shape
+    # Handle both 2D and 3D target tensors
+    if original_sequences.dim() == 3:
+        # Soft targets: (batch_size, seq_len, vocab_size) -> convert to hard targets
+        batch_size, seq_len, vocab_size = original_sequences.shape
+        original_sequences_2d = torch.argmax(original_sequences, dim=-1)  # (batch_size, seq_len)
+    else:
+        # Hard targets: (batch_size, seq_len)
+        batch_size, seq_len = original_sequences.shape
+        original_sequences_2d = original_sequences
 
     # Step 1: Use already computed logits to get reconstructed tokens (GPU efficient)
     with torch.no_grad():
@@ -86,7 +95,7 @@ def calculate_predicted_masking_ratio(logits, original_sequences, mask, training
         reconstructed_tokens = torch.argmax(logits, dim=-1)  # (batch_size, seq_len)
 
         # Create final sequences: keep unmasked tokens, use predictions for masked tokens
-        final_sequences = original_sequences.clone()
+        final_sequences = original_sequences_2d.clone()
         final_sequences[mask] = reconstructed_tokens[mask]
 
     # Step 2: Use existing calculate_sequence_scores function to get predictions

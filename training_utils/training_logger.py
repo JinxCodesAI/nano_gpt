@@ -137,16 +137,17 @@ class TrainingLogger:
         cleanup_time = timer.get_recent_average('cleanup_operations') * 1000
         gpu_sync_time = timer.get_recent_average('gpu_synchronization') * 1000
         loss_proc_time = timer.get_recent_average('loss_processing') * 1000
+        judge_model_time = timer.get_recent_average('judge_model_calculation') * 1000
         instability_time = timer.get_recent_average('instability_detection') * 1000
         
         # Calculate total of measured components
-        measured_total = grad_accum_time + grad_proc_time + optimizer_time + param_check_time + cleanup_time + gpu_sync_time
+        measured_total = grad_accum_time + grad_proc_time + optimizer_time + param_check_time + cleanup_time + gpu_sync_time + judge_model_time
         total_time = dt * 1000
         unaccounted_time = total_time - measured_total
         
         self.print_and_flush(f"  data: {data_time:.1f}ms, grad_accum: {grad_accum_time:.1f}ms (fw: {forward_time:.1f}ms, bw: {backward_time:.1f}ms)")
         self.print_and_flush(f"  grad_proc: {grad_proc_time:.1f}ms, optimizer: {optimizer_time:.1f}ms, param_check: {param_check_time:.1f}ms")
-        self.print_and_flush(f"  loss_proc: {loss_proc_time:.1f}ms, instability: {instability_time:.1f}ms")
+        self.print_and_flush(f"  loss_proc: {loss_proc_time:.1f}ms, judge_model: {judge_model_time:.1f}ms, instability: {instability_time:.1f}ms")
         self.print_and_flush(f"  cleanup: {cleanup_time:.1f}ms, gpu_sync: {gpu_sync_time:.1f}ms")
         self.print_and_flush(f"  measured: {measured_total:.1f}ms, unaccounted: {unaccounted_time:.1f}ms ({unaccounted_time/total_time*100:.1f}%)")
     

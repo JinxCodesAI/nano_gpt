@@ -82,7 +82,9 @@ from .entropy_utils import (
 
 from .loss_processing import (
     calculate_per_sample_losses,
-    apply_per_sample_modifications
+    apply_per_sample_modifications,
+    calculate_predicted_masking_ratio,
+    calculate_wrongness_factor
 )
 
 # New refactoring modules
