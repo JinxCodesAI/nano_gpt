@@ -729,6 +729,7 @@ elif training_ctx.training_type == 'sequence_scoring':
 
 print_and_flush("Starting training loop...")
 just_recovered = False
+
 while True:
 
     # determine and set the learning rate for this iteration

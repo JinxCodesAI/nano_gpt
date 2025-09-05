@@ -7,6 +7,7 @@ from enum import Enum
 from abc import ABC, abstractmethod
 from typing import Union
 from dataclasses import dataclass
+import torch
 
 
 class UnmaskingStageType(Enum):
@@ -66,6 +67,39 @@ class UnmaskingStage:
     
     def get_val_loss_stale_count(self) -> int:
         return self.config.val_loss_stale_count
+
+
+def create_stage_objects(stages_config):
+    """Create UnmaskingStage objects from configuration dictionaries."""
+    if not stages_config:
+        return None
+
+    stage_objects = []
+    for stage in stages_config:
+        stage_type = stage['type']
+        if stage_type == 'sticky':
+            config_obj = StickyStageConfig(
+                target_masked_ratio=stage['target_masked_ratio'],
+                p1_probability=stage['p1_probability'],
+                p2_probability=stage['p2_probability'],
+                val_loss_stale_count=stage['val_loss_stale_count']
+            )
+        elif stage_type == 'random':
+            config_obj = RandomStageConfig(
+                max_masked_ratio=stage['max_masked_ratio'],
+                val_loss_stale_count=stage['val_loss_stale_count']
+            )
+        elif stage_type == 'span':
+            config_obj = SpanStageConfig(
+                spans_count=stage['spans_count'],
+                val_loss_stale_count=stage['val_loss_stale_count']
+            )
+        else:
+            raise ValueError(f"Unknown stage type: {stage_type}")
+
+        stage_objects.append(UnmaskingStage(config_obj))
+
+    return stage_objects
 
 
 @dataclass
@@ -157,7 +191,10 @@ class TrainingContext:
     
     # Label smoothing parameters
     uncertainty_factor: float = 0.0  # Label smoothing factor: 0 = no smoothing, >0 = apply smoothing
-    
+
+    # External loss modification
+    wrongness_factor: torch.Tensor = None  # (batch_size,) external wrongness scaling factor
+
     def __post_init__(self):
         # Default unmasking stages if not provided
         if self.training_type == 'unmasking' and self.unmasking_stages is None:

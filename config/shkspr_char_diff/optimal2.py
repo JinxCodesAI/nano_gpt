@@ -2,7 +2,7 @@ out_dir = 'out'
 init_from = 'scratch' # 'scratch' or 'resume'
 wandb_log = False # disabled by default
 wandb_project = 'experiments_diffusion'
-wandb_run_name = 'shkspr_char_diff_moderate_first' # 'run' + str(time.time())
+wandb_run_name = 'shkspr_char_refactor_test' # 'run' + str(time.time())
 batch_size = 16
 gradient_accumulation_steps = 16
 # data

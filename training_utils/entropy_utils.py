@@ -94,10 +94,54 @@ def get_current_entropy_penalty(iter_num, ctx: TrainingContext):
     return progress * ctx.max_entropy_penalty
 
 
+def calculate_wrong_answer_entropy_per_sample(logits, targets, mask, vocab_size):
+    """
+    Calculate entropy of wrong answer distributions per sample (reuses existing logic).
+
+    Args:
+        logits: Model logits (batch_size, seq_len, vocab_size)
+        targets: Target tokens (batch_size, seq_len)
+        mask: Boolean mask (batch_size, seq_len) - only calculate for masked positions
+        vocab_size: Size of vocabulary
+
+    Returns:
+        per_sample_entropies: (batch_size,) - entropy per sample
+    """
+    batch_size, seq_len, vocab_size_logits = logits.shape
+    device = logits.device
+    per_sample_entropies = torch.zeros(batch_size, device=device)
+
+    for sample_idx in range(batch_size):
+        sample_mask = mask[sample_idx]  # (seq_len,)
+        if not sample_mask.any():
+            continue
+
+        # Extract masked positions for this sample
+        sample_logits = logits[sample_idx:sample_idx+1, :, :]  # Keep batch dim: (1, seq_len, vocab_size)
+        sample_targets = targets[sample_idx:sample_idx+1, :]   # Keep batch dim: (1, seq_len)
+        sample_mask_expanded = sample_mask.unsqueeze(0)        # (1, seq_len)
+
+        # Apply mask to get only masked positions
+        masked_logits = sample_logits[:, sample_mask, :]       # (1, num_masked_positions, vocab_size)
+        masked_targets = sample_targets[:, sample_mask]        # (1, num_masked_positions)
+
+        # Reuse existing entropy calculation logic
+        if masked_logits.numel() > 0:
+            # Reshape to match existing function expectations
+            reshaped_logits = masked_logits.view(1, -1, vocab_size_logits)
+            reshaped_targets = masked_targets.view(1, -1)
+
+            # Call existing function (it will return scalar for this single sample)
+            sample_entropy = calculate_wrong_answer_entropy(reshaped_logits, reshaped_targets, vocab_size)
+            per_sample_entropies[sample_idx] = sample_entropy
+
+    return per_sample_entropies
+
+
 def update_entropy_multiplier_ema(ctx: TrainingContext, current_multiplier: float):
     """
     Update the exponential moving average of entropy multiplier.
-    
+
     Args:
         ctx: Training context
         current_multiplier: Current entropy multiplier value

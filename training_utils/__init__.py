@@ -26,7 +26,8 @@ from .training_config import (
     RandomStageConfig,
     SpanStageConfig,
     UnmaskingStage,
-    TrainingContext
+    TrainingContext,
+    create_stage_objects
 )
 
 from .data_loading import (
@@ -73,10 +74,23 @@ from .training_progress import (
 
 from .entropy_utils import (
     calculate_wrong_answer_entropy,
+    calculate_wrong_answer_entropy_per_sample,
     get_current_entropy_penalty,
     update_entropy_multiplier_ema,
     apply_label_smoothing
 )
+
+from .loss_processing import (
+    calculate_per_sample_losses,
+    apply_per_sample_modifications
+)
+
+# New refactoring modules
+from .checkpoint_manager import CheckpointManager
+from .instability_detector import InstabilityDetector
+from .training_logger import TrainingLogger
+from .model_initializer import ModelInitializer
+from .source_code_printer import SourceCodePrinter
 
 # All exported symbols for wildcard imports (import * from utils)
 __all__ = [
@@ -88,6 +102,7 @@ __all__ = [
     'SpanStageConfig',
     'UnmaskingStage',
     'TrainingContext',
+    'create_stage_objects',
     
     # Data loading functions
     'start_prefetch',
@@ -124,7 +139,19 @@ __all__ = [
     
     # Entropy utility functions
     'calculate_wrong_answer_entropy',
-    'get_current_entropy_penalty', 
+    'calculate_wrong_answer_entropy_per_sample',
+    'get_current_entropy_penalty',
     'update_entropy_multiplier_ema',
-    'apply_label_smoothing'
+    'apply_label_smoothing',
+
+    # Loss processing functions
+    'calculate_per_sample_losses',
+    'apply_per_sample_modifications',
+
+    # Refactoring modules
+    'CheckpointManager',
+    'InstabilityDetector',
+    'TrainingLogger',
+    'ModelInitializer',
+    'SourceCodePrinter'
 ]
