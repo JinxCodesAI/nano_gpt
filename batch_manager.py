@@ -127,6 +127,22 @@ class BatchManager:
         x = x_data[start_idx:end_idx]
         y = y_data[start_idx:end_idx]
 
+        # If underfilled at end of file, repeat samples to fill the batch
+        cur_bs = x.shape[0]
+        if cur_bs < self.batch_size and cur_bs > 0:
+            need = self.batch_size - cur_bs
+            # Repeat the available rows in order until we reach the desired size
+            # Works for any tensor rank; repeats along the batch dimension (dim=0)
+            def _repeat_to_fill(t, need):
+                p = t.shape[0]
+                reps = (need + p - 1) // p
+                tiled = t.repeat((reps,) + (1,) * (t.dim() - 1))
+                return tiled[:need]
+            x_fill = _repeat_to_fill(x, need)
+            y_fill = _repeat_to_fill(y, need)
+            x = torch.cat([x, x_fill], dim=0)
+            y = torch.cat([y, y_fill], dim=0)
+
         # Move to next batch for next call
         self._current_batch_idx[split] += 1
 
