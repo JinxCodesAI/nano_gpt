@@ -5,7 +5,6 @@ Features:
 - Supports filesystem queue in data/<dataset>/queue/{train,val}
 - Blocks and waits when no data is available
 - Deletes fully-consumed files to signal provider (only in queue mode)
-- Backward-compatible with legacy {split}_batches_*.pt files at dataset root
 - Exposes meta.pkl and basic stats
 
 Note: For now we maintain the (X, Y) return path when schema has x/y. If a
@@ -34,14 +33,14 @@ class DatasetConsumer:
         cache_files: int = 1,
         wait_sleep_seconds: float = 1.0,
         wait_timeout_seconds: Optional[float] = None,
-        verbose: bool = False,
+        verbose: bool = False,  # keep for optional logging
     ) -> None:
         self.data_dir = data_dir
         self.batch_size = batch_size
         self.block_size = block_size
         self.target_size = target_size if target_size is not None else block_size
         self.device_type = device_type
-        self.prefer_queue = prefer_queue
+        self.prefer_queue = True  # enforce streaming-only mode
         self.cache_files = max(1, int(cache_files))
         self.wait_sleep_seconds = wait_sleep_seconds
         self.wait_timeout_seconds = wait_timeout_seconds
@@ -49,7 +48,7 @@ class DatasetConsumer:
 
         # batch state
         self._initialized = False
-        self._mode = "queue" if prefer_queue else "legacy"
+        self._mode = "queue"
         self._split_files: Dict[str, List[str]] = {"train": [], "val": []}
         self._current_file_idx: Dict[str, int] = {"train": 0, "val": 0}
         self._current_batch_idx: Dict[str, int] = {"train": 0, "val": 0}
@@ -84,8 +83,6 @@ class DatasetConsumer:
                     f"Start the dataset provider (prepare.py <config>) to generate streaming data."
                 )
             self._mode = "queue"
-        else:
-            self._mode = "legacy"
         if self.verbose:
             print(f"DatasetConsumer mode: {self._mode}")
 
