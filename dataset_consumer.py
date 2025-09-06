@@ -77,7 +77,12 @@ class DatasetConsumer:
     # ---- initialization ----
     def _detect_mode(self) -> None:
         queue_dir = os.path.join(self.data_dir, "queue")
-        if self.prefer_queue and os.path.isdir(queue_dir):
+        if self.prefer_queue:
+            if not os.path.isdir(queue_dir):
+                raise FileNotFoundError(
+                    f"Queue directory not found at {queue_dir}. "
+                    f"Start the dataset provider (prepare.py <config>) to generate streaming data."
+                )
             self._mode = "queue"
         else:
             self._mode = "legacy"
