@@ -238,6 +238,7 @@ EVALUATION_CONFIG = {
         'optimal2_6400.pt',
         'optimal5_bert_8000.pt',
         'optimal_2400.pt',
+        '5200_unmasking_judge.pt',
         # Add more model checkpoints here for comparison
         # 'model2.pt',
         # 'model3.pt',

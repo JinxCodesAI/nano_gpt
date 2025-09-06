@@ -14,7 +14,7 @@ from sample_utils import linear_remasking_schedule, nucleus_sample, apply_remask
 # Configuration
 init_from = 'resume'
 out_dir = 'out'
-checkpoint_name = 'optimal5_bert_8000.pt' #'35.75_58.2_UM.pt' Decent models optimal2_3400.pt, 
+checkpoint_name = '5200_unmasking_judge.pt' #'35.75_58.2_UM.pt' Decent models optimal2_3400.pt, 
 remasking_checkpoint_name = None #'ckpt_remasking_binary_600.pt'  # Optional: remasking_binary model checkpoint
 num_samples = 8  # Number of samples to generate
 sequence_length = 1024  # Total length of generated sequence
@@ -24,8 +24,8 @@ dtype = 'float16'
 compile = False
 
 # Generation parameters
-temperature = 1.0  # Temperature for sampling (1.0 = no change, <1.0 = more deterministic, >1.0 = more random)
-top_p = 0.8   # Nucleus sampling parameter (1.0 = disabled, <1.0 = only sample from top cumulative probability mass)
+temperature = 0.8  # Temperature for sampling (1.0 = no change, <1.0 = more deterministic, >1.0 = more random)
+top_p = 1   # Nucleus sampling parameter (1.0 = disabled, <1.0 = only sample from top cumulative probability mass)
 repetition_penalty = 1  # Penalty for repeating recent tokens (>1.0 = discourage repetition)
 repetition_window = 10  # Look back this many tokens for repetition penalty
 diffusion_iterations = 100  # Number of demasking iterations
