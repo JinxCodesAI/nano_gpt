@@ -38,17 +38,47 @@ def _load_config() -> dict:
 
 
 def _provider_for_dataset(dataset: str) -> Type:
-    # Map dataset string to provider class path
-    registry = {
-        'shakespeare_char': ('data.shakespeare_char.prepare_streaming', 'ShakespeareCharProvider'),
-        # add other datasets here as they are implemented
-    }
-    if dataset not in registry:
-        raise ValueError(f"No streaming provider registered for dataset '{dataset}'")
-    module_name, class_name = registry[dataset]
-    mod = import_module(module_name)
-    cls = getattr(mod, class_name)
-    return cls
+    """Discover a provider class by convention.
+
+    Convention:
+    - Module: data.<dataset>.prepare_streaming must exist
+    - Within the module, exactly one subclass of DataProviderBase must be defined
+      OR the module must export a symbol named 'Provider' pointing to the class.
+    """
+    module_name = f"data.{dataset}.prepare_streaming"
+    try:
+        mod = import_module(module_name)
+    except ModuleNotFoundError as e:
+        raise ValueError(
+            f"Could not find provider module '{module_name}'. Ensure your dataset folder has prepare_streaming.py"
+        ) from e
+
+    # If explicit Provider symbol is present, use it
+    if hasattr(mod, 'Provider'):
+        return getattr(mod, 'Provider')
+
+    # Otherwise, search for exactly one subclass of DataProviderBase
+    try:
+        from data.common.provider_base import DataProviderBase
+    except Exception as e:
+        raise RuntimeError("Failed to import DataProviderBase for provider discovery") from e
+
+    candidates = []
+    for name in dir(mod):
+        obj = getattr(mod, name)
+        if isinstance(obj, type) and issubclass(obj, DataProviderBase) and obj is not DataProviderBase:
+            candidates.append(obj)
+    if len(candidates) == 1:
+        return candidates[0]
+    if len(candidates) == 0:
+        raise ValueError(
+            f"No DataProviderBase subclass found in {module_name}. Define one subclass or export 'Provider'."
+        )
+    # Multiple candidates found; ask user to disambiguate via Provider symbol
+    raise ValueError(
+        f"Multiple provider classes found in {module_name}: {[c.__name__ for c in candidates]}. "
+        f"Export a single 'Provider' symbol in the module to disambiguate."
+    )
 
 
 def main() -> None:
