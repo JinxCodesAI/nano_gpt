@@ -52,6 +52,7 @@ gradient_accumulation_steps = 5 * 8 # used to simulate larger batch sizes
 batch_size = 12 # if gradient_accumulation_steps > 1, this is the micro-batch size
 block_size = 1024
 target_size = None # target sequence length, defaults to block_size if None
+vocab_size = None # vocab size of the tokenizer
 # model
 n_layer = 12
 n_head = 12
@@ -131,7 +132,10 @@ meta_vocab_size = None
 if os.path.exists(meta_path):
     with open(meta_path, 'rb') as f:
         meta = pickle.load(f)
-    meta_vocab_size = meta['vocab_size']
+    if vocab_size is None:
+        meta_vocab_size = meta['vocab_size']
+    else:
+        meta_vocab_size = vocab_size
     print(f"found vocab_size = {meta_vocab_size} (inside {meta_path})")
 
 # model init
