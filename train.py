@@ -29,7 +29,7 @@ from torch.distributed import init_process_group, destroy_process_group
 
 from model import GPTConfig, GPT
 import torch._dynamo
-from batch_manager import BatchManager
+
 from dataset_consumer import DatasetConsumer
 torch._dynamo.config.suppress_errors = True
 
@@ -120,44 +120,28 @@ ctx = nullcontext() if device_type == 'cpu' else torch.amp.autocast(device_type=
 # data loader with pre-computed batches
 data_dir = os.path.join('data', dataset)
 
-# initialize data consumer (config-driven), fallback to BatchManager
-# new config knobs (optional):
-#   data_streaming_enabled: bool
-#   data_prefer_queue: bool
-#   data_wait_timeout_seconds: Optional[float]
-#   data_wait_sleep_seconds: float
-# default to disabled streaming for backward compatibility
-if 'data_streaming_enabled' in globals() and globals()['data_streaming_enabled']:
-    consumer = DatasetConsumer(
-        data_dir=data_dir,
-        batch_size=batch_size,
-        block_size=block_size,
-        target_size=target_size,
-        device_type=device_type,
-        prefer_queue=globals().get('data_prefer_queue', True),
-        cache_files=1,
-        wait_sleep_seconds=globals().get('data_wait_sleep_seconds', 1.0),
-        wait_timeout_seconds=globals().get('data_wait_timeout_seconds', None),
-        verbose=False,
-    )
-else:
-    consumer = BatchManager(data_dir, batch_size, block_size, target_size, device_type)
+# initialize streaming data consumer (config-driven)
+consumer = DatasetConsumer(
+    data_dir=data_dir,
+    batch_size=batch_size,
+    block_size=block_size,
+    target_size=target_size,
+    device_type=device_type,
+    prefer_queue=globals().get('data_prefer_queue', True),
+    cache_files=globals().get('data_cache_files', 1),
+    wait_sleep_seconds=globals().get('data_wait_sleep_seconds', 1.0),
+    wait_timeout_seconds=globals().get('data_wait_timeout_seconds', None),
+    verbose=globals().get('data_stream_verbose', False),
+)
 
 # init these up here, can override if init_from='resume' (i.e. from a checkpoint)
 iter_num = 0
 best_val_loss = 1e9
 
-# attempt to derive vocab_size from the dataset
-meta_path = os.path.join(data_dir, 'meta.pkl')
-meta_vocab_size = None
-if os.path.exists(meta_path):
-    with open(meta_path, 'rb') as f:
-        meta = pickle.load(f)
-    if vocab_size is None:
-        meta_vocab_size = meta['vocab_size']
-    else:
-        meta_vocab_size = vocab_size
-    print(f"found vocab_size = {meta_vocab_size} (inside {meta_path})")
+# derive vocab_size from consumer meta
+meta = consumer.meta
+meta_vocab_size = meta.get('vocab_size', vocab_size)
+print(f"found vocab_size = {meta_vocab_size} (from consumer.meta)")
 
 # model init
 model_args = dict(n_layer=n_layer, n_head=n_head, n_embd=n_embd, block_size=block_size,
