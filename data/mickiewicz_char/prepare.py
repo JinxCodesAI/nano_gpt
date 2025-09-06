@@ -60,23 +60,39 @@ def generate_batches(data_ids, batch_size, block_size, target_size, batches_per_
         filename = f'{split_name}_batches_{file_idx:04d}.pt'
         filepath = os.path.join(output_dir, filename)
 
-        torch.save({
-            'x': file_x,
-            'y': file_y,
-            'metadata': metadata
-        }, filepath)
-
-        print(f"Saved {filepath} with {current_file_batches} batches")
+        try:
+            torch.save({
+                'x': file_x,
+                'y': file_y,
+                'metadata': metadata
+            }, filepath)
+            print(f"Saved {filepath} with {current_file_batches} batches")
+        except Exception as e:
+            print(f"Error saving {filepath}: {e}")
+            print(f"Data shapes: x={file_x.shape}, y={file_y.shape}")
+            print(f"Data types: x={file_x.dtype}, y={file_y.dtype}")
+            raise
         batch_idx += current_file_batches
 
+def replace_polish_chars(text):
+    """Replace Polish special characters with ASCII equivalents."""
+    replacements = {
+        'ą': 'a', 'ć': 'c', 'ę': 'e', 'ł': 'l', 'ń': 'n', 'ó': 'o', 'ś': 's', 'ź': 'z', 'ż': 'z',
+        'Ą': 'A', 'Ć': 'C', 'Ę': 'E', 'Ł': 'L', 'Ń': 'N', 'Ó': 'O', 'Ś': 'S', 'Ź': 'Z', 'Ż': 'Z'
+    }
+    for polish_char, ascii_char in replacements.items():
+        text = text.replace(polish_char, ascii_char)
+    return text
+
 def main():
-    parser = argparse.ArgumentParser(description='Prepare Shakespeare dataset with batch generation')
+    parser = argparse.ArgumentParser(description='Prepare Polish text dataset with batch generation')
     parser.add_argument('--batch_size', type=int, default=32, help='Batch size for training')
     parser.add_argument('--block_size', type=int, default=256, help='Block size (input sequence length)')
     parser.add_argument('--target_size', type=int, default=None, help='Target size (defaults to block_size)')
     parser.add_argument('--batches_per_file', type=int, default=100, help='Number of batches per batch file')
     parser.add_argument('--total_batches', type=int, default=1000, help='Total number of batches to generate')
     parser.add_argument('--force_regenerate', action='store_true', help='Force regeneration even if files exist')
+    parser.add_argument('--replace_polish_chars', action='store_true', help='Replace Polish characters with ASCII equivalents')
 
     args = parser.parse_args()
 
@@ -106,9 +122,34 @@ def main():
         with open(input_file_path, 'w') as f:
             f.write(requests.get(data_url).text)
 
-    with open(input_file_path, 'r') as f:
-        data = f.read()
+    # Try different encodings to handle Polish characters properly
+    encodings_to_try = ['iso-8859-2', 'utf-8', 'iso-8859-1', 'windows-1250', 'cp1252']
+    data = None
+    used_encoding = None
+
+    for encoding in encodings_to_try:
+        try:
+            with open(input_file_path, 'r', encoding=encoding) as f:
+                data = f.read()
+            used_encoding = encoding
+            print(f"Successfully read file using {encoding} encoding")
+            break
+        except UnicodeDecodeError as e:
+            print(f"Failed to read with {encoding}: {e}")
+            continue
+
+    if data is None:
+        raise RuntimeError("Could not read input file with any supported encoding")
+
     print(f"length of dataset in characters: {len(data):,}")
+
+    # Optionally replace Polish characters with ASCII equivalents
+    if args.replace_polish_chars:
+        original_chars = sorted(list(set(data)))
+        data = replace_polish_chars(data)
+        new_chars = sorted(list(set(data)))
+        print(f"Replaced Polish characters. Vocab size reduced from {len(original_chars)} to {len(new_chars)}")
+        print(f"Removed characters: {set(original_chars) - set(new_chars)}")
 
     # get all the unique characters that occur in this text
     chars = sorted(list(set(data)))
