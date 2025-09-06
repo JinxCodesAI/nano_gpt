@@ -30,6 +30,7 @@ from torch.distributed import init_process_group, destroy_process_group
 from model import GPTConfig, GPT
 import torch._dynamo
 from batch_manager import BatchManager
+from dataset_consumer import DatasetConsumer
 torch._dynamo.config.suppress_errors = True
 
 # -----------------------------------------------------------------------------
@@ -119,8 +120,28 @@ ctx = nullcontext() if device_type == 'cpu' else torch.amp.autocast(device_type=
 # data loader with pre-computed batches
 data_dir = os.path.join('data', dataset)
 
-# initialize batch manager
-batch_manager = BatchManager(data_dir, batch_size, block_size, target_size, device_type)
+# initialize data consumer (config-driven), fallback to BatchManager
+# new config knobs (optional):
+#   data_streaming_enabled: bool
+#   data_prefer_queue: bool
+#   data_wait_timeout_seconds: Optional[float]
+#   data_wait_sleep_seconds: float
+# default to disabled streaming for backward compatibility
+if 'data_streaming_enabled' in globals() and globals()['data_streaming_enabled']:
+    consumer = DatasetConsumer(
+        data_dir=data_dir,
+        batch_size=batch_size,
+        block_size=block_size,
+        target_size=target_size,
+        device_type=device_type,
+        prefer_queue=globals().get('data_prefer_queue', True),
+        cache_files=1,
+        wait_sleep_seconds=globals().get('data_wait_sleep_seconds', 1.0),
+        wait_timeout_seconds=globals().get('data_wait_timeout_seconds', None),
+        verbose=False,
+    )
+else:
+    consumer = BatchManager(data_dir, batch_size, block_size, target_size, device_type)
 
 # init these up here, can override if init_from='resume' (i.e. from a checkpoint)
 iter_num = 0
@@ -214,7 +235,7 @@ def estimate_loss():
     for split in ['train', 'val']:
         losses = torch.zeros(eval_iters)
         for k in range(eval_iters):
-            X, Y = batch_manager.get_batch(split, device)
+            X, Y = consumer.get_batch(split, device)
             with ctx:
                 logits, loss = model(X, Y)
             losses[k] = loss.item()
@@ -242,7 +263,7 @@ if wandb_log and master_process:
     wandb.init(project=wandb_project, name=wandb_run_name, config=config)
 
 # training loop
-X, Y = batch_manager.get_batch('train', device) # fetch the very first batch
+X, Y = consumer.get_batch('train', device) # fetch the very first batch
 t0 = time.time()
 local_iter_num = 0 # number of iterations in the lifetime of this process
 raw_model = model.module if ddp else model # unwrap DDP container if needed
@@ -295,7 +316,7 @@ while True:
             logits, loss = model(X, Y)
             loss = loss / gradient_accumulation_steps # scale the loss to account for gradient accumulation
         # immediately async prefetch next batch while model is doing the forward pass on the GPU
-        X, Y = batch_manager.get_batch('train', device)
+        X, Y = consumer.get_batch('train', device)
         # backward pass, with gradient scaling if training in fp16
         scaler.scale(loss).backward()
     # clip the gradient
