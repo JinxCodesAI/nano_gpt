@@ -72,7 +72,7 @@ def main() -> None:
         max_backlog_files=cfg.get('max_backlog_files', 2),
         sleep_seconds=cfg.get('sleep_seconds', 2.0),
         seed=cfg.get('seed', 1337),
-        verbose=cfg.get('data_stream_verbose', False),
+        verbose=cfg.get('data_stream_verbose', True),
     )
     provider.run()
 

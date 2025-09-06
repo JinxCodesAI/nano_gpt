@@ -140,9 +140,11 @@ class DatasetConsumer:
         # delete only in queue mode
         try:
             os.remove(path)
+            if self.verbose:
+                print(f"[consumer] deleted: {path}")
         except Exception as e:
             if self.verbose:
-                print(f"Warning: failed to delete consumed file {path}: {e}")
+                print(f"[consumer] warning: failed to delete consumed file {path}: {e}")
 
     def _advance_to_next_file(self, split: str) -> None:
         self._current_file_idx[split] += 1
@@ -158,7 +160,13 @@ class DatasetConsumer:
         while True:
             # refresh file list in queue mode or when none loaded
             if self._mode == "queue" or not self._split_files[split]:
+                before = set(self._split_files[split])
                 self._split_files[split] = self._list_available_files(split)
+                after = set(self._split_files[split])
+                added = sorted(list(after - before))
+                if added and self.verbose:
+                    for p in added:
+                        print(f"[consumer] detected new file for {split}: {p}")
             if self._split_files[split]:
                 return
             # no files available, wait

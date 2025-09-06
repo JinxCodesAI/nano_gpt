@@ -115,7 +115,7 @@ class DataProviderBase:
         torch.save({"tensors": tensors, "metadata": metadata}, tmp_path)
         os.replace(tmp_path, final_path)
         if self.verbose:
-            print(f"Produced {final_path}")
+            print(f"[provider] produced: {final_path}")
 
     def run(self, splits: Iterable[str] = ("train", "val")) -> None:
         self.ensure_dirs()
