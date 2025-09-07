@@ -31,10 +31,11 @@ from model import GPTConfig, GPT
 import torch._dynamo
 
 from dataset_consumer import DatasetConsumer
+from checkpoint_manager import CheckpointManager
 torch._dynamo.config.suppress_errors = True
 
 # -----------------------------------------------------------------------------
-# default config values designed to train a gpt2 (124M) on OpenWebText
+# default config values designed for a small GPT-like model on OpenWebText
 # I/O
 out_dir = 'out'
 eval_interval = 2000
@@ -42,11 +43,11 @@ log_interval = 1
 eval_iters = 200
 eval_only = False # if True, script exits right after the first eval
 always_save_checkpoint = True # if True, always save a checkpoint after each eval
-init_from = 'scratch' # 'scratch' or 'resume' or 'gpt2*'
+init_from = 'scratch' # 'scratch' or 'resume'
 # wandb logging
 wandb_log = False # disabled by default
 wandb_project = 'owt'
-wandb_run_name = 'gpt2' # 'run' + str(time.time())
+wandb_run_name = 'run' # 'run' + str(time.time())
 # data
 dataset = 'openwebtext'
 gradient_accumulation_steps = 5 * 8 # used to simulate larger batch sizes
@@ -111,6 +112,7 @@ print(f"tokens per iteration will be: {tokens_per_iter:,}")
 
 if master_process:
     os.makedirs(out_dir, exist_ok=True)
+checkpoint_manager = CheckpointManager(out_dir)
 torch.manual_seed(1337 + seed_offset)
 torch.backends.cuda.matmul.allow_tf32 = True # allow tf32 on matmul
 torch.backends.cudnn.allow_tf32 = True # allow tf32 on cudnn
@@ -144,6 +146,9 @@ best_val_loss = 1e9
 meta = consumer.meta
 meta_vocab_size = meta.get('vocab_size', vocab_size)
 print(f"found vocab_size = {meta_vocab_size} (from consumer.meta)")
+# attach dataset meta to config to inform checkpoint naming (contains training_type)
+config['meta'] = meta
+
 
 # model init
 model_args = dict(n_layer=n_layer, n_head=n_head, n_embd=n_embd, block_size=block_size,
@@ -152,16 +157,15 @@ if init_from == 'scratch':
     # init a new model from scratch
     print("Initializing a new model from scratch")
     # determine the vocab size we'll use for from-scratch training
-    if meta_vocab_size is None:
-        print("defaulting to vocab_size of GPT-2 to 50304 (50257 rounded up for efficiency)")
-    model_args['vocab_size'] = meta_vocab_size if meta_vocab_size is not None else 50304
+    if meta_vocab_size is None and vocab_size is None:
+        raise ValueError("vocab_size must be provided by consumer.meta or config; no default fallback")
+    model_args['vocab_size'] = meta_vocab_size if meta_vocab_size is not None else vocab_size
     gptconf = GPTConfig(**model_args)
     model = GPT(gptconf)
 elif init_from == 'resume':
     print(f"Resuming training from {out_dir}")
-    # resume training from a checkpoint.
-    ckpt_path = os.path.join(out_dir, 'ckpt.pt')
-    checkpoint = torch.load(ckpt_path, map_location=device)
+    # resume training from a checkpoint via CheckpointManager
+    checkpoint = checkpoint_manager.load(device=device)
     checkpoint_model_args = checkpoint['model_args']
     # force these config attributes to be equal otherwise we can't even resume training
     # the rest of the attributes (e.g. dropout) can stay as desired from command line
@@ -171,34 +175,26 @@ elif init_from == 'resume':
     gptconf = GPTConfig(**model_args)
     model = GPT(gptconf)
     state_dict = checkpoint['model']
-    # fix the keys of the state dictionary :(
-    # honestly no idea how checkpoints sometimes get this prefix, have to debug more
-    unwanted_prefix = '_orig_mod.'
-    for k,v in list(state_dict.items()):
-        if k.startswith(unwanted_prefix):
-            state_dict[k[len(unwanted_prefix):]] = state_dict.pop(k)
-    model.load_state_dict(state_dict)
+    checkpoint_manager.load_model_state(model, state_dict)
     iter_num = checkpoint['iter_num']
     best_val_loss = checkpoint['best_val_loss']
-elif init_from.startswith('gpt2'):
-    print(f"Initializing from OpenAI GPT-2 weights: {init_from}")
-    # initialize from OpenAI GPT-2 weights
-    override_args = dict(dropout=dropout)
-    model = GPT.from_pretrained(init_from, override_args)
-    # read off the created config params, so we can store them into checkpoint correctly
-    for k in ['n_layer', 'n_head', 'n_embd', 'block_size', 'bias', 'vocab_size']:
-        model_args[k] = getattr(model.config, k)
+
 # crop down the model block size if desired, using model surgery
 if block_size < model.config.block_size:
     model.crop_block_size(block_size)
-    model_args['block_size'] = block_size # so that the checkpoint will have the right value
+    model_args['block_size'] = block_size  # so that the checkpoint will have the right value
+
+checkpoint_manager.set_metadata(model_args=model_args, config=config)
 model.to(device)
+raw_model = model.module if ddp else model  # ensure raw model is registered
+checkpoint_manager.register_model(raw_model)
 
 # initialize a GradScaler. If enabled=False scaler is a no-op
 scaler = torch.cuda.amp.GradScaler(enabled=(dtype == 'float16'))
-
 # optimizer
 optimizer = model.configure_optimizers(weight_decay, learning_rate, (beta1, beta2), device_type)
+checkpoint_manager.register_optimizer(optimizer)
+
 if init_from == 'resume':
     optimizer.load_state_dict(checkpoint['optimizer'])
 checkpoint = None # free up memory
@@ -248,6 +244,7 @@ if wandb_log and master_process:
     import wandb
     wandb.init(project=wandb_project, name=wandb_run_name, config=config)
 
+checkpoint_manager.update_progress(iter_num=iter_num, best_val_loss=best_val_loss)
 # training loop
 X, Y = consumer.get_batch('train', device) # fetch the very first batch
 t0 = time.time()
@@ -276,16 +273,9 @@ while True:
         if losses['val'] < best_val_loss or always_save_checkpoint:
             best_val_loss = losses['val']
             if iter_num > 0:
-                checkpoint = {
-                    'model': raw_model.state_dict(),
-                    'optimizer': optimizer.state_dict(),
-                    'model_args': model_args,
-                    'iter_num': iter_num,
-                    'best_val_loss': best_val_loss,
-                    'config': config,
-                }
-                print(f"saving checkpoint to {out_dir}")
-                torch.save(checkpoint, os.path.join(out_dir, 'ckpt.pt'))
+                checkpoint_manager.update_progress(iter_num=iter_num, best_val_loss=best_val_loss)
+                ckpt_path = checkpoint_manager.save()
+                print(f"saving checkpoint to {ckpt_path}")
     if iter_num == 0 and eval_only:
         break
 
@@ -328,6 +318,7 @@ while True:
             running_mfu = mfu if running_mfu == -1.0 else 0.9*running_mfu + 0.1*mfu
         print(f"iter {iter_num}: loss {lossf:.4f}, time {dt*1000:.2f}ms, mfu {running_mfu*100:.2f}%")
     iter_num += 1
+    checkpoint_manager.update_progress(iter_num=iter_num, best_val_loss=best_val_loss)
     local_iter_num += 1
 
     # termination conditions
