@@ -15,8 +15,8 @@ wandb_run_name = 'mini-gpt'
 
 dataset = 'shakespeare_char'
 
-gradient_accumulation_steps = 1
-batch_size = 8
+gradient_accumulation_steps = 4
+batch_size = 16
 block_size = 1024 # context of up to 256 previous characters
 learning_rate = 1e-3 # with baby networks can afford to go a bit higher
 max_iters = 5000
