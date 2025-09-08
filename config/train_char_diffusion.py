@@ -3,7 +3,7 @@
 
 out_dir = 'out-char-diffusion'
 eval_interval = 250
-eval_iters = 200
+eval_iters = 50
 log_interval = 10
 
 # save checkpoints when validation improves
@@ -21,7 +21,7 @@ composition_config = 'complex' # refers to data/char_diffusion/config/complex.py
 if composition_config is not None:
     import os
     import sys
-    config_path = os.path.join(os.path.dirname(__file__), '..', 'data', 'char_diffusion', 'config', f'{composition_config}.py')
+    config_path = os.path.join('data', 'char_diffusion', 'config', f'{composition_config}.py')
     if os.path.exists(config_path):
         import importlib.util
         spec = importlib.util.spec_from_file_location(f"{composition_config}_config", config_path)
@@ -42,7 +42,7 @@ else:
     validation_stages = None
 
 gradient_accumulation_steps = 1
-batch_size = 16  # Slightly larger batch size for BERT training
+batch_size = 32  # Slightly larger batch size for BERT training
 block_size = 1024 # Context size for masking
 
 # BERT training typically uses lower learning rates
@@ -54,9 +54,9 @@ beta2 = 0.99
 warmup_iters = 500  # More warmup for BERT
 
 # Model architecture - bidirectional for BERT
-n_layer = 8
-n_head = 8
-n_embd = 512
+n_layer = 6
+n_head = 6
+n_embd = 384
 dropout = 0.1
 attention_type = 'bidirectional' # Critical for BERT-style training
 position_encoding = 'rotary'

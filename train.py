@@ -32,6 +32,7 @@ import torch._dynamo
 
 from dataset_consumer import DatasetConsumer
 from checkpoint_manager import CheckpointManager
+from loss_modifiers import create_loss_modifier_pipeline
 torch._dynamo.config.suppress_errors = True
 
 # -----------------------------------------------------------------------------
@@ -81,12 +82,35 @@ backend = 'nccl' # 'nccl', 'gloo', etc.
 device = 'cuda' # examples: 'cpu', 'cuda', 'cuda:0', 'cuda:1' etc., or try 'mps' on macbooks
 dtype = 'bfloat16' if torch.cuda.is_available() and torch.cuda.is_bf16_supported() else 'float16' # 'float32', 'bfloat16', or 'float16', the latter will auto implement a GradScaler
 compile = True # use PyTorch 2.0 to compile the model to be faster
+# loss modifiers (all disabled by default for backward compatibility)
+loss_modifiers_enabled = False # master switch for all loss modifiers
+entropy_modifier_enabled = False # enable entropy-based loss modification
+entropy_modifier_weight = 1.0 # weight factor for entropy modification
+entropy_modifier_use_for_weighting = False # use entropy for loss weighting
+entropy_modifier_threshold = 0.0 # threshold for filtering low-entropy positions
+entropy_modifier_eps = 1e-8 # small value to prevent log(0) in entropy calculation
+target_smoothing_enabled = False # enable label smoothing
+target_smoothing_factor = 0.1 # label smoothing factor (0.0 = no smoothing)
+target_smoothing_special_tokens = [] # special token IDs to exclude from smoothing
+target_smoothing_exclude_padding = True # exclude padding tokens from loss calculation
+target_smoothing_padding_token = -100 # padding token ID to exclude
+mask_ratio_weight_enabled = False # enable mask ratio based loss weighting
+mask_ratio_weight_power = 0.5 # power for inverse square root weighting
+mask_ratio_weight_min = 0.1 # minimum weight to prevent extreme values
+mask_ratio_weight_max = 10.0 # maximum weight to prevent extreme values
+mask_ratio_weight_eps = 1e-8 # small value to prevent division by zero
+mask_ratio_weight_sequence_level = True # apply weights at sequence level vs batch level
 # -----------------------------------------------------------------------------
 config_keys = [k for k,v in globals().items() if not k.startswith('_') and isinstance(v, (int, float, bool, str))]
 exec(open('configurator.py').read()) # overrides from command line or config file
 from config.validator import validate_config
 validate_config(globals())
 config = {k: globals()[k] for k in config_keys} # will be useful for logging
+
+# initialize loss modifier pipeline
+loss_modifier_pipeline = create_loss_modifier_pipeline(config)
+if not loss_modifier_pipeline.is_empty():
+    print(f"Enabled loss modifiers: {', '.join(loss_modifier_pipeline.get_enabled_modifier_names())}")
 # -----------------------------------------------------------------------------
 
 # various inits, derived attributes, I/O setup
@@ -222,7 +246,7 @@ def estimate_loss():
         for k in range(eval_iters):
             X, Y = consumer.get_batch(split, device)
             with ctx:
-                logits, loss = model(X, Y)
+                logits, loss = model(X, Y, loss_modifiers=loss_modifier_pipeline)
             losses[k] = loss.item()
         out[split] = losses.mean()
     model.train()
@@ -266,13 +290,21 @@ while True:
         losses = estimate_loss()
         print(f"step {iter_num}: train loss {losses['train']:.4f}, val loss {losses['val']:.4f}")
         if wandb_log:
-            wandb.log({
+            log_dict = {
                 "iter": iter_num,
                 "train/loss": losses['train'],
                 "val/loss": losses['val'],
                 "lr": lr,
                 "mfu": running_mfu*100, # convert to percentage
-            })
+            }
+            # Add loss modifier metrics if available
+            if not loss_modifier_pipeline.is_empty():
+                modifier_metrics = loss_modifier_pipeline.get_all_metrics()
+                for key, value in modifier_metrics.items():
+                    log_dict[f"loss_modifiers/{key}"] = value
+                # Reset metrics after logging
+                loss_modifier_pipeline.reset_all_metrics()
+            wandb.log(log_dict)
         if losses['val'] < best_val_loss or always_save_checkpoint:
             best_val_loss = losses['val']
             if iter_num > 0:
@@ -292,7 +324,7 @@ while True:
             # looking at the source of that context manager, it just toggles this variable
             model.require_backward_grad_sync = (micro_step == gradient_accumulation_steps - 1)
         with ctx:
-            logits, loss = model(X, Y)
+            logits, loss = model(X, Y, loss_modifiers=loss_modifier_pipeline)
             loss = loss / gradient_accumulation_steps # scale the loss to account for gradient accumulation
         # immediately async prefetch next batch while model is doing the forward pass on the GPU
         X, Y = consumer.get_batch('train', device)

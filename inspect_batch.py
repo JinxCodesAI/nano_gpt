@@ -118,7 +118,7 @@ def analyze_batch_file(dataset_name, batch_file_path):
     print()
     
     # Analyze a few examples
-    num_examples = min(3, batch_size)
+    num_examples = min(100, 100)
     print(f"EXAMPLE ROWS (first {num_examples}):")
     print()
     

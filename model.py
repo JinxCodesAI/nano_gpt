@@ -330,7 +330,7 @@ class GPT(nn.Module):
         elif isinstance(module, nn.Embedding):
             torch.nn.init.normal_(module.weight, mean=0.0, std=0.02)
 
-    def forward(self, idx, targets=None):
+    def forward(self, idx, targets=None, loss_modifiers=None):
         device = idx.device
         b, t = idx.size()
         assert t <= self.config.block_size, f"Cannot forward sequence of length {t}, block size is only {self.config.block_size}"
@@ -354,7 +354,15 @@ class GPT(nn.Module):
         if targets is not None:
             # if we are given some desired targets also calculate the loss
             logits = self.lm_head(x)
+            
+            # Calculate base loss
             loss = F.cross_entropy(logits.view(-1, logits.size(-1)), targets.view(-1), ignore_index=self.config.ignore_index)
+            
+            # Apply loss modifiers if provided
+            if loss_modifiers is not None and not loss_modifiers.is_empty():
+                # Create mask for valid positions (not ignored)
+                mask = targets != self.config.ignore_index
+                loss = loss_modifiers.modify_loss(logits, targets, loss, mask=mask)
         else:
             # inference-time mini-optimization: only forward the lm_head on the very last position
             logits = self.lm_head(x[:, [-1], :]) # note: using list [-1] to preserve the time dim
