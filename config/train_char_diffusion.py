@@ -41,7 +41,7 @@ else:
     unmasking_stages = None
     validation_stages = None
 
-gradient_accumulation_steps = 1
+gradient_accumulation_steps = 4
 batch_size = 32  # Slightly larger batch size for BERT training
 block_size = 1024 # Context size for masking
 
