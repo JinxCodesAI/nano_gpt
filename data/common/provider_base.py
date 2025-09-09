@@ -94,10 +94,24 @@ class DataProviderBase:
         # collect batches
         batches = [self.sample_batch(split, rng) for _ in range(self.batches_per_file)]
         # concatenate along batch dimension
-        keys = batches[0].keys()
+        tensor_keys = [k for k in batches[0].keys() if isinstance(batches[0][k], torch.Tensor)]
         tensors: Dict[str, torch.Tensor] = {}
-        for k in keys:
+        for k in tensor_keys:
             tensors[k] = torch.cat([b[k] for b in batches], dim=0)
+            
+        # collect non-tensor metadata from batches
+        batch_metadata = {}
+        for k in batches[0].keys():
+            if k not in tensor_keys and k not in batch_metadata:
+                # Collect all values for this key across batches
+                values = []
+                for batch in batches:
+                    if k in batch:
+                        if isinstance(batch[k], list):
+                            values.extend(batch[k])
+                        else:
+                            values.append(batch[k])
+                batch_metadata[k] = values
         metadata = {
             "batch_size": self.batch_size,
             "num_batches": self.batches_per_file,
@@ -105,6 +119,8 @@ class DataProviderBase:
             "split": split,
             "produced_at": int(time.time() * 1000),
         }
+        # Add batch-specific metadata
+        metadata.update(batch_metadata)
         # write atomic
         d = self.train_dir if split == "train" else self.val_dir
         ts = metadata["produced_at"]

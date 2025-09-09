@@ -103,6 +103,14 @@ def main() -> None:
         sleep_seconds=cfg.get('sleep_seconds', 2.0),
         seed=cfg.get('seed', 1337),
         verbose=cfg.get('data_stream_verbose', True),
+        # Pass stage-related configuration
+        use_all_stages_for_training=cfg.get('use_all_stages_for_training', None),
+        unmasking_stages=cfg.get('unmasking_stages', None),
+        validation_stages=cfg.get('validation_stages', None),
+        # Pass other diffusion-specific parameters
+        mask_probability=cfg.get('mask_probability', 0.15),
+        mask_token_id=cfg.get('mask_token_id', None),
+        ignore_index=cfg.get('ignore_index', -100),
     )
     provider.run()
 

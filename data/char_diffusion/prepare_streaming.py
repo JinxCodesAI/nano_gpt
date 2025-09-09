@@ -130,6 +130,24 @@ class CharDiffusionProvider(DataProviderBase):
                 print(f"  use_all_stages_for_training: {self.use_all_stages_for_training}")
                 print(f"  training_stages: {len(self.unmasking_stages) if self.unmasking_stages else 0}")
                 print(f"  validation_stages: {len(self.validation_stages) if self.validation_stages else 0}")
+                
+                if self.train_stage_distribution:
+                    print(f"  train_stage_distribution:")
+                    for i, stage_info in enumerate(self.train_stage_distribution):
+                        config = stage_info['config']
+                        count = stage_info['count']
+                        stage_type = config.get('type', 'unknown')
+                        if stage_type == 'sticky':
+                            ratio = config.get('target_masked_ratio', 'unknown')
+                            print(f"    Stage {i}: {stage_type} (ratio={ratio}) -> {count} samples per file")
+                        elif stage_type == 'random':
+                            ratio = config.get('max_masked_ratio', 'unknown')
+                            print(f"    Stage {i}: {stage_type} (max_ratio={ratio}) -> {count} samples per file")
+                        elif stage_type == 'span':
+                            spans = config.get('spans_count', 'unknown')
+                            print(f"    Stage {i}: {stage_type} (spans={spans}) -> {count} samples per file")
+                        else:
+                            print(f"    Stage {i}: {stage_type} -> {count} samples per file")
     
     def _validate_stage_config(self):
         """Validate stage configuration and raise exceptions for unsupported options."""
@@ -164,17 +182,19 @@ class CharDiffusionProvider(DataProviderBase):
             List of dicts with stage config and sample count
         """
         total_stages = len(stages)
-        samples_per_stage = self.batches_per_file // total_stages
-        remainder = self.batches_per_file % total_stages
+        total_samples = self.batches_per_file * self.batch_size
+        samples_per_stage = total_samples // total_stages
+        remainder = total_samples % total_stages
         
         distribution = []
         for i, stage in enumerate(stages):
             # Distribute remainder across first stages
             count = samples_per_stage + (1 if i < remainder else 0)
-            distribution.append({
-                'config': stage,
-                'count': count
-            })
+            if count > 0:  # Only include stages with samples
+                distribution.append({
+                    'config': stage,
+                    'count': count
+                })
         
         return distribution
 
@@ -201,7 +221,10 @@ class CharDiffusionProvider(DataProviderBase):
     def sample_batch(self, split: str, rng) -> Dict[str, Any]:
         """Sample a batch with stage-aware masking or default BERT-style masking."""
         if self.use_all_stages_for_training:
-            return self._sample_stage_based_batch(split, rng)
+            # For stage-based generation, we need to generate all samples for the file at once
+            # This method will be called by the base class for each batch, but we need to 
+            # coordinate across all batches in the file. We'll handle this differently.
+            raise NotImplementedError("Stage-based sampling requires file-level generation")
         else:
             return self._sample_default_batch(split, rng)
     
@@ -240,9 +263,10 @@ class CharDiffusionProvider(DataProviderBase):
         # Get stage distribution for this split
         stage_distribution = self.train_stage_distribution if split == "train" else self.val_stage_distribution
         
-        # Generate samples according to stage distribution
+        # Generate samples according to stage distribution within a single batch
         all_x = []
         all_y = []
+        stage_info_list = []
         
         for stage_info in stage_distribution:
             stage_config = stage_info['config']
@@ -252,46 +276,149 @@ class CharDiffusionProvider(DataProviderBase):
                 continue
                 
             # Sample sequences for this stage
-            ix = torch.randint(0, max_start_idx, (count * self.batch_size,), generator=rng).tolist()
+            ix = torch.randint(0, max_start_idx, (count,), generator=rng).tolist()
             x_list = [ids[i : i + self.block_size] for i in ix]
-            x_stage = torch.tensor(x_list, dtype=torch.long).view(count, self.batch_size, self.block_size)
+            x_stage = torch.tensor(x_list, dtype=torch.long)
             
-            # Apply stage-specific masking to each batch in this stage
-            for batch_idx in range(count):
-                batch_x = x_stage[batch_idx]
-                
-                # Apply stage-specific masking
-                corrupted_x, mask = apply_stage_masking(
-                    batch_x, stage_config, self.mask_token_id, 
-                    self.vocab_size - 1, rng
-                )
-                
-                # Create labels: ignore_index for non-masked positions, original token for masked
-                labels = torch.where(mask, batch_x, self.ignore_index)
-                
-                all_x.append(corrupted_x)
-                all_y.append(labels)
+            # Apply stage-specific masking
+            corrupted_x, mask = apply_stage_masking(
+                x_stage, stage_config, self.mask_token_id, 
+                self.vocab_size - 1, rng
+            )
+            
+            # Create labels: ignore_index for non-masked positions, original token for masked
+            labels = torch.where(mask, x_stage, self.ignore_index)
+            
+            all_x.append(corrupted_x)
+            all_y.append(labels)
+            
+            # Track stage info for debugging
+            stage_info_list.extend([stage_config] * count)
         
-        # Concatenate all batches and shuffle them randomly to distribute stages
+        # Concatenate all samples and shuffle them randomly to mix different stage types
         if all_x:
             combined_x = torch.cat(all_x, dim=0)
             combined_y = torch.cat(all_y, dim=0)
             
-            # Randomly shuffle the batches to mix different stage types
+            # Randomly shuffle the samples to mix different stage types
             total_samples = combined_x.shape[0]
             shuffle_indices = torch.randperm(total_samples, generator=rng)
             
             shuffled_x = combined_x[shuffle_indices]
             shuffled_y = combined_y[shuffle_indices]
             
-            # Take only one batch worth of samples (the base class expects single batch)
+            # Create shuffled stage info for debugging
+            shuffled_stage_info = [stage_info_list[i] for i in shuffle_indices.tolist()]
+            
             return {
-                "x": shuffled_x[:self.batch_size],
-                "y": shuffled_y[:self.batch_size],
+                "x": shuffled_x,
+                "y": shuffled_y,
+                "stage_info": shuffled_stage_info  # Add stage info for debugging
             }
         else:
             # Fallback to default masking if no stages configured
             return self._sample_default_batch(split, rng)
+    
+    def produce_one_file(self, split: str, seq: int) -> None:
+        """Override to handle stage-based generation at file level."""
+        if self.use_all_stages_for_training:
+            self._produce_stage_based_file(split, seq)
+        else:
+            # Use default file production for non-stage-based generation
+            super().produce_one_file(split, seq)
+    
+    def _produce_stage_based_file(self, split: str, seq: int) -> None:
+        """Generate an entire file with stage-based sampling."""
+        import time
+        
+        rng = torch.Generator()
+        # derive deterministic seed per split/seq (same as base class)
+        per_seed = (self.seed * 1000003) ^ (hash(split) & 0xFFFFFFFF) ^ seq
+        rng.manual_seed(per_seed)
+        
+        ids = self.train_ids if split == "train" else self.val_ids
+        max_start_idx = len(ids) - self.block_size
+        
+        # Get stage distribution for this split
+        stage_distribution = self.train_stage_distribution if split == "train" else self.val_stage_distribution
+        
+        # Generate all samples according to stage distribution
+        all_x = []
+        all_y = []
+        all_stage_info = []
+        
+        for stage_info in stage_distribution:
+            stage_config = stage_info['config']
+            count = stage_info['count']
+            
+            if count == 0:
+                continue
+                
+            # Sample sequences for this stage
+            ix = torch.randint(0, max_start_idx, (count,), generator=rng).tolist()
+            x_list = [ids[i : i + self.block_size] for i in ix]
+            x_stage = torch.tensor(x_list, dtype=torch.long)
+            
+            # Apply stage-specific masking
+            corrupted_x, mask = apply_stage_masking(
+                x_stage, stage_config, self.mask_token_id, 
+                self.vocab_size - 1, rng
+            )
+            
+            # Create labels: ignore_index for non-masked positions, original token for masked
+            labels = torch.where(mask, x_stage, self.ignore_index)
+            
+            all_x.append(corrupted_x)
+            all_y.append(labels)
+            
+            # Track stage info for each sample
+            all_stage_info.extend([stage_config] * count)
+        
+        # Concatenate all samples
+        if all_x:
+            combined_x = torch.cat(all_x, dim=0)
+            combined_y = torch.cat(all_y, dim=0)
+            
+            # Randomly shuffle all samples to mix different stage types
+            total_samples = combined_x.shape[0]
+            shuffle_indices = torch.randperm(total_samples, generator=rng)
+            
+            shuffled_x = combined_x[shuffle_indices]
+            shuffled_y = combined_y[shuffle_indices]
+            
+            # Create shuffled stage info
+            shuffled_stage_info = [all_stage_info[i] for i in shuffle_indices.tolist()]
+            
+            # Organize into batches
+            tensors = {
+                "x": shuffled_x,
+                "y": shuffled_y,
+            }
+            
+            metadata = {
+                "batch_size": self.batch_size,
+                "num_batches": self.batches_per_file,
+                "file_idx": seq,
+                "split": split,
+                "produced_at": int(time.time() * 1000),
+                "stage_info": shuffled_stage_info,
+                "stage_distribution": stage_distribution  # Include stage distribution info
+            }
+            
+            # Write atomic
+            d = self.train_dir if split == "train" else self.val_dir
+            ts = metadata["produced_at"]
+            tmp_name = f".tmp-{ts}-{seq:06d}.pt"
+            final_name = f"{ts}-{seq:06d}-{self.batches_per_file}.pt"
+            tmp_path = os.path.join(d, tmp_name)
+            final_path = os.path.join(d, final_name)
+            torch.save({"tensors": tensors, "metadata": metadata}, tmp_path)
+            os.replace(tmp_path, final_path)
+            if self.verbose:
+                print(f"[provider] produced stage-based file: {final_path}")
+        else:
+            # Fallback to default generation
+            super().produce_one_file(split, seq)
 
 
 def main():

@@ -130,7 +130,7 @@ def apply_target_driven_sticky_masking_cpu(x: torch.Tensor, target_masked_ratio:
         neighbor_masked[:, :-1] |= current_mask[:, 1:]  # Right neighbor
         
         # Generate random values for masking decision
-        rand_vals = torch.rand_like(x, dtype=torch.float, generator=rng)
+        rand_vals = torch.rand(x.shape, dtype=torch.float, generator=rng, device=x.device)
         
         # Apply different probabilities based on neighbor status (vectorized)
         mask_probs = torch.where(neighbor_masked, p2_probability, p1_probability)
