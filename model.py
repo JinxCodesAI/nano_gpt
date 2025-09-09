@@ -484,8 +484,19 @@ class GPT(nn.Module):
         N = self.get_num_params()
         cfg = self.config
         L, H, Q, T = cfg.n_layer, cfg.n_head, cfg.n_embd//cfg.n_head, cfg.block_size
+        
+        # Standard transformer FLOPS
         flops_per_token = 6*N + 12*L*H*Q*T
-        flops_per_fwdbwd = flops_per_token * T
+        
+        # Add RoPE overhead if using rotary position encoding
+        if getattr(cfg, 'position_encoding', 'absolute') == 'rotary':
+            # RoPE operations: 8 ops per head per sequence position (4 ops each for Q and K)
+            # Applied in forward and backward pass: 16 * L * H * Q * T
+            rope_flops_per_fwdbwd = 16 * L * H * Q * T
+            flops_per_fwdbwd = flops_per_token * T + rope_flops_per_fwdbwd
+        else:
+            flops_per_fwdbwd = flops_per_token * T
+            
         flops_per_iter = flops_per_fwdbwd * fwdbwd_per_iter
         # express our flops throughput as ratio of A100 bfloat16 peak flops
         flops_achieved = flops_per_iter * (1.0/dt) # per second

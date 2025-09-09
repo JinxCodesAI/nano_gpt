@@ -289,6 +289,8 @@ while True:
     if iter_num % eval_interval == 0 and master_process:
         losses = estimate_loss()
         print(f"step {iter_num}: train loss {losses['train']:.4f}, val loss {losses['val']:.4f}")
+        # Reset timer after validation to exclude validation time from MFU calculation
+        t0 = time.time()
         if wandb_log:
             log_dict = {
                 "iter": iter_num,
