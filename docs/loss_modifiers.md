@@ -100,6 +100,18 @@ If the average per‑sample entropy across its positions is, say, H_s1=0.8 and H
 - batch_weight = mean([0.8, 0.5]) = 0.65.
 - Final loss = original_loss * 0.65 (lower than baseline because average wrong‑answer entropy is modest; if entropies were higher, the weight would be higher).
 
+Same batch, different mode settings:
+- Case A (use_for_weighting=False, entropy_modifier_weight=1.0):
+  - batch_weight is not computed from entropy; the modifier applies a constant multiplier.
+  - Final loss = original_loss × 1.0.
+- Case B (use_for_weighting=True, entropy_modifier_weight=1.0, entropy_modifier_threshold=0.5):
+  - Per-sample entropies H = [0.8, 0.4] → clamped H* = [0.8, 0.5]
+  - batch_weight = mean(H*) = (0.8 + 0.5)/2 = 0.65
+  - Final loss = original_loss × 0.65
+
+Observation: Only in Case B does entropy affect the loss, and it does so via a single batch scalar derived from per-sample entropies. In Case A, entropy is logged but does not change the loss value.
+
+
 Use cases:
 - Emphasize updates when the model’s wrong predictions are diverse (more informative errors).
 - Down‑weight updates when the model fixates on specific wrong tokens (possibly noisy/confusing cases).
