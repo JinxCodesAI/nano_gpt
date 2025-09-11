@@ -356,13 +356,29 @@ class GPT(nn.Module):
             logits = self.lm_head(x)
             
             # Calculate base loss
-            loss = F.cross_entropy(logits.view(-1, logits.size(-1)), targets.view(-1), ignore_index=self.config.ignore_index)
-            
-            # Apply loss modifiers if provided
             if loss_modifiers is not None and not loss_modifiers.is_empty():
+                # Compute per-position cross-entropy once for modifier pipeline
+                # logits: (b, t, vocab)
+                # targets: (b, t)
+                flat_logits = logits.view(-1, logits.size(-1))      # (b*t, vocab)
+                flat_targets = targets.view(-1)                     # (b*t,)
+                per_position_loss = F.cross_entropy(
+                    flat_logits, flat_targets,
+                    ignore_index=self.config.ignore_index,
+                    reduction='none'
+                )                                                   # (b*t,)
+                per_position_loss = per_position_loss.view(b, t)    # (b, t)
+
                 # Create mask for valid positions (not ignored)
                 mask = targets != self.config.ignore_index
-                loss = loss_modifiers.modify_loss(logits, targets, loss, mask=mask)
+
+                # Provide a baseline scalar (mean over valid positions) but allow pipeline to replace via per_position_loss
+                base_loss = (per_position_loss * mask.float()).sum() / (mask.float().sum() + 1e-8)
+                loss = loss_modifiers.modify_loss(
+                    logits, targets, base_loss, mask=mask, per_position_loss=per_position_loss, ignore_index=self.config.ignore_index
+                )
+            else:
+                loss = F.cross_entropy(logits.view(-1, logits.size(-1)), targets.view(-1), ignore_index=self.config.ignore_index)
         else:
             # inference-time mini-optimization: only forward the lm_head on the very last position
             logits = self.lm_head(x[:, [-1], :]) # note: using list [-1] to preserve the time dim

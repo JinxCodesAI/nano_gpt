@@ -1,3 +1,4 @@
+
 """
 Target smoothing loss modifier that applies label smoothing to target tokens.
 
@@ -82,9 +83,9 @@ class TargetSmoothingModifier(BaseLossModifier):
             # Calculate smoothing parameters
             confidence = 1.0 - self.smoothing_factor
             smoothing_value = self.smoothing_factor / (vocab_size - 1)
-            
-            # Create smoothed distribution
-            smoothed = one_hot * confidence + smoothing_value
+
+            # Create smoothed distribution (FIXED)
+            smoothed = one_hot * confidence + smoothing_value * (1 - one_hot)
             
             # Exclude special tokens from smoothing if specified
             if self.special_token_set:
@@ -132,38 +133,40 @@ class TargetSmoothingModifier(BaseLossModifier):
         
         # Calculate log probabilities
         log_probs = F.log_softmax(logits, dim=-1)
-        
-        # Calculate KL divergence loss with smoothed targets
-        kl_loss = -(smoothed_targets * log_probs).sum(dim=-1)  # (batch_size, seq_len)
-        
+
+        # Calculate smoothed cross-entropy per position
+        smoothed_ce = -(smoothed_targets * log_probs).sum(dim=-1)  # (batch_size, seq_len)
+
         # Create mask for valid positions (exclude padding if specified)
         if self.exclude_padding:
             valid_mask = (targets != self.padding_token_id) & (targets >= 0) & (targets < vocab_size)
         else:
             valid_mask = (targets >= 0) & (targets < vocab_size)
-        
-        # Average loss over valid positions only
-        if valid_mask.any():
-            smoothed_loss = (kl_loss * valid_mask.float()).sum() / valid_mask.float().sum()
-        else:
-            smoothed_loss = kl_loss.mean()
-        
-        # Store metrics
+
+        # Zero out invalid positions for metrics aggregation; aggregation is handled by pipeline
+        per_position_loss = smoothed_ce * valid_mask.float()
+
+        # Store metrics (also compute original CE for reference)
         original_loss = F.cross_entropy(
-            logits.view(-1, vocab_size), 
-            targets.view(-1), 
+            logits.view(-1, vocab_size),
+            targets.view(-1),
             ignore_index=self.padding_token_id if self.exclude_padding else -100
         )
-        
+
+        # Compute masked mean for reporting only
+        denom = valid_mask.float().sum().clamp_min(1.0)
+        smoothed_loss_mean = per_position_loss.sum() / denom
+
         self._metrics = {
             'original_loss': original_loss.item(),
-            'smoothed_loss': smoothed_loss.item(),
+            'smoothed_loss': smoothed_loss_mean.item(),
             'smoothing_factor': self.smoothing_factor,
             'valid_positions': valid_mask.float().sum().item(),
             'total_positions': targets.numel(),
         }
-        
-        return smoothed_loss
+
+        # Return per-position loss replacement; pipeline will aggregate
+        return {'per_position_loss': smoothed_ce}
     
     def get_metrics(self) -> Dict[str, Any]:
         """Get target smoothing metrics from the last forward pass."""

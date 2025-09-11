@@ -131,21 +131,46 @@ class EntropyModifier(BaseLossModifier):
             'entropy_std': per_position_entropy.std().item(),
         }
         
-        # Always apply entropy-based dynamic weighting
-        # Calculate per-sample average entropy
+        # Always apply entropy-based dynamic weighting at per-sample level.
+        # Compute per-sample average entropy
         if mask is not None:
             mask_f = mask.float()
             sample_entropy = (per_position_entropy * mask_f).sum(dim=1) / (mask_f.sum(dim=1) + self.eps)
         else:
             sample_entropy = per_position_entropy.mean(dim=1)
 
-        # Weight loss by entropy (higher entropy = higher weight)
-        # Apply threshold filtering if specified
-        entropy_weights = torch.clamp(sample_entropy, min=self.entropy_threshold)
-        batch_weight = entropy_weights.mean() * self.weight
+        # Compute per-sample weights: lower entropy -> higher weight (punish concentrated wrong answers)
+        # w_i = weight * 1 / (clamp(H_i, min=threshold) + eps)
+        clamped_entropy = torch.clamp(sample_entropy, min=self.entropy_threshold)
+        per_sample_weights = self.weight / (clamped_entropy + self.eps)
 
-        self._metrics['entropy_weight'] = batch_weight.item()
-        return loss * batch_weight
+        # Obtain per-position loss to aggregate per-sample
+        per_position_loss = kwargs.get('per_position_loss', None)
+        if per_position_loss is None:
+            # Fallback: compute per-position CE without ignore handling
+            batch_size, seq_len, vocab_size = logits.shape
+            flat_logits = logits.view(-1, vocab_size)
+            flat_targets = targets.view(-1)
+            per_position_loss = F.cross_entropy(flat_logits, flat_targets, reduction='none').view(batch_size, seq_len)
+
+        # Aggregate to per-sample losses using mask when available
+        if mask is not None:
+            mask_f = mask.float()
+            per_sample_loss = (per_position_loss * mask_f).sum(dim=1) / (mask_f.sum(dim=1) + self.eps)
+        else:
+            per_sample_loss = per_position_loss.mean(dim=1)
+
+        # Apply per-sample weights and average over batch
+        weighted_losses = per_sample_loss * per_sample_weights
+        final_loss = weighted_losses.mean()
+
+        # Metrics
+        self._metrics['mean_entropy'] = sample_entropy.mean().item()
+        self._metrics['min_entropy'] = sample_entropy.min().item()
+        self._metrics['max_entropy'] = sample_entropy.max().item()
+        self._metrics['entropy_weight_mean'] = per_sample_weights.mean().item()
+
+        return final_loss
     
     def get_metrics(self) -> Dict[str, Any]:
         """Get entropy metrics from the last forward pass."""
