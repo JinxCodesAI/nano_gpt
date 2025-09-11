@@ -133,33 +133,51 @@ target_smoothing_padding_token = -100            # Padding token ID
 
 ### 3. Mask Ratio Weight Modifier
 
-**Purpose**: Weights loss inversely proportional to the square root of the mask ratio.
+Purpose: Adjust loss based on how many valid (non-masked) tokens a sequence contains. Sequences with fewer valid tokens receive higher weights to compensate for lower signal.
 
-**Theory**: Sequences with fewer valid tokens should receive higher weights to compensate for having less signal in the loss calculation.
+Definitions:
+- mask: Boolean tensor (batch_size, seq_len) where True indicates a valid position. If not provided, all positions are assumed valid.
+- mask_ratio (per sequence): sum(mask_i) / seq_len.
 
-**Configuration**:
-```python
-loss_modifiers_enabled = True
-mask_ratio_weight_enabled = True
-mask_ratio_weight_power = 0.5                    # Power for inverse weighting
-mask_ratio_weight_min = 0.1                      # Minimum weight (prevents extremes)
-mask_ratio_weight_max = 10.0                     # Maximum weight (prevents extremes)
-mask_ratio_weight_eps = 1e-8                     # Prevent division by zero
-mask_ratio_weight_sequence_level = True          # Apply per-sequence vs per-batch
-```
+Parameters:
+- mask_ratio_weight_power (float, default 0.5): Exponent for inverse weighting; if 0.5, weight = 1/sqrt(mask_ratio).
+- mask_ratio_weight_min, mask_ratio_weight_max (floats, defaults 0.1 and 10.0): Clamp bounds for weights.
+- mask_ratio_weight_eps (float, default 1e-8): Numerical stability for divisions and zero ratios.
+- mask_ratio_weight_sequence_level (bool, default True): If True, compute per-sequence losses and weight each sequence individually. If False, compute a single batch_weight from the mean of per-sequence weights and scale the original batch loss.
 
-**Formula**: `weight = 1 / (mask_ratio + eps)^power`
+Computation:
+1) Compute mask_ratio per sequence: r_i = sum(mask_i) / (seq_len + eps)
+2) Compute weight per sequence: w_i = clamp((r_i + eps)^(-power), min_weight, max_weight)
+3) Apply weights:
+   - Sequence-level (mask_ratio_weight_sequence_level=True):
+     - Compute per-position loss with reduction='none', reshape to [B, T].
+     - Mask and average per sequence: L_i = sum(loss_i * mask_i) / (sum(mask_i) + eps)
+     - Final loss = mean_i(w_i * L_i)
+   - Batch-level (mask_ratio_weight_sequence_level=False):
+     - batch_weight = mean_i(w_i)
+     - Final loss = original_loss * batch_weight
 
-**Use Cases**:
-- Balance training with variable-length sequences
-- Handle datasets with significant padding
-- Compensate for uneven token distributions
+Examples:
+- Sequence-level example:
+  - Assume batch_size=2, seq_len=4, power=0.5, min=0.1, max=10.0
+  - mask for sample 1 has 1 valid token → r_1 = 1/4 = 0.25 → w_1 = 1/sqrt(0.25) = 2.0
+  - mask for sample 2 has 4 valid tokens → r_2 = 4/4 = 1.0 → w_2 = 1/sqrt(1.0) = 1.0
+  - Suppose per-sequence masked losses: L_1 = 2.0, L_2 = 1.0
+  - Final loss = mean([2.0*2.0, 1.0*1.0]) = mean([4.0, 1.0]) = 2.5
 
-**Metrics Logged**:
-- `mean_mask_ratio`: Average mask ratio across batch
-- `min_mask_ratio`, `max_mask_ratio`: Mask ratio range
-- `mean_weight`: Average applied weight
-- `weight_std`: Weight standard deviation
+- Batch-level example:
+  - With the same r_1=0.25 (w_1=2.0), r_2=1.0 (w_2=1.0)
+  - batch_weight = mean([2.0, 1.0]) = 1.5
+  - Final loss = original_loss * 1.5
+
+Use cases:
+- Balance training with variable sequence lengths or heavy padding.
+- Emphasize sequences with fewer valid tokens to avoid under-training them.
+
+Metrics logged:
+- mean_mask_ratio, min_mask_ratio, max_mask_ratio
+- mean_weight, min_weight, max_weight, weight_std
+- batch_weight (only when using batch-level mode)
 
 ## Configuration Files
 
