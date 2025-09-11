@@ -86,7 +86,6 @@ compile = True # use PyTorch 2.0 to compile the model to be faster
 loss_modifiers_enabled = False # master switch for all loss modifiers
 entropy_modifier_enabled = False # enable entropy-based loss modification
 entropy_modifier_weight = 1.0 # weight factor for entropy modification
-entropy_modifier_use_for_weighting = False # use entropy for loss weighting
 entropy_modifier_threshold = 0.0 # threshold for filtering low-entropy positions
 entropy_modifier_eps = 1e-8 # small value to prevent log(0) in entropy calculation
 target_smoothing_enabled = False # enable label smoothing

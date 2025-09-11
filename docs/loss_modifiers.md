@@ -21,8 +21,8 @@ python train.py  # All modifiers disabled - identical to original behavior
 # Enable label smoothing
 python train.py --loss_modifiers_enabled=True --target_smoothing_enabled=True --target_smoothing_factor=0.1
 
-# Enable entropy-based weighting
-python train.py --loss_modifiers_enabled=True --entropy_modifier_enabled=True --entropy_modifier_use_for_weighting=True
+# Enable entropy-based entropy-based weighting (always dynamic)
+python train.py --loss_modifiers_enabled=True --entropy_modifier_enabled=True
 
 # Combine multiple modifiers
 python train.py --loss_modifiers_enabled=True \
@@ -42,8 +42,7 @@ Intuition:
 - Low entropy (wrong answers concentrate on a few tokens) → potentially biased/confused predictions → give less or baseline weight.
 
 Parameters (from config or CLI):
-- entropy_modifier_weight (float, default 1.0): Base multiplicative weight applied to loss. When use_for_weighting=False, loss = loss * weight.
-- entropy_modifier_use_for_weighting (bool, default False): If True, compute a dynamic batch weight from per‑sample entropies and multiply the loss by it.
+- entropy_modifier_weight (float, default 1.0): Base multiplicative weight applied to the dynamic batch weight.
 - entropy_modifier_threshold (float, default 0.0): Minimum entropy floor when computing dynamic weights. Entropies below this are clamped up to the threshold to avoid zero/near‑zero weights.
 - entropy_modifier_eps (float, default 1e-8): Numerical stability for logs/divisions.
 
@@ -52,7 +51,6 @@ Configuration example:
 loss_modifiers_enabled = True
 entropy_modifier_enabled = True
 entropy_modifier_weight = 1.0
-entropy_modifier_use_for_weighting = True
 entropy_modifier_threshold = 0.1
 entropy_modifier_eps = 1e-8
 ```
@@ -62,16 +60,10 @@ Mechanics (how it works):
 2) Zero out the probability of the correct token; renormalize remaining mass over wrong tokens only to get q (distribution over wrong answers).
 3) Per‑position entropy: H = -Σ_i q_i log(q_i). If all mass is on the correct token (no wrong mass), H is treated as 0.
 4) If a mask is provided, per‑position entropies are masked accordingly.
-5) If use_for_weighting is True:
-   - Compute per‑sample entropy as the mean (or masked mean) across positions.
-   - Clamp per‑sample entropies with entropy_threshold: H* = clamp(H, min=entropy_threshold).
-   - Compute batch_weight = mean(H*) * entropy_modifier_weight.
-   - Final loss = loss * batch_weight.
-   Otherwise (use_for_weighting=False): Final loss = loss * entropy_modifier_weight.
-
-Mode comparison: use_for_weighting=False vs True
-- When False: The modifier multiplies the loss by a constant: loss_out = loss_in × entropy_modifier_weight. Entropy is logged only; it does not influence loss.
-- When True: The modifier computes a dynamic batch scalar from sample entropies and multiplies the loss by it: loss_out = loss_in × mean(max(H_sample, entropy_modifier_threshold)) × entropy_modifier_weight.
+5) Always compute per‑sample entropy as the mean (or masked mean) across positions.
+6) Clamp per‑sample entropies with entropy_threshold: H* = clamp(H, min=entropy_threshold).
+7) Compute batch_weight = mean(H*) * entropy_modifier_weight.
+8) Final loss = loss * batch_weight.
 
 Batch-level illustration (sample weights):
 Assume batch size = 4, per-sample entropies after per-position averaging are H = [0.2, 0.6, 1.0, 0.4], threshold=0.5, weight=1.0.
@@ -80,14 +72,13 @@ Assume batch size = 4, per-sample entropies after per-position averaging are H =
 - All samples in this step share the same scalar multiplier 0.65; the modifier does not apply different multipliers per sample in the current implementation.
 
 
-What are entropy_modifier_use_for_weighting and entropy_modifier_threshold?
-- entropy_modifier_use_for_weighting: Enables dynamic weighting. Instead of a fixed multiplier, the modifier computes a batch_weight from the current batch’s average wrong‑answer entropies and multiplies the loss by it.
+What is entropy_modifier_threshold?
 - entropy_modifier_threshold: A floor applied during dynamic weighting to prevent very small entropies from collapsing the weight. It clamps each per‑sample entropy to at least this value before averaging.
 
 Logged metrics:
 - mean_entropy: Mean per‑position wrong‑answer entropy (masked if provided).
 - max_entropy, min_entropy, entropy_std: Range and variability of entropies.
-- entropy_weight: The final batch multiplier when use_for_weighting=True.
+- entropy_weight: The final batch multiplier (mean clamped per‑sample entropy × entropy_modifier_weight).
 
 Worked example:
 Suppose batch_size=2, seq_len=2, vocab_size=4. Targets = [[2, 1], [0, 3]]. Consider the first token of sample 1 with logits [2.0, 1.0, 4.0, 0.5] and target=2.
@@ -100,17 +91,13 @@ If the average per‑sample entropy across its positions is, say, H_s1=0.8 and H
 - batch_weight = mean([0.8, 0.5]) = 0.65.
 - Final loss = original_loss * 0.65 (lower than baseline because average wrong‑answer entropy is modest; if entropies were higher, the weight would be higher).
 
-Same batch, different mode settings:
-- Case A (use_for_weighting=False, entropy_modifier_weight=1.0):
-  - batch_weight is not computed from entropy; the modifier applies a constant multiplier.
-  - Final loss = original_loss × 1.0.
-- Case B (use_for_weighting=True, entropy_modifier_weight=1.0, entropy_modifier_threshold=0.5):
-  - Per-sample entropies H = [0.8, 0.4] → clamped H* = [0.8, 0.5]
+Same batch, effect with always-dynamic weighting:
+- Given H = [0.8, 0.4] and threshold=0.5:
+  - H* = [0.8, 0.5]
   - batch_weight = mean(H*) = (0.8 + 0.5)/2 = 0.65
   - Final loss = original_loss × 0.65
 
-Observation: Only in Case B does entropy affect the loss, and it does so via a single batch scalar derived from per-sample entropies. In Case A, entropy is logged but does not change the loss value.
-
+Observation: With always-dynamic weighting, entropy directly influences the single batch scalar applied to the loss every step.
 
 Use cases:
 - Emphasize updates when the model’s wrong predictions are diverse (more informative errors).

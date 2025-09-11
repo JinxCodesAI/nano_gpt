@@ -33,13 +33,11 @@ class EntropyModifier(BaseLossModifier):
         Config keys:
             enabled (bool): Whether to enable this modifier
             weight (float): Weight factor for entropy-based loss modification (default: 1.0)
-            use_for_weighting (bool): Whether to use entropy for loss weighting (default: False)
             entropy_threshold (float): Threshold for filtering low-entropy positions (default: 0.0)
             eps (float): Small value to prevent log(0) in entropy calculation (default: 1e-8)
         """
         super().__init__(config)
         self.weight = config.get('weight', 1.0)
-        self.use_for_weighting = config.get('use_for_weighting', False)
         self.entropy_threshold = config.get('entropy_threshold', 0.0)
         self.eps = config.get('eps', 1e-8)
     
@@ -138,24 +136,20 @@ class EntropyModifier(BaseLossModifier):
             'entropy_std': per_position_entropy.std().item(),
         }
         
-        # Apply entropy-based loss weighting if enabled
-        if self.use_for_weighting:
-            # Calculate per-sample average entropy
-            if mask is not None:
-                sample_entropy = (per_position_entropy * mask.float()).sum(dim=1) / (mask.float().sum(dim=1) + self.eps)
-            else:
-                sample_entropy = per_position_entropy.mean(dim=1)
-            
-            # Weight loss by entropy (higher entropy = higher weight)
-            # Apply threshold filtering if specified
-            entropy_weights = torch.clamp(sample_entropy, min=self.entropy_threshold)
-            batch_weight = entropy_weights.mean() * self.weight
-            
-            self._metrics['entropy_weight'] = batch_weight.item()
-            return loss * batch_weight
+        # Always apply entropy-based dynamic weighting
+        # Calculate per-sample average entropy
+        if mask is not None:
+            sample_entropy = (per_position_entropy * mask.float()).sum(dim=1) / (mask.float().sum(dim=1) + self.eps)
         else:
-            # If not using for weighting, just apply the base weight
-            return loss * self.weight
+            sample_entropy = per_position_entropy.mean(dim=1)
+
+        # Weight loss by entropy (higher entropy = higher weight)
+        # Apply threshold filtering if specified
+        entropy_weights = torch.clamp(sample_entropy, min=self.entropy_threshold)
+        batch_weight = entropy_weights.mean() * self.weight
+
+        self._metrics['entropy_weight'] = batch_weight.item()
+        return loss * batch_weight
     
     def get_metrics(self) -> Dict[str, Any]:
         """Get entropy metrics from the last forward pass."""
