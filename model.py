@@ -358,10 +358,16 @@ class GPT(nn.Module):
             # Calculate base loss
             if loss_modifiers is not None and not loss_modifiers.is_empty():
                 # Compute per-position cross-entropy once for modifier pipeline
-                flat_logits = logits.view(-1, logits.size(-1))
-                flat_targets = targets.view(-1)
-                per_position_loss = F.cross_entropy(flat_logits, flat_targets, ignore_index=self.config.ignore_index, reduction='none')
-                per_position_loss = per_position_loss.view(b, t)
+                # logits: (b, t, vocab)
+                # targets: (b, t)
+                flat_logits = logits.view(-1, logits.size(-1))      # (b*t, vocab)
+                flat_targets = targets.view(-1)                     # (b*t,)
+                per_position_loss = F.cross_entropy(
+                    flat_logits, flat_targets,
+                    ignore_index=self.config.ignore_index,
+                    reduction='none'
+                )                                                   # (b*t,)
+                per_position_loss = per_position_loss.view(b, t)    # (b, t)
 
                 # Create mask for valid positions (not ignored)
                 mask = targets != self.config.ignore_index
