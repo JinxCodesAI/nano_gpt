@@ -21,7 +21,7 @@ python train.py  # All modifiers disabled - identical to original behavior
 # Enable label smoothing
 python train.py --loss_modifiers_enabled=True --target_smoothing_enabled=True --target_smoothing_factor=0.1
 
-# Enable entropy-based weighting  
+# Enable entropy-based weighting
 python train.py --loss_modifiers_enabled=True --entropy_modifier_enabled=True --entropy_modifier_use_for_weighting=True
 
 # Combine multiple modifiers
@@ -68,6 +68,17 @@ Mechanics (how it works):
    - Compute batch_weight = mean(H*) * entropy_modifier_weight.
    - Final loss = loss * batch_weight.
    Otherwise (use_for_weighting=False): Final loss = loss * entropy_modifier_weight.
+
+Mode comparison: use_for_weighting=False vs True
+- When False: The modifier multiplies the loss by a constant: loss_out = loss_in × entropy_modifier_weight. Entropy is logged only; it does not influence loss.
+- When True: The modifier computes a dynamic batch scalar from sample entropies and multiplies the loss by it: loss_out = loss_in × mean(max(H_sample, entropy_modifier_threshold)) × entropy_modifier_weight.
+
+Batch-level illustration (sample weights):
+Assume batch size = 4, per-sample entropies after per-position averaging are H = [0.2, 0.6, 1.0, 0.4], threshold=0.5, weight=1.0.
+- Clamped entropies: H* = [0.5, 0.6, 1.0, 0.5]
+- batch_weight = mean(H*) = 0.65
+- All samples in this step share the same scalar multiplier 0.65; the modifier does not apply different multipliers per sample in the current implementation.
+
 
 What are entropy_modifier_use_for_weighting and entropy_modifier_threshold?
 - entropy_modifier_use_for_weighting: Enables dynamic weighting. Instead of a fixed multiplier, the modifier computes a batch_weight from the current batch’s average wrong‑answer entropies and multiplies the loss by it.
@@ -216,21 +227,21 @@ class CustomModifier(BaseLossModifier):
     def __init__(self, config):
         super().__init__(config)
         self.custom_param = config.get('custom_param', 1.0)
-    
+
     def modify_loss(self, logits, targets, loss, **kwargs):
         if not self.enabled:
             return loss
-        
+
         # Your custom loss modification logic here
         modified_loss = loss * self.custom_param
-        
+
         # Store metrics for monitoring
         self._metrics = {
             'custom_metric': modified_loss.item(),
         }
-        
+
         return modified_loss
-    
+
     def get_metrics(self):
         return self._metrics.copy()
 ```
