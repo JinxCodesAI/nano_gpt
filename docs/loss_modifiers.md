@@ -21,8 +21,8 @@ python train.py  # All modifiers disabled - identical to original behavior
 # Enable label smoothing
 python train.py --loss_modifiers_enabled=True --target_smoothing_enabled=True --target_smoothing_factor=0.1
 
-# Enable entropy-based weighting  
-python train.py --loss_modifiers_enabled=True --entropy_modifier_enabled=True --entropy_modifier_use_for_weighting=True
+# Enable entropy-based entropy-based weighting (always dynamic)
+python train.py --loss_modifiers_enabled=True --entropy_modifier_enabled=True
 
 # Combine multiple modifiers
 python train.py --loss_modifiers_enabled=True \
@@ -35,32 +35,74 @@ python train.py --loss_modifiers_enabled=True \
 
 ### 1. Entropy Modifier
 
-**Purpose**: Weights loss based on the entropy of wrong answer distributions per position.
+Purpose: Focus training on positions/samples where the model’s wrong‑answer distribution is more uniform (higher information content), and optionally down‑weight positions with low‑entropy wrong‑answer distributions.
 
-**Theory**: 
-- **High entropy** (uniform wrong answers) = good signal-to-noise ratio
-- **Low entropy** (concentrated wrong answers) = poor signal-to-noise ratio
+Intuition:
+- High entropy (wrong answers are spread out) → model isn’t fixating on a few wrong tokens → better signal‑to‑noise → give more weight.
+- Low entropy (wrong answers concentrate on a few tokens) → potentially biased/confused predictions → give less or baseline weight.
 
-**Configuration**:
+Parameters (from config or CLI):
+- entropy_modifier_weight (float, default 1.0): Base multiplicative weight applied to the dynamic batch weight.
+- entropy_modifier_threshold (float, default 0.0): Minimum entropy floor when computing dynamic weights. Entropies below this are clamped up to the threshold to avoid zero/near‑zero weights.
+- entropy_modifier_eps (float, default 1e-8): Numerical stability for logs/divisions.
+
+Configuration example:
 ```python
 loss_modifiers_enabled = True
 entropy_modifier_enabled = True
-entropy_modifier_weight = 1.0                    # Base weight factor
-entropy_modifier_use_for_weighting = False       # Use entropy for dynamic weighting
-entropy_modifier_threshold = 0.0                 # Minimum entropy threshold
-entropy_modifier_eps = 1e-8                      # Prevent log(0) errors
+entropy_modifier_weight = 1.0
+entropy_modifier_threshold = 0.1
+entropy_modifier_eps = 1e-8
 ```
 
-**Use Cases**:
-- Focus training on positions with better signal quality
-- Identify and down-weight positions with poor discrimination
-- Analysis of model confidence patterns
+Mechanics (how it works):
+1) Compute softmax over logits to get per‑token probabilities p.
+2) Zero out the probability of the correct token; renormalize remaining mass over wrong tokens only to get q (distribution over wrong answers).
+3) Per‑position entropy: H = -Σ_i q_i log(q_i). If all mass is on the correct token (no wrong mass), H is treated as 0.
+4) If a mask is provided, per‑position entropies are masked accordingly.
+5) Always compute per‑sample entropy as the mean (or masked mean) across positions.
+6) Clamp per‑sample entropies with entropy_threshold: H* = clamp(H, min=entropy_threshold).
+7) Compute batch_weight = mean(H*) * entropy_modifier_weight.
+8) Final loss = loss * batch_weight.
 
-**Metrics Logged**:
-- `mean_entropy`: Average entropy across positions
-- `max_entropy`, `min_entropy`: Entropy range
-- `entropy_std`: Entropy standard deviation
-- `entropy_weight`: Applied weight (if using for weighting)
+Batch-level illustration (sample weights):
+Assume batch size = 4, per-sample entropies after per-position averaging are H = [0.2, 0.6, 1.0, 0.4], threshold=0.5, weight=1.0.
+- Clamped entropies: H* = [0.5, 0.6, 1.0, 0.5]
+- batch_weight = mean(H*) = 0.65
+- All samples in this step share the same scalar multiplier 0.65; the modifier does not apply different multipliers per sample in the current implementation.
+
+
+What is entropy_modifier_threshold?
+- entropy_modifier_threshold: A floor applied during dynamic weighting to prevent very small entropies from collapsing the weight. It clamps each per‑sample entropy to at least this value before averaging.
+
+Logged metrics:
+- mean_entropy: Mean per‑position wrong‑answer entropy (masked if provided).
+- max_entropy, min_entropy, entropy_std: Range and variability of entropies.
+- entropy_weight: The final batch multiplier (mean clamped per‑sample entropy × entropy_modifier_weight).
+
+Worked example:
+Suppose batch_size=2, seq_len=2, vocab_size=4. Targets = [[2, 1], [0, 3]]. Consider the first token of sample 1 with logits [2.0, 1.0, 4.0, 0.5] and target=2.
+- Softmax p ≈ [0.100, 0.037, 0.848, 0.015]. Zero out the correct token (index 2): wrong mass ≈ 0.152.
+- Renormalize over wrong tokens: q ≈ [0.100/0.152, 0.037/0.152, 0.015/0.152, (target=2 is 0)] ≈ [0.658, 0.243, 0.099, 0.000].
+- Entropy H = -Σ q_i log(q_i) ≈ -(0.658 ln 0.658 + 0.243 ln 0.243 + 0.099 ln 0.099) ≈ 0.90 nats.
+
+If the average per‑sample entropy across its positions is, say, H_s1=0.8 and H_s2=0.4, with entropy_modifier_threshold=0.5 and entropy_modifier_weight=1.0:
+- Clamp: H*_s1 = max(0.8, 0.5) = 0.8; H*_s2 = max(0.4, 0.5) = 0.5.
+- batch_weight = mean([0.8, 0.5]) = 0.65.
+- Final loss = original_loss * 0.65 (lower than baseline because average wrong‑answer entropy is modest; if entropies were higher, the weight would be higher).
+
+Same batch, effect with always-dynamic weighting:
+- Given H = [0.8, 0.4] and threshold=0.5:
+  - H* = [0.8, 0.5]
+  - batch_weight = mean(H*) = (0.8 + 0.5)/2 = 0.65
+  - Final loss = original_loss × 0.65
+
+Observation: With always-dynamic weighting, entropy directly influences the single batch scalar applied to the loss every step.
+
+Use cases:
+- Emphasize updates when the model’s wrong predictions are diverse (more informative errors).
+- Down‑weight updates when the model fixates on specific wrong tokens (possibly noisy/confusing cases).
+- Track confidence patterns via entropy metrics during training.
 
 ### 2. Target Smoothing Modifier
 
@@ -184,21 +226,21 @@ class CustomModifier(BaseLossModifier):
     def __init__(self, config):
         super().__init__(config)
         self.custom_param = config.get('custom_param', 1.0)
-    
+
     def modify_loss(self, logits, targets, loss, **kwargs):
         if not self.enabled:
             return loss
-        
+
         # Your custom loss modification logic here
         modified_loss = loss * self.custom_param
-        
+
         # Store metrics for monitoring
         self._metrics = {
             'custom_metric': modified_loss.item(),
         }
-        
+
         return modified_loss
-    
+
     def get_metrics(self):
         return self._metrics.copy()
 ```

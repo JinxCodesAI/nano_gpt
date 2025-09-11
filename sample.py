@@ -22,14 +22,14 @@ from sample_utils import (
 # Model loading
 init_from = 'resume'  # 'resume' to load from checkpoint
 out_dir = 'out'
-checkpoint_name = 'big_boy2.pt'  # Main model checkpoint
+checkpoint_name = 'new_8500.pt'  # Main model checkpoint
 remasking_checkpoint_name = None  # Optional: remasking model checkpoint
 
 # Generation parameters
 num_samples = 4  # Number of samples to generate
 sequence_length = 512  # Total length of generated sequence
 max_new_tokens = 100  # For regular sampling (non-diffusion)
-seed = 1337
+seed = -1
 device = 'cuda'
 dtype = 'float16'  # Use float16 for RTX 2060 compatibility
 compile = False  # Use PyTorch 2.0 compilation (disabled due to triton issues)
@@ -48,7 +48,7 @@ end_ratio = 0.05   # Final ratio of tokens to remask (5%)
 
 # Remasking parameters
 randomness_strength = 0.4  # Balance between random (1.0) and model-guided (0.0) remasking
-intelligent_remasking = False  # Enable self-confidence based remasking when no remasking model
+intelligent_remasking = True  # Enable self-confidence based remasking when no remasking model
 
 # Schedule parameters
 schedule_type = 'linear'  # 'linear' or 'custom'
@@ -66,6 +66,9 @@ top_k = 200  # Top-k sampling
 
 # -----------------------------------------------------------------------------
 exec(open('configurator.py').read()) # overrides from command line or config file
+
+if seed == -1:
+    seed = int.from_bytes(os.urandom(4), byteorder='little')
 
 # Validation
 if sampling_method not in ['diffusion', 'standard']:
