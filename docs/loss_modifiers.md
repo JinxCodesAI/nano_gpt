@@ -35,15 +35,15 @@ python train.py --loss_modifiers_enabled=True \
 
 ### 1. Entropy Modifier
 
-Purpose: Focus training on positions/samples where the model’s wrong‑answer distribution is more uniform (higher information content), and optionally down‑weight positions with low‑entropy wrong‑answer distributions.
+Purpose: Focus training on samples where the model’s wrong‑answer distribution is more uniform (higher information content), and penalize samples where wrong answer probability concentrates in few tokens.
 
 Intuition:
-- High entropy (wrong answers are spread out) → model isn’t fixating on a few wrong tokens → better signal‑to‑noise → give more weight.
-- Low entropy (wrong answers concentrate on a few tokens) → potentially biased/confused predictions → give less or baseline weight.
+- High entropy across wrong answers → more diffuse/confidently wrong → lower penalty (lower weight multiplier).
+- Low entropy (concentrated wrong answers) → higher penalty (higher weight multiplier per sample).
 
 Parameters (from config or CLI):
-- entropy_modifier_weight (float, default 1.0): Base multiplicative weight applied to the dynamic batch weight.
-- entropy_modifier_threshold (float, default 0.0): Minimum entropy floor when computing dynamic weights. Entropies below this are clamped up to the threshold to avoid zero/near‑zero weights.
+- entropy_modifier_weight (float, default 1.0): Base factor in the per-sample multiplier.
+- entropy_modifier_threshold (float, default 0.0): Minimum entropy floor when computing per-sample multipliers.
 - entropy_modifier_eps (float, default 1e-8): Numerical stability for logs/divisions.
 
 Configuration example:
@@ -60,16 +60,15 @@ Mechanics (how it works):
 2) Zero out the probability of the correct token; renormalize remaining mass over wrong tokens only to get q (distribution over wrong answers).
 3) Per‑position entropy: H = -Σ_i q_i log(q_i). If all mass is on the correct token (no wrong mass), H is treated as 0.
 4) If a mask is provided, per‑position entropies are masked accordingly.
-5) Always compute per‑sample entropy as the mean (or masked mean) across positions.
-6) Clamp per‑sample entropies with entropy_threshold: H* = clamp(H, min=entropy_threshold).
-7) Compute batch_weight = mean(H*) * entropy_modifier_weight.
-8) Final loss = loss * batch_weight.
+5) Compute per‑sample entropy as the mean (or masked mean) across positions.
+6) Compute per-sample weights w_i = entropy_modifier_weight / (clamp(H_i, min=entropy_threshold) + eps).
+7) Aggregate per-position loss to per-sample loss and multiply by w_i; final loss is mean over samples.
 
-Batch-level illustration (sample weights):
+Per-sample illustration (sample weights):
 Assume batch size = 4, per-sample entropies after per-position averaging are H = [0.2, 0.6, 1.0, 0.4], threshold=0.5, weight=1.0.
 - Clamped entropies: H* = [0.5, 0.6, 1.0, 0.5]
-- batch_weight = mean(H*) = 0.65
-- All samples in this step share the same scalar multiplier 0.65; the modifier does not apply different multipliers per sample in the current implementation.
+- Per-sample weights w = 1 / (H* + eps) ≈ [2.0, 1.667, 1.0, 2.0]
+- Final loss = mean_i(w_i * L_i) where L_i is the per-sample masked mean loss.
 
 
 What is entropy_modifier_threshold?
