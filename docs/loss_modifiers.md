@@ -143,19 +143,13 @@ Parameters:
 - mask_ratio_weight_power (float, default 0.5): Exponent for inverse weighting; if 0.5, weight = 1/sqrt(mask_ratio).
 - mask_ratio_weight_min, mask_ratio_weight_max (floats, defaults 0.1 and 10.0): Clamp bounds for weights.
 - mask_ratio_weight_eps (float, default 1e-8): Numerical stability for divisions and zero ratios.
-- mask_ratio_weight_sequence_level (bool, default True): If True, compute per-sequence losses and weight each sequence individually. If False, compute a single batch_weight from the mean of per-sequence weights and scale the original batch loss.
 
-Computation:
+Computation (always sequence-level):
 1) Compute mask_ratio per sequence: r_i = sum(mask_i) / (seq_len + eps)
 2) Compute weight per sequence: w_i = clamp((r_i + eps)^(-power), min_weight, max_weight)
-3) Apply weights:
-   - Sequence-level (mask_ratio_weight_sequence_level=True):
-     - Compute per-position loss with reduction='none', reshape to [B, T].
-     - Mask and average per sequence: L_i = sum(loss_i * mask_i) / (sum(mask_i) + eps)
-     - Final loss = mean_i(w_i * L_i)
-   - Batch-level (mask_ratio_weight_sequence_level=False):
-     - batch_weight = mean_i(w_i)
-     - Final loss = original_loss * batch_weight
+3) Compute per-position loss with reduction='none', reshape to [B, T].
+4) Mask and average per sequence: L_i = sum(loss_i * mask_i) / (sum(mask_i) + eps)
+5) Final loss = mean_i(w_i * L_i)
 
 Examples:
 - Sequence-level example:

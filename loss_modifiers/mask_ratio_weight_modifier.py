@@ -19,11 +19,10 @@ class MaskRatioWeightModifier(BaseLossModifier):
     Loss modifier that weights loss inversely to the square root of mask ratio.
     
     This modifier calculates the ratio of valid (non-masked) positions in each
-    sequence and applies a weight inversely proportional to the square root of
-    this ratio. This helps balance training when sequences have varying amounts
-    of valid tokens.
+    sequence and applies a weight inversely proportional to the power (default 0.5) of
+    this ratio. This gives an option to reward model more for solving correctly harder samples.
     
-    The weighting formula is: weight = 1 / sqrt(mask_ratio)^power
+    The weighting formula is: weight = 1 / mask_ratio^power
     where mask_ratio is the fraction of valid tokens in the sequence.
     """
     
@@ -37,14 +36,12 @@ class MaskRatioWeightModifier(BaseLossModifier):
             min_weight (float): Minimum weight to apply (prevents extreme weights) (default: 0.1)
             max_weight (float): Maximum weight to apply (prevents extreme weights) (default: 10.0)
             eps (float): Small value to prevent division by zero (default: 1e-8)
-            use_sequence_level (bool): Whether to apply weights at sequence level vs batch level (default: True)
         """
         super().__init__(config)
         self.power = config.get('power', 0.5)
         self.min_weight = config.get('min_weight', 0.1)
         self.max_weight = config.get('max_weight', 10.0)
         self.eps = config.get('eps', 1e-8)
-        self.use_sequence_level = config.get('use_sequence_level', True)
     
     def _calculate_mask_ratios(
         self,
@@ -136,40 +133,32 @@ class MaskRatioWeightModifier(BaseLossModifier):
             'max_weight': weights.max().item(),
             'weight_std': weights.std().item(),
         }
-        
-        if self.use_sequence_level:
-            # Apply different weight to each sequence in the batch
-            # For this, we need to recalculate loss per sequence and then weight
-            batch_size, seq_len, vocab_size = logits.shape
-            
-            # Calculate loss per sequence
-            # Reshape for per-sample loss calculation
-            flat_logits = logits.view(-1, vocab_size)
-            flat_targets = targets.view(-1)
-            flat_mask = mask.view(-1)
-            
-            # Calculate per-position losses
-            per_position_loss = torch.nn.functional.cross_entropy(
-                flat_logits, flat_targets, reduction='none'
-            )
-            per_position_loss = per_position_loss.view(batch_size, seq_len)
-            
-            # Apply mask and calculate per-sequence loss
-            masked_loss = per_position_loss * mask.float()
-            per_sequence_loss = masked_loss.sum(dim=1) / (mask.float().sum(dim=1) + self.eps)
-            
-            # Apply weights to per-sequence losses
-            weighted_losses = per_sequence_loss * weights
-            
-            # Return mean of weighted losses
-            final_loss = weighted_losses.mean()
-            
-        else:
-            # Apply batch-level weight (average of all sequence weights)
-            batch_weight = weights.mean()
-            final_loss = loss * batch_weight
-            self._metrics['batch_weight'] = batch_weight.item()
-        
+
+        # Always apply per-sequence weighting
+        batch_size, seq_len, vocab_size = logits.shape
+
+        # Calculate loss per sequence
+        # Reshape for per-sample loss calculation
+        flat_logits = logits.view(-1, vocab_size)
+        flat_targets = targets.view(-1)
+
+        # Calculate per-position losses
+        per_position_loss = torch.nn.functional.cross_entropy(
+            flat_logits, flat_targets, reduction='none'
+        )
+        per_position_loss = per_position_loss.view(batch_size, seq_len)
+
+        # Apply mask and calculate per-sequence loss
+        mask_f = mask.float()
+        masked_loss = per_position_loss * mask_f
+        per_sequence_loss = masked_loss.sum(dim=1) / (mask_f.sum(dim=1) + self.eps)
+
+        # Apply weights to per-sequence losses
+        weighted_losses = per_sequence_loss * weights
+
+        # Return mean of weighted losses
+        final_loss = weighted_losses.mean()
+
         return final_loss
     
     def get_metrics(self) -> Dict[str, Any]:
