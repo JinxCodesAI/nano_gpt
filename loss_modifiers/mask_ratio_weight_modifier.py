@@ -111,11 +111,11 @@ class MaskRatioWeightModifier(BaseLossModifier):
         """
         if not self.enabled:
             return loss
-        
-        # If no mask provided, assume all positions are valid
+
+        # If no mask provided, infer it from targets using ignore_index (default -100)
         if mask is None:
-            batch_size, seq_len = targets.shape
-            mask = torch.ones(batch_size, seq_len, dtype=torch.bool, device=targets.device)
+            ignore_index = kwargs.get('ignore_index', -100)
+            mask = targets != ignore_index
         
         # Calculate mask ratios
         mask_ratios = self._calculate_mask_ratios(mask)

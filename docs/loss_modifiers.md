@@ -136,7 +136,7 @@ target_smoothing_padding_token = -100            # Padding token ID
 Purpose: Adjust loss based on how many valid (non-masked) tokens a sequence contains. Sequences with fewer valid tokens receive higher weights to compensate for lower signal.
 
 Definitions:
-- mask: Boolean tensor (batch_size, seq_len) where True indicates a valid position. If not provided, all positions are assumed valid.
+- mask: Boolean tensor (batch_size, seq_len) where True indicates a valid position. If not provided, the modifier infers mask from targets using ignore_index (default -100).
 - mask_ratio (per sequence): sum(mask_i) / seq_len.
 
 Parameters:
@@ -145,24 +145,19 @@ Parameters:
 - mask_ratio_weight_eps (float, default 1e-8): Numerical stability for divisions and zero ratios.
 
 Computation (always sequence-level):
-1) Compute mask_ratio per sequence: r_i = sum(mask_i) / (seq_len + eps)
-2) Compute weight per sequence: w_i = clamp((r_i + eps)^(-power), min_weight, max_weight)
-3) Compute per-position loss with reduction='none', reshape to [B, T].
-4) Mask and average per sequence: L_i = sum(loss_i * mask_i) / (sum(mask_i) + eps)
-5) Final loss = mean_i(w_i * L_i)
+1) If mask is None, infer mask as (targets != ignore_index), where ignore_index defaults to -100 (or can be passed via modifier kwargs).
+2) Compute mask_ratio per sequence: r_i = sum(mask_i) / (seq_len + eps)
+3) Compute weight per sequence: w_i = clamp((r_i + eps)^(-power), min_weight, max_weight)
+4) Compute per-position loss with reduction='none', reshape to [B, T].
+5) Mask and average per sequence: L_i = sum(loss_i * mask_i) / (sum(mask_i) + eps)
+6) Final loss = mean_i(w_i * L_i)
 
-Examples:
-- Sequence-level example:
-  - Assume batch_size=2, seq_len=4, power=0.5, min=0.1, max=10.0
-  - mask for sample 1 has 1 valid token → r_1 = 1/4 = 0.25 → w_1 = 1/sqrt(0.25) = 2.0
-  - mask for sample 2 has 4 valid tokens → r_2 = 4/4 = 1.0 → w_2 = 1/sqrt(1.0) = 1.0
-  - Suppose per-sequence masked losses: L_1 = 2.0, L_2 = 1.0
-  - Final loss = mean([2.0*2.0, 1.0*1.0]) = mean([4.0, 1.0]) = 2.5
-
-- Batch-level example:
-  - With the same r_1=0.25 (w_1=2.0), r_2=1.0 (w_2=1.0)
-  - batch_weight = mean([2.0, 1.0]) = 1.5
-  - Final loss = original_loss * 1.5
+Examples (sequence-level):
+- Assume batch_size=2, seq_len=4, power=0.5, min=0.1, max=10.0, ignore_index=-100
+- targets_1 = [5, -100, -100, -100] → mask_1 = [1, 0, 0, 0] → r_1 = 1/4 = 0.25 → w_1 = 1/sqrt(0.25) = 2.0
+- targets_2 = [3, 4, 1, 2] → mask_2 = [1, 1, 1, 1] → r_2 = 4/4 = 1.0 → w_2 = 1/sqrt(1.0) = 1.0
+- Suppose per-sequence masked losses: L_1 = 2.0, L_2 = 1.0
+- Final loss = mean([2.0*2.0, 1.0*1.0]) = mean([4.0, 1.0]) = 2.5
 
 Use cases:
 - Balance training with variable sequence lengths or heavy padding.
@@ -171,7 +166,6 @@ Use cases:
 Metrics logged:
 - mean_mask_ratio, min_mask_ratio, max_mask_ratio
 - mean_weight, min_weight, max_weight, weight_std
-- batch_weight (only when using batch-level mode)
 
 ## Configuration Files
 
