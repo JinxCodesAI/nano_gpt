@@ -88,7 +88,6 @@ def create_loss_modifier_pipeline(config):
             'min_weight': get_config_value('mask_ratio_weight_min', 0.1),
             'max_weight': get_config_value('mask_ratio_weight_max', 10.0),
             'eps': get_config_value('mask_ratio_weight_eps', 1e-8),
-            'use_sequence_level': get_config_value('mask_ratio_weight_sequence_level', True),
         }
         modifiers.append(MaskRatioWeightModifier(mask_weight_config))
     
