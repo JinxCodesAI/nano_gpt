@@ -5,8 +5,8 @@ The loss modifiers system provides a modular, extensible way to apply various lo
 ## Overview
 
 The system consists of three main components:
-- **Pipeline**: Orchestrates multiple modifiers in sequence
-- **Base Interface**: Abstract class ensuring consistent behavior
+- **Pipeline**: Orchestrates multiple modifiers in sequence. The pipeline now threads optional per-position loss tensors through modifiers for precise control, and aggregates to a scalar at the end when needed.
+- **Base Interface**: Abstract class ensuring consistent behavior. Modifiers may return either a scalar loss or a dict with a replacement per-position loss.
 - **Individual Modifiers**: Specific loss modification algorithms
 
 ## Quick Start
@@ -109,6 +109,8 @@ Use cases:
 **Purpose**: Applies label smoothing to target tokens to reduce overfitting.
 
 **Theory**: Instead of hard targets (1 for correct, 0 for others), uses soft targets that assign some probability to incorrect tokens. This prevents the model from becoming overconfident.
+
+**Mechanics**: Computes smoothed cross-entropy per position as the expectation of negative log-probability under the smoothed target distribution q: L = -Σ_y q_y log p_y. This is sometimes written as a KL-like form, but we do not subtract H(q) because it is constant wrt model parameters. The modifier now returns a per-position loss tensor to the pipeline, which performs final masking and aggregation.
 
 **Configuration**:
 ```python
@@ -254,9 +256,9 @@ class CustomModifier(BaseLossModifier):
 ### Modifier Combinations
 
 Modifiers are applied in sequence, so order matters:
-1. **Target Smoothing**: Changes the loss function itself
-2. **Entropy Modifier**: Weights based on prediction quality
-3. **Mask Ratio Weight**: Adjusts for sequence-level characteristics
+1. **Target Smoothing** (per-position loss producer): Replaces the per-position loss with smoothed cross-entropy.
+2. **Mask Ratio Weight** (weighter/aggregator): Uses the provided per-position loss and mask to compute weighted per-sequence losses and averages to a scalar.
+3. **Entropy Modifier** (batch weight): Multiplies the resulting scalar loss by a batch-level weight derived from wrong-answer entropy.
 
 ## Best Practices
 

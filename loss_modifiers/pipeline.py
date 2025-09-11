@@ -46,32 +46,63 @@ class LossModifierPipeline:
         self._enabled_modifiers = [mod for mod in self.modifiers if mod.is_enabled()]
     
     def modify_loss(
-        self, 
-        logits: torch.Tensor, 
-        targets: torch.Tensor, 
-        loss: torch.Tensor, 
+        self,
+        logits: torch.Tensor,
+        targets: torch.Tensor,
+        loss: torch.Tensor,
         **kwargs
     ) -> torch.Tensor:
         """
         Apply all enabled modifiers to the loss in sequence.
-        
+
         Args:
             logits: Model output logits (batch_size, seq_len, vocab_size)
             targets: Target token IDs (batch_size, seq_len)
             loss: Original loss value (scalar tensor)
-            **kwargs: Additional arguments passed to modifiers
-            
+            **kwargs: Additional arguments passed to modifiers. Common keys:
+                - per_position_loss: Optional (B,T) tensor with per-position losses
+                - mask: Optional boolean mask (B,T) for valid positions
+
         Returns:
             Modified loss tensor after applying all enabled modifiers
         """
         # If no enabled modifiers, return original loss (zero overhead)
         if not self._enabled_modifiers:
             return loss
-        
+
+        # Track optional per-position loss tensor through the pipeline
+        per_position_loss = kwargs.get('per_position_loss', None)
+        # Whether any modifier in this pipeline produced/replaced per_position_loss
+        per_position_loss_owned = False
+        extra_kwargs = dict(kwargs)
+
         modified_loss = loss
         for modifier in self._enabled_modifiers:
-            modified_loss = modifier.modify_loss(logits, targets, modified_loss, **kwargs)
-        
+            # Pass current per_position_loss along
+            if per_position_loss is not None:
+                extra_kwargs['per_position_loss'] = per_position_loss
+            result = modifier.modify_loss(logits, targets, modified_loss, **extra_kwargs)
+
+            # Support both scalar return and dict return with possible per_position_loss replacement
+            if isinstance(result, dict):
+                if 'per_position_loss' in result:
+                    per_position_loss = result['per_position_loss']
+                    per_position_loss_owned = True
+                if 'loss' in result and result['loss'] is not None:
+                    modified_loss = result['loss']
+            else:
+                modified_loss = result
+
+        # Aggregate only if a modifier produced/replaced per_position_loss and no later modifier
+        # provided a final scalar loss to use
+        if per_position_loss_owned:
+            mask = kwargs.get('mask', None)
+            if mask is not None:
+                mask_f = mask.float()
+                modified_loss = (per_position_loss * mask_f).sum() / (mask_f.sum() + 1e-8)
+            else:
+                modified_loss = per_position_loss.mean()
+
         return modified_loss
     
     def get_all_metrics(self) -> Dict[str, Any]:

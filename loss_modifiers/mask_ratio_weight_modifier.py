@@ -137,16 +137,15 @@ class MaskRatioWeightModifier(BaseLossModifier):
         # Always apply per-sequence weighting
         batch_size, seq_len, vocab_size = logits.shape
 
-        # Calculate loss per sequence
-        # Reshape for per-sample loss calculation
-        flat_logits = logits.view(-1, vocab_size)
-        flat_targets = targets.view(-1)
-
-        # Calculate per-position losses
-        per_position_loss = torch.nn.functional.cross_entropy(
-            flat_logits, flat_targets, reduction='none'
-        )
-        per_position_loss = per_position_loss.view(batch_size, seq_len)
+        # Use provided per-position loss if available; otherwise compute CE without ignore handling
+        per_position_loss = kwargs.get('per_position_loss', None)
+        if per_position_loss is None:
+            # Fallback: compute per-position CE
+            flat_logits = logits.view(-1, vocab_size)
+            flat_targets = targets.view(-1)
+            per_position_loss = torch.nn.functional.cross_entropy(
+                flat_logits, flat_targets, reduction='none'
+            ).view(batch_size, seq_len)
 
         # Apply mask and calculate per-sequence loss
         mask_f = mask.float()

@@ -32,23 +32,32 @@ class BaseLossModifier(ABC):
     
     @abstractmethod
     def modify_loss(
-        self, 
-        logits: torch.Tensor, 
-        targets: torch.Tensor, 
-        loss: torch.Tensor, 
+        self,
+        logits: torch.Tensor,
+        targets: torch.Tensor,
+        loss: torch.Tensor,
         **kwargs
-    ) -> torch.Tensor:
+    ) -> torch.Tensor | dict:
         """
         Apply the loss modification to the input loss.
-        
+
         Args:
             logits: Model output logits (batch_size, seq_len, vocab_size)
             targets: Target token IDs (batch_size, seq_len)
             loss: Original loss value (scalar tensor)
-            **kwargs: Additional arguments that may be needed by specific modifiers
-            
+            **kwargs: Additional arguments that may be needed by specific modifiers.
+                Common keys supported by the pipeline:
+                - per_position_loss: Optional (batch_size, seq_len) tensor with per-position losses
+                - mask: Optional boolean mask (batch_size, seq_len) of valid positions
+                - ignore_index: Optional int for ignored target positions
+
         Returns:
-            Modified loss tensor (scalar)
+            Either:
+            - A scalar tensor 'loss' (modified loss), or
+            - A dict that may contain:
+                {'loss': <scalar tensor>, 'per_position_loss': <(B,T) tensor>}.
+              Returning 'per_position_loss' indicates this modifier replaces the
+              per-position loss; the pipeline will aggregate it to a scalar at the end.
         """
         pass
     
