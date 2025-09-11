@@ -87,10 +87,7 @@ class EntropyModifier(BaseLossModifier):
         # Set entropy to 0 for positions where there are no wrong answers with significant probability
         entropy_per_token[~valid_positions] = 0.0
         
-        # Apply mask if provided
-        if mask is not None:
-            entropy_per_token = entropy_per_token * mask.float()
-        
+        # Do not apply mask here; return per-position entropies unmasked.
         return entropy_per_token
     
     def modify_loss(
@@ -119,13 +116,11 @@ class EntropyModifier(BaseLossModifier):
         # Calculate per-position entropy
         per_position_entropy = self._calculate_wrong_answer_entropy(logits, targets, mask)
         
-        # Store metrics
+        # Store metrics (masked mean if mask is provided)
         if mask is not None:
-            valid_positions = mask.float().sum()
-            if valid_positions > 0:
-                mean_entropy = (per_position_entropy * mask.float()).sum() / valid_positions
-            else:
-                mean_entropy = torch.tensor(0.0, device=logits.device)
+            mask_f = mask.float()
+            valid_positions = mask_f.sum()
+            mean_entropy = (per_position_entropy * mask_f).sum() / (valid_positions + self.eps)
         else:
             mean_entropy = per_position_entropy.mean()
         
@@ -139,7 +134,8 @@ class EntropyModifier(BaseLossModifier):
         # Always apply entropy-based dynamic weighting
         # Calculate per-sample average entropy
         if mask is not None:
-            sample_entropy = (per_position_entropy * mask.float()).sum(dim=1) / (mask.float().sum(dim=1) + self.eps)
+            mask_f = mask.float()
+            sample_entropy = (per_position_entropy * mask_f).sum(dim=1) / (mask_f.sum(dim=1) + self.eps)
         else:
             sample_entropy = per_position_entropy.mean(dim=1)
 
