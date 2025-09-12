@@ -36,12 +36,15 @@ class EntropyModifier(BaseLossModifier):
             weight (float): Weight factor for entropy-based loss modification (default: 1.0)
             entropy_threshold (float): Minimum normalized entropy floor for weighting (default: 0.0, range: [0,1])
             eps (float): Small value to prevent log(0) in entropy calculation (default: 1e-8)
+            verbose (bool): Enable verbose logging of calculation irregularities (default: False)
         """
         super().__init__(config)
         self.weight = config.get('weight', 1.0)
         self.entropy_threshold = config.get('entropy_threshold', 0.0)
         self.eps = config.get('eps', 1e-8)
-        print(f"EntropyModifier: weight={self.weight}, entropy_threshold={self.entropy_threshold}, eps={self.eps}")
+        self.verbose = config.get('verbose', False)
+        self.verbose = False
+        print(f"EntropyModifier: weight={self.weight}, entropy_threshold={self.entropy_threshold}, eps={self.eps}, verbose={self.verbose}")
     
     def _calculate_wrong_answer_entropy(
         self,
@@ -70,20 +73,79 @@ class EntropyModifier(BaseLossModifier):
         # Convert logits to probabilities
         probs = F.softmax(logits, dim=-1)  # (batch_size, seq_len, vocab_size)
         
-        # Create mask for wrong answers
+        # Create mask for wrong answers - with bounds checking
         target_mask = torch.zeros_like(probs, dtype=torch.bool)
-        target_mask.scatter_(-1, targets.unsqueeze(-1), True)  # Mark correct answers
+        
+        # Check for out-of-bounds target indices that cause scatter errors
+        # Note: ignore_index (typically -100) should be handled separately
+        ignore_index = getattr(self, 'ignore_index', -100)  # Default PyTorch ignore index
+        
+        # Mask for positions that should be ignored (like padding)
+        ignore_mask = targets == ignore_index
+        
+        # Mask for valid target indices in vocabulary range
+        vocab_valid = (targets >= 0) & (targets < vocab_size)
+        
+        # Overall valid targets: either ignore_index OR valid vocab index
+        valid_targets = ignore_mask | vocab_valid
+        invalid_target_count = (~valid_targets).sum().item()
+        
+        if invalid_target_count > 0 or self.verbose:
+            min_target = targets.min().item()
+            max_target = targets.max().item()
+            
+            # Analyze target distribution for character-level debugging
+            unique_targets = targets.unique()
+            negative_targets = (targets < 0).sum().item()
+            too_high_targets = (targets >= vocab_size).sum().item()
+            ignore_targets = (targets == ignore_index).sum().item()
+            
+            print(f"[EntropyModifier] Target Analysis:")
+            print(f"  Target range: [{min_target}, {max_target}] vs model vocab_size: {vocab_size}")
+            print(f"  Invalid targets: {invalid_target_count} total")
+            print(f"  - Negative targets: {negative_targets}")  
+            print(f"  - Too high (>= {vocab_size}): {too_high_targets}")
+            print(f"  - Ignore index ({ignore_index}): {ignore_targets}")
+            print(f"  - Unique target values: {len(unique_targets)} distinct")
+            
+            if len(unique_targets) <= 20:  # Show actual values if reasonable
+                print(f"  - Unique values: {sorted(unique_targets.tolist())}")
+            
+            # Check if this looks like vocab size mismatch
+            if max_target < vocab_size // 10:  # Character vocab much smaller than model vocab
+                print(f"  - LIKELY ISSUE: Character vocab (~{max_target}) vs large model vocab ({vocab_size})")
+                print(f"  - Consider resizing model vocabulary or using correct config")
+            
+            # For scatter operation, replace invalid indices with valid ones (we'll mask them out later)
+            # Clamp any out-of-bounds targets to vocab_size-1 (last valid index)
+            safe_targets = torch.clamp(targets, min=0, max=vocab_size-1)
+            # But keep ignore_index as 0 for scatter (will be masked out anyway)  
+            safe_targets = torch.where(ignore_mask, torch.zeros_like(targets), safe_targets)
+        else:
+            safe_targets = torch.where(~ignore_mask, targets, torch.zeros_like(targets))
+            
+        target_mask.scatter_(-1, safe_targets.unsqueeze(-1), True)  # Mark correct answers
         
         # Zero out probabilities of correct answers to focus on wrong answer distribution
         wrong_probs = probs.clone()
-        wrong_probs[target_mask] = 0.0
+        # Only zero out target probabilities for valid (non-ignored) positions AND non-mask-token targets
+        valid_vocab_positions = ~ignore_mask  # Positions that are not ignore_index
+        
+        # For mask tokens (targets >= vocab_size), we might want different handling
+        # For now, treat them like regular targets but handle bounds safely
+        wrong_probs[target_mask & valid_vocab_positions.unsqueeze(-1)] = 0.0
         
         # Renormalize to get distribution over wrong answers only
         wrong_prob_sum = wrong_probs.sum(dim=-1, keepdim=True)  # (batch_size, seq_len, 1)
         
-        # Avoid division by zero - if all probability is on correct answer, entropy is 0
-        valid_positions = wrong_prob_sum.squeeze(-1) > self.eps  # (batch_size, seq_len)
+        # Valid positions for entropy calculation: non-ignored AND have wrong answer probability
+        valid_positions = valid_vocab_positions & (wrong_prob_sum.squeeze(-1) > self.eps)
         wrong_probs = wrong_probs / (wrong_prob_sum + self.eps)
+        
+        if self.verbose:
+            invalid_count = (~valid_positions).sum().item()
+            if invalid_count > 0:
+                print(f"[EntropyModifier] {invalid_count}/{valid_positions.numel()} positions have no significant wrong answer probability")
         
         # Calculate entropy: H = -sum(p * log(p))
         # Add epsilon to prevent log(0)
@@ -93,10 +155,34 @@ class EntropyModifier(BaseLossModifier):
         # Normalize entropy to make it vocabulary-size independent
         # Count number of wrong tokens with non-negligible probability
         num_wrong_tokens = (wrong_probs > self.eps).sum(dim=-1).float()  # (batch_size, seq_len)
-        max_possible_entropy = torch.log(num_wrong_tokens + self.eps)  # Maximum entropy for uniform distribution
+        
+        # Safe normalization: only normalize when there are 2+ wrong tokens
+        # When num_wrong_tokens <= 1, entropy should be 0 (no diversity possible)
+        safe_mask = num_wrong_tokens > 1.0  # Only positions with 2+ wrong tokens can have entropy > 0
+        max_possible_entropy = torch.log(torch.clamp(num_wrong_tokens, min=2.0))  # Clamp to avoid log(0) and log(1)
+        
+        if self.verbose:
+            unsafe_count = (~safe_mask).sum().item()
+            if unsafe_count > 0:
+                print(f"[EntropyModifier] {unsafe_count}/{safe_mask.numel()} positions have ≤1 wrong token (entropy forced to 0)")
         
         # Normalized entropy: ranges from 0 (concentrated) to 1 (uniform)
-        entropy_per_token = raw_entropy / (max_possible_entropy + self.eps)  # (batch_size, seq_len)
+        entropy_per_token = torch.zeros_like(raw_entropy)  # Start with zeros
+        entropy_per_token[safe_mask] = raw_entropy[safe_mask] / max_possible_entropy[safe_mask]  # Only normalize valid positions
+        
+        # Additional safety: clamp normalized entropy to [0, 1] and handle any NaN/inf
+        pre_clamp_entropy = entropy_per_token.clone()
+        entropy_per_token = torch.clamp(entropy_per_token, min=0.0, max=1.0)
+        non_finite_mask = ~torch.isfinite(entropy_per_token)
+        entropy_per_token = torch.where(torch.isfinite(entropy_per_token), entropy_per_token, torch.zeros_like(entropy_per_token))
+        
+        if self.verbose:
+            clamped_count = ((pre_clamp_entropy < 0) | (pre_clamp_entropy > 1)).sum().item()
+            non_finite_count = non_finite_mask.sum().item()
+            if clamped_count > 0:
+                print(f"[EntropyModifier] {clamped_count} entropy values were clamped to [0,1] range")
+            if non_finite_count > 0:
+                print(f"[EntropyModifier] WARNING: {non_finite_count} non-finite entropy values detected and set to 0")
         
         # Set entropy to 0 for positions where there are no wrong answers with significant probability
         entropy_per_token[~valid_positions] = 0.0
@@ -130,7 +216,7 @@ class EntropyModifier(BaseLossModifier):
         # Calculate per-position entropy
         per_position_entropy = self._calculate_wrong_answer_entropy(logits, targets, mask)
         
-        # Store metrics (masked mean if mask is provided)
+        # Store metrics (masked mean if mask is provided) - with safety checks
         if mask is not None:
             mask_f = mask.float()
             valid_positions = mask_f.sum()
@@ -138,11 +224,29 @@ class EntropyModifier(BaseLossModifier):
         else:
             mean_entropy = per_position_entropy.mean()
         
+        # Safety checks for metrics to prevent CUDA errors
+        mean_entropy_orig = mean_entropy.clone()
+        mean_entropy = torch.clamp(mean_entropy, min=0.0, max=1.0)
+        if not torch.isfinite(mean_entropy):
+            if self.verbose:
+                print(f"[EntropyModifier] WARNING: Non-finite mean_entropy detected, set to 0")
+            mean_entropy = torch.tensor(0.0, device=mean_entropy.device)
+        elif self.verbose and not torch.allclose(mean_entropy, mean_entropy_orig):
+            print(f"[EntropyModifier] Mean entropy clamped: {mean_entropy_orig.item():.6f} -> {mean_entropy.item():.6f}")
+            
+        max_entropy = torch.clamp(per_position_entropy.max(), min=0.0, max=1.0)
+        min_entropy = torch.clamp(per_position_entropy.min(), min=0.0, max=1.0)
+        entropy_std = per_position_entropy.std()
+        if not torch.isfinite(entropy_std):
+            if self.verbose:
+                print(f"[EntropyModifier] WARNING: Non-finite entropy_std detected, set to 0")
+            entropy_std = torch.tensor(0.0, device=entropy_std.device)
+        
         self._metrics = {
             'mean_entropy': mean_entropy.item(),
-            'max_entropy': per_position_entropy.max().item(),
-            'min_entropy': per_position_entropy.min().item(),
-            'entropy_std': per_position_entropy.std().item(),
+            'max_entropy': max_entropy.item(),
+            'min_entropy': min_entropy.item(),
+            'entropy_std': entropy_std.item(),
         }
         
         # Always apply entropy-based dynamic weighting at per-sample level.
@@ -155,8 +259,33 @@ class EntropyModifier(BaseLossModifier):
 
         # Compute per-sample weights: lower entropy -> higher weight (punish concentrated wrong answers)
         # w_i = weight * 1 / (clamp(H_i, min=threshold) + eps)
+        # Add safety: ensure sample_entropy is finite and in [0,1] range
+        sample_entropy_orig = sample_entropy.clone()
+        sample_entropy = torch.clamp(sample_entropy, min=0.0, max=1.0)
+        non_finite_samples = ~torch.isfinite(sample_entropy_orig)
+        sample_entropy = torch.where(torch.isfinite(sample_entropy), sample_entropy, torch.zeros_like(sample_entropy))
+        
+        if self.verbose:
+            clamped_samples = ((sample_entropy_orig < 0) | (sample_entropy_orig > 1)).sum().item()
+            non_finite_samples_count = non_finite_samples.sum().item()
+            if clamped_samples > 0:
+                print(f"[EntropyModifier] {clamped_samples} per-sample entropies clamped to [0,1]")
+            if non_finite_samples_count > 0:
+                print(f"[EntropyModifier] WARNING: {non_finite_samples_count} non-finite per-sample entropies set to 0")
+        
         clamped_entropy = torch.clamp(sample_entropy, min=self.entropy_threshold)
         per_sample_weights = self.weight / (clamped_entropy + self.eps)
+        
+        # Safety: clamp weights to reasonable range to prevent extreme values
+        weights_orig = per_sample_weights.clone()
+        per_sample_weights = torch.clamp(per_sample_weights, min=self.eps, max=1000.0)
+        
+        if self.verbose:
+            extreme_weights = ((weights_orig < self.eps) | (weights_orig > 1000.0)).sum().item()
+            if extreme_weights > 0:
+                print(f"[EntropyModifier] {extreme_weights} extreme per-sample weights clamped to [{self.eps:.2e}, 1000.0]")
+            min_weight, max_weight = per_sample_weights.min().item(), per_sample_weights.max().item()
+            print(f"[EntropyModifier] Per-sample weights range: [{min_weight:.4f}, {max_weight:.4f}]")
 
         # Obtain per-position loss to aggregate per-sample
         per_position_loss = kwargs.get('per_position_loss', None)
@@ -177,12 +306,55 @@ class EntropyModifier(BaseLossModifier):
         # Apply per-sample weights and average over batch
         weighted_losses = per_sample_loss * per_sample_weights
         final_loss = weighted_losses.mean()
+        
+        if self.verbose:
+            original_loss_val = loss.item() if hasattr(loss, 'item') else float(loss)
+            final_loss_val = final_loss.item() if torch.isfinite(final_loss) else float('nan')
+            loss_ratio = final_loss_val / original_loss_val if original_loss_val != 0 and torch.isfinite(final_loss) else float('nan')
+            print(f"[EntropyModifier] Loss modification: {original_loss_val:.6f} -> {final_loss_val:.6f} (ratio: {loss_ratio:.4f})")
+        
+        # Safety check for final loss
+        if not torch.isfinite(final_loss):
+            if self.verbose:
+                print(f"[EntropyModifier] WARNING: Non-finite final loss detected, falling back to original loss")
+            else:
+                print(f"WARNING: EntropyModifier produced non-finite loss, falling back to original loss")
+            final_loss = loss
 
-        # Metrics
-        self._metrics['mean_entropy'] = sample_entropy.mean().item()
-        self._metrics['min_entropy'] = sample_entropy.min().item()
-        self._metrics['max_entropy'] = sample_entropy.max().item()
-        self._metrics['entropy_weight_mean'] = per_sample_weights.mean().item()
+        # Metrics with safety checks
+        mean_sample_entropy = sample_entropy.mean()
+        min_sample_entropy = sample_entropy.min()  
+        max_sample_entropy = sample_entropy.max()
+        mean_weights = per_sample_weights.mean()
+        
+        # Ensure all metrics are finite before converting to items
+        metrics_fixed = 0
+        if not torch.isfinite(mean_sample_entropy):
+            self._metrics['mean_entropy'] = 0.0
+            metrics_fixed += 1
+        else:
+            self._metrics['mean_entropy'] = mean_sample_entropy.item()
+            
+        if not torch.isfinite(min_sample_entropy):
+            self._metrics['min_entropy'] = 0.0
+            metrics_fixed += 1
+        else:
+            self._metrics['min_entropy'] = min_sample_entropy.item()
+            
+        if not torch.isfinite(max_sample_entropy):
+            self._metrics['max_entropy'] = 0.0
+            metrics_fixed += 1
+        else:
+            self._metrics['max_entropy'] = max_sample_entropy.item()
+            
+        if not torch.isfinite(mean_weights):
+            self._metrics['entropy_weight_mean'] = 1.0
+            metrics_fixed += 1
+        else:
+            self._metrics['entropy_weight_mean'] = mean_weights.item()
+        
+        if self.verbose and metrics_fixed > 0:
+            print(f"[EntropyModifier] WARNING: {metrics_fixed} metrics were non-finite and corrected")
 
         return final_loss
     

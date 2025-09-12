@@ -88,4 +88,4 @@ entropy_modifier_weight = 0.3
 entropy_modifier_threshold = 0.1 
 # loss multiplier in range of [0.3, 3]
 entropy_modifier_eps = 1e-8
-
+entropy_modifier_verbose = True

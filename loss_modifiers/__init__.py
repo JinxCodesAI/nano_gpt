@@ -61,6 +61,7 @@ def create_loss_modifier_pipeline(config):
     if entropy_enabled:
         entropy_config = {
             'enabled': True,
+            'verbose': get_config_value('entropy_modifier_verbose', False),
             'weight': get_config_value('entropy_modifier_weight', 1.0),
             'entropy_threshold': get_config_value('entropy_modifier_threshold', 0.0),
             'eps': get_config_value('entropy_modifier_eps', 1e-8),

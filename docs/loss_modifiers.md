@@ -46,6 +46,7 @@ Parameters (from config or CLI):
 - entropy_modifier_weight (float, default 1.0): Base factor in the per-sample multiplier.
 - entropy_modifier_threshold (float, default 0.0): Minimum normalized entropy floor when computing per-sample multipliers (range: [0,1]).
 - entropy_modifier_eps (float, default 1e-8): Numerical stability for logs/divisions.
+- entropy_modifier_verbose (bool, default False): Enable verbose logging of calculation irregularities and safety corrections.
 
 Configuration example:
 ```python
@@ -55,6 +56,7 @@ entropy_modifier_enabled = True
 entropy_modifier_weight = 0.1
 entropy_modifier_threshold = 0.0
 entropy_modifier_eps = 1e-8
+entropy_modifier_verbose = False  # Set to True for debugging
 ```
 
 Mechanics (how it works):
@@ -85,6 +87,26 @@ Logged metrics:
 - entropy_weight_mean: Mean per-sample weight multiplier derived from normalized entropy.
 
 **All entropy metrics are now vocabulary-size independent and bounded in [0,1].**
+
+### Verbose Mode Debug Logging
+
+Enable verbose logging with `entropy_modifier_verbose = True` to monitor calculation irregularities:
+
+```python
+entropy_modifier_verbose = True  # Enable detailed logging
+```
+
+Verbose mode reports:
+- **Positions with no wrong answer probability**: When model is extremely confident 
+- **Positions with ≤1 wrong token**: Cannot compute meaningful entropy (forced to 0)
+- **Entropy values clamped**: Values outside [0,1] range corrected
+- **Non-finite values detected**: NaN/inf values replaced with safe defaults
+- **Per-sample weight ranges**: Min/max weights applied to loss samples
+- **Extreme weights clamped**: Very high/low weights bounded to reasonable range
+- **Loss modification ratios**: Before/after loss comparison
+- **Non-finite metrics corrected**: Safety fallbacks for logging values
+
+Use verbose mode during development to ensure entropy calculation behaves as expected.
 
 Worked example:
 Suppose batch_size=2, seq_len=2, vocab_size=4. Targets = [[2, 1], [0, 3]]. Consider the first token of sample 1 with logits [2.0, 1.0, 4.0, 0.5] and target=2.
