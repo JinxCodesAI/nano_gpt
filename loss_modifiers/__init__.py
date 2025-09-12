@@ -45,18 +45,10 @@ def create_loss_modifier_pipeline(config):
     # Helper function to get config value
     def get_config_value(key, default=None):
         if hasattr(config, key):
-            value = getattr(config, key)
-            if key == 'target_smoothing_special_tokens':
-                print(f"DEBUG: Found {key} via hasattr: {value}")
-            return value
+            return getattr(config, key)
         elif isinstance(config, dict):
-            value = config.get(key, default)
-            if key == 'target_smoothing_special_tokens':
-                print(f"DEBUG: Found {key} via dict.get: {value}")
-            return value
+            return config.get(key, default)
         else:
-            if key == 'target_smoothing_special_tokens':
-                print(f"DEBUG: {key} not found, using default: {default}")
             return default
     
     # Check if any modifiers are enabled
@@ -79,8 +71,19 @@ def create_loss_modifier_pipeline(config):
     # Target Smoothing Modifier
     smoothing_enabled = get_config_value('target_smoothing_enabled', False)
     if smoothing_enabled:
-        special_tokens = get_config_value('target_smoothing_special_tokens', [])
-        print(f"DEBUG: target_smoothing_special_tokens = {special_tokens}")
+        special_tokens_raw = get_config_value('target_smoothing_special_tokens', [])
+        
+        # Parse special tokens - handle both list and comma-delimited string formats
+        if isinstance(special_tokens_raw, str):
+            if special_tokens_raw.strip():
+                special_tokens = [int(x.strip()) for x in special_tokens_raw.split(',')]
+            else:
+                special_tokens = []
+        elif isinstance(special_tokens_raw, list):
+            special_tokens = special_tokens_raw
+        else:
+            special_tokens = []
+        
         smoothing_config = {
             'enabled': True,
             'smoothing_factor': get_config_value('target_smoothing_factor', 0.1),

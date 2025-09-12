@@ -90,9 +90,16 @@ entropy_modifier_threshold = 0.1
 entropy_modifier_eps = 1e-8
 entropy_modifier_verbose = True
 
+# Target smoothing config - MUST be after composition config loading
 target_smoothing_enabled = True
 target_smoothing_factor = 0.1                    # Smoothing strength (0.0 = no smoothing)
-target_smoothing_special_tokens = [65]             # Token IDs to exclude from smoothing
+target_smoothing_special_tokens = "65"             # Comma delimited Token IDs to exclude from smoothing
 target_smoothing_exclude_padding = True          # Exclude padding from loss
 target_smoothing_padding_token = -100            # Padding token ID
+
+mask_ratio_weight_enabled = True
+mask_ratio_weight_power = 0.5        # Square root inverse weighting
+mask_ratio_weight_min_weight = 0.1   # Prevent extreme deweighting
+mask_ratio_weight_max_weight = 10.0  # Prevent extreme upweighting  
+mask_ratio_weight_eps = 1e-8         # Numerical stability
 

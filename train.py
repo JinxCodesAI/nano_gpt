@@ -99,7 +99,7 @@ mask_ratio_weight_min = 0.1 # minimum weight to prevent extreme values
 mask_ratio_weight_max = 10.0 # maximum weight to prevent extreme values
 mask_ratio_weight_eps = 1e-8 # small value to prevent division by zero
 # -----------------------------------------------------------------------------
-config_keys = [k for k,v in globals().items() if not k.startswith('_') and isinstance(v, (int, float, bool, str))]
+config_keys = [k for k,v in globals().items() if not k.startswith('_') and isinstance(v, (int, float, bool, str, list))]
 exec(open('configurator.py').read()) # overrides from command line or config file
 from config.validator import validate_config
 validate_config(globals())
