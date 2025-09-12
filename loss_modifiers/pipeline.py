@@ -7,6 +7,7 @@ for the training loop and handles metric collection from all modifiers.
 """
 
 from typing import List, Dict, Any, Optional
+from contextlib import contextmanager
 import torch
 from .base import BaseLossModifier
 
@@ -29,6 +30,7 @@ class LossModifierPipeline:
         """
         self.modifiers = modifiers or []
         self._enabled_modifiers = []
+        self._temporarily_disabled = False
         self._update_enabled_modifiers()
     
     def add_modifier(self, modifier: BaseLossModifier) -> None:
@@ -66,8 +68,8 @@ class LossModifierPipeline:
         Returns:
             Modified loss tensor after applying all enabled modifiers
         """
-        # If no enabled modifiers, return original loss (zero overhead)
-        if not self._enabled_modifiers:
+        # If no enabled modifiers or temporarily disabled, return original loss (zero overhead)
+        if not self._enabled_modifiers or self._temporarily_disabled:
             return loss
 
         # Track optional per-position loss tensor through the pipeline
@@ -132,3 +134,37 @@ class LossModifierPipeline:
     def get_enabled_modifier_names(self) -> List[str]:
         """Get names of all enabled modifiers for logging."""
         return [mod.__class__.__name__ for mod in self._enabled_modifiers]
+    
+    @contextmanager
+    def temporarily_disabled(self):
+        """
+        Context manager to temporarily disable all loss modifiers.
+        
+        This is useful during validation/evaluation to ensure consistent 
+        baseline loss calculations that aren't affected by training-specific
+        loss modifications.
+        
+        Usage:
+            with loss_modifier_pipeline.temporarily_disabled():
+                logits, loss = model(X, Y, loss_modifiers=loss_modifier_pipeline)
+                # loss will be unmodified standard cross-entropy
+        """
+        old_state = self._temporarily_disabled
+        self._temporarily_disabled = True
+        try:
+            yield
+        finally:
+            self._temporarily_disabled = old_state
+    
+    def set_temporarily_disabled(self, disabled: bool) -> None:
+        """
+        Manually set the temporarily disabled state.
+        
+        Args:
+            disabled: If True, all modifiers will be bypassed until set to False
+        """
+        self._temporarily_disabled = disabled
+    
+    def is_temporarily_disabled(self) -> bool:
+        """Check if the pipeline is temporarily disabled."""
+        return self._temporarily_disabled

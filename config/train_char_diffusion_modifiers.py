@@ -83,6 +83,7 @@ ignore_index = -100  # Default PyTorch ignore index
 # block_size = 128
 
 loss_modifiers_enabled = True
+
 entropy_modifier_enabled = True
 entropy_modifier_weight = 0.3
 entropy_modifier_threshold = 0.1 

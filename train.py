@@ -239,14 +239,18 @@ if ddp:
 def estimate_loss():
     out = {}
     model.eval()
-    for split in ['train', 'val']:
-        losses = torch.zeros(eval_iters)
-        for k in range(eval_iters):
-            X, Y = consumer.get_batch(split, device)
-            with ctx:
-                logits, loss = model(X, Y, loss_modifiers=loss_modifier_pipeline)
-            losses[k] = loss.item()
-        out[split] = losses.mean()
+    
+    # Temporarily disable loss modifiers during evaluation to get comparable baseline metrics
+    with loss_modifier_pipeline.temporarily_disabled():
+        for split in ['train', 'val']:
+            losses = torch.zeros(eval_iters)
+            for k in range(eval_iters):
+                X, Y = consumer.get_batch(split, device)
+                with ctx:
+                    logits, loss = model(X, Y, loss_modifiers=loss_modifier_pipeline)
+                losses[k] = loss.item()
+            out[split] = losses.mean()
+    
     model.train()
     return out
 
