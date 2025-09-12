@@ -242,11 +242,12 @@ class EntropyModifier(BaseLossModifier):
                 print(f"[EntropyModifier] WARNING: Non-finite entropy_std detected, set to 0")
             entropy_std = torch.tensor(0.0, device=entropy_std.device)
         
+        # Initialize metrics dict - will be completed at end of modify_loss
         self._metrics = {
-            'mean_entropy': mean_entropy.item(),
-            'max_entropy': max_entropy.item(),
-            'min_entropy': min_entropy.item(),
-            'entropy_std': entropy_std.item(),
+            'per_position_mean_entropy': mean_entropy.item(),
+            'per_position_max_entropy': max_entropy.item(),
+            'per_position_min_entropy': min_entropy.item(),
+            'per_position_entropy_std': entropy_std.item(),
         }
         
         # Always apply entropy-based dynamic weighting at per-sample level.
@@ -280,12 +281,19 @@ class EntropyModifier(BaseLossModifier):
         weights_orig = per_sample_weights.clone()
         per_sample_weights = torch.clamp(per_sample_weights, min=self.eps, max=1000.0)
         
+        # Normalize weights to preserve batch mean: sum(weights) = batch_size
+        batch_size = per_sample_weights.size(0)
+        weight_sum = per_sample_weights.sum()
+        per_sample_weights = per_sample_weights * (batch_size / (weight_sum + self.eps))
+        
         if self.verbose:
             extreme_weights = ((weights_orig < self.eps) | (weights_orig > 1000.0)).sum().item()
             if extreme_weights > 0:
                 print(f"[EntropyModifier] {extreme_weights} extreme per-sample weights clamped to [{self.eps:.2e}, 1000.0]")
             min_weight, max_weight = per_sample_weights.min().item(), per_sample_weights.max().item()
+            normalized_sum = per_sample_weights.sum().item()
             print(f"[EntropyModifier] Per-sample weights range: [{min_weight:.4f}, {max_weight:.4f}]")
+            print(f"[EntropyModifier] Normalized weight sum: {normalized_sum:.4f} (target: {batch_size})")
 
         # Obtain per-position loss to aggregate per-sample
         per_position_loss = kwargs.get('per_position_loss', None)
@@ -307,51 +315,96 @@ class EntropyModifier(BaseLossModifier):
         weighted_losses = per_sample_loss * per_sample_weights
         final_loss = weighted_losses.mean()
         
+        # Calculate loss metrics
+        original_loss_val = loss.item() if hasattr(loss, 'item') else float(loss)
+        final_loss_val = final_loss.item() if torch.isfinite(final_loss) else float('nan')
+        loss_ratio = final_loss_val / original_loss_val if original_loss_val != 0 and torch.isfinite(final_loss) else float('nan')
+        
         if self.verbose:
-            original_loss_val = loss.item() if hasattr(loss, 'item') else float(loss)
-            final_loss_val = final_loss.item() if torch.isfinite(final_loss) else float('nan')
-            loss_ratio = final_loss_val / original_loss_val if original_loss_val != 0 and torch.isfinite(final_loss) else float('nan')
             print(f"[EntropyModifier] Loss modification: {original_loss_val:.6f} -> {final_loss_val:.6f} (ratio: {loss_ratio:.4f})")
         
         # Safety check for final loss
+        loss_fallback = False
         if not torch.isfinite(final_loss):
             if self.verbose:
                 print(f"[EntropyModifier] WARNING: Non-finite final loss detected, falling back to original loss")
             else:
                 print(f"WARNING: EntropyModifier produced non-finite loss, falling back to original loss")
             final_loss = loss
+            loss_fallback = True
 
-        # Metrics with safety checks
+        # Complete metrics with per-sample and weight statistics
         mean_sample_entropy = sample_entropy.mean()
         min_sample_entropy = sample_entropy.min()  
         max_sample_entropy = sample_entropy.max()
+        sample_entropy_std = sample_entropy.std()
         mean_weights = per_sample_weights.mean()
+        min_weights = per_sample_weights.min()
+        max_weights = per_sample_weights.max()
+        weight_std = per_sample_weights.std()
         
-        # Ensure all metrics are finite before converting to items
+        # Add comprehensive metrics (preserving the per-position ones from earlier)
         metrics_fixed = 0
-        if not torch.isfinite(mean_sample_entropy):
-            self._metrics['mean_entropy'] = 0.0
-            metrics_fixed += 1
+        
+        # Per-sample entropy stats
+        if torch.isfinite(mean_sample_entropy):
+            self._metrics['sample_mean_entropy'] = mean_sample_entropy.item()
         else:
-            self._metrics['mean_entropy'] = mean_sample_entropy.item()
+            self._metrics['sample_mean_entropy'] = 0.0
+            metrics_fixed += 1
             
-        if not torch.isfinite(min_sample_entropy):
-            self._metrics['min_entropy'] = 0.0
-            metrics_fixed += 1
+        if torch.isfinite(min_sample_entropy):
+            self._metrics['sample_min_entropy'] = min_sample_entropy.item()
         else:
-            self._metrics['min_entropy'] = min_sample_entropy.item()
+            self._metrics['sample_min_entropy'] = 0.0
+            metrics_fixed += 1
             
-        if not torch.isfinite(max_sample_entropy):
-            self._metrics['max_entropy'] = 0.0
-            metrics_fixed += 1
+        if torch.isfinite(max_sample_entropy):
+            self._metrics['sample_max_entropy'] = max_sample_entropy.item()
         else:
-            self._metrics['max_entropy'] = max_sample_entropy.item()
+            self._metrics['sample_max_entropy'] = 0.0
+            metrics_fixed += 1
             
-        if not torch.isfinite(mean_weights):
-            self._metrics['entropy_weight_mean'] = 1.0
-            metrics_fixed += 1
+        if torch.isfinite(sample_entropy_std):
+            self._metrics['sample_entropy_std'] = sample_entropy_std.item()
         else:
-            self._metrics['entropy_weight_mean'] = mean_weights.item()
+            self._metrics['sample_entropy_std'] = 0.0
+            metrics_fixed += 1
+        
+        # Weight statistics
+        if torch.isfinite(mean_weights):
+            self._metrics['weight_mean'] = mean_weights.item()
+        else:
+            self._metrics['weight_mean'] = 1.0
+            metrics_fixed += 1
+            
+        if torch.isfinite(min_weights):
+            self._metrics['weight_min'] = min_weights.item()
+        else:
+            self._metrics['weight_min'] = 1.0
+            metrics_fixed += 1
+            
+        if torch.isfinite(max_weights):
+            self._metrics['weight_max'] = max_weights.item()
+        else:
+            self._metrics['weight_max'] = 1.0
+            metrics_fixed += 1
+            
+        if torch.isfinite(weight_std):
+            self._metrics['weight_std'] = weight_std.item()
+        else:
+            self._metrics['weight_std'] = 0.0
+            metrics_fixed += 1
+        
+        # Loss modification metrics
+        self._metrics['original_loss'] = original_loss_val
+        self._metrics['final_loss'] = final_loss_val if not loss_fallback else original_loss_val
+        self._metrics['loss_ratio'] = loss_ratio if not loss_fallback else 1.0
+        self._metrics['loss_fallback'] = loss_fallback
+        
+        # Batch statistics 
+        self._metrics['batch_size'] = batch_size
+        self._metrics['weight_sum'] = per_sample_weights.sum().item()
         
         if self.verbose and metrics_fixed > 0:
             print(f"[EntropyModifier] WARNING: {metrics_fixed} metrics were non-finite and corrected")

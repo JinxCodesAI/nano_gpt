@@ -89,3 +89,10 @@ entropy_modifier_threshold = 0.1
 # loss multiplier in range of [0.3, 3]
 entropy_modifier_eps = 1e-8
 entropy_modifier_verbose = True
+
+target_smoothing_enabled = True
+target_smoothing_factor = 0.1                    # Smoothing strength (0.0 = no smoothing)
+target_smoothing_special_tokens = [65]             # Token IDs to exclude from smoothing
+target_smoothing_exclude_padding = True          # Exclude padding from loss
+target_smoothing_padding_token = -100            # Padding token ID
+

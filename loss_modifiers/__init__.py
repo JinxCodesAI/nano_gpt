@@ -45,10 +45,18 @@ def create_loss_modifier_pipeline(config):
     # Helper function to get config value
     def get_config_value(key, default=None):
         if hasattr(config, key):
-            return getattr(config, key)
+            value = getattr(config, key)
+            if key == 'target_smoothing_special_tokens':
+                print(f"DEBUG: Found {key} via hasattr: {value}")
+            return value
         elif isinstance(config, dict):
-            return config.get(key, default)
+            value = config.get(key, default)
+            if key == 'target_smoothing_special_tokens':
+                print(f"DEBUG: Found {key} via dict.get: {value}")
+            return value
         else:
+            if key == 'target_smoothing_special_tokens':
+                print(f"DEBUG: {key} not found, using default: {default}")
             return default
     
     # Check if any modifiers are enabled
@@ -71,10 +79,12 @@ def create_loss_modifier_pipeline(config):
     # Target Smoothing Modifier
     smoothing_enabled = get_config_value('target_smoothing_enabled', False)
     if smoothing_enabled:
+        special_tokens = get_config_value('target_smoothing_special_tokens', [])
+        print(f"DEBUG: target_smoothing_special_tokens = {special_tokens}")
         smoothing_config = {
             'enabled': True,
             'smoothing_factor': get_config_value('target_smoothing_factor', 0.1),
-            'special_token_ids': get_config_value('target_smoothing_special_tokens', []),
+            'special_token_ids': special_tokens,
             'exclude_padding': get_config_value('target_smoothing_exclude_padding', True),
             'padding_token_id': get_config_value('target_smoothing_padding_token', -100),
         }

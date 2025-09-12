@@ -67,26 +67,51 @@ Mechanics (how it works):
 5) If a mask is provided, per‑position normalized entropies are masked accordingly.
 6) Compute per‑sample entropy as the mean (or masked mean) across positions.
 7) Compute per-sample weights w_i = entropy_modifier_weight / (clamp(H_i, min=entropy_threshold) + eps).
-8) Aggregate per-position loss to per-sample loss and multiply by w_i; final loss is mean over samples.
+8) **Normalize weights to preserve batch mean**: Scale weights so sum(w_i) = batch_size.
+9) Aggregate per-position loss to per-sample loss and multiply by w_i; final loss is mean over samples.
 
 Per-sample illustration (sample weights):
 Assume batch size = 4, per-sample **normalized** entropies after per-position averaging are H = [0.2, 0.6, 1.0, 0.4], threshold=0.5, weight=1.0.
 - Clamped entropies: H* = [0.5, 0.6, 1.0, 0.5]
-- Per-sample weights w = 1 / (H* + eps) ≈ [2.0, 1.667, 1.0, 2.0]
+- Raw weights w_raw = 1 / (H* + eps) ≈ [2.0, 1.667, 1.0, 2.0] 
+- Sum of raw weights: 6.667
+- **Normalized weights**: w = w_raw × (4 / 6.667) ≈ [1.2, 1.0, 0.6, 1.2] (sum = 4.0)
 - Final loss = mean_i(w_i * L_i) where L_i is the per-sample masked mean loss.
 
-**Note**: With normalized entropy, these values are now comparable across different vocabulary sizes.
+**Note**: Weight normalization preserves the original batch mean while applying entropy-based reweighting.
 
 
 What is entropy_modifier_threshold?
 - entropy_modifier_threshold: A floor applied during dynamic weighting to prevent very small normalized entropies from collapsing the weight. It clamps each per‑sample entropy to at least this value (range [0,1]) before averaging. Now vocabulary-size independent!
 
 Logged metrics:
-- mean_entropy: Mean per‑position **normalized** wrong‑answer entropy [0,1] (masked if provided).
-- max_entropy, min_entropy, entropy_std: Range and variability of normalized entropies [0,1].
-- entropy_weight_mean: Mean per-sample weight multiplier derived from normalized entropy.
 
-**All entropy metrics are now vocabulary-size independent and bounded in [0,1].**
+**Per-Position Entropy** (all sequence positions):
+- per_position_mean_entropy: Mean normalized entropy across all positions [0,1]
+- per_position_max_entropy, per_position_min_entropy: Range of position entropies [0,1] 
+- per_position_entropy_std: Standard deviation of position entropies
+
+**Per-Sample Entropy** (averaged per sequence):
+- sample_mean_entropy: Mean of per-sample entropies [0,1]
+- sample_max_entropy, sample_min_entropy: Range of sample-averaged entropies [0,1]
+- sample_entropy_std: Standard deviation of per-sample entropies
+
+**Weight Statistics** (after normalization):
+- weight_mean: Mean per-sample weight (should ≈ 1.0 due to normalization)
+- weight_max, weight_min: Range of normalized per-sample weights  
+- weight_std: Standard deviation of per-sample weights
+
+**Loss Modification**:
+- original_loss: Input loss value before modification
+- final_loss: Output loss value after entropy weighting
+- loss_ratio: final_loss / original_loss (should ≈ 1.0 due to mean preservation)
+- loss_fallback: Boolean, true if fallback to original loss occurred
+
+**Batch Info**:
+- batch_size: Number of samples in batch
+- weight_sum: Sum of normalized weights (should ≈ batch_size)
+
+**All entropy metrics are vocabulary-size independent and bounded in [0,1].**
 
 ### Verbose Mode Debug Logging
 
