@@ -47,6 +47,10 @@ data/
 │   ├── prepare_streaming.py        # Main provider implementation
 │   ├── mlm_inference.py           # MLM model loading and inference
 │   ├── synthetic_generation.py    # Synthetic text generation logic
+│   ├── config/                    # Stage-based configurations (same as char_diffusion)
+│   │   ├── __init__.py
+│   │   ├── simple.py              # Simple masking configuration
+│   │   └── complex.py             # Advanced multi-stage configuration
 │   └── input.txt                  # Raw text data (Shakespeare)
 ```
 
@@ -55,19 +59,26 @@ data/
 **File**: `data/sequence_scorer/prepare_streaming.py`
 
 ```python
-from typing import Dict, Any, Optional
+from typing import Dict, Any, Optional, List
 import torch
 import os
 from data.common.provider_base import DataProviderBase
 from .mlm_inference import MLMInferenceEngine
-from .synthetic_generation import create_synthetic_text
+from .synthetic_generation import create_synthetic_text, create_stage_synthetic_text
 
 class SequenceScorerProvider(DataProviderBase):
     def __init__(self, *args, **kwargs):
         # Extract sequence scorer specific config
         self.mlm_checkpoint_path = kwargs.pop('mlm_checkpoint_path')
-        self.mask_probability_range = kwargs.pop('mask_probability_range', (0.1, 0.8))
         self.cls_token_id = kwargs.pop('cls_token_id', 0)  # [CLS] token position
+        
+        # Stage-based configuration (same as char_diffusion)
+        self.use_all_stages_for_training = kwargs.pop('use_all_stages_for_training', None)
+        self.unmasking_stages = kwargs.pop('unmasking_stages', None)
+        self.validation_stages = kwargs.pop('validation_stages', None)
+        
+        # Fallback simple configuration for non-stage mode
+        self.mask_probability_range = kwargs.pop('mask_probability_range', (0.1, 0.8))
         
         super().__init__(*args, **kwargs)
         
@@ -80,6 +91,54 @@ class SequenceScorerProvider(DataProviderBase):
         
         # Load text data and create vocabulary (similar to char_diffusion)
         self._load_text_data()
+        
+        # Validate and initialize stage configuration
+        self._validate_stage_config()
+        self._initialize_stage_distribution()
+        
+    def _validate_stage_config(self):
+        """Validate stage configuration and raise exceptions for unsupported options."""
+        if self.use_all_stages_for_training is not None:
+            if not self.use_all_stages_for_training:
+                raise NotImplementedError("use_all_stages_for_training=False is not yet implemented")
+            
+            if not self.unmasking_stages:
+                raise ValueError("unmasking_stages must be provided when use_all_stages_for_training=True")
+                
+            if not self.validation_stages:
+                raise ValueError("validation_stages must be provided when use_all_stages_for_training=True")
+    
+    def _initialize_stage_distribution(self):
+        """Initialize stage distribution for batch generation."""
+        if self.use_all_stages_for_training:
+            # Calculate how many batches of each stage type to generate per file
+            self.train_stage_distribution = self._calculate_stage_distribution(self.unmasking_stages)
+            self.val_stage_distribution = self._calculate_stage_distribution(self.validation_stages)
+        else:
+            self.train_stage_distribution = None
+            self.val_stage_distribution = None
+    
+    def _calculate_stage_distribution(self, stages: List[Dict]) -> List[Dict]:
+        """
+        Calculate how many samples of each stage type to generate per file.
+        Same logic as char_diffusion provider.
+        """
+        total_stages = len(stages)
+        total_samples = self.batches_per_file * self.batch_size
+        samples_per_stage = total_samples // total_stages
+        remainder = total_samples % total_stages
+        
+        distribution = []
+        for i, stage in enumerate(stages):
+            # Distribute remainder across first stages
+            count = samples_per_stage + (1 if i < remainder else 0)
+            if count > 0:  # Only include stages with samples
+                distribution.append({
+                    'config': stage,
+                    'count': count
+                })
+        
+        return distribution
         
     def build_meta(self) -> Dict:
         """Build metadata for sequence scoring task."""
@@ -108,8 +167,21 @@ class SequenceScorerProvider(DataProviderBase):
     
     def sample_batch(self, split: str, rng) -> Dict[str, torch.Tensor]:
         """Generate batch with synthetic text and synthenticity scores."""
-        # Implementation details in Phase 2
-        pass
+        if self.use_all_stages_for_training:
+            # For stage-based generation, we need to generate all samples for the file at once
+            # This method will be called by the base class for each batch, but we need to 
+            # coordinate across all batches in the file. We'll handle this differently.
+            raise NotImplementedError("Stage-based sampling requires file-level generation")
+        else:
+            return self._sample_default_batch(split, rng)
+    
+    def produce_one_file(self, split: str, seq: int) -> None:
+        """Override to handle stage-based generation at file level."""
+        if self.use_all_stages_for_training:
+            self._produce_stage_based_file(split, seq)
+        else:
+            # Use default file production for non-stage-based generation
+            super().produce_one_file(split, seq)
 ```
 
 ### Phase 2: MLM Inference Engine
@@ -221,8 +293,79 @@ class MLMInferenceEngine:
 
 ```python
 import torch
-from typing import Tuple
-from data.char_diffusion.masking_utils import apply_bert_style_corruption_cpu
+from typing import Tuple, Dict, Any
+from data.char_diffusion.masking_utils import apply_stage_masking
+
+def apply_stage_masking_direct(
+    x: torch.Tensor, 
+    stage_config: Dict[str, Any], 
+    mask_token_id: int, 
+    rng: torch.Generator
+) -> tuple[torch.Tensor, torch.Tensor]:
+    """
+    Apply stage-specific masking with direct [MASK] token replacement (no BERT-style corruption).
+    
+    Args:
+        x: Input tokens [batch_size, seq_len]
+        stage_config: Stage configuration dictionary
+        mask_token_id: Token ID for [MASK] token
+        rng: Random number generator
+        
+    Returns:
+        masked_x: Input with masked positions replaced by [MASK] tokens
+        mask: Boolean mask indicating which positions were masked
+    """
+    stage_type = stage_config['type']
+    
+    if stage_type == 'random':
+        max_masked_ratio = stage_config['max_masked_ratio']
+        batch_size = x.shape[0]
+        
+        # Generate different mask ratios for each sample
+        mask_ratios = torch.rand(batch_size, generator=rng) * max_masked_ratio
+        
+        all_masked = []
+        all_masks = []
+        
+        for i in range(batch_size):
+            sample_x = x[i:i+1]
+            mask_probs = torch.rand(sample_x.shape, generator=rng)
+            mask = mask_probs < mask_ratios[i].item()
+            
+            masked_x = sample_x.clone()
+            masked_x[mask] = mask_token_id
+            
+            all_masked.append(masked_x)
+            all_masks.append(mask)
+        
+        return torch.cat(all_masked, dim=0), torch.cat(all_masks, dim=0)
+        
+    elif stage_type == 'sticky':
+        from data.char_diffusion.masking_utils import apply_target_driven_sticky_masking_cpu
+        # Use existing sticky masking but extract only mask positions
+        _, mask = apply_target_driven_sticky_masking_cpu(
+            x, stage_config['target_masked_ratio'], 
+            stage_config['p1_probability'], stage_config['p2_probability'],
+            mask_token_id, 0, rng  # vocab_size not used for direct masking
+        )
+        # Apply direct masking
+        masked_x = x.clone()
+        masked_x[mask] = mask_token_id
+        return masked_x, mask
+        
+    elif stage_type == 'span':
+        from data.char_diffusion.masking_utils import apply_span_masking_cpu
+        # Use existing span masking but extract only mask positions
+        _, mask = apply_span_masking_cpu(
+            x, stage_config['spans_count'], mask_token_id, 0, rng
+        )
+        # Apply direct masking
+        masked_x = x.clone()
+        masked_x[mask] = mask_token_id
+        return masked_x, mask
+        
+    else:
+        raise ValueError(f"Unknown stage type: {stage_type}")
 
 def create_synthetic_text(
     original_text: torch.Tensor,
@@ -257,22 +400,72 @@ def create_synthetic_text(
     mask_probs = torch.rand(original_text.shape, generator=rng)
     mask = mask_probs < mask_ratio
     
-    # Apply BERT-style corruption to create input for MLM model
-    corrupted_input = apply_bert_style_corruption_cpu(
-        original_text, mask, mask_token_id, vocab_size, rng
-    )
+    # Apply direct masking (replace masked positions with [MASK] token)
+    corrupted_input = original_text.clone()
+    corrupted_input[mask] = mask_token_id
     
     # Use MLM model to predict masked tokens
     predicted_text = mlm_engine.predict_masked_tokens(
         corrupted_input, 
-        corrupted_input == mask_token_id,  # Only predict actual [MASK] tokens
+        mask,  # Use the original mask positions
         temperature=sampling_temperature,
         top_k=top_k
     )
     
     # Calculate actual synthenticity ratio
-    # Count positions where we actually replaced with predictions
-    synthetic_positions = corrupted_input == mask_token_id
+    # Count positions where we masked and regenerated tokens
+    synthetic_positions = mask
+    total_positions = seq_len * batch_size
+    actual_synthetic_count = synthetic_positions.sum().item()
+    actual_synthenticity = actual_synthetic_count / total_positions
+    
+    return predicted_text, actual_synthenticity
+
+def create_stage_synthetic_text(
+    original_text: torch.Tensor,
+    stage_config: Dict[str, Any],
+    mlm_engine,
+    mask_token_id: int,
+    vocab_size: int,
+    rng: torch.Generator,
+    sampling_temperature: float = 1.0,
+    top_k: int = None
+) -> Tuple[torch.Tensor, float]:
+    """
+    Create synthetic text using stage-based masking configuration.
+    
+    Args:
+        original_text: Original text tokens [batch_size, seq_len]
+        stage_config: Stage configuration dictionary (sticky, random, or span)
+        mlm_engine: MLM inference engine
+        mask_token_id: ID of [MASK] token
+        vocab_size: Vocabulary size (excluding [MASK])
+        rng: Random number generator
+        sampling_temperature: Temperature for prediction sampling
+        top_k: Top-k sampling parameter
+        
+    Returns:
+        synthetic_text: Text with predicted tokens [batch_size, seq_len]
+        actual_synthenticity: Actual ratio of synthetic tokens
+    """
+    batch_size, seq_len = original_text.shape
+    
+    # Apply stage-specific masking (direct replacement with [MASK] tokens)
+    corrupted_input, mask = apply_stage_masking_direct(
+        original_text, stage_config, mask_token_id, rng
+    )
+    
+    # Use MLM model to predict masked tokens
+    predicted_text = mlm_engine.predict_masked_tokens(
+        corrupted_input, 
+        mask,  # Use the original mask positions
+        temperature=sampling_temperature,
+        top_k=top_k
+    )
+    
+    # Calculate actual synthenticity ratio
+    # Count positions where we masked and regenerated tokens
+    synthetic_positions = mask
     total_positions = seq_len * batch_size
     actual_synthetic_count = synthetic_positions.sum().item()
     actual_synthenticity = actual_synthetic_count / total_positions
@@ -339,8 +532,8 @@ def _load_text_data(self):
         self.itos[self.cls_token_id] = '[CLS]'
         self.stoi['[CLS]'] = self.cls_token_id
 
-def sample_batch(self, split: str, rng) -> Dict[str, torch.Tensor]:
-    """Generate batch with synthetic text and synthenticity scores."""
+def _sample_default_batch(self, split: str, rng) -> Dict[str, torch.Tensor]:
+    """Generate batch with simple mask ratio range (non-stage mode)."""
     ids = self.train_ids if split == "train" else self.val_ids
     max_start_idx = len(ids) - (self.block_size - 1)  # Reserve space for [CLS]
     
@@ -370,7 +563,7 @@ def sample_batch(self, split: str, rng) -> Dict[str, torch.Tensor]:
             mask_ratios[i].item(),
             self.mlm_engine,
             self.mask_token_id,
-            self.vocab_size - 1,  # Exclude [MASK] from random generation
+            0,  # vocab_size not needed for direct masking
             rng,
             sampling_temperature=1.0,
             top_k=50  # Use top-k sampling for diversity
@@ -394,16 +587,129 @@ def sample_batch(self, split: str, rng) -> Dict[str, torch.Tensor]:
         "input_ids": input_ids,
         "targets": targets,
     }
+
+def _produce_stage_based_file(self, split: str, seq: int) -> None:
+    """Generate an entire file with stage-based sampling (same pattern as char_diffusion)."""
+    import time
+    
+    rng = torch.Generator()
+    # derive deterministic seed per split/seq (same as base class)
+    per_seed = (self.seed * 1000003) ^ (hash(split) & 0xFFFFFFFF) ^ seq
+    rng.manual_seed(per_seed)
+    
+    ids = self.train_ids if split == "train" else self.val_ids
+    max_start_idx = len(ids) - (self.block_size - 1)  # Reserve space for [CLS]
+    
+    # Get stage distribution for this split
+    stage_distribution = self.train_stage_distribution if split == "train" else self.val_stage_distribution
+    
+    # Generate all samples according to stage distribution
+    all_inputs = []
+    all_targets = []
+    all_stage_info = []
+    
+    for stage_info in stage_distribution:
+        stage_config = stage_info['config']
+        count = stage_info['count']
+        
+        if count == 0:
+            continue
+            
+        # Sample sequences for this stage
+        ix = torch.randint(0, max_start_idx, (count,), generator=rng).tolist()
+        original_sequences = []
+        for i in ix:
+            seq_data = ids[i : i + (self.block_size - 1)]  # Leave space for [CLS]
+            original_sequences.append(seq_data)
+        
+        original_text = torch.tensor(original_sequences, dtype=torch.long)
+        
+        # Apply stage-specific synthetic text generation
+        synthetic_text, actual_synthenticity = create_stage_synthetic_text(
+            original_text,
+            stage_config,
+            self.mlm_engine,
+            self.mask_token_id,
+            0,  # vocab_size not needed for direct masking
+            rng,
+            sampling_temperature=1.0,
+            top_k=50
+        )
+        
+        # Add [CLS] token at the beginning for each sequence
+        inputs_with_cls = []
+        for i in range(count):
+            input_with_cls = add_cls_token(
+                synthetic_text[i:i+1], 
+                self.cls_token_id, 
+                self.block_size
+            )
+            inputs_with_cls.append(input_with_cls)
+        
+        # Calculate synthenticity targets per sequence (for stage-based, may be same for all in stage)
+        stage_targets = [actual_synthenticity] * count
+        
+        all_inputs.extend(inputs_with_cls)
+        all_targets.extend(stage_targets)
+        
+        # Track stage info for each sample
+        all_stage_info.extend([stage_config] * count)
+    
+    # Concatenate all samples
+    if all_inputs:
+        combined_inputs = torch.cat(all_inputs, dim=0)
+        combined_targets = torch.tensor(all_targets, dtype=torch.float32)
+        
+        # Randomly shuffle all samples to mix different stage types
+        total_samples = combined_inputs.shape[0]
+        shuffle_indices = torch.randperm(total_samples, generator=rng)
+        
+        shuffled_inputs = combined_inputs[shuffle_indices]
+        shuffled_targets = combined_targets[shuffle_indices]
+        
+        # Create shuffled stage info
+        shuffled_stage_info = [all_stage_info[i] for i in shuffle_indices.tolist()]
+        
+        # Organize into batches
+        tensors = {
+            "input_ids": shuffled_inputs,
+            "targets": shuffled_targets,
+        }
+        
+        metadata = {
+            "batch_size": self.batch_size,
+            "num_batches": self.batches_per_file,
+            "file_idx": seq,
+            "split": split,
+            "produced_at": int(time.time() * 1000),
+            "stage_info": shuffled_stage_info,
+            "stage_distribution": stage_distribution  # Include stage distribution info
+        }
+        
+        # Write atomic
+        d = self.train_dir if split == "train" else self.val_dir
+        ts = metadata["produced_at"]
+        tmp_name = f".tmp-{ts}-{seq:06d}.pt"
+        final_name = f"{ts}-{seq:06d}-{self.batches_per_file}.pt"
+        tmp_path = os.path.join(d, tmp_name)
+        final_path = os.path.join(d, final_name)
+        torch.save({"tensors": tensors, "metadata": metadata}, tmp_path)
+        os.replace(tmp_path, final_path)
+        if self.verbose:
+            print(f"[sequence_scorer] produced stage-based file: {final_path}")
+    else:
+        # Fallback to default generation
+        super().produce_one_file(split, seq)
 ```
 
 ### Phase 4: Configuration Integration
 
-#### 4.1 Update Sequence Scorer Config
+#### 4.1 Simple Configuration (Non-Stage Mode)
 
-**File**: `config/sequence_scorer_config.py`
+**File**: `config/sequence_scorer_simple.py`
 
 ```python
-"""Configuration for sequence scoring dataset with synthetic text generation"""
+"""Simple configuration for sequence scoring dataset with basic masking"""
 
 # Dataset configuration
 dataset = 'sequence_scorer'
@@ -415,14 +721,14 @@ mlm_checkpoint_path = 'checkpoints/char_diffusion_mlm.pt'  # Path to trained MLM
 mask_probability_range = (0.1, 0.7)  # Range of masking ratios to generate
 cls_token_id = 0  # Position for [CLS] token (adjust based on vocab)
 
+# No stage configuration (uses simple masking)
+use_all_stages_for_training = None
+unmasking_stages = None
+validation_stages = None
+
 # Model mode configuration  
 model_mode = 'sequence_scorer'
 attention_type = 'bidirectional'
-
-# Transfer learning settings
-freeze_transformer = True
-unfreeze_at_iteration = 2000
-init_from_checkpoint = 'checkpoints/pretrained_lm.pt'
 
 # Training settings optimized for sequence scoring
 learning_rate = 1e-4
@@ -430,58 +736,199 @@ warmup_iters = 300
 max_iters = 8000
 eval_interval = 200
 
-# Loss modifiers (most will be filtered out for MSE loss)
-loss_modifiers_enabled = True
-entropy_modifier_enabled = False  # N/A for regression
-target_smoothing_enabled = False  # N/A for regression
-
 # Data generation settings
 batches_per_file = 50  # Smaller files due to MLM inference cost
 max_backlog_files = 3
 sleep_seconds = 5.0  # Longer sleep due to inference cost
 
-print("Sequence scorer configuration loaded")
+print("Simple sequence scorer configuration loaded")
 ```
 
-#### 4.2 Update Prepare.py Discovery
+#### 4.2 Stage-Based Configuration
 
-The existing `prepare.py` uses convention-based discovery, so no changes needed. The system will automatically find:
-- Module: `data.sequence_scorer.prepare_streaming`  
-- Class: `SequenceScorerProvider` (via `Provider` alias)
+**File**: `config/sequence_scorer_complex.py`
+
+```python
+"""Advanced configuration for sequence scoring dataset with stage-based generation"""
+
+# Dataset configuration
+dataset = 'sequence_scorer'
+batch_size = 16
+block_size = 256
+
+# MLM model for synthetic text generation
+mlm_checkpoint_path = 'checkpoints/char_diffusion_mlm.pt'
+cls_token_id = 0
+
+# Load composition configuration (same as char_diffusion)
+composition_config = 'complex'  # refers to data/sequence_scorer/config/complex.py
+
+# Load global variables from composition config if specified
+if composition_config is not None:
+    import os
+    config_path = os.path.join('data', 'sequence_scorer', 'config', f'{composition_config}.py')
+    if os.path.exists(config_path):
+        import importlib.util
+        spec = importlib.util.spec_from_file_location(f"{composition_config}_config", config_path)
+        config_module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(config_module)
+        
+        # Import all global variables from the config
+        for attr_name in dir(config_module):
+            if not attr_name.startswith('_'):
+                globals()[attr_name] = getattr(config_module, attr_name)
+        print(f"Loaded composition config from {config_path}")
+    else:
+        print(f"Warning: composition config file not found at {config_path}")
+else:
+    # Set default values when no composition config is used
+    use_all_stages_for_training = None
+    unmasking_stages = None
+    validation_stages = None
+
+# Model mode configuration  
+model_mode = 'sequence_scorer'
+attention_type = 'bidirectional'
+
+# Training settings optimized for sequence scoring
+learning_rate = 1e-4
+warmup_iters = 300
+max_iters = 8000
+eval_interval = 200
+
+# Data generation settings (more conservative for stage-based)
+batches_per_file = 30  # Smaller files due to MLM inference and stage complexity
+max_backlog_files = 2
+sleep_seconds = 8.0  # More time for MLM inference across stages
+
+print("Complex sequence scorer configuration loaded")
+```
+
+#### 4.3 Stage Configuration Files
+
+**File**: `data/sequence_scorer/config/complex.py`
+
+```python
+# Stage-based configuration for sequence scorer (mirrors char_diffusion complex.py)
+use_all_stages_for_training = True
+
+# Training stages - same configurations as char_diffusion but adapted for sequence scoring
+unmasking_stages = [
+    {'type':'sticky','target_masked_ratio': 0.4, 'p1_probability': 0.15, 'p2_probability': 0.3, 'val_loss_stale_count': 6},
+    {'type':'sticky','target_masked_ratio': 0.6, 'p1_probability': 0.1, 'p2_probability': 0.5, 'val_loss_stale_count': 8},
+    {'type':'random','max_masked_ratio': 0.5, 'val_loss_stale_count': 10},
+    {'type': 'span', 'spans_count': 20, 'val_loss_stale_count': 10},
+    {'type':'sticky','target_masked_ratio': 0.6, 'p1_probability': 0.3, 'p2_probability': 0.1, 'val_loss_stale_count': 8},
+    {'type':'sticky','target_masked_ratio': 0.6, 'p1_probability': 0.1, 'p2_probability': 0.5, 'val_loss_stale_count': 8},
+    {'type':'random','max_masked_ratio': 0.2, 'val_loss_stale_count': 10},
+    {'type':'sticky','target_masked_ratio': 0.55, 'p1_probability': 0.1, 'p2_probability': 0.6, 'val_loss_stale_count': 10},
+    {'type':'sticky','target_masked_ratio': 0.9, 'p1_probability': 0.1, 'p2_probability': 0.9, 'val_loss_stale_count': 20},
+]
+
+# Validation stages - extended set for comprehensive evaluation
+validation_stages = [
+    {'type':'sticky','target_masked_ratio': 0.4, 'p1_probability': 0.15, 'p2_probability': 0.3, 'val_loss_stale_count': 6},
+    {'type':'sticky','target_masked_ratio': 0.6, 'p1_probability': 0.1, 'p2_probability': 0.5, 'val_loss_stale_count': 8},
+    {'type':'random','max_masked_ratio': 0.5, 'val_loss_stale_count': 10},
+    {'type':'sticky','target_masked_ratio': 0.6, 'p1_probability': 0.3, 'p2_probability': 0.1, 'val_loss_stale_count': 8},
+    {'type':'sticky','target_masked_ratio': 0.6, 'p1_probability': 0.1, 'p2_probability': 0.5, 'val_loss_stale_count': 8},
+    {'type':'random','max_masked_ratio': 0.2, 'val_loss_stale_count': 10},
+    {'type':'sticky','target_masked_ratio': 0.2, 'p1_probability': 0.3, 'p2_probability': 0.0, 'val_loss_stale_count': 2},
+    {'type':'sticky','target_masked_ratio': 0.4, 'p1_probability': 0.3, 'p2_probability': 0.0, 'val_loss_stale_count': 4},
+    {'type':'sticky','target_masked_ratio': 0.4, 'p1_probability': 0.15, 'p2_probability': 0.3, 'val_loss_stale_count': 6},
+    {'type':'sticky','target_masked_ratio': 0.55, 'p1_probability': 0.1, 'p2_probability': 0.6, 'val_loss_stale_count': 10},
+    {'type':'sticky','target_masked_ratio': 0.7, 'p1_probability': 0.2, 'p2_probability': 0.4, 'val_loss_stale_count': 15},
+    {'type':'sticky','target_masked_ratio': 0.8, 'p1_probability': 0.2, 'p2_probability': 0.4, 'val_loss_stale_count': 20},
+    {'type':'sticky','target_masked_ratio': 0.8, 'p1_probability': 0.1, 'p2_probability': 0.9, 'val_loss_stale_count': 20},
+    {'type':'sticky','target_masked_ratio': 0.9, 'p1_probability': 0.1, 'p2_probability': 0.9, 'val_loss_stale_count': 20},
+]
+```
+
+#### 4.4 Prepare.py Integration
+
+The existing `prepare.py` uses convention-based discovery and already passes stage-related configuration, so no changes needed. The system will automatically:
+- Find module: `data.sequence_scorer.prepare_streaming`  
+- Find class: `SequenceScorerProvider` (via `Provider` alias)
+- Pass stage configuration through `use_all_stages_for_training`, `unmasking_stages`, `validation_stages` parameters
 
 ### Phase 5: Usage and Validation
 
 #### 5.1 Training Pipeline Integration
 
-**Usage commands:**
+**Simple Mode Usage:**
 
 ```bash
 # 1. First train a char_diffusion MLM model (if not already available)
-python train.py --config=config/train_char_diffusion.py --out_dir=checkpoints/char_mlm
+python train.py config/train_char_diffusion.py --out_dir=checkpoints/char_mlm
 
-# 2. Generate sequence scoring data using trained MLM model
-python prepare.py config/sequence_scorer_config.py
+# 2. Generate sequence scoring data using simple configuration
+python prepare.py config/sequence_scorer_simple.py
 
 # 3. Train sequence scorer model
-python train.py config/sequence_scorer_config.py --out_dir=checkpoints/sequence_scorer
+python train.py config/sequence_scorer_simple.py --out_dir=checkpoints/sequence_scorer_simple
+```
+
+**Stage-Based Mode Usage:**
+
+```bash
+# 1. First train a char_diffusion MLM model with stage-based configuration
+python train.py config/train_char_diffusion.py --out_dir=checkpoints/char_mlm_complex
+
+# 2. Generate sequence scoring data using complex stage-based configuration
+python prepare.py config/sequence_scorer_complex.py
+
+# 3. Train sequence scorer model with stage-based data
+python train.py config/sequence_scorer_complex.py --out_dir=checkpoints/sequence_scorer_complex
+```
+
+**Hybrid Training (Recommended):**
+
+```bash
+# 1. Train MLM model with complex stage configuration for robustness
+python train.py config/train_char_diffusion.py --out_dir=checkpoints/char_mlm_robust
+
+# 2. Generate sequence scoring data with SAME stage configuration
+python prepare.py config/sequence_scorer_complex.py
+
+# 3. Train sequence scorer with stage-aware synthetic data
+python train.py config/sequence_scorer_complex.py --out_dir=checkpoints/sequence_scorer_robust
 ```
 
 #### 5.2 Expected Data Flow
 
+**Simple Mode Data Flow:**
 1. **Data Generation Phase** (prepare.py):
    - Load Shakespeare text 
    - For each batch:
      - Sample text sequences
-     - Apply random masking (10%-70% of tokens)
-     - Use MLM model to predict masked tokens
+     - Apply random masking (10%-70% of tokens with [MASK] token)
+     - Use MLM model to regenerate masked positions
      - Add [CLS] token at beginning
-     - Target = actual synthenticity ratio
+     - Target = actual synthenticity ratio (proportion of regenerated tokens)
    
 2. **Training Phase** (train.py):
    - Load synthetic text with [CLS] tokens
    - Extract [CLS] representation from sequence scorer model
    - Predict synthenticity score (0-1) with sigmoid
    - Optimize MSE loss against true synthenticity ratios
+
+**Stage-Based Data Flow:**
+1. **Data Generation Phase** (prepare.py):
+   - Load Shakespeare text
+   - For each file generation:
+     - Distribute samples across all stages (9 training + 14 validation stages)
+     - For each stage:
+       - Apply stage-specific masking (sticky/random/span with [MASK] tokens)
+       - Use MLM model to regenerate masked positions
+       - Calculate stage-specific synthenticity ratio (proportion of regenerated tokens)
+     - Shuffle all samples to mix stage types
+     - Add [CLS] tokens and save with stage metadata
+
+2. **Training Phase** (train.py):
+   - Load mixed synthetic text with diverse masking patterns
+   - Extract [CLS] representations across all stage types
+   - Learn robust synthenticity detection across diverse regeneration patterns
+   - Optimize MSE loss against curriculum of synthenticity ratios
 
 #### 5.3 Validation Tests
 
@@ -542,12 +989,23 @@ if __name__ == "__main__":
 
 ## Integration Benefits
 
-This implementation provides:
+This enhanced implementation provides:
 
-1. **Seamless Integration**: Uses existing DataProviderBase architecture
-2. **Flexible Configuration**: Configurable mask ratios and sampling parameters  
-3. **Training Compatibility**: Works with existing sequence scorer model
-4. **Monitoring**: Detailed logging of synthenticity distributions
-5. **Reproducibility**: Deterministic generation with proper RNG seeding
+1. **Complete Stage Compatibility**: Full support for char_diffusion's complex stage configurations
+2. **Seamless Integration**: Uses existing DataProviderBase and masking utilities
+3. **Flexible Configuration**: Both simple masking and advanced multi-stage curriculum learning
+4. **Training Compatibility**: Works with existing sequence scorer model architecture
+5. **Monitoring**: Detailed logging of synthenticity distributions across all stages
+6. **Reproducibility**: Deterministic generation with proper RNG seeding per stage
+7. **Curriculum Learning**: Enables progressive difficulty training like char_diffusion
+8. **Configuration Reuse**: Same complex.py files can be used across datasets
 
-The sequence scorer dataset will enable training models to detect AI-generated text by learning the relationship between local (token-level) and global (sequence-level) synthetic patterns.
+## Key Advantages of Stage-Based Sequence Scoring
+
+1. **Robust Synthetic Detection**: Trains on diverse regeneration patterns (sticky, random, span masking)
+2. **Curriculum Learning**: Progressive difficulty from low to high synthenticity ratios  
+3. **Cross-Dataset Consistency**: Same stage configurations as MLM training
+4. **Evaluation Granularity**: Detailed validation across 14 different regeneration scenarios
+5. **Research Alignment**: Matches char_diffusion experimental setup for fair comparison
+
+The sequence scorer dataset will enable training models to detect AI-generated text by learning the relationship between local (token-level) and global (sequence-level) synthetic patterns across a comprehensive curriculum of regeneration strategies, mirroring the sophisticated training approach used in char_diffusion.
