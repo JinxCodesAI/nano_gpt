@@ -111,6 +111,10 @@ def main() -> None:
         mask_probability=cfg.get('mask_probability', 0.15),
         mask_token_id=cfg.get('mask_token_id', None),
         ignore_index=cfg.get('ignore_index', -100),
+        # Sequence scorer specific
+        mlm_checkpoint_path=cfg.get('mlm_checkpoint_path', None),
+        cls_token_id=cfg.get('cls_token_id', 0),
+        mask_probability_range=cfg.get('mask_probability_range', (0.1, 0.8)),
     )
     provider.run()
 
