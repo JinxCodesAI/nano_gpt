@@ -22,7 +22,7 @@ from sample_utils import (
 # Model loading
 init_from = 'resume'  # 'resume' to load from checkpoint
 out_dir = 'out'
-checkpoint_name = 'new_8500.pt'  # Main model checkpoint
+checkpoint_name = '7250_1.76_all_LMod_enabled.pt'  # Main model checkpoint
 remasking_checkpoint_name = None  # Optional: remasking model checkpoint
 
 # Generation parameters

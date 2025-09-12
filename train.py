@@ -35,6 +35,7 @@ from checkpoint_manager import CheckpointManager
 from loss_modifiers import create_loss_modifier_pipeline
 from core.scheduler import CosineLRScheduler
 from core.evaluator import Evaluator
+from core.logger import create_logger
 torch._dynamo.config.suppress_errors = True
 
 # -----------------------------------------------------------------------------
@@ -109,8 +110,10 @@ config = {k: globals()[k] for k in config_keys} # will be useful for logging
 
 # initialize loss modifier pipeline
 loss_modifier_pipeline = create_loss_modifier_pipeline(config)
+# Store message for later logging after logger is initialized
+enabled_modifiers_msg = None
 if not loss_modifier_pipeline.is_empty():
-    print(f"Enabled loss modifiers: {', '.join(loss_modifier_pipeline.get_enabled_modifier_names())}")
+    enabled_modifiers_msg = f"Enabled loss modifiers: {', '.join(loss_modifier_pipeline.get_enabled_modifier_names())}"
 # -----------------------------------------------------------------------------
 
 # various inits, derived attributes, I/O setup
@@ -134,7 +137,21 @@ else:
     seed_offset = 0
     ddp_world_size = 1
 tokens_per_iter = gradient_accumulation_steps * ddp_world_size * batch_size * block_size
-print(f"tokens per iteration will be: {tokens_per_iter:,}")
+
+# initialize logger early so all subsequent operations can use it
+logger = create_logger(
+    wandb_log=wandb_log,
+    wandb_project=wandb_project,
+    wandb_run_name=wandb_run_name,
+    config=config,
+    master_process=master_process
+)
+
+logger.log_info(f"tokens per iteration will be: {tokens_per_iter:,}")
+
+# Log loss modifier status if any are enabled
+if enabled_modifiers_msg:
+    logger.log_info(enabled_modifiers_msg)
 
 if master_process:
     os.makedirs(out_dir, exist_ok=True)
@@ -171,7 +188,7 @@ best_val_loss = 1e9
 # derive vocab_size from consumer meta
 meta = consumer.meta
 meta_vocab_size = meta.get('vocab_size', vocab_size)
-print(f"found vocab_size = {meta_vocab_size} (from consumer.meta)")
+logger.log_info(f"found vocab_size = {meta_vocab_size} (from consumer.meta)")
 # attach dataset meta to config to inform checkpoint naming (contains training_type)
 config['meta'] = meta
 
@@ -182,15 +199,15 @@ model_args = dict(n_layer=n_layer, n_head=n_head, n_embd=n_embd, block_size=bloc
                   position_encoding=position_encoding) # start with model_args from command line
 if init_from == 'scratch':
     # init a new model from scratch
-    print("Initializing a new model from scratch")
+    logger.log_info("Initializing a new model from scratch")
     # determine the vocab size we'll use for from-scratch training
     if meta_vocab_size is None and vocab_size is None:
         raise ValueError("vocab_size must be provided by consumer.meta or config; no default fallback")
     model_args['vocab_size'] = meta_vocab_size if meta_vocab_size is not None else vocab_size
     gptconf = GPTConfig(**model_args)
-    model = GPT(gptconf)
+    model = GPT(gptconf, logger=logger)
 elif init_from == 'resume':
-    print(f"Resuming training from {out_dir}")
+    logger.log_info(f"Resuming training from {out_dir}")
     # resume training from a checkpoint via CheckpointManager
     checkpoint = checkpoint_manager.load(device=device)
     checkpoint_model_args = checkpoint['model_args']
@@ -200,7 +217,7 @@ elif init_from == 'resume':
         model_args[k] = checkpoint_model_args[k]
     # create the model
     gptconf = GPTConfig(**model_args)
-    model = GPT(gptconf)
+    model = GPT(gptconf, logger=logger)
     state_dict = checkpoint['model']
     checkpoint_manager.load_model_state(model, state_dict)
     iter_num = checkpoint['iter_num']
@@ -228,7 +245,7 @@ checkpoint = None # free up memory
 
 # compile the model
 if compile:
-    print("compiling the model... (takes a ~minute)")
+    logger.log_info("compiling the model... (takes a ~minute)")
     unoptimized_model = model
     model = torch.compile(model) # requires PyTorch 2.0
 
@@ -256,10 +273,6 @@ evaluator = Evaluator(
     device=device
 )
 
-# logging
-if wandb_log and master_process:
-    import wandb
-    wandb.init(project=wandb_project, name=wandb_run_name, config=config)
 
 checkpoint_manager.update_progress(iter_num=iter_num, best_val_loss=best_val_loss)
 # training loop
@@ -278,31 +291,34 @@ while True:
     # evaluate the loss on train/val sets and write checkpoints
     if iter_num % eval_interval == 0 and master_process:
         losses = evaluator.evaluate()
-        print(f"step {iter_num}: train loss {losses['train']:.4f}, val loss {losses['val']:.4f}")
         # Reset timer after validation to exclude validation time from MFU calculation
         t0 = time.time()
-        if wandb_log:
-            log_dict = {
-                "iter": iter_num,
-                "train/loss": losses['train'],
-                "val/loss": losses['val'],
-                "lr": lr,
-                "mfu": running_mfu*100, # convert to percentage
-            }
-            # Add loss modifier metrics if available
-            if not loss_modifier_pipeline.is_empty():
-                modifier_metrics = loss_modifier_pipeline.get_all_metrics()
-                for key, value in modifier_metrics.items():
-                    log_dict[f"loss_modifiers/{key}"] = value
-                # Reset metrics after logging
-                loss_modifier_pipeline.reset_all_metrics()
-            wandb.log(log_dict)
+        
+        # Prepare evaluation metrics for logging
+        eval_metrics = {
+            "iter": iter_num,
+            "train/loss": losses['train'],
+            "val/loss": losses['val'],
+            "lr": lr,
+            "mfu_pct": running_mfu*100,  # Already as percentage for logger
+        }
+        
+        # Add loss modifier metrics if available
+        if not loss_modifier_pipeline.is_empty():
+            modifier_metrics = loss_modifier_pipeline.get_all_metrics()
+            eval_metrics["loss_modifier_metrics"] = modifier_metrics
+            # Reset metrics after logging
+            loss_modifier_pipeline.reset_all_metrics()
+        
+        # Log evaluation results
+        logger.log_eval(eval_metrics)
+        
         if losses['val'] < best_val_loss or always_save_checkpoint:
             best_val_loss = losses['val']
             if iter_num > 0:
                 checkpoint_manager.update_progress(iter_num=iter_num, best_val_loss=best_val_loss)
                 ckpt_path = checkpoint_manager.save()
-                print(f"saving checkpoint to {ckpt_path}")
+                logger.log_checkpoint(f"saving checkpoint to {ckpt_path}")
     if iter_num == 0 and eval_only:
         break
 
@@ -342,7 +358,17 @@ while True:
         if local_iter_num >= 5: # let the training loop settle a bit
             mfu = raw_model.estimate_mfu(batch_size * gradient_accumulation_steps, dt)
             running_mfu = mfu if running_mfu == -1.0 else 0.9*running_mfu + 0.1*mfu
-        print(f"iter {iter_num}: loss {lossf:.4f}, time {dt*1000:.2f}ms, mfu {running_mfu*100:.2f}%")
+        
+        # Prepare step metrics for logging
+        step_metrics = {
+            "iter": iter_num,
+            "loss": lossf,
+            "time_ms": dt*1000,
+            "mfu_pct": running_mfu*100
+        }
+        
+        # Log training step
+        logger.log_step(step_metrics)
     iter_num += 1
     checkpoint_manager.update_progress(iter_num=iter_num, best_val_loss=best_val_loss)
     local_iter_num += 1
