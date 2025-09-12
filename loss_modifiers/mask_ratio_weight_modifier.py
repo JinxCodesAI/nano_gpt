@@ -90,11 +90,27 @@ class MaskRatioWeightModifier(BaseLossModifier):
         
         return weights
     
+    def supports_mode(self, mode):
+        """Check mode compatibility"""
+        try:
+            from model import ModelMode
+        except ImportError:
+            from .base import ModelMode
+        
+        if mode == ModelMode.LANGUAGE_MODEL:
+            return True
+        elif mode == ModelMode.TOKEN_CLASSIFIER:
+            return True  # Can work for classification too
+        elif mode == ModelMode.SEQUENCE_SCORER:
+            return False  # Not meaningful for sequence-level tasks
+        return False
+
     def modify_loss(
         self,
         logits: torch.Tensor,
         targets: torch.Tensor,
         loss: torch.Tensor,
+        model_mode=None,
         mask: Optional[torch.Tensor] = None,
         **kwargs
     ) -> torch.Tensor:
@@ -111,6 +127,10 @@ class MaskRatioWeightModifier(BaseLossModifier):
             Modified loss tensor weighted by mask ratios
         """
         if not self.enabled:
+            return loss
+        
+        # Check mode compatibility
+        if model_mode and not self.supports_mode(model_mode):
             return loss
 
         # If no mask provided, infer it from targets using ignore_index (default -100)

@@ -105,11 +105,27 @@ class TargetSmoothingModifier(BaseLossModifier):
         
         return smoothed
     
+    def supports_mode(self, mode):
+        """Check mode compatibility"""
+        try:
+            from model import ModelMode
+        except ImportError:
+            from .base import ModelMode
+        
+        if mode == ModelMode.LANGUAGE_MODEL:
+            return True
+        elif mode == ModelMode.TOKEN_CLASSIFIER:
+            return True  # Label smoothing works well for classification
+        elif mode == ModelMode.SEQUENCE_SCORER:
+            return False  # N/A for regression tasks
+        return False
+
     def modify_loss(
         self,
         logits: torch.Tensor,
         targets: torch.Tensor,
         loss: torch.Tensor,
+        model_mode=None,
         **kwargs
     ) -> torch.Tensor:
         """
@@ -124,6 +140,10 @@ class TargetSmoothingModifier(BaseLossModifier):
             Modified loss using smoothed targets
         """
         if not self.enabled:
+            return loss
+        
+        # Check mode compatibility
+        if model_mode and not self.supports_mode(model_mode):
             return loss
         
         batch_size, seq_len, vocab_size = logits.shape

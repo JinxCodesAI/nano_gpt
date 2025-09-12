@@ -27,7 +27,7 @@ import torch
 from torch.nn.parallel import DistributedDataParallel as DDP
 from torch.distributed import init_process_group, destroy_process_group
 
-from model import GPTConfig, GPT
+from model import GPTConfig, GPT, ModelMode
 import torch._dynamo
 
 from dataset_consumer import DatasetConsumer
@@ -101,6 +101,14 @@ mask_ratio_weight_power = 0.5 # power for inverse square root weighting
 mask_ratio_weight_min = 0.1 # minimum weight to prevent extreme values
 mask_ratio_weight_max = 10.0 # maximum weight to prevent extreme values
 mask_ratio_weight_eps = 1e-8 # small value to prevent division by zero
+# multi-mode configuration
+model_mode = 'language_model'  # 'language_model', 'token_classifier', 'sequence_scorer'
+num_token_classes = 2  # For token classification
+cls_token_id = None  # For sequence scoring
+freeze_transformer = False  # Feature extraction mode
+init_from_checkpoint = None  # Path to pretrained model
+unfreeze_at_iteration = None  # Dynamic unfreezing
+unfreeze_lr_multiplier = 0.1  # LR multiplier when unfreezing
 # -----------------------------------------------------------------------------
 config_keys = [k for k,v in globals().items() if not k.startswith('_') and isinstance(v, (int, float, bool, str, list))]
 exec(open('configurator.py').read()) # overrides from command line or config file
@@ -196,7 +204,15 @@ config['meta'] = meta
 # model init
 model_args = dict(n_layer=n_layer, n_head=n_head, n_embd=n_embd, block_size=block_size,
                   bias=bias, vocab_size=None, dropout=dropout, attention_type=attention_type, 
-                  position_encoding=position_encoding) # start with model_args from command line
+                  position_encoding=position_encoding,
+                  # multi-mode parameters
+                  mode=ModelMode(model_mode),
+                  num_token_classes=num_token_classes,
+                  cls_token_id=cls_token_id,
+                  freeze_transformer=freeze_transformer,
+                  init_from_checkpoint=init_from_checkpoint,
+                  unfreeze_at_iteration=unfreeze_at_iteration,
+                  unfreeze_lr_multiplier=unfreeze_lr_multiplier) # start with model_args from command line
 if init_from == 'scratch':
     # init a new model from scratch
     logger.log_info("Initializing a new model from scratch")
@@ -321,6 +337,20 @@ while True:
                 logger.log_checkpoint(f"saving checkpoint to {ckpt_path}")
     if iter_num == 0 and eval_only:
         break
+
+    # Dynamic unfreezing support
+    if (unfreeze_at_iteration is not None and 
+        iter_num == unfreeze_at_iteration and 
+        raw_model.get_frozen_status()):
+        
+        logger.log_info(f"Unfreezing transformer at iteration {iter_num}")
+        raw_model.unfreeze_transformer_weights()
+        
+        # Adjust learning rate for stability
+        for param_group in optimizer.param_groups:
+            param_group['lr'] *= unfreeze_lr_multiplier
+        
+        logger.log_info(f"Reduced learning rate by factor {unfreeze_lr_multiplier}")
 
     # forward backward update, with optional gradient accumulation to simulate larger batch size
     # and using the GradScaler if data type is float16

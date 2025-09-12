@@ -52,6 +52,7 @@ class LossModifierPipeline:
         logits: torch.Tensor,
         targets: torch.Tensor,
         loss: torch.Tensor,
+        model_mode=None,
         **kwargs
     ) -> torch.Tensor:
         """
@@ -72,6 +73,15 @@ class LossModifierPipeline:
         if not self._enabled_modifiers or self._temporarily_disabled:
             return loss
 
+        # Filter modifiers by mode compatibility
+        compatible_modifiers = [
+            m for m in self._enabled_modifiers 
+            if model_mode is None or m.supports_mode(model_mode)
+        ]
+        
+        if not compatible_modifiers:
+            return loss
+
         # Track optional per-position loss tensor through the pipeline
         per_position_loss = kwargs.get('per_position_loss', None)
         # Whether any modifier in this pipeline produced/replaced per_position_loss
@@ -79,11 +89,11 @@ class LossModifierPipeline:
         extra_kwargs = dict(kwargs)
 
         modified_loss = loss
-        for modifier in self._enabled_modifiers:
+        for modifier in compatible_modifiers:
             # Pass current per_position_loss along
             if per_position_loss is not None:
                 extra_kwargs['per_position_loss'] = per_position_loss
-            result = modifier.modify_loss(logits, targets, modified_loss, **extra_kwargs)
+            result = modifier.modify_loss(logits, targets, modified_loss, model_mode=model_mode, **extra_kwargs)
 
             # Support both scalar return and dict return with possible per_position_loss replacement
             if isinstance(result, dict):

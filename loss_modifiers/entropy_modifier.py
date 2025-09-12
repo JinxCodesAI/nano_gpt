@@ -190,11 +190,27 @@ class EntropyModifier(BaseLossModifier):
         # Do not apply mask here; return per-position entropies unmasked.
         return entropy_per_token
     
+    def supports_mode(self, mode):
+        """Check mode compatibility"""
+        try:
+            from model import ModelMode
+        except ImportError:
+            from .base import ModelMode
+        
+        if mode == ModelMode.LANGUAGE_MODEL:
+            return True
+        elif mode == ModelMode.TOKEN_CLASSIFIER:
+            return True  # Entropy works well for classification
+        elif mode == ModelMode.SEQUENCE_SCORER:
+            return False  # N/A for MSE loss
+        return False
+
     def modify_loss(
         self,
         logits: torch.Tensor,
         targets: torch.Tensor,
         loss: torch.Tensor,
+        model_mode=None,
         mask: Optional[torch.Tensor] = None,
         **kwargs
     ) -> torch.Tensor:
@@ -211,6 +227,10 @@ class EntropyModifier(BaseLossModifier):
             Modified loss tensor
         """
         if not self.enabled:
+            return loss
+        
+        # Check mode compatibility
+        if model_mode and not self.supports_mode(model_mode):
             return loss
         
         # Calculate per-position entropy
