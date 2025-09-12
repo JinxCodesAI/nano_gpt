@@ -42,6 +42,7 @@ class MaskRatioWeightModifier(BaseLossModifier):
         self.min_weight = config.get('min_weight', 0.1)
         self.max_weight = config.get('max_weight', 10.0)
         self.eps = config.get('eps', 1e-8)
+        print(f"MaskRatioWeightModifier: power={self.power}, min_weight={self.min_weight}, max_weight={self.max_weight}, eps={self.eps}")
     
     def _calculate_mask_ratios(
         self,

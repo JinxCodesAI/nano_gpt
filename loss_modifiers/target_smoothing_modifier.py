@@ -46,6 +46,7 @@ class TargetSmoothingModifier(BaseLossModifier):
         
         # Create special token mask for efficient lookup
         self.special_token_set = set(self.special_token_ids) if self.special_token_ids else set()
+        print(f"TargetSmoothingModifier: smoothing_factor={self.smoothing_factor}, special_token_ids={self.special_token_ids}, exclude_padding={self.exclude_padding}, padding_token_id={self.padding_token_id}")
     
     def _create_smoothed_targets(
         self,

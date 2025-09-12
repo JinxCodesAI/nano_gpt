@@ -35,68 +35,76 @@ python train.py --loss_modifiers_enabled=True \
 
 ### 1. Entropy Modifier
 
-Purpose: Focus training on samples where the model’s wrong‑answer distribution is more uniform (higher information content), and penalize samples where wrong answer probability concentrates in few tokens.
+Purpose: Focus training on samples where the model's wrong‑answer distribution is more uniform (higher information content), and penalize samples where wrong answer probability concentrates in few tokens. Uses **normalized entropy** that is vocabulary-size independent.
 
 Intuition:
-- High entropy across wrong answers → more diffuse/confidently wrong → lower penalty (lower weight multiplier).
-- Low entropy (concentrated wrong answers) → higher penalty (higher weight multiplier per sample).
+- **High normalized entropy (→1.0)**: wrong answers uniformly distributed → lower penalty (lower weight multiplier)
+- **Low normalized entropy (→0.0)**: wrong answers concentrated on few tokens → higher penalty (higher weight multiplier)
+- **Vocabulary-size independent**: entropy normalized to [0,1] range for consistent behavior across different models
 
 Parameters (from config or CLI):
 - entropy_modifier_weight (float, default 1.0): Base factor in the per-sample multiplier.
-- entropy_modifier_threshold (float, default 0.0): Minimum entropy floor when computing per-sample multipliers.
+- entropy_modifier_threshold (float, default 0.0): Minimum normalized entropy floor when computing per-sample multipliers (range: [0,1]).
 - entropy_modifier_eps (float, default 1e-8): Numerical stability for logs/divisions.
 
 Configuration example:
 ```python
 loss_modifiers_enabled = True
+
 entropy_modifier_enabled = True
-entropy_modifier_weight = 1.0
-entropy_modifier_threshold = 0.1
+entropy_modifier_weight = 0.1
+entropy_modifier_threshold = 0.0
 entropy_modifier_eps = 1e-8
 ```
 
 Mechanics (how it works):
 1) Compute softmax over logits to get per‑token probabilities p.
 2) Zero out the probability of the correct token; renormalize remaining mass over wrong tokens only to get q (distribution over wrong answers).
-3) Per‑position entropy: H = -Σ_i q_i log(q_i). If all mass is on the correct token (no wrong mass), H is treated as 0.
-4) If a mask is provided, per‑position entropies are masked accordingly.
-5) Compute per‑sample entropy as the mean (or masked mean) across positions.
-6) Compute per-sample weights w_i = entropy_modifier_weight / (clamp(H_i, min=entropy_threshold) + eps).
-7) Aggregate per-position loss to per-sample loss and multiply by w_i; final loss is mean over samples.
+3) Per‑position raw entropy: H_raw = -Σ_i q_i log(q_i). If all mass is on the correct token (no wrong mass), H_raw is treated as 0.
+4) **Normalize entropy**: H_norm = H_raw / log(N_wrong) where N_wrong is the count of wrong tokens with non-negligible probability. This produces vocabulary-size independent values in [0,1].
+5) If a mask is provided, per‑position normalized entropies are masked accordingly.
+6) Compute per‑sample entropy as the mean (or masked mean) across positions.
+7) Compute per-sample weights w_i = entropy_modifier_weight / (clamp(H_i, min=entropy_threshold) + eps).
+8) Aggregate per-position loss to per-sample loss and multiply by w_i; final loss is mean over samples.
 
 Per-sample illustration (sample weights):
-Assume batch size = 4, per-sample entropies after per-position averaging are H = [0.2, 0.6, 1.0, 0.4], threshold=0.5, weight=1.0.
+Assume batch size = 4, per-sample **normalized** entropies after per-position averaging are H = [0.2, 0.6, 1.0, 0.4], threshold=0.5, weight=1.0.
 - Clamped entropies: H* = [0.5, 0.6, 1.0, 0.5]
 - Per-sample weights w = 1 / (H* + eps) ≈ [2.0, 1.667, 1.0, 2.0]
 - Final loss = mean_i(w_i * L_i) where L_i is the per-sample masked mean loss.
 
+**Note**: With normalized entropy, these values are now comparable across different vocabulary sizes.
+
 
 What is entropy_modifier_threshold?
-- entropy_modifier_threshold: A floor applied during dynamic weighting to prevent very small entropies from collapsing the weight. It clamps each per‑sample entropy to at least this value before averaging.
+- entropy_modifier_threshold: A floor applied during dynamic weighting to prevent very small normalized entropies from collapsing the weight. It clamps each per‑sample entropy to at least this value (range [0,1]) before averaging. Now vocabulary-size independent!
 
 Logged metrics:
-- mean_entropy: Mean per‑position wrong‑answer entropy (masked if provided).
-- max_entropy, min_entropy, entropy_std: Range and variability of entropies.
-- entropy_weight: The final batch multiplier (mean clamped per‑sample entropy × entropy_modifier_weight).
+- mean_entropy: Mean per‑position **normalized** wrong‑answer entropy [0,1] (masked if provided).
+- max_entropy, min_entropy, entropy_std: Range and variability of normalized entropies [0,1].
+- entropy_weight_mean: Mean per-sample weight multiplier derived from normalized entropy.
+
+**All entropy metrics are now vocabulary-size independent and bounded in [0,1].**
 
 Worked example:
 Suppose batch_size=2, seq_len=2, vocab_size=4. Targets = [[2, 1], [0, 3]]. Consider the first token of sample 1 with logits [2.0, 1.0, 4.0, 0.5] and target=2.
 - Softmax p ≈ [0.100, 0.037, 0.848, 0.015]. Zero out the correct token (index 2): wrong mass ≈ 0.152.
 - Renormalize over wrong tokens: q ≈ [0.100/0.152, 0.037/0.152, 0.015/0.152, (target=2 is 0)] ≈ [0.658, 0.243, 0.099, 0.000].
-- Entropy H = -Σ q_i log(q_i) ≈ -(0.658 ln 0.658 + 0.243 ln 0.243 + 0.099 ln 0.099) ≈ 0.90 nats.
+- Raw entropy H_raw = -Σ q_i log(q_i) ≈ -(0.658 ln 0.658 + 0.243 ln 0.243 + 0.099 ln 0.099) ≈ 0.90 nats.
+- **Normalized entropy**: 3 wrong tokens have probability > eps, so max_entropy = ln(3) ≈ 1.099. H_norm = 0.90 / 1.099 ≈ **0.82**.
 
-If the average per‑sample entropy across its positions is, say, H_s1=0.8 and H_s2=0.4, with entropy_modifier_threshold=0.5 and entropy_modifier_weight=1.0:
-- Clamp: H*_s1 = max(0.8, 0.5) = 0.8; H*_s2 = max(0.4, 0.5) = 0.5.
-- batch_weight = mean([0.8, 0.5]) = 0.65.
-- Final loss = original_loss * 0.65 (lower than baseline because average wrong‑answer entropy is modest; if entropies were higher, the weight would be higher).
+If the average per‑sample **normalized** entropy across positions is H_s1=0.7 and H_s2=0.3, with entropy_modifier_threshold=0.5 and entropy_modifier_weight=1.0:
+- Clamp: H*_s1 = max(0.7, 0.5) = 0.7; H*_s2 = max(0.3, 0.5) = 0.5.
+- Per-sample weights: w = [1/0.7, 1/0.5] ≈ [1.43, 2.0]
+- Final loss = mean([1.43 * L_1, 2.0 * L_2]) where L_i are per-sample losses.
 
-Same batch, effect with always-dynamic weighting:
-- Given H = [0.8, 0.4] and threshold=0.5:
-  - H* = [0.8, 0.5]
-  - batch_weight = mean(H*) = (0.8 + 0.5)/2 = 0.65
-  - Final loss = original_loss × 0.65
+**Key improvement**: The normalized entropy value 0.82 is now meaningful regardless of vocabulary size!
 
-Observation: With always-dynamic weighting, entropy directly influences the single batch scalar applied to the loss every step.
+Same batch with normalized entropy, old behavior comparison:
+- **Before normalization** (vocabulary-dependent): Raw entropy values varied by vocab size
+- **After normalization** (vocabulary-independent): H = [0.7, 0.3] are comparable across all vocabulary sizes
+- Per-sample weights w = [1/0.7, 1/0.3] ≈ [1.43, 3.33] with threshold=0.0
+- **Consistent behavior**: Same entropy threshold and weight settings work across different models!
 
 Use cases:
 - Emphasize updates when the model’s wrong predictions are diverse (more informative errors).

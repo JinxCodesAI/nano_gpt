@@ -16,14 +16,15 @@ from .base import BaseLossModifier
 
 class EntropyModifier(BaseLossModifier):
     """
-    Loss modifier that uses entropy of wrong answer distributions to weight loss.
+    Loss modifier that uses normalized entropy of wrong answer distributions to weight loss.
     
-    Calculates entropy of the probability distribution over incorrect tokens for each position.
-    High entropy (uniform distribution over wrong answers) indicates high signal-to-noise ratio.
-    Low entropy (concentrated distribution over wrong answers) indicates low signal-to-noise ratio.
+    Calculates the normalized entropy of probability distribution over incorrect tokens for each position.
+    The entropy is vocabulary-size independent, ranging from 0 to 1:
+    - High entropy (1.0): uniform distribution over wrong answers → high signal-to-noise ratio
+    - Low entropy (0.0): concentrated distribution over wrong answers → low signal-to-noise ratio
     
-    The loss can be weighted based on this entropy to focus training on positions with
-    better signal-to-noise ratios.
+    The loss is weighted based on this normalized entropy, with lower entropy receiving higher weights
+    to penalize samples where wrong answer probability concentrates on few tokens.
     """
     
     def __init__(self, config: Dict[str, Any]):
@@ -33,13 +34,14 @@ class EntropyModifier(BaseLossModifier):
         Config keys:
             enabled (bool): Whether to enable this modifier
             weight (float): Weight factor for entropy-based loss modification (default: 1.0)
-            entropy_threshold (float): Threshold for filtering low-entropy positions (default: 0.0)
+            entropy_threshold (float): Minimum normalized entropy floor for weighting (default: 0.0, range: [0,1])
             eps (float): Small value to prevent log(0) in entropy calculation (default: 1e-8)
         """
         super().__init__(config)
         self.weight = config.get('weight', 1.0)
         self.entropy_threshold = config.get('entropy_threshold', 0.0)
         self.eps = config.get('eps', 1e-8)
+        print(f"EntropyModifier: weight={self.weight}, entropy_threshold={self.entropy_threshold}, eps={self.eps}")
     
     def _calculate_wrong_answer_entropy(
         self,
@@ -48,7 +50,11 @@ class EntropyModifier(BaseLossModifier):
         mask: Optional[torch.Tensor] = None
     ) -> torch.Tensor:
         """
-        Calculate entropy of wrong answer distributions per position.
+        Calculate normalized entropy of wrong answer distributions per position.
+        
+        The entropy is normalized to be vocabulary-size independent, ranging from 0 to 1:
+        - 0: All wrong-answer probability concentrated on a single token (low diversity)
+        - 1: Wrong-answer probability uniformly distributed (high diversity)
         
         Args:
             logits: Model logits (batch_size, seq_len, vocab_size)
@@ -56,7 +62,7 @@ class EntropyModifier(BaseLossModifier):
             mask: Optional boolean mask (batch_size, seq_len) - only calculate for masked positions
             
         Returns:
-            per_position_entropies: (batch_size, seq_len) - entropy per position
+            per_position_entropies: (batch_size, seq_len) - normalized entropy per position [0,1]
         """
         batch_size, seq_len, vocab_size = logits.shape
         device = logits.device
@@ -82,7 +88,15 @@ class EntropyModifier(BaseLossModifier):
         # Calculate entropy: H = -sum(p * log(p))
         # Add epsilon to prevent log(0)
         log_probs = torch.log(wrong_probs + self.eps)
-        entropy_per_token = -(wrong_probs * log_probs).sum(dim=-1)  # (batch_size, seq_len)
+        raw_entropy = -(wrong_probs * log_probs).sum(dim=-1)  # (batch_size, seq_len)
+        
+        # Normalize entropy to make it vocabulary-size independent
+        # Count number of wrong tokens with non-negligible probability
+        num_wrong_tokens = (wrong_probs > self.eps).sum(dim=-1).float()  # (batch_size, seq_len)
+        max_possible_entropy = torch.log(num_wrong_tokens + self.eps)  # Maximum entropy for uniform distribution
+        
+        # Normalized entropy: ranges from 0 (concentrated) to 1 (uniform)
+        entropy_per_token = raw_entropy / (max_possible_entropy + self.eps)  # (batch_size, seq_len)
         
         # Set entropy to 0 for positions where there are no wrong answers with significant probability
         entropy_per_token[~valid_positions] = 0.0
