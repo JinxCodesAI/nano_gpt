@@ -33,6 +33,8 @@ import torch._dynamo
 from dataset_consumer import DatasetConsumer
 from checkpoint_manager import CheckpointManager
 from loss_modifiers import create_loss_modifier_pipeline
+from core.scheduler import CosineLRScheduler
+from core.evaluator import Evaluator
 torch._dynamo.config.suppress_errors = True
 
 # -----------------------------------------------------------------------------
@@ -234,39 +236,25 @@ if compile:
 if ddp:
     model = DDP(model, device_ids=[ddp_local_rank])
 
-# helps estimate an arbitrarily accurate loss over either split using many batches
-@torch.no_grad()
-def estimate_loss():
-    out = {}
-    model.eval()
-    
-    # Temporarily disable loss modifiers during evaluation to get comparable baseline metrics
-    with loss_modifier_pipeline.temporarily_disabled():
-        for split in ['train', 'val']:
-            losses = torch.zeros(eval_iters)
-            for k in range(eval_iters):
-                X, Y = consumer.get_batch(split, device)
-                with ctx:
-                    logits, loss = model(X, Y, loss_modifiers=loss_modifier_pipeline)
-                losses[k] = loss.item()
-            out[split] = losses.mean()
-    
-    model.train()
-    return out
 
-# learning rate decay scheduler (cosine with warmup)
-def get_lr(it):
-    # 1) linear warmup for warmup_iters steps
-    if it < warmup_iters:
-        return learning_rate * (it + 1) / (warmup_iters + 1)
-    # 2) if it > lr_decay_iters, return min learning rate
-    if it > lr_decay_iters:
-        return min_lr
-    # 3) in between, use cosine decay down to min learning rate
-    decay_ratio = (it - warmup_iters) / (lr_decay_iters - warmup_iters)
-    assert 0 <= decay_ratio <= 1
-    coeff = 0.5 * (1.0 + math.cos(math.pi * decay_ratio)) # coeff ranges 0..1
-    return min_lr + coeff * (learning_rate - min_lr)
+# initialize learning rate scheduler
+scheduler = CosineLRScheduler(
+    learning_rate=learning_rate,
+    warmup_iters=warmup_iters,
+    lr_decay_iters=lr_decay_iters,
+    min_lr=min_lr,
+    decay_lr=decay_lr
+)
+
+# initialize evaluator
+evaluator = Evaluator(
+    model=model,
+    consumer=consumer,
+    loss_modifier_pipeline=loss_modifier_pipeline,
+    eval_iters=eval_iters,
+    ctx=ctx,
+    device=device
+)
 
 # logging
 if wandb_log and master_process:
@@ -283,13 +271,13 @@ running_mfu = -1.0
 while True:
 
     # determine and set the learning rate for this iteration
-    lr = get_lr(iter_num) if decay_lr else learning_rate
+    lr = scheduler.get_lr(iter_num)
     for param_group in optimizer.param_groups:
         param_group['lr'] = lr
 
     # evaluate the loss on train/val sets and write checkpoints
     if iter_num % eval_interval == 0 and master_process:
-        losses = estimate_loss()
+        losses = evaluator.evaluate()
         print(f"step {iter_num}: train loss {losses['train']:.4f}, val loss {losses['val']:.4f}")
         # Reset timer after validation to exclude validation time from MFU calculation
         t0 = time.time()
