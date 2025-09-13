@@ -11,6 +11,7 @@ from .synthetic_generation import (
     create_synthetic_text,
     create_stage_synthetic_text,
     add_cls_token,
+    apply_stage_masking_direct,
 )
 
 
