@@ -42,6 +42,8 @@ class SequenceScorerProvider(DataProviderBase):
             device=mlm_device,
             verbose=self.verbose,
         )
+        if self.verbose:
+            print(f"[sequence_scorer] Unmasking device: {mlm_device}")
 
         # Load text and vocab consistent with MLM model
         self._load_text_data()
@@ -233,8 +235,10 @@ class SequenceScorerProvider(DataProviderBase):
             all_stage_info.extend([stage_config] * count)
 
             if self.verbose:
-                # Compute counts
-                masked_counts = (synthetic_text[:, 1:] != original_text[:, :synthetic_text.shape[1]-1]).sum().item()
+                # Compute counts (move to CPU for comparison)
+                st_cpu = synthetic_text.detach().to('cpu')
+                ot_cpu = original_text.detach().to('cpu')
+                masked_counts = (st_cpu[:, 1:] != ot_cpu[:, :st_cpu.shape[1]-1]).sum().item()
                 print(f"[sequence_scorer] stage type={stage_config.get('type')} count={count} time_ms={(t1-t0)*1000:.2f} masked_positions~={masked_counts}")
 
         if all_inputs:
