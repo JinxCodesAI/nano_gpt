@@ -128,6 +128,13 @@ class SequenceScorerProvider(DataProviderBase):
             raise NotImplementedError("Stage-based sampling requires file-level generation")
         return self._sample_default_batch(split, rng)
 
+    def produce_one_file(self, split: str, seq: int) -> None:
+        """Override to handle stage-based generation at file level."""
+        if self.use_all_stages_for_training:
+            self._produce_stage_based_file(split, seq)
+        else:
+            super().produce_one_file(split, seq)
+
     def _sample_default_batch(self, split: str, rng) -> Dict[str, torch.Tensor]:
         ids = self.train_ids if split == "train" else self.val_ids
         max_start_idx = len(ids) - (self.block_size - 1)  # leave space for [CLS]
