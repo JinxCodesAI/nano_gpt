@@ -256,6 +256,9 @@ class DatasetConsumer:
         # return legacy tuple when possible
         if "x" in batch_tensors and "y" in batch_tensors:
             return batch_tensors["x"], batch_tensors["y"]
+        # normalize common schema keys to tuple expected by train/evaluator
+        if "input_ids" in batch_tensors and "targets" in batch_tensors:
+            return batch_tensors["input_ids"], batch_tensors["targets"]
         return batch_tensors
 
     def reset_state(self, split: Optional[str] = None) -> None:
