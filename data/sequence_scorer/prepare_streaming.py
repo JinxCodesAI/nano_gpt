@@ -202,6 +202,8 @@ class SequenceScorerProvider(DataProviderBase):
         all_stage_info: List[Dict[str, Any]] = []
 
         import time
+        total_stage_time = 0.0
+        total_mask_time = 0.0
         for stage_info in stage_distribution:
             stage_config = stage_info['config']
             count = stage_info['count']
@@ -211,35 +213,30 @@ class SequenceScorerProvider(DataProviderBase):
             original_sequences = [ids[i : i + (self.block_size - 1)] for i in ix]
             original_text = torch.tensor(original_sequences, dtype=torch.long)
 
+            # Measure mask vs unmask separately
             t0 = time.time()
-            synthetic_text, actual_synth = create_stage_synthetic_text(
-                original_text,
-                stage_config,
-                self.mlm_engine,
-                self.mask_token_id,
-                self.vocab_size - 1,
-                rng,
-                sampling_temperature=1.0,
-                top_k=50,
+            masked_input, mask = apply_stage_masking_direct(
+                original_text, stage_config, self.mask_token_id, self.vocab_size - 1, rng
+            )
+            t_mask_end = time.time()
+            synthetic_text = self.mlm_engine.predict_masked_tokens(
+                masked_input, mask, temperature=1.0, top_k=50
             )
             t1 = time.time()
 
-            # Append inputs and targets (actual_synth is scalar float)
+            # per-sample syntheticity based on mask
+            masked_counts = mask.sum(dim=1).to(torch.float32)
+            actual_synth = (masked_counts / max(mask.shape[1], 1)).cpu()
+
+            # Accumulate timings
+            total_stage_time += (t1 - t0)
+            total_mask_time += (t_mask_end - t0)
+
+            # Append inputs and targets
             input_with_cls = add_cls_token(synthetic_text, self.cls_token_id, self.block_size)
             all_inputs.append(input_with_cls)
-            # if actual_synth is tensor per-sample, use directly; else broadcast
-            if torch.is_tensor(actual_synth):
-                all_targets.append(actual_synth.cpu())
-            else:
-                all_targets.append(torch.full((count,), float(actual_synth), dtype=torch.float32))
+            all_targets.append(actual_synth)
             all_stage_info.extend([stage_config] * count)
-
-            if self.verbose:
-                # Compute counts (move to CPU for comparison)
-                st_cpu = synthetic_text.detach().to('cpu')
-                ot_cpu = original_text.detach().to('cpu')
-                masked_counts = (st_cpu[:, 1:] != ot_cpu[:, :st_cpu.shape[1]-1]).sum().item()
-                print(f"[sequence_scorer] stage type={stage_config.get('type')} count={count} time_ms={(t1-t0)*1000:.2f} masked_positions~={masked_counts}")
 
         if all_inputs:
             combined_inputs = torch.cat(all_inputs, dim=0)
@@ -252,6 +249,14 @@ class SequenceScorerProvider(DataProviderBase):
             shuffled_stage_info = [all_stage_info[i] for i in shuffle_indices.tolist()]
 
             tensors = {"input_ids": shuffled_inputs, "targets": shuffled_targets}
+
+            # Print per-file aggregate timing right after we finalize the tensors
+            if self.verbose:
+                total_ms = total_stage_time * 1000.0
+                mask_ms = total_mask_time * 1000.0
+                pct_remask = (mask_ms / max(total_ms, 1e-6)) * 100.0
+                print(f"[sequence_scorer] batch gen avg per-file: {total_ms:.2f} ms, remasking {pct_remask:.1f}%")
+
             metadata = {
                 "batch_size": self.batch_size,
                 "num_batches": self.batches_per_file,
