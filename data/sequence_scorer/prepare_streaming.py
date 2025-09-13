@@ -28,6 +28,11 @@ class SequenceScorerProvider(DataProviderBase):
         # Simple masking configuration
         self.mask_probability_range = kwargs.pop('mask_probability_range', (0.1, 0.8))
 
+        # Ignore diffusion-specific kwargs that prepare.py may pass
+        kwargs.pop('mask_probability', None)
+        kwargs.pop('mask_token_id', None)
+        kwargs.pop('ignore_index', None)
+
         super().__init__(*args, **kwargs)
 
         # Initialize MLM inference engine (CPU for data generation)
