@@ -117,11 +117,13 @@ class SequenceScorerProvider(DataProviderBase):
         self.train_ids = [self.stoi.get(c, 0) for c in data[: int(len(data) * 0.9)]]
         self.val_ids = [self.stoi.get(c, 0) for c in data[int(len(data) * 0.9) :]]
 
-        # Ensure [CLS] token exists in vocab mapping
+        # Ensure [CLS] token exists in vocab mapping and extend vocab_size if needed
         if self.cls_token_id not in self.itos:
             self.itos[self.cls_token_id] = '[CLS]'
         if '[CLS]' not in self.stoi:
             self.stoi['[CLS]'] = self.cls_token_id
+        if self.cls_token_id >= self.vocab_size:
+            self.vocab_size = int(self.cls_token_id) + 1
 
     def sample_batch(self, split: str, rng) -> Dict[str, torch.Tensor]:
         if self.use_all_stages_for_training:
