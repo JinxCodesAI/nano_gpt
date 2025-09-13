@@ -251,13 +251,7 @@ class SequenceScorerProvider(DataProviderBase):
 
             tensors = {"input_ids": shuffled_inputs, "targets": shuffled_targets}
 
-            # Print per-file aggregate timing right after we finalize the tensors
-            if self.verbose:
-                total_ms = total_stage_time * 1000.0
-                mask_ms = total_mask_time * 1000.0
-                pct_remask = (mask_ms / max(total_ms, 1e-6)) * 100.0
-                print(f"[sequence_scorer] batch gen avg per-file: {total_ms:.2f} ms, remasking {pct_remask:.1f}%")
-
+            # Assemble metadata first
             metadata = {
                 "batch_size": self.batch_size,
                 "num_batches": self.batches_per_file,
@@ -278,6 +272,12 @@ class SequenceScorerProvider(DataProviderBase):
             os.replace(tmp_path, final_path)
             if self.verbose:
                 print(f"[sequence_scorer] produced stage-based file: {final_path}")
+                # Print aggregate timing as average per-batch and remasking share
+                total_ms = total_stage_time * 1000.0
+                avg_per_batch_ms = total_ms / max(self.batches_per_file, 1)
+                mask_ms = total_mask_time * 1000.0
+                pct_remask = (mask_ms / max(total_ms, 1e-6)) * 100.0
+                print(f"[sequence_scorer] avg batch gen time: {avg_per_batch_ms:.2f} ms (per file), remasking {pct_remask:.1f}%")
         else:
             super().produce_one_file(split, seq)
 
