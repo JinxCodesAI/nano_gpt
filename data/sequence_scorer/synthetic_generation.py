@@ -11,6 +11,7 @@ def apply_stage_masking_direct(
     x: torch.Tensor,
     stage_config: Dict[str, Any],
     mask_token_id: int,
+    vocab_size: int,
     rng: torch.Generator,
 ) -> Tuple[torch.Tensor, torch.Tensor]:
     """
@@ -44,7 +45,7 @@ def apply_stage_masking_direct(
         # We only need the mask; function returns (corrupted_x, mask)
         _, mask = apply_target_driven_sticky_masking_cpu(
             x, target_masked_ratio, p1_probability, p2_probability,
-            mask_token_id, 0, rng  # vocab_size not used for direct masking
+            mask_token_id, vocab_size, rng
         )
         masked_x = x.clone()
         masked_x[mask] = mask_token_id
@@ -52,7 +53,7 @@ def apply_stage_masking_direct(
 
     elif stage_type == 'span':
         _, mask = apply_span_masking_cpu(
-            x, stage_config['spans_count'], mask_token_id, 0, rng
+            x, stage_config['spans_count'], mask_token_id, vocab_size, rng
         )
         masked_x = x.clone()
         masked_x[mask] = mask_token_id
@@ -110,6 +111,7 @@ def create_stage_synthetic_text(
     stage_config: Dict[str, Any],
     mlm_engine,
     mask_token_id: int,
+    vocab_size: int,
     rng: torch.Generator,
     sampling_temperature: float = 1.0,
     top_k: Optional[int] = None,
@@ -120,7 +122,7 @@ def create_stage_synthetic_text(
     batch_size, seq_len = original_text.shape
 
     corrupted_input, mask = apply_stage_masking_direct(
-        original_text, stage_config, mask_token_id, rng
+        original_text, stage_config, mask_token_id, vocab_size, rng
     )
 
     predicted_text = mlm_engine.predict_masked_tokens(

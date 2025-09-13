@@ -196,6 +196,7 @@ class SequenceScorerProvider(DataProviderBase):
                 stage_config,
                 self.mlm_engine,
                 self.mask_token_id,
+                self.vocab_size - 1,
                 rng,
                 sampling_temperature=1.0,
                 top_k=50,
