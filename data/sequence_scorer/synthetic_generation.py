@@ -25,19 +25,16 @@ def apply_stage_masking_direct(
     if stage_type == 'random':
         max_masked_ratio = stage_config['max_masked_ratio']
         batch_size = x.shape[0]
-        # Different mask ratio per sample
+        # Different mask ratio per sample (vectorized)
         mask_ratios = torch.rand(batch_size, generator=rng, device=x.device) * max_masked_ratio
-        all_masked = []
-        all_masks = []
-        for i in range(batch_size):
-            sample_x = x[i:i+1]
-            mask_probs = torch.rand(sample_x.shape, generator=rng, device=x.device)
-            mask = mask_probs < mask_ratios[i].item()
-            masked_x = sample_x.clone()
-            masked_x[mask] = mask_token_id
-            all_masked.append(masked_x)
-            all_masks.append(mask)
-        return torch.cat(all_masked, dim=0), torch.cat(all_masks, dim=0)
+        # Generate mask probabilities for all positions once
+        mask_probs = torch.rand(x.shape, generator=rng, device=x.device)
+        # Broadcast per-sample ratios across sequence length
+        thresholds = mask_ratios.view(-1, 1)
+        mask = mask_probs < thresholds
+        masked_x = x.clone()
+        masked_x[mask] = mask_token_id
+        return masked_x, mask
 
     elif stage_type == 'sticky':
         # Use existing sticky masking to compute mask, then directly replace with mask token
