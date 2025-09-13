@@ -36,6 +36,13 @@ class SequenceScorerProvider(DataProviderBase):
 
         super().__init__(*args, **kwargs)
 
+        import time
+        self._start_time = time.time()
+        def _prefix():
+            ms = int((time.time() - self._start_time) * 1000)
+            return f"[{ms}ms] [sequence_scorer]"
+        self._log_prefix = _prefix
+
         # Initialize MLM inference engine (prefer CUDA for unmasking if available)
         mlm_device = 'cuda' if torch.cuda.is_available() else 'cpu'
         self.mlm_engine = MLMInferenceEngine(
@@ -44,7 +51,7 @@ class SequenceScorerProvider(DataProviderBase):
             verbose=self.verbose,
         )
         if self.verbose:
-            print(f"[sequence_scorer] Unmasking device: {mlm_device}")
+            print(f"{self._log_prefix()} Unmasking device: {mlm_device}")
 
         # Load text and vocab consistent with MLM model
         self._load_text_data()
@@ -57,7 +64,7 @@ class SequenceScorerProvider(DataProviderBase):
         self._ensure_meta_up_to_date()
 
         if self.verbose:
-            print("SequenceScorerProvider initialized:")
+            print(f"{self._log_prefix()} SequenceScorerProvider initialized:")
             print(f"  vocab_size: {self.vocab_size}")
             print(f"  mask_token_id: {self.mask_token_id}")
             print(f"  cls_token_id: {self.cls_token_id}")
@@ -271,13 +278,14 @@ class SequenceScorerProvider(DataProviderBase):
             torch.save({"tensors": tensors, "metadata": metadata}, tmp_path)
             os.replace(tmp_path, final_path)
             if self.verbose:
-                print(f"[sequence_scorer] produced stage-based file: {final_path}")
-                # Print aggregate timing as average per-batch and remasking share
+                print(f"{self._log_prefix()} produced stage-based file: {final_path}")
+                # Print aggregate timing as average per-batch and unmasking share
                 total_ms = total_stage_time * 1000.0
                 avg_per_batch_ms = total_ms / max(self.batches_per_file, 1)
                 mask_ms = total_mask_time * 1000.0
-                pct_remask = (mask_ms / max(total_ms, 1e-6)) * 100.0
-                print(f"[sequence_scorer] avg batch gen time: {avg_per_batch_ms:.2f} ms (per file), remasking {pct_remask:.1f}%")
+                unmask_ms = max(total_ms - mask_ms, 0.0)
+                pct_unmask = (unmask_ms / max(total_ms, 1e-6)) * 100.0
+                print(f"{self._log_prefix()} avg batch gen time: {avg_per_batch_ms:.2f} ms ({self.batches_per_file} batches), unmasking {pct_unmask:.1f}%")
         else:
             super().produce_one_file(split, seq)
 

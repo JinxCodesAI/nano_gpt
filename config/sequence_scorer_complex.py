@@ -3,11 +3,12 @@
 # Dataset configuration
 dataset = 'sequence_scorer'
 batch_size = 16
-block_size = 256
+block_size = 1024
 
 # MLM model for synthetic text generation
 mlm_checkpoint_path = 'out/7250_1.76_all_LMod_enabled.pt'  # adjust to your MLM checkpoint
 cls_token_id = 66
+max_backlog_files = 10
 
 # Load composition configuration (same as char_diffusion)
 composition_config = 'complex'  # reuses data/char_diffusion/config/complex.py
