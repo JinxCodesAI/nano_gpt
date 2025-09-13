@@ -6,16 +6,16 @@ batch_size = 16
 block_size = 256
 
 # MLM model for synthetic text generation
-mlm_checkpoint_path = 'out/ckpt_MLM_0.pt'  # adjust to your MLM checkpoint
-cls_token_id = 0
+mlm_checkpoint_path = 'out/7250_1.76_all_LMod_enabled.pt'  # adjust to your MLM checkpoint
+cls_token_id = 66
 
 # Load composition configuration (same as char_diffusion)
-composition_config = 'complex'  # refers to data/sequence_scorer/config/complex.py
+composition_config = 'complex'  # reuses data/char_diffusion/config/complex.py
 
 # Load globals from composition config if present
 if composition_config is not None:
     import os
-    config_path = os.path.join('data', 'sequence_scorer', 'config', f'{composition_config}.py')
+    config_path = os.path.join('data', 'char_diffusion', 'config', f'{composition_config}.py')
     if os.path.exists(config_path):
         import importlib.util
         spec = importlib.util.spec_from_file_location(f"{composition_config}_config", config_path)
@@ -36,11 +36,21 @@ else:
 model_mode = 'sequence_scorer'
 attention_type = 'bidirectional'
 
-# Training settings optimized for sequence scoring
-learning_rate = 1e-4
-warmup_iters = 300
-max_iters = 8000
-eval_interval = 200
+# BERT training typically uses lower learning rates
+learning_rate = 5e-4
+warmup_iters = 500
+max_iters = 10000
+lr_decay_iters = 10000
+min_lr = 5e-5
+beta2 = 0.99
+
+# Model architecture - bidirectional for BERT
+n_layer = 6
+n_head = 6
+n_embd = 384
+dropout = 0.1
+position_encoding = 'rotary'
+dtype = 'float16'
 
 # Data generation settings
 batches_per_file = 30
