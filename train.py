@@ -196,7 +196,14 @@ best_val_loss = 1e9
 # derive vocab_size from consumer meta
 meta = consumer.meta
 meta_vocab_size = meta.get('vocab_size', vocab_size)
-logger.log_info(f"found vocab_size = {meta_vocab_size} (from consumer.meta)")
+# Ensure vocab covers CLS token if provided
+effective_vocab_size = meta_vocab_size
+if cls_token_id is not None:
+    if effective_vocab_size is None:
+        effective_vocab_size = int(cls_token_id) + 1
+    else:
+        effective_vocab_size = max(int(effective_vocab_size), int(cls_token_id) + 1)
+logger.log_info(f"found vocab_size = {meta_vocab_size} (from consumer.meta); effective_vocab_size = {effective_vocab_size}")
 # attach dataset meta to config to inform checkpoint naming (contains training_type)
 config['meta'] = meta
 
@@ -217,9 +224,9 @@ if init_from == 'scratch':
     # init a new model from scratch
     logger.log_info("Initializing a new model from scratch")
     # determine the vocab size we'll use for from-scratch training
-    if meta_vocab_size is None and vocab_size is None:
+    if effective_vocab_size is None:
         raise ValueError("vocab_size must be provided by consumer.meta or config; no default fallback")
-    model_args['vocab_size'] = meta_vocab_size if meta_vocab_size is not None else vocab_size
+    model_args['vocab_size'] = effective_vocab_size
     gptconf = GPTConfig(**model_args)
     model = GPT(gptconf, logger=logger)
 elif init_from == 'resume':
@@ -263,7 +270,11 @@ checkpoint = None # free up memory
 if compile:
     logger.log_info("compiling the model... (takes a ~minute)")
     unoptimized_model = model
-    model = torch.compile(model) # requires PyTorch 2.0
+    try:
+        model = torch.compile(model)
+    except Exception as e:
+        logger.log_warning(f"torch.compile failed ({e}); falling back to eager mode. Set compile=False to silence.")
+        model = unoptimized_model
 
 # wrap model into DDP container
 if ddp:
