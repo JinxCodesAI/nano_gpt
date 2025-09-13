@@ -267,6 +267,13 @@ if init_from == 'resume':
 checkpoint = None # free up memory
 
 # compile the model
+# disable compile if Triton is unavailable
+if compile:
+    try:
+        import triton  # noqa: F401
+    except Exception:
+        logger.log_warning("Triton not available; disabling torch.compile")
+        compile = False
 if compile:
     logger.log_info("compiling the model... (takes a ~minute)")
     unoptimized_model = model
