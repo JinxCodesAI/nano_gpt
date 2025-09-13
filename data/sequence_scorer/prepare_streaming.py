@@ -49,6 +49,9 @@ class SequenceScorerProvider(DataProviderBase):
         self._validate_stage_config()
         self._initialize_stage_distribution()
 
+        # Ensure meta reflects current config (e.g., updated CLS token and vocab size)
+        self._ensure_meta_up_to_date()
+
         if self.verbose:
             print("SequenceScorerProvider initialized:")
             print(f"  vocab_size: {self.vocab_size}")
@@ -71,6 +74,23 @@ class SequenceScorerProvider(DataProviderBase):
         else:
             self.train_stage_distribution = None
             self.val_stage_distribution = None
+
+    def _ensure_meta_up_to_date(self) -> None:
+        desired = self.build_meta()
+        try:
+            import pickle
+            if os.path.exists(self.meta_path):
+                with open(self.meta_path, "rb") as f:
+                    existing = pickle.load(f)
+                if existing.get("vocab_size") != desired.get("vocab_size") or existing.get("cls_token_id") != desired.get("cls_token_id"):
+                    if self.verbose:
+                        print("[sequence_scorer] updating meta.pkl to reflect vocab/CLS changes")
+                    self.write_meta(desired)
+            else:
+                self.write_meta(desired)
+        except Exception as e:
+            # Fail loudly to avoid silent mismatches
+            raise
 
     def _calculate_stage_distribution(self, stages: List[Dict]) -> List[Dict]:
         total_stages = len(stages)
