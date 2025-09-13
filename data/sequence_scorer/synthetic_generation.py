@@ -65,13 +65,13 @@ def apply_stage_masking_direct(
 
 def create_synthetic_text(
     original_text: torch.Tensor,
-    mask_ratio: float,
+    mask_ratio,  # float or Tensor[B]
     mlm_engine,
     mask_token_id: int,
     rng: torch.Generator,
     sampling_temperature: float = 1.0,
     top_k: Optional[int] = None,
-) -> Tuple[torch.Tensor, float]:
+) -> Tuple[torch.Tensor, torch.Tensor]:
     """
     Create synthetic text by masking and predicting with MLM model.
 
@@ -81,15 +81,22 @@ def create_synthetic_text(
     """
     batch_size, seq_len = original_text.shape
 
-    # Random mask
+    # Support per-sample mask ratios (vectorized)
+    if not torch.is_tensor(mask_ratio):
+        mask_ratio = torch.full((batch_size,), float(mask_ratio), device=original_text.device)
+    else:
+        mask_ratio = mask_ratio.to(original_text.device)
+
+    # Random mask: different ratio per sample
     mask_probs = torch.rand(original_text.shape, generator=rng, device=original_text.device)
-    mask = mask_probs < mask_ratio
+    thresholds = mask_ratio.view(-1, 1)
+    mask = mask_probs < thresholds
 
     # Direct masking
     corrupted_input = original_text.clone()
     corrupted_input[mask] = mask_token_id
 
-    # Predict masked tokens using MLM model
+    # Predict masked tokens using MLM model (runs on mlm_engine.device)
     predicted_text = mlm_engine.predict_masked_tokens(
         corrupted_input,
         mask,
@@ -97,11 +104,9 @@ def create_synthetic_text(
         top_k=top_k,
     )
 
-    # Syntheticity equals fraction of positions we replaced
-    synthetic_positions = mask
-    total_positions = seq_len * batch_size
-    actual_synthetic_count = synthetic_positions.sum().item()
-    actual_syntheticity = actual_synthetic_count / max(total_positions, 1)
+    # Syntheticity equals fraction of positions we replaced, returned per-sample
+    masked_counts = mask.sum(dim=1).to(torch.float32)
+    actual_syntheticity = masked_counts / max(seq_len, 1)
 
     return predicted_text, actual_syntheticity
 
@@ -115,7 +120,7 @@ def create_stage_synthetic_text(
     rng: torch.Generator,
     sampling_temperature: float = 1.0,
     top_k: Optional[int] = None,
-) -> Tuple[torch.Tensor, float]:
+) -> Tuple[torch.Tensor, torch.Tensor]:
     """
     Create synthetic text using stage-based masking configuration.
     """

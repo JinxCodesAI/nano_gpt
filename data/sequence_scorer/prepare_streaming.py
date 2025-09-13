@@ -35,10 +35,11 @@ class SequenceScorerProvider(DataProviderBase):
 
         super().__init__(*args, **kwargs)
 
-        # Initialize MLM inference engine (CPU for data generation)
+        # Initialize MLM inference engine (prefer CUDA for unmasking if available)
+        mlm_device = 'cuda' if torch.cuda.is_available() else 'cpu'
         self.mlm_engine = MLMInferenceEngine(
             checkpoint_path=self.mlm_checkpoint_path,
-            device='cpu',
+            device=mlm_device,
             verbose=self.verbose,
         )
 
@@ -166,28 +167,22 @@ class SequenceScorerProvider(DataProviderBase):
         original_sequences = [ids[i : i + (self.block_size - 1)] for i in ix]
         original_text = torch.tensor(original_sequences, dtype=torch.long)
 
-        # Random mask ratio per sample
+        # Random mask ratio per sample (vectorized synthetic generation)
         min_ratio, max_ratio = self.mask_probability_range
         mask_ratios = torch.rand(self.batch_size, generator=rng) * (max_ratio - min_ratio) + min_ratio
 
-        batch_inputs = []
-        batch_targets = []
-        for i in range(self.batch_size):
-            synthetic_text, actual_synth = create_synthetic_text(
-                original_text[i:i+1],
-                mask_ratios[i].item(),
-                self.mlm_engine,
-                self.mask_token_id,
-                rng,
-                sampling_temperature=1.0,
-                top_k=50,
-            )
-            input_with_cls = add_cls_token(synthetic_text, self.cls_token_id, self.block_size)
-            batch_inputs.append(input_with_cls)
-            batch_targets.append(actual_synth)
-
-        input_ids = torch.cat(batch_inputs, dim=0)
-        targets = torch.tensor(batch_targets, dtype=torch.float32)
+        # Call into batched synthetic generation once
+        synthetic_text, actual_synth = create_synthetic_text(
+            original_text,
+            mask_ratios,
+            self.mlm_engine,
+            self.mask_token_id,
+            rng,
+            sampling_temperature=1.0,
+            top_k=50,
+        )
+        input_ids = add_cls_token(synthetic_text, self.cls_token_id, self.block_size)
+        targets = actual_synth.float().cpu()
         return {"input_ids": input_ids, "targets": targets}
 
     def _produce_stage_based_file(self, split: str, seq: int) -> None:
@@ -204,6 +199,7 @@ class SequenceScorerProvider(DataProviderBase):
         all_targets: List[float] = []
         all_stage_info: List[Dict[str, Any]] = []
 
+        import time
         for stage_info in stage_distribution:
             stage_config = stage_info['config']
             count = stage_info['count']
@@ -213,6 +209,7 @@ class SequenceScorerProvider(DataProviderBase):
             original_sequences = [ids[i : i + (self.block_size - 1)] for i in ix]
             original_text = torch.tensor(original_sequences, dtype=torch.long)
 
+            t0 = time.time()
             synthetic_text, actual_synth = create_stage_synthetic_text(
                 original_text,
                 stage_config,
@@ -223,16 +220,27 @@ class SequenceScorerProvider(DataProviderBase):
                 sampling_temperature=1.0,
                 top_k=50,
             )
+            t1 = time.time()
 
-            for i in range(count):
-                input_with_cls = add_cls_token(synthetic_text[i:i+1], self.cls_token_id, self.block_size)
-                all_inputs.append(input_with_cls)
-            all_targets.extend([actual_synth] * count)
+            # Append inputs and targets (actual_synth is scalar float)
+            input_with_cls = add_cls_token(synthetic_text, self.cls_token_id, self.block_size)
+            all_inputs.append(input_with_cls)
+            # if actual_synth is tensor per-sample, use directly; else broadcast
+            if torch.is_tensor(actual_synth):
+                all_targets.append(actual_synth.cpu())
+            else:
+                all_targets.append(torch.full((count,), float(actual_synth), dtype=torch.float32))
             all_stage_info.extend([stage_config] * count)
+
+            if self.verbose:
+                # Compute counts
+                masked_counts = (synthetic_text[:, 1:] != original_text[:, :synthetic_text.shape[1]-1]).sum().item()
+                print(f"[sequence_scorer] stage type={stage_config.get('type')} count={count} time_ms={(t1-t0)*1000:.2f} masked_positions~={masked_counts}")
 
         if all_inputs:
             combined_inputs = torch.cat(all_inputs, dim=0)
-            combined_targets = torch.tensor(all_targets, dtype=torch.float32)
+            # all_targets may be list of tensors; concatenate then cast
+            combined_targets = torch.cat([t if torch.is_tensor(t) else torch.tensor(t, dtype=torch.float32) for t in all_targets], dim=0).to(torch.float32)
             total_samples = combined_inputs.shape[0]
             shuffle_indices = torch.randperm(total_samples, generator=rng)
             shuffled_inputs = combined_inputs[shuffle_indices]
