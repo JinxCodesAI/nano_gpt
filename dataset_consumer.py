@@ -67,6 +67,15 @@ class DatasetConsumer:
                 raise FileNotFoundError(f"meta.pkl not found at {self._meta_path}")
             with open(self._meta_path, "rb") as f:
                 self._meta = pickle.load(f)
+            # Ensure vocab_size accounts for CLS token if present
+            try:
+                cls_id = self._meta.get("cls_token_id", None)
+                vs = self._meta.get("vocab_size", None)
+                if cls_id is not None and vs is not None and cls_id >= vs:
+                    self._meta["vocab_size"] = int(cls_id) + 1
+            except Exception:
+                # Fail safely; better to proceed than crash here
+                pass
         return self._meta
 
     def schema(self, split: str) -> Optional[List[Dict]]:
