@@ -80,18 +80,20 @@ def apply_random_masking_cpu(x: torch.Tensor, mask_probability: float,
 
 class CharDiffusionProvider(DataProviderBase):
     def __init__(self, *args, **kwargs) -> None:
+        # Accept full config for dataset-specific parsing
+        cfg = kwargs.pop('config', {}) or {}
         # Extract diffusion-specific config
-        self.mask_probability = kwargs.pop('mask_probability', 0.15)
-        self.mask_token_id = kwargs.pop('mask_token_id', None)  # Will be set after vocab creation
-        self.ignore_index = kwargs.pop('ignore_index', -100)  # Default PyTorch ignore index
-        
+        self.mask_probability = cfg.get('mask_probability', 0.15)
+        self.mask_token_id = cfg.get('mask_token_id', None)  # Will be set after vocab creation
+        self.ignore_index = cfg.get('ignore_index', -100)  # Default PyTorch ignore index
+
         # Extract stage-based configuration
-        self.use_all_stages_for_training = kwargs.pop('use_all_stages_for_training', None)
-        self.unmasking_stages = kwargs.pop('unmasking_stages', None)
-        self.validation_stages = kwargs.pop('validation_stages', None)
-        
+        self.use_all_stages_for_training = cfg.get('use_all_stages_for_training', None)
+        self.unmasking_stages = cfg.get('unmasking_stages', None)
+        self.validation_stages = cfg.get('validation_stages', None)
+
         super().__init__(*args, **kwargs)
-        
+
         # Load Shakespeare data - fail if not present
         input_file_path = os.path.join(self.data_dir, 'input.txt')
         with open(input_file_path, 'r') as f:

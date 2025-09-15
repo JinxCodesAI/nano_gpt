@@ -17,22 +17,19 @@ from .synthetic_generation import (
 
 class SequenceScorerProvider(DataProviderBase):
     def __init__(self, *args, **kwargs) -> None:
+        # Accept full config for dataset-specific parsing
+        cfg = kwargs.pop('config', {}) or {}
         # Extract sequence scorer specific config
-        self.mlm_checkpoint_path = kwargs.pop('mlm_checkpoint_path')
-        self.cls_token_id = kwargs.pop('cls_token_id', 0)
+        self.mlm_checkpoint_path = cfg.get('mlm_checkpoint_path')
+        self.cls_token_id = cfg.get('cls_token_id', 0)
 
         # Stage-based configuration (optional)
-        self.use_all_stages_for_training = kwargs.pop('use_all_stages_for_training', None)
-        self.unmasking_stages = kwargs.pop('unmasking_stages', None)
-        self.validation_stages = kwargs.pop('validation_stages', None)
+        self.use_all_stages_for_training = cfg.get('use_all_stages_for_training', None)
+        self.unmasking_stages = cfg.get('unmasking_stages', None)
+        self.validation_stages = cfg.get('validation_stages', None)
 
         # Simple masking configuration
-        self.mask_probability_range = kwargs.pop('mask_probability_range', (0.1, 0.8))
-
-        # Ignore diffusion-specific kwargs that prepare.py may pass
-        kwargs.pop('mask_probability', None)
-        kwargs.pop('mask_token_id', None)
-        kwargs.pop('ignore_index', None)
+        self.mask_probability_range = cfg.get('mask_probability_range', (0.1, 0.8))
 
         super().__init__(*args, **kwargs)
 
