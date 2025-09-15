@@ -2,8 +2,9 @@
 
 # Dataset configuration
 dataset = 'sequence_scorer'
-batch_size = 16
+batch_size = 4
 block_size = 1024
+device = 'cuda'
 
 # MLM model for synthetic text generation
 mlm_checkpoint_path = 'out/7250_1.76_all_LMod_enabled.pt'  # adjust to your MLM checkpoint
