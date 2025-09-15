@@ -10,10 +10,17 @@ https://github.com/huggingface/transformers/blob/main/src/transformers/models/gp
 import math
 import inspect
 from dataclasses import dataclass
+from enum import Enum
 
 import torch
 import torch.nn as nn
 from torch.nn import functional as F
+
+class ModelMode(Enum):
+    """Defines the operational modes for the transformer model"""
+    LANGUAGE_MODEL = "language_model"      # Standard language modeling
+    TOKEN_CLASSIFIER = "token_classifier"  # Per-token classification
+    SEQUENCE_SCORER = "sequence_scorer"    # Sequence-level 0-1 scoring
 
 class RotaryPositionalEmbedding(nn.Module):
     """
@@ -114,6 +121,7 @@ class CausalSelfAttention(nn.Module):
         # flash attention make GPU go brrrrr but support is only in PyTorch >= 2.0
         self.flash = hasattr(torch.nn.functional, 'scaled_dot_product_attention')
         if not self.flash:
+            # Note: This warning occurs during model init, before logger is available
             print("WARNING: using slow attention. Flash Attention requires PyTorch >= 2.0")
             # causal mask to ensure that attention is only applied to the left in the input sequence
             self.register_buffer("bias", torch.tril(torch.ones(config.block_size, config.block_size))
@@ -183,6 +191,7 @@ class BidirectionalSelfAttention(nn.Module):
         # flash attention make GPU go brrrrr but support is only in PyTorch >= 2.0
         self.flash = hasattr(torch.nn.functional, 'scaled_dot_product_attention')
         if not self.flash:
+            # Note: This warning occurs during model init, before logger is available
             print("WARNING: using slow attention. Flash Attention requires PyTorch >= 2.0")
 
     def forward(self, x):
@@ -243,9 +252,11 @@ class Block(nn.Module):
         attention_type = getattr(config, 'attention_type', 'causal')
         if attention_type == 'bidirectional':
             self.attn = BidirectionalSelfAttention(config)
+            # Note: These messages occur during model init, before logger is available
             print("Using bidirectional attention")
         else:
             self.attn = CausalSelfAttention(config)
+            # Note: These messages occur during model init, before logger is available
             print("Using causal attention")
 
         self.ln_2 = LayerNorm(config.n_embd, bias=config.bias)
@@ -268,14 +279,46 @@ class GPTConfig:
     ignore_index: int = -100 # Standard PyTorch ignore index for loss computation
     attention_type: str = 'causal' # 'causal' for autoregressive, 'bidirectional' for BERT-style
     position_encoding: str = 'absolute' # 'absolute' or 'rotary'
+    
+    # Multi-mode support
+    mode: ModelMode = ModelMode.LANGUAGE_MODEL
+    num_token_classes: int = 2  # For token classification
+    cls_token_id: int = None  # For sequence scoring
+    
+    # Transfer learning support
+    freeze_transformer: bool = False
+    init_from_checkpoint: str = None
+    unfreeze_at_iteration: int = None
+    unfreeze_lr_multiplier: float = 0.1
+    
+    # Backward compatibility
+    binary_classification: bool = False  # Legacy support
+    
+    def __post_init__(self):
+        # Handle backward compatibility
+        if self.binary_classification and self.mode == ModelMode.LANGUAGE_MODEL:
+            self._log_warning("binary_classification=True detected, converting to TOKEN_CLASSIFIER mode")
+            self.mode = ModelMode.TOKEN_CLASSIFIER
+            self.num_token_classes = 2
+        
+        # Enforce bidirectional attention for classification tasks
+        if self.mode in [ModelMode.TOKEN_CLASSIFIER, ModelMode.SEQUENCE_SCORER]:
+            if self.attention_type != 'bidirectional':
+                self._log_warning(f"{self.mode.value} requires bidirectional attention. Changing from '{self.attention_type}' to 'bidirectional'")
+                self.attention_type = 'bidirectional'
+    
+    def _log_warning(self, message):
+        """Log warning message - will be enhanced when logger is available"""
+        print(f"WARNING: {message}")
 
 class GPT(nn.Module):
 
-    def __init__(self, config):
+    def __init__(self, config, logger=None):
         super().__init__()
         assert config.vocab_size is not None
         assert config.block_size is not None
         self.config = config
+        self.logger = logger
 
         # Create transformer components - conditionally include position embeddings
         transformer_components = dict(
@@ -288,17 +331,37 @@ class GPT(nn.Module):
         # Only add absolute position embeddings if not using RoPE
         if config.position_encoding == 'absolute':
             transformer_components['wpe'] = nn.Embedding(config.block_size, config.n_embd)
-            print("Using absolute position embeddings")
+            self._log_info("Using absolute position embeddings")
         else:
-            print("Using Rotary Position Embeddings (RoPE)")
+            self._log_info("Using Rotary Position Embeddings (RoPE)")
         
         self.transformer = nn.ModuleDict(transformer_components)
-        self.lm_head = nn.Linear(config.n_embd, config.vocab_size, bias=False)
-        # with weight tying when using torch.compile() some warnings get generated:
-        # "UserWarning: functional_call was passed multiple values for tied weights.
-        # This behavior is deprecated and will be an error in future versions"
-        # not 100% sure what this is, so far seems to be harmless. TODO investigate
-        self.transformer.wte.weight = self.lm_head.weight # https://paperswithcode.com/method/weight-tying
+        
+        # Create mode-specific output heads
+        if self.config.mode == ModelMode.LANGUAGE_MODEL:
+            # Existing language modeling head
+            self.lm_head = nn.Linear(config.n_embd, config.vocab_size, bias=False)
+            # with weight tying when using torch.compile() some warnings get generated:
+            # "UserWarning: functional_call was passed multiple values for tied weights.
+            # This behavior is deprecated and will be an error in future versions"
+            # not 100% sure what this is, so far seems to be harmless. TODO investigate
+            self.transformer.wte.weight = self.lm_head.weight # https://paperswithcode.com/method/weight-tying
+        elif self.config.mode == ModelMode.TOKEN_CLASSIFIER:
+            # Token-level classification head
+            self.lm_head = nn.Linear(config.n_embd, config.num_token_classes, bias=False)
+            self._log_info(f"Token classifier head: {config.num_token_classes} classes per token")
+        elif self.config.mode == ModelMode.SEQUENCE_SCORER:
+            # Sequence-level scoring head
+            self.sequence_head = nn.Sequential(
+                nn.Linear(config.n_embd, 1, bias=False),
+                nn.Sigmoid()
+            )
+            # Initialize with small weights for stability
+            with torch.no_grad():
+                self.sequence_head[0].weight.normal_(0.0, 0.01)
+            self._log_info("Sequence scorer head: continuous score 0-1")
+        else:
+            raise ValueError(f"Unknown model mode: {self.config.mode}")
 
         # init all weights
         self.apply(self._init_weights)
@@ -307,8 +370,69 @@ class GPT(nn.Module):
             if pn.endswith('c_proj.weight'):
                 torch.nn.init.normal_(p, mean=0.0, std=0.02/math.sqrt(2 * config.n_layer))
 
+        # Transfer learning: load pretrained weights if specified
+        if config.init_from_checkpoint is not None and config.init_from_checkpoint != "":
+            self._load_pretrained_checkpoint(config.init_from_checkpoint)
+        
+        # Transfer learning: freeze transformer if requested
+        if config.freeze_transformer:
+            self.freeze_transformer_weights()
+        
         # report number of parameters
-        print("number of parameters: %.2fM" % (self.get_num_params()/1e6,))
+        self._log_info("number of parameters: %.2fM" % (self.get_num_params()/1e6,))
+
+    def _log_info(self, message):
+        """Log info message using logger if available, otherwise print."""
+        if self.logger:
+            self.logger.log_info(message)
+        else:
+            print(message)
+
+    def _load_pretrained_checkpoint(self, checkpoint_path):
+        """Load pretrained weights, excluding heads"""
+        self._log_info(f"Loading pretrained weights from {checkpoint_path}")
+        checkpoint = torch.load(checkpoint_path, map_location='cpu', weights_only=False)
+        
+        state_dict = checkpoint.get('model', checkpoint)
+        
+        # Filter transformer weights, exclude heads
+        transformer_state_dict = {}
+        for k, v in state_dict.items():
+            clean_key = k.replace('_orig_mod.', '')  # Remove torch.compile prefix
+            if (clean_key.startswith('transformer.') and 
+                not clean_key.startswith('lm_head') and 
+                not clean_key.startswith('sequence_head')):
+                transformer_state_dict[clean_key] = v
+        
+        # Load with strict=False to allow missing head weights
+        missing_keys, unexpected_keys = self.load_state_dict(transformer_state_dict, strict=False)
+        self._log_info(f"Loaded transformer weights: {len(missing_keys)} missing (expected for new heads), {len(unexpected_keys)} unexpected")
+
+    def freeze_transformer_weights(self):
+        """Freeze transformer for feature extraction"""
+        self._log_info("Freezing transformer weights for feature extraction")
+        for param in self.transformer.parameters():
+            param.requires_grad = False
+        # Keep heads trainable
+        if hasattr(self, 'lm_head'):
+            for param in self.lm_head.parameters():
+                param.requires_grad = True
+        if hasattr(self, 'sequence_head'):
+            for param in self.sequence_head.parameters():
+                param.requires_grad = True
+
+    def unfreeze_transformer_weights(self):
+        """Unfreeze transformer for full fine-tuning"""
+        self._log_info("Unfreezing transformer weights for fine-tuning")
+        for param in self.transformer.parameters():
+            param.requires_grad = True
+
+    def get_frozen_status(self):
+        """Check if transformer is frozen"""
+        for param in self.transformer.parameters():
+            if param.requires_grad:
+                return False
+        return True
 
     def get_num_params(self, non_embedding=True):
         """
@@ -351,40 +475,113 @@ class GPT(nn.Module):
             x = block(x)
         x = self.transformer.ln_f(x)
 
+        # Mode-specific output and loss computation
+        if self.config.mode == ModelMode.SEQUENCE_SCORER:
+            return self._forward_sequence_scorer(x, targets, loss_modifiers)
+        elif self.config.mode == ModelMode.TOKEN_CLASSIFIER:
+            return self._forward_token_classifier(x, targets, loss_modifiers)
+        else:  # LANGUAGE_MODEL
+            return self._forward_language_model(x, targets, loss_modifiers)
+
+    def _forward_sequence_scorer(self, x, targets, loss_modifiers):
+        """Sequence scoring forward pass"""
+        cls_output = x[:, 0, :]  # Extract [CLS] token
+        logits = self.sequence_head(cls_output).squeeze(-1)
+        
         if targets is not None:
-            # if we are given some desired targets also calculate the loss
-            logits = self.lm_head(x)
+            base_loss = F.mse_loss(logits, targets.float())
             
-            # Calculate base loss
+            # Apply loss modifiers if available and compatible with sequence scoring
             if loss_modifiers is not None and not loss_modifiers.is_empty():
-                # Compute per-position cross-entropy once for modifier pipeline
-                # logits: (b, t, vocab)
-                # targets: (b, t)
-                flat_logits = logits.view(-1, logits.size(-1))      # (b*t, vocab)
-                flat_targets = targets.view(-1)                     # (b*t,)
+                # Note: Some modifiers may not be applicable to sequence scoring
+                loss = loss_modifiers.modify_loss(
+                    logits.unsqueeze(-1), targets, base_loss,
+                    model_mode=self.config.mode
+                )
+            else:
+                loss = base_loss
+        else:
+            loss = None
+        
+        return logits, loss
+
+    def _forward_token_classifier(self, x, targets, loss_modifiers):
+        """Token classification forward pass"""
+        logits = self.lm_head(x)
+        
+        if targets is not None:
+            num_classes = self.config.num_token_classes
+            if targets.dim() == 3:  # Soft targets
+                base_loss = F.cross_entropy(logits.view(-1, num_classes), targets.view(-1, num_classes))
+            else:  # Hard targets with dynamic weighting
+                base_loss = self._compute_weighted_classification_loss(logits, targets, num_classes)
+            
+            # Apply loss modifiers if available
+            if loss_modifiers is not None and not loss_modifiers.is_empty():
+                mask = targets != -1  # Valid token mask
+                loss = loss_modifiers.modify_loss(
+                    logits, targets, base_loss, mask=mask,
+                    ignore_index=-1, model_mode=self.config.mode
+                )
+            else:
+                loss = base_loss
+        else:
+            loss = None
+        
+        return logits, loss
+
+    def _forward_language_model(self, x, targets, loss_modifiers):
+        """Language modeling forward pass (existing logic)"""
+        if targets is not None:
+            logits = self.lm_head(x)
+            if loss_modifiers is not None and not loss_modifiers.is_empty():
+                # Existing loss modifier logic
+                flat_logits = logits.view(-1, logits.size(-1))
+                flat_targets = targets.view(-1)
                 per_position_loss = F.cross_entropy(
                     flat_logits, flat_targets,
                     ignore_index=self.config.ignore_index,
                     reduction='none'
-                )                                                   # (b*t,)
-                per_position_loss = per_position_loss.view(b, t)    # (b, t)
-
-                # Create mask for valid positions (not ignored)
+                )
+                per_position_loss = per_position_loss.view(targets.size(0), targets.size(1))
                 mask = targets != self.config.ignore_index
-
-                # Provide a baseline scalar (mean over valid positions) but allow pipeline to replace via per_position_loss
                 base_loss = (per_position_loss * mask.float()).sum() / (mask.float().sum() + 1e-8)
                 loss = loss_modifiers.modify_loss(
-                    logits, targets, base_loss, mask=mask, per_position_loss=per_position_loss, ignore_index=self.config.ignore_index
+                    logits, targets, base_loss, mask=mask, 
+                    per_position_loss=per_position_loss, 
+                    ignore_index=self.config.ignore_index,
+                    model_mode=self.config.mode
                 )
             else:
                 loss = F.cross_entropy(logits.view(-1, logits.size(-1)), targets.view(-1), ignore_index=self.config.ignore_index)
         else:
-            # inference-time mini-optimization: only forward the lm_head on the very last position
-            logits = self.lm_head(x[:, [-1], :]) # note: using list [-1] to preserve the time dim
+            # Inference optimization
+            logits = self.lm_head(x[:, [-1], :])
             loss = None
-
+        
         return logits, loss
+
+    def _compute_weighted_classification_loss(self, logits, targets, num_classes):
+        """Compute classification loss with dynamic class weighting for imbalanced datasets"""
+        flattened_targets = targets.view(-1)
+        valid_targets = flattened_targets[flattened_targets != -1]
+
+        if len(valid_targets) > 0 and num_classes > 1:
+            # Dynamic class weighting for imbalanced datasets
+            unique, counts = torch.unique(valid_targets, return_counts=True)
+            n_samples = len(valid_targets)
+
+            class_weights = torch.zeros(num_classes, device=targets.device, dtype=logits.dtype)
+            for cls, count in zip(unique, counts):
+                if cls < num_classes:  # Ensure class index is valid
+                    class_weights[cls] = n_samples / (num_classes * count)
+
+            loss = F.cross_entropy(logits.view(-1, num_classes), flattened_targets,
+                                 weight=class_weights, ignore_index=-1)
+        else:
+            loss = F.cross_entropy(logits.view(-1, num_classes), flattened_targets, ignore_index=-1)
+        
+        return loss
 
     def crop_block_size(self, block_size):
         # model surgery to decrease the block size if necessary
@@ -417,6 +614,7 @@ class GPT(nn.Module):
         # only dropout can be overridden see more notes below
         assert all(k == 'dropout' for k in override_args)
         from transformers import GPT2LMHeadModel
+        # Note: This is a class method, so we use print directly as no logger instance is available
         print("loading weights from pretrained gpt: %s" % model_type)
 
         # n_layer, n_head and n_embd are determined from model_type
@@ -426,12 +624,14 @@ class GPT(nn.Module):
             'gpt2-large':   dict(n_layer=36, n_head=20, n_embd=1280), # 774M params
             'gpt2-xl':      dict(n_layer=48, n_head=25, n_embd=1600), # 1558M params
         }[model_type]
+        # Note: This is a class method, so we use print directly as no logger instance is available
         print("forcing vocab_size=50257, block_size=1024, bias=True")
         config_args['vocab_size'] = 50257 # always 50257 for GPT model checkpoints
         config_args['block_size'] = 1024 # always 1024 for GPT model checkpoints
         config_args['bias'] = True # always True for GPT model checkpoints
         # we can override the dropout rate, if desired
         if 'dropout' in override_args:
+            # Note: This is a class method, so we use print directly as no logger instance is available
             print(f"overriding dropout rate to {override_args['dropout']}")
             config_args['dropout'] = override_args['dropout']
         # create a from-scratch initialized minGPT model
@@ -482,14 +682,14 @@ class GPT(nn.Module):
         ]
         num_decay_params = sum(p.numel() for p in decay_params)
         num_nodecay_params = sum(p.numel() for p in nodecay_params)
-        print(f"num decayed parameter tensors: {len(decay_params)}, with {num_decay_params:,} parameters")
-        print(f"num non-decayed parameter tensors: {len(nodecay_params)}, with {num_nodecay_params:,} parameters")
+        self._log_info(f"num decayed parameter tensors: {len(decay_params)}, with {num_decay_params:,} parameters")
+        self._log_info(f"num non-decayed parameter tensors: {len(nodecay_params)}, with {num_nodecay_params:,} parameters")
         # Create AdamW optimizer and use the fused version if it is available
         fused_available = 'fused' in inspect.signature(torch.optim.AdamW).parameters
         use_fused = fused_available and device_type == 'cuda'
         extra_args = dict(fused=True) if use_fused else dict()
         optimizer = torch.optim.AdamW(optim_groups, lr=learning_rate, betas=betas, **extra_args)
-        print(f"using fused AdamW: {use_fused}")
+        self._log_info(f"using fused AdamW: {use_fused}")
 
         return optimizer
 

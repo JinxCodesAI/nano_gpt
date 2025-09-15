@@ -61,6 +61,7 @@ def create_loss_modifier_pipeline(config):
     if entropy_enabled:
         entropy_config = {
             'enabled': True,
+            'verbose': get_config_value('entropy_modifier_verbose', False),
             'weight': get_config_value('entropy_modifier_weight', 1.0),
             'entropy_threshold': get_config_value('entropy_modifier_threshold', 0.0),
             'eps': get_config_value('entropy_modifier_eps', 1e-8),
@@ -70,10 +71,23 @@ def create_loss_modifier_pipeline(config):
     # Target Smoothing Modifier
     smoothing_enabled = get_config_value('target_smoothing_enabled', False)
     if smoothing_enabled:
+        special_tokens_raw = get_config_value('target_smoothing_special_tokens', [])
+        
+        # Parse special tokens - handle both list and comma-delimited string formats
+        if isinstance(special_tokens_raw, str):
+            if special_tokens_raw.strip():
+                special_tokens = [int(x.strip()) for x in special_tokens_raw.split(',')]
+            else:
+                special_tokens = []
+        elif isinstance(special_tokens_raw, list):
+            special_tokens = special_tokens_raw
+        else:
+            special_tokens = []
+        
         smoothing_config = {
             'enabled': True,
             'smoothing_factor': get_config_value('target_smoothing_factor', 0.1),
-            'special_token_ids': get_config_value('target_smoothing_special_tokens', []),
+            'special_token_ids': special_tokens,
             'exclude_padding': get_config_value('target_smoothing_exclude_padding', True),
             'padding_token_id': get_config_value('target_smoothing_padding_token', -100),
         }

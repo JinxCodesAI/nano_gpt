@@ -10,4 +10,4 @@ __pycache__/
 env/
 venv/
 wandb/
-out/*.txt
+out/*

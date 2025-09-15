@@ -35,68 +35,123 @@ python train.py --loss_modifiers_enabled=True \
 
 ### 1. Entropy Modifier
 
-Purpose: Focus training on samples where the model’s wrong‑answer distribution is more uniform (higher information content), and penalize samples where wrong answer probability concentrates in few tokens.
+Purpose: Focus training on samples where the model's wrong‑answer distribution is more uniform (higher information content), and penalize samples where wrong answer probability concentrates in few tokens. Uses **normalized entropy** that is vocabulary-size independent.
 
 Intuition:
-- High entropy across wrong answers → more diffuse/confidently wrong → lower penalty (lower weight multiplier).
-- Low entropy (concentrated wrong answers) → higher penalty (higher weight multiplier per sample).
+- **High normalized entropy (→1.0)**: wrong answers uniformly distributed → lower penalty (lower weight multiplier)
+- **Low normalized entropy (→0.0)**: wrong answers concentrated on few tokens → higher penalty (higher weight multiplier)
+- **Vocabulary-size independent**: entropy normalized to [0,1] range for consistent behavior across different models
 
 Parameters (from config or CLI):
 - entropy_modifier_weight (float, default 1.0): Base factor in the per-sample multiplier.
-- entropy_modifier_threshold (float, default 0.0): Minimum entropy floor when computing per-sample multipliers.
+- entropy_modifier_threshold (float, default 0.0): Minimum normalized entropy floor when computing per-sample multipliers (range: [0,1]).
 - entropy_modifier_eps (float, default 1e-8): Numerical stability for logs/divisions.
+- entropy_modifier_verbose (bool, default False): Enable verbose logging of calculation irregularities and safety corrections.
 
 Configuration example:
 ```python
 loss_modifiers_enabled = True
+
 entropy_modifier_enabled = True
-entropy_modifier_weight = 1.0
-entropy_modifier_threshold = 0.1
+entropy_modifier_weight = 0.1
+entropy_modifier_threshold = 0.0
 entropy_modifier_eps = 1e-8
+entropy_modifier_verbose = False  # Set to True for debugging
 ```
 
 Mechanics (how it works):
 1) Compute softmax over logits to get per‑token probabilities p.
 2) Zero out the probability of the correct token; renormalize remaining mass over wrong tokens only to get q (distribution over wrong answers).
-3) Per‑position entropy: H = -Σ_i q_i log(q_i). If all mass is on the correct token (no wrong mass), H is treated as 0.
-4) If a mask is provided, per‑position entropies are masked accordingly.
-5) Compute per‑sample entropy as the mean (or masked mean) across positions.
-6) Compute per-sample weights w_i = entropy_modifier_weight / (clamp(H_i, min=entropy_threshold) + eps).
-7) Aggregate per-position loss to per-sample loss and multiply by w_i; final loss is mean over samples.
+3) Per‑position raw entropy: H_raw = -Σ_i q_i log(q_i). If all mass is on the correct token (no wrong mass), H_raw is treated as 0.
+4) **Normalize entropy**: H_norm = H_raw / log(N_wrong) where N_wrong is the count of wrong tokens with non-negligible probability. This produces vocabulary-size independent values in [0,1].
+5) If a mask is provided, per‑position normalized entropies are masked accordingly.
+6) Compute per‑sample entropy as the mean (or masked mean) across positions.
+7) Compute per-sample weights w_i = entropy_modifier_weight / (clamp(H_i, min=entropy_threshold) + eps).
+8) **Normalize weights to preserve batch mean**: Scale weights so sum(w_i) = batch_size.
+9) Aggregate per-position loss to per-sample loss and multiply by w_i; final loss is mean over samples.
 
 Per-sample illustration (sample weights):
-Assume batch size = 4, per-sample entropies after per-position averaging are H = [0.2, 0.6, 1.0, 0.4], threshold=0.5, weight=1.0.
+Assume batch size = 4, per-sample **normalized** entropies after per-position averaging are H = [0.2, 0.6, 1.0, 0.4], threshold=0.5, weight=1.0.
 - Clamped entropies: H* = [0.5, 0.6, 1.0, 0.5]
-- Per-sample weights w = 1 / (H* + eps) ≈ [2.0, 1.667, 1.0, 2.0]
+- Raw weights w_raw = 1 / (H* + eps) ≈ [2.0, 1.667, 1.0, 2.0] 
+- Sum of raw weights: 6.667
+- **Normalized weights**: w = w_raw × (4 / 6.667) ≈ [1.2, 1.0, 0.6, 1.2] (sum = 4.0)
 - Final loss = mean_i(w_i * L_i) where L_i is the per-sample masked mean loss.
+
+**Note**: Weight normalization preserves the original batch mean while applying entropy-based reweighting.
 
 
 What is entropy_modifier_threshold?
-- entropy_modifier_threshold: A floor applied during dynamic weighting to prevent very small entropies from collapsing the weight. It clamps each per‑sample entropy to at least this value before averaging.
+- entropy_modifier_threshold: A floor applied during dynamic weighting to prevent very small normalized entropies from collapsing the weight. It clamps each per‑sample entropy to at least this value (range [0,1]) before averaging. Now vocabulary-size independent!
 
 Logged metrics:
-- mean_entropy: Mean per‑position wrong‑answer entropy (masked if provided).
-- max_entropy, min_entropy, entropy_std: Range and variability of entropies.
-- entropy_weight: The final batch multiplier (mean clamped per‑sample entropy × entropy_modifier_weight).
+
+**Per-Position Entropy** (all sequence positions):
+- per_position_mean_entropy: Mean normalized entropy across all positions [0,1]
+- per_position_max_entropy, per_position_min_entropy: Range of position entropies [0,1] 
+- per_position_entropy_std: Standard deviation of position entropies
+
+**Per-Sample Entropy** (averaged per sequence):
+- sample_mean_entropy: Mean of per-sample entropies [0,1]
+- sample_max_entropy, sample_min_entropy: Range of sample-averaged entropies [0,1]
+- sample_entropy_std: Standard deviation of per-sample entropies
+
+**Weight Statistics** (after normalization):
+- weight_mean: Mean per-sample weight (should ≈ 1.0 due to normalization)
+- weight_max, weight_min: Range of normalized per-sample weights  
+- weight_std: Standard deviation of per-sample weights
+
+**Loss Modification**:
+- original_loss: Input loss value before modification
+- final_loss: Output loss value after entropy weighting
+- loss_ratio: final_loss / original_loss (should ≈ 1.0 due to mean preservation)
+- loss_fallback: Boolean, true if fallback to original loss occurred
+
+**Batch Info**:
+- batch_size: Number of samples in batch
+- weight_sum: Sum of normalized weights (should ≈ batch_size)
+
+**All entropy metrics are vocabulary-size independent and bounded in [0,1].**
+
+### Verbose Mode Debug Logging
+
+Enable verbose logging with `entropy_modifier_verbose = True` to monitor calculation irregularities:
+
+```python
+entropy_modifier_verbose = True  # Enable detailed logging
+```
+
+Verbose mode reports:
+- **Positions with no wrong answer probability**: When model is extremely confident 
+- **Positions with ≤1 wrong token**: Cannot compute meaningful entropy (forced to 0)
+- **Entropy values clamped**: Values outside [0,1] range corrected
+- **Non-finite values detected**: NaN/inf values replaced with safe defaults
+- **Per-sample weight ranges**: Min/max weights applied to loss samples
+- **Extreme weights clamped**: Very high/low weights bounded to reasonable range
+- **Loss modification ratios**: Before/after loss comparison
+- **Non-finite metrics corrected**: Safety fallbacks for logging values
+
+Use verbose mode during development to ensure entropy calculation behaves as expected.
 
 Worked example:
 Suppose batch_size=2, seq_len=2, vocab_size=4. Targets = [[2, 1], [0, 3]]. Consider the first token of sample 1 with logits [2.0, 1.0, 4.0, 0.5] and target=2.
 - Softmax p ≈ [0.100, 0.037, 0.848, 0.015]. Zero out the correct token (index 2): wrong mass ≈ 0.152.
 - Renormalize over wrong tokens: q ≈ [0.100/0.152, 0.037/0.152, 0.015/0.152, (target=2 is 0)] ≈ [0.658, 0.243, 0.099, 0.000].
-- Entropy H = -Σ q_i log(q_i) ≈ -(0.658 ln 0.658 + 0.243 ln 0.243 + 0.099 ln 0.099) ≈ 0.90 nats.
+- Raw entropy H_raw = -Σ q_i log(q_i) ≈ -(0.658 ln 0.658 + 0.243 ln 0.243 + 0.099 ln 0.099) ≈ 0.90 nats.
+- **Normalized entropy**: 3 wrong tokens have probability > eps, so max_entropy = ln(3) ≈ 1.099. H_norm = 0.90 / 1.099 ≈ **0.82**.
 
-If the average per‑sample entropy across its positions is, say, H_s1=0.8 and H_s2=0.4, with entropy_modifier_threshold=0.5 and entropy_modifier_weight=1.0:
-- Clamp: H*_s1 = max(0.8, 0.5) = 0.8; H*_s2 = max(0.4, 0.5) = 0.5.
-- batch_weight = mean([0.8, 0.5]) = 0.65.
-- Final loss = original_loss * 0.65 (lower than baseline because average wrong‑answer entropy is modest; if entropies were higher, the weight would be higher).
+If the average per‑sample **normalized** entropy across positions is H_s1=0.7 and H_s2=0.3, with entropy_modifier_threshold=0.5 and entropy_modifier_weight=1.0:
+- Clamp: H*_s1 = max(0.7, 0.5) = 0.7; H*_s2 = max(0.3, 0.5) = 0.5.
+- Per-sample weights: w = [1/0.7, 1/0.5] ≈ [1.43, 2.0]
+- Final loss = mean([1.43 * L_1, 2.0 * L_2]) where L_i are per-sample losses.
 
-Same batch, effect with always-dynamic weighting:
-- Given H = [0.8, 0.4] and threshold=0.5:
-  - H* = [0.8, 0.5]
-  - batch_weight = mean(H*) = (0.8 + 0.5)/2 = 0.65
-  - Final loss = original_loss × 0.65
+**Key improvement**: The normalized entropy value 0.82 is now meaningful regardless of vocabulary size!
 
-Observation: With always-dynamic weighting, entropy directly influences the single batch scalar applied to the loss every step.
+Same batch with normalized entropy, old behavior comparison:
+- **Before normalization** (vocabulary-dependent): Raw entropy values varied by vocab size
+- **After normalization** (vocabulary-independent): H = [0.7, 0.3] are comparable across all vocabulary sizes
+- Per-sample weights w = [1/0.7, 1/0.3] ≈ [1.43, 3.33] with threshold=0.0
+- **Consistent behavior**: Same entropy threshold and weight settings work across different models!
 
 Use cases:
 - Emphasize updates when the model’s wrong predictions are diverse (more informative errors).
@@ -134,39 +189,85 @@ target_smoothing_padding_token = -100            # Padding token ID
 
 ### 3. Mask Ratio Weight Modifier
 
-Purpose: Adjust loss based on how many valid (non-masked) tokens a sequence contains. Sequences with fewer valid tokens receive higher weights to compensate for lower signal.
+**Purpose**: Balance training when dealing with sequences that have varying amounts of valid (non-masked) tokens. Applies higher weights to sequences with fewer valid tokens to compensate for reduced signal in the loss calculation.
 
-Definitions:
-- mask: Boolean tensor (batch_size, seq_len) where True indicates a valid position. If not provided, the modifier infers mask from targets using ignore_index (default -100).
-- mask_ratio (per sequence): sum(mask_i) / seq_len.
+**Intuition**: Sequences with fewer valid tokens (higher masking) should receive proportionally higher weights during training to ensure they contribute meaningfully to parameter updates. The modifier uses inverse power weighting: `weight = 1 / (mask_ratio^power)`.
 
-Parameters:
-- mask_ratio_weight_power (float, default 0.5): Exponent for inverse weighting; if 0.5, weight = 1/sqrt(mask_ratio).
-- mask_ratio_weight_min, mask_ratio_weight_max (floats, defaults 0.1 and 10.0): Clamp bounds for weights.
-- mask_ratio_weight_eps (float, default 1e-8): Numerical stability for divisions and zero ratios.
+**Parameters** (from config or CLI):
+- `mask_ratio_weight_power` (float, default 0.5): Power for inverse weighting. Common values:
+  - 0.5: Square root weighting `1/√(mask_ratio)` - moderate emphasis on sparse sequences
+  - 1.0: Linear inverse weighting `1/mask_ratio` - strong emphasis on sparse sequences
+  - 0.25: Fourth root weighting - gentle emphasis on sparse sequences
+- `mask_ratio_weight_min_weight` (float, default 0.1): Minimum weight clamp to prevent extreme deweighting
+- `mask_ratio_weight_max_weight` (float, default 10.0): Maximum weight clamp to prevent extreme upweighting
+- `mask_ratio_weight_eps` (float, default 1e-8): Numerical stability epsilon for divisions
 
-Computation (always sequence-level):
-1) If mask is None, infer mask as (targets != ignore_index), where ignore_index defaults to -100 (or can be passed via modifier kwargs).
-2) Compute mask_ratio per sequence: r_i = sum(mask_i) / (seq_len + eps)
-3) Compute weight per sequence: w_i = clamp((r_i + eps)^(-power), min_weight, max_weight)
-4) Compute per-position loss with reduction='none', reshape to [B, T].
-5) Mask and average per sequence: L_i = sum(loss_i * mask_i) / (sum(mask_i) + eps)
-6) Final loss = mean_i(w_i * L_i)
+**Configuration**:
+```python
+loss_modifiers_enabled = True
 
-Examples (sequence-level):
-- Assume batch_size=2, seq_len=4, power=0.5, min=0.1, max=10.0, ignore_index=-100
-- targets_1 = [5, -100, -100, -100] → mask_1 = [1, 0, 0, 0] → r_1 = 1/4 = 0.25 → w_1 = 1/sqrt(0.25) = 2.0
-- targets_2 = [3, 4, 1, 2] → mask_2 = [1, 1, 1, 1] → r_2 = 4/4 = 1.0 → w_2 = 1/sqrt(1.0) = 1.0
-- Suppose per-sequence masked losses: L_1 = 2.0, L_2 = 1.0
-- Final loss = mean([2.0*2.0, 1.0*1.0]) = mean([4.0, 1.0]) = 2.5
+mask_ratio_weight_enabled = True
+mask_ratio_weight_power = 0.5        # Square root inverse weighting
+mask_ratio_weight_min_weight = 0.1   # Prevent extreme deweighting
+mask_ratio_weight_max_weight = 10.0  # Prevent extreme upweighting  
+mask_ratio_weight_eps = 1e-8         # Numerical stability
+```
 
-Use cases:
-- Balance training with variable sequence lengths or heavy padding.
-- Emphasize sequences with fewer valid tokens to avoid under-training them.
+**Mechanics** (how it works):
+1) **Mask inference**: If no mask provided, infer from targets: `mask = (targets != ignore_index)` where `ignore_index` defaults to -100
+2) **Ratio calculation**: Per-sequence mask ratio: `r_i = sum(mask_i) / seq_len`
+3) **Weight computation**: Per-sequence weight: `w_i = clamp(1 / (r_i + eps)^power, min_weight, max_weight)`
+4) **Loss aggregation**: Compute per-position CE loss, mask invalid positions, average per sequence: `L_i = sum(loss_i * mask_i) / (sum(mask_i) + eps)`
+5) **Final weighting**: Apply sequence weights: `final_loss = mean_i(w_i * L_i)`
 
-Metrics logged:
-- mean_mask_ratio, min_mask_ratio, max_mask_ratio
-- mean_weight, min_weight, max_weight, weight_std
+**Worked Example**:
+Batch with 3 sequences, seq_len=4, power=0.5, min_weight=0.1, max_weight=10.0:
+
+```python
+# Sample sequences with different masking patterns
+targets = [
+    [5, 10, -100, -100],    # 50% valid tokens
+    [3, 4, 1, 2],           # 100% valid tokens  
+    [7, -100, -100, -100]   # 25% valid tokens
+]
+
+# Mask ratios
+mask_ratios = [0.5, 1.0, 0.25]
+
+# Compute weights: w_i = 1 / sqrt(r_i)
+weights = [
+    1/√(0.5) ≈ 1.41,   # Moderate upweight
+    1/√(1.0) = 1.0,    # No reweighting
+    1/√(0.25) = 2.0    # Strong upweight
+]
+
+# If per-sequence losses are [1.5, 1.2, 2.0]:
+# Final loss = mean([1.41*1.5, 1.0*1.2, 2.0*2.0]) 
+#            = mean([2.12, 1.2, 4.0]) = 2.44
+```
+
+**Weight Distribution Analysis**:
+- **High mask ratio (1.0)**: Full sequence valid → weight ≈ 1.0 (baseline)
+- **Medium mask ratio (0.5)**: Half sequence valid → weight ≈ 1.41 (+41% emphasis)  
+- **Low mask ratio (0.25)**: Quarter sequence valid → weight = 2.0 (+100% emphasis)
+- **Very low mask ratio (0.1)**: Heavy masking → weight ≈ 3.16 (clamped if > max_weight)
+
+**Use Cases**:
+- **Variable sequence padding**: Balance training when sequences have different amounts of padding
+- **Masked language modeling**: Emphasize sequences with fewer unmasked tokens
+- **Sparse supervision**: Give more weight to samples with limited supervision signal
+- **Curriculum learning**: Gradually increase emphasis on heavily masked sequences
+
+**Metrics Logged**:
+
+**Mask Statistics**:
+- `mean_mask_ratio`: Average ratio of valid tokens across batch [0,1]
+- `min_mask_ratio`, `max_mask_ratio`: Range of mask ratios in batch [0,1]
+
+**Weight Statistics**:
+- `mean_weight`: Average applied weight across sequences
+- `min_weight`, `max_weight`: Range of applied weights [min_weight, max_weight]
+- `weight_std`: Standard deviation of sequence weights
 
 ## Configuration Files
 

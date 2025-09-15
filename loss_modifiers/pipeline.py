@@ -7,6 +7,7 @@ for the training loop and handles metric collection from all modifiers.
 """
 
 from typing import List, Dict, Any, Optional
+from contextlib import contextmanager
 import torch
 from .base import BaseLossModifier
 
@@ -29,6 +30,7 @@ class LossModifierPipeline:
         """
         self.modifiers = modifiers or []
         self._enabled_modifiers = []
+        self._temporarily_disabled = False
         self._update_enabled_modifiers()
     
     def add_modifier(self, modifier: BaseLossModifier) -> None:
@@ -50,6 +52,7 @@ class LossModifierPipeline:
         logits: torch.Tensor,
         targets: torch.Tensor,
         loss: torch.Tensor,
+        model_mode=None,
         **kwargs
     ) -> torch.Tensor:
         """
@@ -66,8 +69,17 @@ class LossModifierPipeline:
         Returns:
             Modified loss tensor after applying all enabled modifiers
         """
-        # If no enabled modifiers, return original loss (zero overhead)
-        if not self._enabled_modifiers:
+        # If no enabled modifiers or temporarily disabled, return original loss (zero overhead)
+        if not self._enabled_modifiers or self._temporarily_disabled:
+            return loss
+
+        # Filter modifiers by mode compatibility
+        compatible_modifiers = [
+            m for m in self._enabled_modifiers 
+            if model_mode is None or m.supports_mode(model_mode)
+        ]
+        
+        if not compatible_modifiers:
             return loss
 
         # Track optional per-position loss tensor through the pipeline
@@ -77,11 +89,11 @@ class LossModifierPipeline:
         extra_kwargs = dict(kwargs)
 
         modified_loss = loss
-        for modifier in self._enabled_modifiers:
+        for modifier in compatible_modifiers:
             # Pass current per_position_loss along
             if per_position_loss is not None:
                 extra_kwargs['per_position_loss'] = per_position_loss
-            result = modifier.modify_loss(logits, targets, modified_loss, **extra_kwargs)
+            result = modifier.modify_loss(logits, targets, modified_loss, model_mode=model_mode, **extra_kwargs)
 
             # Support both scalar return and dict return with possible per_position_loss replacement
             if isinstance(result, dict):
@@ -132,3 +144,37 @@ class LossModifierPipeline:
     def get_enabled_modifier_names(self) -> List[str]:
         """Get names of all enabled modifiers for logging."""
         return [mod.__class__.__name__ for mod in self._enabled_modifiers]
+    
+    @contextmanager
+    def temporarily_disabled(self):
+        """
+        Context manager to temporarily disable all loss modifiers.
+        
+        This is useful during validation/evaluation to ensure consistent 
+        baseline loss calculations that aren't affected by training-specific
+        loss modifications.
+        
+        Usage:
+            with loss_modifier_pipeline.temporarily_disabled():
+                logits, loss = model(X, Y, loss_modifiers=loss_modifier_pipeline)
+                # loss will be unmodified standard cross-entropy
+        """
+        old_state = self._temporarily_disabled
+        self._temporarily_disabled = True
+        try:
+            yield
+        finally:
+            self._temporarily_disabled = old_state
+    
+    def set_temporarily_disabled(self, disabled: bool) -> None:
+        """
+        Manually set the temporarily disabled state.
+        
+        Args:
+            disabled: If True, all modifiers will be bypassed until set to False
+        """
+        self._temporarily_disabled = disabled
+    
+    def is_temporarily_disabled(self) -> bool:
+        """Check if the pipeline is temporarily disabled."""
+        return self._temporarily_disabled

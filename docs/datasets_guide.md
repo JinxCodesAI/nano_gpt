@@ -49,19 +49,26 @@ class ShakespeareCharProvider(DataProviderBase):
         return {"x": x, "y": y}
 ````
 
-### Step 2: Register your Provider for prepare.py
-prepare.py uses a simple registry to map dataset name to the provider class.
+### Step 2: Provider discovery and config passing
+prepare.py discovers your provider by convention and injects the full training config.
 
-Open prepare.py and add to _provider_for_dataset:
+- Convention: create data/<dataset>/prepare_streaming.py and define a subclass of DataProviderBase. Optionally export `Provider = YourProvider`.
+- Discovery: prepare.py imports `data.<dataset>.prepare_streaming` and uses `Provider` symbol if present, otherwise the single DataProviderBase subclass found.
+- Config injection: prepare.py calls `Provider(data_dir=..., batch_size=..., block_size=..., ..., config=cfg)` where `cfg` is the entire config dict loaded from your config .py.
+
+Your provider should parse dataset-specific settings from `config` in its __init__, e.g.:
 
 ````python
-registry = {
-    'shakespeare_char': ('data.shakespeare_char.prepare_streaming', 'ShakespeareCharProvider'),
-    'your_dataset': ('data.your_dataset.prepare_streaming', 'YourProvider'),
-}
+class YourProvider(DataProviderBase):
+    def __init__(self, *args, **kwargs):
+        cfg = kwargs.pop('config', {}) or {}
+        self.some_setting = cfg.get('some_setting', default)
+        super().__init__(*args, **kwargs)
 ````
 
-Ensure the dataset name matches your config's dataset variable.
+Do not modify prepare.py to add dataset-specific kwargs. Keep prepare.py dataset-agnostic.
+
+Ensure the dataset name in your config matches your folder name under data/.
 
 ### Step 3: Create or adapt a training config
 Create config/your_config.py (e.g., config/train_shakespeare_char.py). At minimum, set:

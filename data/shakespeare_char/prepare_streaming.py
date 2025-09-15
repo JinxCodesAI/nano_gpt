@@ -15,6 +15,8 @@ from data.common.provider_base import DataProviderBase
 
 class ShakespeareCharProvider(DataProviderBase):
     def __init__(self, *args, **kwargs) -> None:
+        # Accept and ignore dataset-specific config if provided to keep base signature clean
+        self.config = kwargs.pop('config', None)
         super().__init__(*args, **kwargs)
         # load or download data
         input_file_path = os.path.join(self.data_dir, 'input.txt')
