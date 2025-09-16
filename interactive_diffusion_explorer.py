@@ -40,7 +40,8 @@ DEVICE = 'cuda' if torch.cuda.is_available() else 'cpu'
 DTYPE = 'float16' if DEVICE == 'cuda' else 'float32'
 
 class DiffusionExplorer:
-    def __init__(self):
+    def __init__(self, interactive: bool = True):
+        self.interactive = bool(interactive)
         self.model = None
         self.stoi = None
         self.itos = None
@@ -71,7 +72,10 @@ class DiffusionExplorer:
         print()
         
     def wait_for_key(self, prompt: str = "Press any key to continue...") -> str:
-        """Wait for user input"""
+        """Wait for user input. In non-interactive mode, no-op."""
+        if not self.interactive:
+            # Non-interactive mode: skip waiting
+            return ""
         if HAS_KEYBOARD:
             print(prompt)
             if os.name == 'nt':  # Windows
@@ -86,7 +90,7 @@ class DiffusionExplorer:
                     termios.tcsetattr(fd, termios.TCSADRAIN, old_settings)
         else:
             return input(prompt + " (Press Enter)")
-            
+
     def get_menu_choice(self, options: List[str], title: str = "Select an option:") -> int:
         """Display menu and get user choice"""
         while True:
@@ -854,9 +858,11 @@ class DiffusionExplorer:
                     if self.current_batch is None:
                         options.append("📂 Select Data File")
                     else:
-                        batch_info = f"📂 Change Data File (Current: {self.current_batch['x'].shape[0]} samples)"
+                        current_input = self.current_batch.get('input') if isinstance(self.current_batch, dict) else None
+                        num_samples = int(current_input.shape[0]) if current_input is not None else 0
+                        batch_info = f"📂 Change Data File (Current: {num_samples} samples)"
                         options.append(batch_info)
-                        
+
                     if self.current_batch is not None:
                         options.append("🔍 Navigate Samples")
                         
