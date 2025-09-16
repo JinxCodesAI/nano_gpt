@@ -360,9 +360,16 @@ class DiffusionExplorer:
                     return container.get(name)
                 return None
 
+            def _pick_from(container, names: List[str]):
+                for n in names:
+                    v = _get_tensor(container, n)
+                    if v is not None:
+                        return v
+                return None
+
             tensors = batch_data.get('tensors', batch_data)
-            x_tensor = _get_tensor(tensors, input_name) or _get_tensor(tensors, 'x') or _get_tensor(tensors, 'input_ids')
-            y_tensor = _get_tensor(tensors, target_name) or _get_tensor(tensors, 'y') or _get_tensor(tensors, 'targets')
+            x_tensor = _pick_from(tensors, [input_name, 'x', 'input_ids'])
+            y_tensor = _pick_from(tensors, [target_name, 'y', 'targets'])
 
             if x_tensor is None or y_tensor is None:
                 print("❌ Could not find required tensors in batch file per schema")
