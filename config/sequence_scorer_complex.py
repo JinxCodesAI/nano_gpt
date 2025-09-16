@@ -2,8 +2,12 @@
 
 # Dataset configuration
 dataset = 'sequence_scorer'
-batch_size = 16
+batch_size = 4
+gradient_accumulation_steps = 1
 block_size = 1024
+eval_interval = 250
+eval_iters = 10
+log_interval = 10
 
 # MLM model for synthetic text generation
 mlm_checkpoint_path = 'out/7250_1.76_all_LMod_enabled.pt'  # adjust to your MLM checkpoint
@@ -54,9 +58,9 @@ position_encoding = 'rotary'
 dtype = 'float16'
 
 # Data generation settings
-batches_per_file = 30
-max_backlog_files = 2
-sleep_seconds = 8.0
+batches_per_file = 100
+max_backlog_files = 20
+sleep_seconds = 1.0
 
 print("Complex sequence scorer configuration loaded")
 
