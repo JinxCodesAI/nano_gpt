@@ -419,23 +419,15 @@ while True:
         # immediately async prefetch next batch while model is doing the forward pass on the GPU
         X, Y = consumer.get_batch('train', device)
         # backward pass, with gradient scaling if training in fp16
-        if scaler.is_enabled():
-            scaler.scale(loss).backward()
-        else:
-            loss.backward()
-
+        scaler.scale(loss).backward()
 
     # clip the gradient
     if grad_clip != 0.0:
-        if scaler.is_enabled():
-            scaler.unscale_(optimizer)
+        scaler.unscale_(optimizer)
         torch.nn.utils.clip_grad_norm_(model.parameters(), grad_clip)
     # step the optimizer and scaler if training in fp16
-    if scaler.is_enabled():
-        scaler.step(optimizer)
-        scaler.update()
-    else:
-        optimizer.step()
+    scaler.step(optimizer)
+    scaler.update()
     # flush the gradients as soon as we can, no need for this memory anymore
     optimizer.zero_grad(set_to_none=True)
 
