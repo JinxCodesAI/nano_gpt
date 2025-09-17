@@ -60,6 +60,15 @@ dropout = 0.1
 position_encoding = 'rotary'
 dtype = 'float16'
 
+# Loss modifiers configuration (sequence scoring)
+loss_modifiers_enabled = True
+# Emphasize batches with higher residual variance
+sequence_variance_enabled = True
+sequence_variance_mode = 'error'      # 'error' | 'prediction' | 'target'
+sequence_variance_scale = 0.5         # conservative scaling
+sequence_variance_eps = 1e-8
+
+
 # Data generation settings
 batches_per_file = 100
 max_backlog_files = 20
