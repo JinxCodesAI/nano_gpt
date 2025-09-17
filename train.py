@@ -418,15 +418,24 @@ while True:
                 pass
         # immediately async prefetch next batch while model is doing the forward pass on the GPU
         X, Y = consumer.get_batch('train', device)
+        # backward pass, with gradient scaling if training in fp16
+        if scaler.is_enabled():
+            scaler.scale(loss).backward()
+        else:
+            loss.backward()
 
 
     # clip the gradient
     if grad_clip != 0.0:
-        scaler.unscale_(optimizer)
+        if scaler.is_enabled():
+            scaler.unscale_(optimizer)
         torch.nn.utils.clip_grad_norm_(model.parameters(), grad_clip)
     # step the optimizer and scaler if training in fp16
-    scaler.step(optimizer)
-    scaler.update()
+    if scaler.is_enabled():
+        scaler.step(optimizer)
+        scaler.update()
+    else:
+        optimizer.step()
     # flush the gradients as soon as we can, no need for this memory anymore
     optimizer.zero_grad(set_to_none=True)
 
@@ -461,6 +470,7 @@ while True:
     t0 = time.time()
 
 if ddp:
+    destroy_process_group()
 
 # ensure we close the JSONL file on exit
 if master_process and 'batch_jsonl_file' in globals() and batch_jsonl_file is not None:
@@ -469,5 +479,3 @@ if master_process and 'batch_jsonl_file' in globals() and batch_jsonl_file is no
         batch_jsonl_file.close()
     except Exception:
         pass
-
-    destroy_process_group()
