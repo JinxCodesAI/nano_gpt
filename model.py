@@ -533,14 +533,12 @@ class GPT(nn.Module):
         cls_output = x[:, 0, :]
         logits = self.sequence_head(cls_output).squeeze(-1)
         if targets is not None:
-            eps = 1e-6
-            abs_err = (logits - targets.float()).abs()
-            baseline_abs_err = (0.5 - targets.float()).abs()
-            ratio = abs_err / baseline_abs_err.clamp_min(eps)
-            base_loss = ratio.clamp_max(5.0).mean()
+
+            base_loss = F.mse_loss(logits, targets.float())
             
             # Apply loss modifiers if available and compatible with sequence scoring
             if loss_modifiers is not None and not loss_modifiers.is_empty():
+                print("Applying loss modifiers for sequence scoring...")
                 # Note: Some modifiers may not be applicable to sequence scoring
                 loss = loss_modifiers.modify_loss(
                     logits.unsqueeze(-1), targets, base_loss,

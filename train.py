@@ -374,7 +374,7 @@ while True:
         for param_group in optimizer.param_groups:
             param_group['lr'] *= unfreeze_lr_multiplier
 
-        logger.log_info(f"Reduced learning rate by factor {unfreeze_lr_multiplier}")
+        logger.log_info(f"Reduced learning rate by factor {unfreeze_lr_multiplier} current lr: {param_group['lr']}")
 
     # forward backward update, with optional gradient accumulation to simulate larger batch size
     # and using the GradScaler if data type is float16
