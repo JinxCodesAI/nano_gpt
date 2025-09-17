@@ -22,7 +22,6 @@ import math
 import pickle
 from contextlib import nullcontext
 
-import json
 
 import numpy as np
 import torch
@@ -163,18 +162,6 @@ logger.log_info(f"tokens per iteration will be: {tokens_per_iter:,}")
 # Log loss modifier status if any are enabled
 if enabled_modifiers_msg:
     logger.log_info(enabled_modifiers_msg)
-
-# quick & dirty per-batch JSONL logging for sequence scorer investigations
-batch_jsonl_path = None
-batch_jsonl_file = None
-if master_process:
-    try:
-        batch_jsonl_path = os.path.join(out_dir, f"sequence_scorer_batches_{int(time.time())}.jsonl")
-        batch_jsonl_file = open(batch_jsonl_path, "a", encoding="utf-8")
-        logger.log_info(f"Batch JSONL logging enabled: {batch_jsonl_path}")
-    except Exception as e:
-        logger.log_warning(f"Failed to open batch JSONL log file: {e}")
-        batch_jsonl_file = None
 
 if master_process:
     os.makedirs(out_dir, exist_ok=True)
@@ -402,6 +389,22 @@ while True:
         logger.log_info(f"Unfreezing transformer at iteration {iter_num}")
         raw_model.unfreeze_transformer_weights()
 
+        # Extend optimizer with newly-trainable transformer params
+        try:
+            existing = {id(p) for g in optimizer.param_groups for p in g.get('params', [])}
+            new_decay, new_nodecay = [], []
+            for n, p in raw_model.named_parameters():
+                if p.requires_grad and id(p) not in existing:
+                    (new_decay if p.dim() >= 2 else new_nodecay).append(p)
+            if len(new_decay) > 0:
+                optimizer.add_param_group({'params': new_decay, 'weight_decay': weight_decay, 'lr': lr})
+            if len(new_nodecay) > 0:
+                optimizer.add_param_group({'params': new_nodecay, 'weight_decay': 0.0, 'lr': lr})
+            if (len(new_decay) + len(new_nodecay)) > 0:
+                logger.log_info(f"Added {len(new_decay)} decayed and {len(new_nodecay)} non-decayed param tensors to optimizer after unfreeze")
+        except Exception as e:
+            logger.log_warning(f"Failed to extend optimizer after unfreeze: {e}")
+
         # Adjust learning rate for stability
         for param_group in optimizer.param_groups:
             param_group['lr'] *= unfreeze_lr_multiplier
@@ -469,70 +472,6 @@ while True:
                     _seqcorr_loss_ratio_count += 1
             except Exception:
                 pass
-        # quick & dirty JSONL logging: batch_number, targets, predictions, loss
-        if batch_jsonl_file is not None:
-            try:
-                log_record = {
-                    "iter": int(iter_num),
-                    "micro_step": int(micro_step),
-                    "batch_number": int(local_iter_num),
-                    "loss": float(loss.item() * gradient_accumulation_steps),
-                }
-                if isinstance(logits, torch.Tensor):
-                    preds_cpu = logits.detach().float().cpu()
-                    if preds_cpu.dim() == 1:
-                        log_record["predictions"] = preds_cpu.tolist()
-                    else:
-                        log_record["predictions_shape"] = list(preds_cpu.shape)
-                        log_record["predictions_mean"] = float(preds_cpu.mean().item())
-                        log_record["predictions_std"] = float(preds_cpu.std().item())
-                if isinstance(Y, torch.Tensor):
-                    targets_cpu = Y.detach().float().cpu()
-                    if targets_cpu.dim() == 1:
-                        log_record["targets"] = targets_cpu.tolist()
-                    else:
-                        log_record["targets_shape"] = list(targets_cpu.shape)
-                        log_record["targets_mean"] = float(targets_cpu.float().mean().item())
-                        log_record["targets_std"] = float(targets_cpu.float().std().item())
-                # include latest seqvar/seqcorr multipliers if available
-                if _seqvar_latest is not None:
-                    log_record["seqvar_loss_ratio"] = float(_seqvar_latest)
-                if _seqcorr_latest is not None:
-                    log_record["seqcorr_loss_ratio"] = float(_seqcorr_latest)
-
-                # compact dispersion diagnostics (retain only essential numbers)
-                try:
-                    if isinstance(preds_cpu, torch.Tensor):
-                        log_record["predictions_var"] = float(preds_cpu.var(unbiased=False).item())
-                    if isinstance(targets_cpu, torch.Tensor):
-                        log_record["targets_var"] = float(targets_cpu.var(unbiased=False).item())
-                except Exception:
-                    pass
-
-                # include ScaledSigmoidHead params A, B and pre-sigmoid stats (batch JSONL only)
-                try:
-                    if hasattr(raw_model, 'sequence_head'):
-                        sh = raw_model.sequence_head
-                        if hasattr(sh, 'A') and isinstance(sh.A, torch.nn.Parameter):
-                            log_record["sigm_A"] = float(sh.A.detach().cpu().item())
-                        if hasattr(sh, 'B') and isinstance(sh.B, torch.nn.Parameter):
-                            log_record["sigm_B"] = float(sh.B.detach().cpu().item())
-                        # Current head: y = sigmoid(linear*A + B); pre-sigmoid z = logit(y)
-                        if isinstance(preds_cpu, torch.Tensor):
-                            eps = 1e-9
-                            y_clamped = preds_cpu.clamp(eps, 1.0 - eps)
-                            z = torch.log(y_clamped / (1.0 - y_clamped))
-                            log_record["z_mean"] = float(z.mean().item())
-                            log_record["z_std"] = float(z.std(unbiased=False).item())
-                            log_record["z_min"] = float(z.min().item())
-                            log_record["z_max"] = float(z.max().item())
-                except Exception:
-                    pass
-
-
-                batch_jsonl_file.write(json.dumps(log_record, ensure_ascii=False) + "\n")
-            except Exception:
-                pass
         # immediately async prefetch next batch while model is doing the forward pass on the GPU
         X, Y = consumer.get_batch('train', device)
         # backward pass, with gradient scaling if training in fp16
@@ -543,77 +482,6 @@ while True:
         scaler.unscale_(optimizer)
         torch.nn.utils.clip_grad_norm_(model.parameters(), grad_clip)
     # step the optimizer and scaler if training in fp16
-    # post-backward, pre-step: JSONL grad diagnostics for A/B/temperature and base head
-    if batch_jsonl_file is not None and master_process:
-        try:
-            grad_record = {
-                "iter": int(iter_num),
-                "batch_number": int(local_iter_num),
-                "type": "grads"
-            }
-            def _group_info(param):
-                info = {"in_opt": False, "lr": None, "weight_decay": None}
-                try:
-                    for g in optimizer.param_groups:
-                        params = g.get('params', [])
-                        if any(p is param for p in params):
-                            info["in_opt"] = True
-                            info["lr"] = g.get('lr', None)
-                            info["weight_decay"] = g.get('weight_decay', None)
-                            break
-                except Exception:
-                    pass
-                return info
-            if hasattr(raw_model, 'sequence_head'):
-                sh = raw_model.sequence_head
-                # A
-                if hasattr(sh, 'A') and isinstance(sh.A, torch.nn.Parameter):
-                    p = sh.A
-                    grad_record["sigm_A_value"] = float(p.detach().cpu().item())
-                    grad_record["sigm_A_requires_grad"] = bool(getattr(p, 'requires_grad', False))
-                    gi = _group_info(p)
-                    grad_record["sigm_A_in_opt"] = bool(gi["in_opt"])
-                    grad_record["sigm_A_lr"] = gi["lr"]
-                    grad_record["sigm_A_weight_decay"] = gi["weight_decay"]
-                    g = getattr(p, 'grad', None)
-                    grad_record["sigm_A_grad"] = float(g.detach().cpu().item()) if g is not None else None
-                # B
-                if hasattr(sh, 'B') and isinstance(sh.B, torch.nn.Parameter):
-                    p = sh.B
-                    grad_record["sigm_B_value"] = float(p.detach().cpu().item())
-                    grad_record["sigm_B_requires_grad"] = bool(getattr(p, 'requires_grad', False))
-                    gi = _group_info(p)
-                    grad_record["sigm_B_in_opt"] = bool(gi["in_opt"])
-                    grad_record["sigm_B_lr"] = gi["lr"]
-                    grad_record["sigm_B_weight_decay"] = gi["weight_decay"]
-                    g = getattr(p, 'grad', None)
-                    grad_record["sigm_B_grad"] = float(g.detach().cpu().item()) if g is not None else None
-                # temperature
-                if hasattr(sh, 'temperature') and isinstance(sh.temperature, torch.nn.Parameter):
-                    p = sh.temperature
-                    grad_record["sigm_temp_value"] = float(p.detach().cpu().item())
-                    grad_record["sigm_temp_requires_grad"] = bool(getattr(p, 'requires_grad', False))
-                    gi = _group_info(p)
-                    grad_record["sigm_temp_in_opt"] = bool(gi["in_opt"])
-                    grad_record["sigm_temp_lr"] = gi["lr"]
-                    grad_record["sigm_temp_weight_decay"] = gi["weight_decay"]
-                    g = getattr(p, 'grad', None)
-                    grad_record["sigm_temp_grad"] = float(g.detach().cpu().item()) if g is not None else None
-                # base predictor weight grad norm
-                if hasattr(sh, 'base_predictor') and hasattr(sh.base_predictor, 'weight'):
-                    w = sh.base_predictor.weight
-                    try:
-                        gn = float(w.grad.detach().data.norm().cpu().item()) if getattr(w, 'grad', None) is not None else None
-                    except Exception:
-                        gn = None
-                    grad_record["base_pred_weight_grad_norm"] = gn
-                    giw = _group_info(w)
-                    grad_record["base_pred_weight_in_opt"] = bool(giw["in_opt"])
-                    grad_record["base_pred_weight_lr"] = giw["lr"]
-                    grad_record["base_pred_weight_weight_decay"] = giw["weight_decay"]
-            batch_jsonl_file.write(json.dumps(grad_record, ensure_ascii=False) + "\n")
-        except Exception:
-            pass
 
     scaler.step(optimizer)
     scaler.update()
@@ -659,10 +527,3 @@ while True:
 if ddp:
     destroy_process_group()
 
-# ensure we close the JSONL file on exit
-if master_process and 'batch_jsonl_file' in globals() and batch_jsonl_file is not None:
-    try:
-        batch_jsonl_file.flush()
-        batch_jsonl_file.close()
-    except Exception:
-        pass
