@@ -1,3 +1,4 @@
+
 """
 Full definition of a GPT Language Model, all of it in this single file.
 References:
@@ -485,11 +486,14 @@ class GPT(nn.Module):
 
     def _forward_sequence_scorer(self, x, targets, loss_modifiers):
         """Sequence scoring forward pass"""
-        cls_output = x[:, 0, :]  # Extract [CLS] token
+        cls_output = x[:, 0, :]
         logits = self.sequence_head(cls_output).squeeze(-1)
-        
         if targets is not None:
-            base_loss = F.mse_loss(logits, targets.float())
+            eps = 1e-6
+            abs_err = (logits - targets.float()).abs()
+            baseline_abs_err = (0.5 - targets.float()).abs()
+            ratio = abs_err / baseline_abs_err.clamp_min(eps)
+            base_loss = ratio.clamp_max(5.0).mean()
             
             # Apply loss modifiers if available and compatible with sequence scoring
             if loss_modifiers is not None and not loss_modifiers.is_empty():
@@ -746,3 +750,4 @@ class GPT(nn.Module):
             idx = torch.cat((idx, idx_next), dim=1)
 
         return idx
+

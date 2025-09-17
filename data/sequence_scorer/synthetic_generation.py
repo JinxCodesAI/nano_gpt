@@ -1,3 +1,4 @@
+import random
 import torch
 from typing import Tuple, Dict, Any, Optional
 
@@ -40,6 +41,7 @@ def apply_stage_masking_direct(
     elif stage_type == 'sticky':
         # Use existing sticky masking to compute mask, then directly replace with mask token
         target_masked_ratio = stage_config['target_masked_ratio']
+        target_masked_ratio = max(random.uniform(0.0, target_masked_ratio), random.uniform(0.0, target_masked_ratio))
         p1_probability = stage_config['p1_probability']
         p2_probability = stage_config['p2_probability']
         # We only need the mask; function returns (corrupted_x, mask)
