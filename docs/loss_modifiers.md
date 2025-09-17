@@ -157,35 +157,68 @@ Use cases:
 
 ### 4. Sequence Scorer Variance Modifier
 
-Purpose: For SEQUENCE_SCORER mode, scale the scalar loss by a factor that depends on the variance in the batch. This emphasizes updates on batches where predictions differ more from targets (or where predictions/targets are more spread out), which can counteract output cramping around the mean.
+Purpose: For SEQUENCE_SCORER mode, scale the scalar loss by a factor derived from the ratio of batch variances var(targets) / var(predictions). This emphasizes updates when targets are more diverse than current predictions and helps counteract output cramping.
 
 Parameters (from config or CLI):
 - sequence_variance_enabled (bool): Enable this modifier
-- sequence_variance_mode (str): One of 'error' | 'prediction' | 'target'. Default 'error'
-  - error: uses var(pred - target)
-  - prediction: uses var(pred)
-  - target: uses var(target)
-- sequence_variance_scale (float): Multiplier applied to the variance term. Default 1.0
-- sequence_variance_eps (float): Numerical stability epsilon (used in ratio metrics only). Default 1e-8
+- sequence_variance_scale (float): Upper cap for the multiplicative factor (>1.0). Example: 2.0
+- sequence_variance_alpha (float): Growth rate for the nonlinear curve. Example: 1.5
+- sequence_variance_eps (float): Numerical stability epsilon when dividing by small variance. Default 1e-8
 
 Configuration example:
 ```python
 loss_modifiers_enabled = True
 sequence_variance_enabled = True
-sequence_variance_mode = 'error'   # 'error' | 'prediction' | 'target'
-sequence_variance_scale = 0.5      # conservative scaling
+sequence_variance_scale = 2.0
+sequence_variance_alpha = 1.5
 sequence_variance_eps = 1e-8
 ```
 
 Mechanics:
 1) In SEQUENCE_SCORER mode, model returns logits shaped (B,) with values in [0,1].
-2) Compute variance according to mode across the batch (unbiased=False).
-3) Scale the scalar base loss: loss <- loss * (1 + sequence_variance_scale * variance)
-4) No per-position loss is produced or required.
+2) Compute r = var(targets) / max(var(predictions), eps) across the batch (unbiased=False).
+3) Compute factor via an aggressive but saturating nonlinearity:
+   factor = 1 + (scale - 1) * (1 - exp(-alpha * max(r - 1, 0)))
+   This equals 1 when r <= 1, increases rapidly for r > 1, and saturates at 'scale'.
+4) Scale the scalar base loss: loss <- loss * factor
 
 Metrics Logged:
-- variance_mode, variance_value
-- scale
+- variance_pred, variance_target
+- ratio_y_over_x (r), factor_applied
+- alpha, scale_cap
+- original_loss, final_loss, loss_ratio
+
+
+### 5. Sequence Scorer Correlation Modifier
+
+Purpose: For SEQUENCE_SCORER mode, scale the scalar loss by a non-linear mapping of the Pearson correlation between predictions and targets. Penalizes anti-correlation strongest, neutral moderately, perfect positive correlation not penalized.
+
+Mapping (c ∈ [-1, 1]):
+- c =  1 → factor = 1.0 (no change)
+- c =  0 → factor = √alpha
+- c = -1 → factor = alpha
+
+Parameters:
+- sequence_correlation_enabled (bool)
+- sequence_correlation_alpha (float ≥ 1.0): Maximum factor at c = -1
+- sequence_correlation_eps (float): Numerical stability for std computations
+
+Configuration example:
+```python
+loss_modifiers_enabled = True
+sequence_correlation_enabled = True
+sequence_correlation_alpha = 4.0
+sequence_correlation_eps = 1e-8
+```
+
+Mechanics:
+1) Compute Pearson correlation over batch between preds and targets (detach preds for correlation).
+2) Compute factor via quadratic A c^2 + B c + C that passes (1→1), (0→√alpha), (-1→alpha).
+3) Scale base loss: loss <- loss * factor.
+
+Metrics Logged:
+- correlation (c), multiplier (factor)
+- alpha, A, B, C
 - original_loss, final_loss, loss_ratio
 
 - Emphasize updates when the model’s wrong predictions are diverse (more informative errors).

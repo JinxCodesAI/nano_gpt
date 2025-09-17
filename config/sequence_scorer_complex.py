@@ -3,7 +3,7 @@
 # Dataset configuration
 dataset = 'sequence_scorer'
 batch_size = 4
-gradient_accumulation_steps = 4
+gradient_accumulation_steps = 2
 block_size = 1024
 eval_interval = 250
 eval_iters = 10
@@ -45,11 +45,11 @@ model_mode = 'sequence_scorer'
 attention_type = 'bidirectional'
 
 # BERT training typically uses lower learning rates
-learning_rate = 5e-4
+learning_rate = 1e-4
 warmup_iters = 500
 max_iters = 10000
 lr_decay_iters = 10000
-min_lr = 5e-5
+min_lr = 1e-5
 beta2 = 0.99
 
 # Model architecture - bidirectional for BERT
@@ -64,9 +64,15 @@ dtype = 'float16'
 loss_modifiers_enabled = True
 # Emphasize batches with higher residual variance
 sequence_variance_enabled = True
-sequence_variance_mode = 'error'      # 'error' | 'prediction' | 'target'
-sequence_variance_scale = 0.5         # conservative scaling
+sequence_variance_scale = 5.0         # cap (>1.0) for aggressive scaling
+sequence_variance_alpha = 1.5         # growth rate for nonlinear curve
 sequence_variance_eps = 1e-8
+
+# Correlation-based scaling (Pearson)
+sequence_correlation_enabled = True
+sequence_correlation_alpha = 4.0
+sequence_correlation_eps = 1e-8
+
 
 
 # Data generation settings

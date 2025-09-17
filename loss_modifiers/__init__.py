@@ -20,6 +20,7 @@ from .entropy_modifier import EntropyModifier
 from .target_smoothing_modifier import TargetSmoothingModifier
 from .mask_ratio_weight_modifier import MaskRatioWeightModifier
 from .sequence_variance_modifier import SequenceScorerVarianceModifier
+from .sequence_correlation_modifier import SequenceScorerCorrelationModifier
 
 __all__ = [
     'BaseLossModifier',
@@ -28,6 +29,7 @@ __all__ = [
     'TargetSmoothingModifier',
     'MaskRatioWeightModifier',
     'SequenceScorerVarianceModifier',
+    'SequenceScorerCorrelationModifier',
     'create_loss_modifier_pipeline',
 ]
 
@@ -112,10 +114,18 @@ def create_loss_modifier_pipeline(config):
     if seq_var_enabled:
         seq_var_config = {
             'enabled': True,
-            'sequence_variance_mode': get_config_value('sequence_variance_mode', 'error'),
-            'sequence_variance_scale': get_config_value('sequence_variance_scale', 1.0),
+            'sequence_variance_scale': get_config_value('sequence_variance_scale', 2.0),
+            'sequence_variance_alpha': get_config_value('sequence_variance_alpha', 1.5),
             'sequence_variance_eps': get_config_value('sequence_variance_eps', 1e-8),
         }
-        modifiers.append(SequenceScorerVarianceModifier(seq_var_config))
+    # Sequence Scorer Correlation Modifier
+    seq_corr_enabled = get_config_value('sequence_correlation_enabled', False)
+    if seq_corr_enabled:
+        seq_corr_config = {
+            'enabled': True,
+            'sequence_correlation_alpha': get_config_value('sequence_correlation_alpha', 4.0),
+            'sequence_correlation_eps': get_config_value('sequence_correlation_eps', 1e-8),
+        }
+        modifiers.append(SequenceScorerCorrelationModifier(seq_corr_config))
 
     return LossModifierPipeline(modifiers)

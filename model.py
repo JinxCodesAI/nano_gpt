@@ -249,12 +249,14 @@ class ScaledSigmoidHead(nn.Module):
         self.base_predictor = nn.Linear(input_dim, 1, bias=False)
         # Initialize temperature > 1 to start more squashed; model can adjust
         self.temperature = nn.Parameter(torch.ones(1) * 2.0)
+        self.A = nn.Parameter(torch.ones(1) * 1.0)
+        self.B = nn.Parameter(torch.ones(1) * 0.0)
 
     def forward(self, x):
         linear_output = self.base_predictor(x)
-        # ensure non-negative temperature via ReLU
-        scaled_output = torch.sigmoid(linear_output / F.relu(self.temperature))
-        return scaled_output
+        # ensure non-negative temperature via ReLU; apply affine transform A*sigmoid + B
+        y = torch.sigmoid(linear_output * self.A + self.B)
+        return y
 
 
 class Block(nn.Module):
@@ -549,7 +551,6 @@ class GPT(nn.Module):
 
             # Apply loss modifiers if available and compatible with sequence scoring
             if loss_modifiers is not None and not loss_modifiers.is_empty():
-                print("Applying loss modifiers for sequence scoring...")
                 # Note: Some modifiers may not be applicable to sequence scoring
                 loss = loss_modifiers.modify_loss(
                     logits.unsqueeze(-1), targets, base_loss,

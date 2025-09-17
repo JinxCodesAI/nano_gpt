@@ -112,10 +112,11 @@ init_from_checkpoint = None  # Path to pretrained model
 unfreeze_at_iteration = None  # Dynamic unfreezing
 unfreeze_lr_multiplier = 0.1  # LR multiplier when unfreezing
 # -----------------------------------------------------------------------------
-config_keys = [k for k,v in globals().items() if not k.startswith('_') and isinstance(v, (int, float, bool, str, list))]
 exec(open('configurator.py').read()) # overrides from command line or config file
 from config.validator import validate_config
 validate_config(globals())
+# Recompute config_keys AFTER applying external config so new keys are included
+config_keys = [k for k,v in globals().items() if not k.startswith('_') and isinstance(v, (int, float, bool, str, list))]
 config = {k: globals()[k] for k in config_keys} # will be useful for logging
 
 # initialize loss modifier pipeline
@@ -206,6 +207,14 @@ consumer = DatasetConsumer(
 # init these up here, can override if init_from='resume' (i.e. from a checkpoint)
 iter_num = 0
 best_val_loss = 1e9
+
+# Accumulators for loss modifier diagnostics (no modifier code changes)
+_seqvar_loss_ratio_sum = 0.0
+_seqvar_loss_ratio_count = 0
+_seqvar_latest = None
+_seqcorr_loss_ratio_sum = 0.0
+_seqcorr_loss_ratio_count = 0
+_seqcorr_latest = None
 
 # derive vocab_size from consumer meta
 meta = consumer.meta
@@ -343,12 +352,35 @@ while True:
             "mfu_pct": running_mfu*100,  # Already as percentage for logger
         }
 
+        # Add ScaledSigmoidHead temperature if available (sequence scorer)
+        try:
+            if hasattr(raw_model, 'sequence_head') and hasattr(raw_model.sequence_head, 'temperature'):
+                eval_metrics["sigm_temp"] = float(raw_model.sequence_head.temperature.detach().cpu().item())
+        except Exception:
+            pass
+
         # Add loss modifier metrics if available
         if not loss_modifier_pipeline.is_empty():
             modifier_metrics = loss_modifier_pipeline.get_all_metrics()
             eval_metrics["loss_modifier_metrics"] = modifier_metrics
-            # Reset metrics after logging
+            # Reset metrics after logging (we print our own averages below regardless)
             loss_modifier_pipeline.reset_all_metrics()
+
+        # Compute and log average loss_ratio from SequenceScorerVarianceModifier before reset
+        if _seqvar_loss_ratio_count > 0:
+            eval_metrics["loss_modifiers/SequenceScorerVarianceModifier.loss_ratio_avg"] = (
+                _seqvar_loss_ratio_sum / max(_seqvar_loss_ratio_count, 1)
+            )
+        # Compute and log average loss_ratio from SequenceScorerCorrelationModifier before reset
+        if _seqcorr_loss_ratio_count > 0:
+            eval_metrics["loss_modifiers/SequenceScorerCorrelationModifier.loss_ratio_avg"] = (
+                _seqcorr_loss_ratio_sum / max(_seqcorr_loss_ratio_count, 1)
+            )
+        # Reset accumulators for next window
+        _seqvar_loss_ratio_sum = 0.0
+        _seqvar_loss_ratio_count = 0
+        _seqcorr_loss_ratio_sum = 0.0
+        _seqcorr_loss_ratio_count = 0
 
         # Log evaluation results
         logger.log_eval(eval_metrics)
@@ -388,6 +420,55 @@ while True:
         with ctx:
             logits, loss = model(X, Y, loss_modifiers=loss_modifier_pipeline)
             loss = loss / gradient_accumulation_steps # scale the loss to account for gradient accumulation
+            # accumulate loss_ratio from SequenceScorerVarianceModifier if available
+            # Compute seqvar factor directly (robust to torch.compile side-effects)
+            try:
+                if (not loss_modifier_pipeline.is_empty() and
+                    config.get('model_mode', model_mode) == 'sequence_scorer' and
+                    config.get('sequence_variance_enabled', False)):
+                    preds_dbg = logits.detach().float().view(-1)
+                    targs_dbg = Y.detach().float().view(-1)
+                    var_pred = preds_dbg.var(unbiased=False)
+                    var_targ = targs_dbg.var(unbiased=False)
+                    eps_dbg = float(config.get('sequence_variance_eps', 1e-8))
+                    scale_dbg = float(config.get('sequence_variance_scale', 2.0))
+                    alpha_dbg = float(config.get('sequence_variance_alpha', 1.5))
+                    denom = torch.clamp(var_pred, min=eps_dbg)
+                    r = var_targ / denom
+                    excess = torch.clamp(r - 1.0, min=0.0)
+                    raw = 1.0 + (scale_dbg - 1.0) * (1.0 - torch.exp(-alpha_dbg * excess))
+                    factor = torch.clamp(raw, min=1.0, max=scale_dbg)
+                    _seqvar_latest = float(factor.item())
+                    _seqvar_loss_ratio_sum += _seqvar_latest
+                    _seqvar_loss_ratio_count += 1
+            except Exception:
+                pass
+            # Compute seqcorr factor directly for logging (correlation-based)
+            try:
+                if (not loss_modifier_pipeline.is_empty() and
+                    config.get('model_mode', model_mode) == 'sequence_scorer' and
+                    config.get('sequence_correlation_enabled', False)):
+                    preds_c = logits.detach().float().view(-1)
+                    targs_c = Y.detach().float().view(-1)
+                    x = preds_c - preds_c.mean()
+                    y = targs_c - targs_c.mean()
+                    eps_c = float(config.get('sequence_correlation_eps', 1e-8))
+                    cov = (x * y).sum()
+                    std_x = torch.sqrt((x * x).sum() + eps_c)
+                    std_y = torch.sqrt((y * y).sum() + eps_c)
+                    corr = cov / (std_x * std_y + eps_c)
+                    # Quadratic factor A*c^2 + B*c + C with the same mapping used in the modifier
+                    alpha_c = float(config.get('sequence_correlation_alpha', 4.0))
+                    sqrt_alpha = math.sqrt(alpha_c)
+                    A = (alpha_c - 2 * sqrt_alpha + 1.0) / 2.0
+                    B = (1.0 - alpha_c) / 2.0
+                    C = sqrt_alpha
+                    factor_c = A * (corr ** 2) + B * corr + C
+                    _seqcorr_latest = float(factor_c.item())
+                    _seqcorr_loss_ratio_sum += _seqcorr_latest
+                    _seqcorr_loss_ratio_count += 1
+            except Exception:
+                pass
         # quick & dirty JSONL logging: batch_number, targets, predictions, loss
         if batch_jsonl_file is not None:
             try:
@@ -413,6 +494,42 @@ while True:
                         log_record["targets_shape"] = list(targets_cpu.shape)
                         log_record["targets_mean"] = float(targets_cpu.float().mean().item())
                         log_record["targets_std"] = float(targets_cpu.float().std().item())
+                # include latest seqvar/seqcorr multipliers if available
+                if _seqvar_latest is not None:
+                    log_record["seqvar_loss_ratio"] = float(_seqvar_latest)
+                if _seqcorr_latest is not None:
+                    log_record["seqcorr_loss_ratio"] = float(_seqcorr_latest)
+
+                # compact dispersion diagnostics (retain only essential numbers)
+                try:
+                    if isinstance(preds_cpu, torch.Tensor):
+                        log_record["predictions_var"] = float(preds_cpu.var(unbiased=False).item())
+                    if isinstance(targets_cpu, torch.Tensor):
+                        log_record["targets_var"] = float(targets_cpu.var(unbiased=False).item())
+                except Exception:
+                    pass
+
+                # include ScaledSigmoidHead params A, B and pre-sigmoid stats (batch JSONL only)
+                try:
+                    if hasattr(raw_model, 'sequence_head'):
+                        sh = raw_model.sequence_head
+                        if hasattr(sh, 'A') and isinstance(sh.A, torch.nn.Parameter):
+                            log_record["sigm_A"] = float(sh.A.detach().cpu().item())
+                        if hasattr(sh, 'B') and isinstance(sh.B, torch.nn.Parameter):
+                            log_record["sigm_B"] = float(sh.B.detach().cpu().item())
+                        # Current head: y = sigmoid(linear*A + B); pre-sigmoid z = logit(y)
+                        if isinstance(preds_cpu, torch.Tensor):
+                            eps = 1e-9
+                            y_clamped = preds_cpu.clamp(eps, 1.0 - eps)
+                            z = torch.log(y_clamped / (1.0 - y_clamped))
+                            log_record["z_mean"] = float(z.mean().item())
+                            log_record["z_std"] = float(z.std(unbiased=False).item())
+                            log_record["z_min"] = float(z.min().item())
+                            log_record["z_max"] = float(z.max().item())
+                except Exception:
+                    pass
+
+
                 batch_jsonl_file.write(json.dumps(log_record, ensure_ascii=False) + "\n")
             except Exception:
                 pass
@@ -426,6 +543,78 @@ while True:
         scaler.unscale_(optimizer)
         torch.nn.utils.clip_grad_norm_(model.parameters(), grad_clip)
     # step the optimizer and scaler if training in fp16
+    # post-backward, pre-step: JSONL grad diagnostics for A/B/temperature and base head
+    if batch_jsonl_file is not None and master_process:
+        try:
+            grad_record = {
+                "iter": int(iter_num),
+                "batch_number": int(local_iter_num),
+                "type": "grads"
+            }
+            def _group_info(param):
+                info = {"in_opt": False, "lr": None, "weight_decay": None}
+                try:
+                    for g in optimizer.param_groups:
+                        params = g.get('params', [])
+                        if any(p is param for p in params):
+                            info["in_opt"] = True
+                            info["lr"] = g.get('lr', None)
+                            info["weight_decay"] = g.get('weight_decay', None)
+                            break
+                except Exception:
+                    pass
+                return info
+            if hasattr(raw_model, 'sequence_head'):
+                sh = raw_model.sequence_head
+                # A
+                if hasattr(sh, 'A') and isinstance(sh.A, torch.nn.Parameter):
+                    p = sh.A
+                    grad_record["sigm_A_value"] = float(p.detach().cpu().item())
+                    grad_record["sigm_A_requires_grad"] = bool(getattr(p, 'requires_grad', False))
+                    gi = _group_info(p)
+                    grad_record["sigm_A_in_opt"] = bool(gi["in_opt"])
+                    grad_record["sigm_A_lr"] = gi["lr"]
+                    grad_record["sigm_A_weight_decay"] = gi["weight_decay"]
+                    g = getattr(p, 'grad', None)
+                    grad_record["sigm_A_grad"] = float(g.detach().cpu().item()) if g is not None else None
+                # B
+                if hasattr(sh, 'B') and isinstance(sh.B, torch.nn.Parameter):
+                    p = sh.B
+                    grad_record["sigm_B_value"] = float(p.detach().cpu().item())
+                    grad_record["sigm_B_requires_grad"] = bool(getattr(p, 'requires_grad', False))
+                    gi = _group_info(p)
+                    grad_record["sigm_B_in_opt"] = bool(gi["in_opt"])
+                    grad_record["sigm_B_lr"] = gi["lr"]
+                    grad_record["sigm_B_weight_decay"] = gi["weight_decay"]
+                    g = getattr(p, 'grad', None)
+                    grad_record["sigm_B_grad"] = float(g.detach().cpu().item()) if g is not None else None
+                # temperature
+                if hasattr(sh, 'temperature') and isinstance(sh.temperature, torch.nn.Parameter):
+                    p = sh.temperature
+                    grad_record["sigm_temp_value"] = float(p.detach().cpu().item())
+                    grad_record["sigm_temp_requires_grad"] = bool(getattr(p, 'requires_grad', False))
+                    gi = _group_info(p)
+                    grad_record["sigm_temp_in_opt"] = bool(gi["in_opt"])
+                    grad_record["sigm_temp_lr"] = gi["lr"]
+                    grad_record["sigm_temp_weight_decay"] = gi["weight_decay"]
+                    g = getattr(p, 'grad', None)
+                    grad_record["sigm_temp_grad"] = float(g.detach().cpu().item()) if g is not None else None
+                # base predictor weight grad norm
+                if hasattr(sh, 'base_predictor') and hasattr(sh.base_predictor, 'weight'):
+                    w = sh.base_predictor.weight
+                    try:
+                        gn = float(w.grad.detach().data.norm().cpu().item()) if getattr(w, 'grad', None) is not None else None
+                    except Exception:
+                        gn = None
+                    grad_record["base_pred_weight_grad_norm"] = gn
+                    giw = _group_info(w)
+                    grad_record["base_pred_weight_in_opt"] = bool(giw["in_opt"])
+                    grad_record["base_pred_weight_lr"] = giw["lr"]
+                    grad_record["base_pred_weight_weight_decay"] = giw["weight_decay"]
+            batch_jsonl_file.write(json.dumps(grad_record, ensure_ascii=False) + "\n")
+        except Exception:
+            pass
+
     scaler.step(optimizer)
     scaler.update()
     # flush the gradients as soon as we can, no need for this memory anymore
@@ -449,6 +638,12 @@ while True:
             "time_ms": dt*1000,
             "mfu_pct": running_mfu*100
         }
+        # Attach latest sequence variance/correlation loss_ratio if available (no modifier changes)
+        if not loss_modifier_pipeline.is_empty():
+            if _seqvar_latest is not None:
+                step_metrics["seqvar_loss_ratio"] = _seqvar_latest
+            if _seqcorr_latest is not None:
+                step_metrics["seqcorr_loss_ratio"] = _seqcorr_latest
 
         # Log training step
         logger.log_step(step_metrics)

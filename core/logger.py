@@ -77,10 +77,18 @@ class ConsoleLogger(Logger):
             
         iter_num = metrics.get('iter', 0)
         loss = metrics.get('loss', 0.0)
-        dt_ms = metrics.get('time_ms', 0.0) 
+        dt_ms = metrics.get('time_ms', 0.0)
         mfu_pct = metrics.get('mfu_pct', 0.0)
-        
-        print(f"iter {iter_num}: loss {loss:.4f}, time {dt_ms:.2f}ms, mfu {mfu_pct:.2f}%")
+        seqvar = metrics.get('seqvar_loss_ratio', None)
+        seqcorr = metrics.get('seqcorr_loss_ratio', None)
+
+        extras = []
+        if seqvar is not None:
+            extras.append(f"seqvar {seqvar:.4f}")
+        if seqcorr is not None:
+            extras.append(f"seqcorr {seqcorr:.4f}")
+        extras_str = (", " + ", ".join(extras)) if extras else ""
+        print(f"iter {iter_num}: loss {loss:.4f}, time {dt_ms:.2f}ms, mfu {mfu_pct:.2f}%{extras_str}")
     
     def log_eval(self, metrics: Dict[str, Any]) -> None:
         """Log evaluation results to console (every eval_interval)."""
@@ -90,8 +98,18 @@ class ConsoleLogger(Logger):
         iter_num = metrics.get('iter', 0)
         train_loss = metrics.get('train/loss', 0.0)
         val_loss = metrics.get('val/loss', 0.0)
-        
-        print(f"step {iter_num}: train loss {train_loss:.4f}, val loss {val_loss:.4f}")
+        seqvar_avg = metrics.get('loss_modifiers/SequenceScorerVarianceModifier.loss_ratio_avg', None)
+        seqcorr_avg = metrics.get('loss_modifiers/SequenceScorerCorrelationModifier.loss_ratio_avg', None)
+        sigm_temp = metrics.get('sigm_temp', None)
+
+        parts = [f"step {iter_num}: train loss {train_loss:.4f}, val loss {val_loss:.4f}"]
+        if seqvar_avg is not None:
+            parts.append(f"seqvar loss_ratio_avg {seqvar_avg:.4f}")
+        if seqcorr_avg is not None:
+            parts.append(f"seqcorr loss_ratio_avg {seqcorr_avg:.4f}")
+        if sigm_temp is not None:
+            parts.append(f"sigm_temp {sigm_temp:.4f}")
+        print(", ".join(parts))
     
     def log_info(self, message: str) -> None:
         """Log general info message to console."""
