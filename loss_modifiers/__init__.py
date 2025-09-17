@@ -6,10 +6,10 @@ during training. All modifiers are opt-in and can be combined in any configurati
 
 Usage:
     from loss_modifiers import create_loss_modifier_pipeline
-    
+
     # Create pipeline with desired modifiers
     pipeline = create_loss_modifier_pipeline(config)
-    
+
     # Use in training loop
     modified_loss = pipeline.modify_loss(logits, targets, original_loss)
 """
@@ -19,6 +19,7 @@ from .pipeline import LossModifierPipeline
 from .entropy_modifier import EntropyModifier
 from .target_smoothing_modifier import TargetSmoothingModifier
 from .mask_ratio_weight_modifier import MaskRatioWeightModifier
+from .sequence_variance_modifier import SequenceScorerVarianceModifier
 
 __all__ = [
     'BaseLossModifier',
@@ -26,6 +27,7 @@ __all__ = [
     'EntropyModifier',
     'TargetSmoothingModifier',
     'MaskRatioWeightModifier',
+    'SequenceScorerVarianceModifier',
     'create_loss_modifier_pipeline',
 ]
 
@@ -33,15 +35,15 @@ __all__ = [
 def create_loss_modifier_pipeline(config):
     """
     Factory function to create a loss modifier pipeline from configuration.
-    
+
     Args:
         config: Configuration dictionary or object with loss modifier settings
-        
+
     Returns:
         LossModifierPipeline: Configured pipeline with enabled modifiers
     """
     modifiers = []
-    
+
     # Helper function to get config value
     def get_config_value(key, default=None):
         if hasattr(config, key):
@@ -50,12 +52,12 @@ def create_loss_modifier_pipeline(config):
             return config.get(key, default)
         else:
             return default
-    
+
     # Check if any modifiers are enabled
     loss_modifiers_enabled = get_config_value('loss_modifiers_enabled', False)
     if not loss_modifiers_enabled:
         return LossModifierPipeline([])  # Return empty pipeline
-    
+
     # Entropy Modifier
     entropy_enabled = get_config_value('entropy_modifier_enabled', False)
     if entropy_enabled:
@@ -67,12 +69,12 @@ def create_loss_modifier_pipeline(config):
             'eps': get_config_value('entropy_modifier_eps', 1e-8),
         }
         modifiers.append(EntropyModifier(entropy_config))
-    
+
     # Target Smoothing Modifier
     smoothing_enabled = get_config_value('target_smoothing_enabled', False)
     if smoothing_enabled:
         special_tokens_raw = get_config_value('target_smoothing_special_tokens', [])
-        
+
         # Parse special tokens - handle both list and comma-delimited string formats
         if isinstance(special_tokens_raw, str):
             if special_tokens_raw.strip():
@@ -83,7 +85,7 @@ def create_loss_modifier_pipeline(config):
             special_tokens = special_tokens_raw
         else:
             special_tokens = []
-        
+
         smoothing_config = {
             'enabled': True,
             'smoothing_factor': get_config_value('target_smoothing_factor', 0.1),
@@ -92,7 +94,7 @@ def create_loss_modifier_pipeline(config):
             'padding_token_id': get_config_value('target_smoothing_padding_token', -100),
         }
         modifiers.append(TargetSmoothingModifier(smoothing_config))
-    
+
     # Mask Ratio Weight Modifier
     mask_weight_enabled = get_config_value('mask_ratio_weight_enabled', False)
     if mask_weight_enabled:
@@ -104,5 +106,16 @@ def create_loss_modifier_pipeline(config):
             'eps': get_config_value('mask_ratio_weight_eps', 1e-8),
         }
         modifiers.append(MaskRatioWeightModifier(mask_weight_config))
-    
+
+    # Sequence Scorer Variance Modifier
+    seq_var_enabled = get_config_value('sequence_variance_enabled', False)
+    if seq_var_enabled:
+        seq_var_config = {
+            'enabled': True,
+            'sequence_variance_mode': get_config_value('sequence_variance_mode', 'error'),
+            'sequence_variance_scale': get_config_value('sequence_variance_scale', 1.0),
+            'sequence_variance_eps': get_config_value('sequence_variance_eps', 1e-8),
+        }
+        modifiers.append(SequenceScorerVarianceModifier(seq_var_config))
+
     return LossModifierPipeline(modifiers)
