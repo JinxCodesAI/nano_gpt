@@ -3,7 +3,7 @@
 # Dataset configuration
 dataset = 'sequence_scorer'
 batch_size = 4
-gradient_accumulation_steps = 1
+gradient_accumulation_steps = 4
 block_size = 1024
 eval_interval = 250
 eval_iters = 10
@@ -11,6 +11,9 @@ log_interval = 10
 
 # MLM model for synthetic text generation
 mlm_checkpoint_path = 'out/7250_1.76_all_LMod_enabled.pt'  # adjust to your MLM checkpoint
+init_from_checkpoint = 'out/7250_1.76_all_LMod_enabled.pt'
+freeze_transformer = True
+unfreeze_at_iteration = 1000
 cls_token_id = 66
 max_backlog_files = 10
 

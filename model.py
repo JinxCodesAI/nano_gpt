@@ -371,14 +371,22 @@ class GPT(nn.Module):
             if pn.endswith('c_proj.weight'):
                 torch.nn.init.normal_(p, mean=0.0, std=0.02/math.sqrt(2 * config.n_layer))
 
+        # Add dedicated CLS embedding parameter (optional, used in SEQUENCE_SCORER)
+        if self.config.mode == ModelMode.SEQUENCE_SCORER and self.config.cls_token_id is not None:
+            # A standalone parameter so freezing the transformer does not freeze CLS
+            self.cls_embedding = nn.Parameter(torch.empty(self.config.n_embd))
+            with torch.no_grad():
+                torch.nn.init.normal_(self.cls_embedding, mean=0.0, std=0.02)
+            self._log_info("Dedicated CLS embedding enabled")
+
         # Transfer learning: load pretrained weights if specified
         if config.init_from_checkpoint is not None and config.init_from_checkpoint != "":
             self._load_pretrained_checkpoint(config.init_from_checkpoint)
-        
+
         # Transfer learning: freeze transformer if requested
         if config.freeze_transformer:
             self.freeze_transformer_weights()
-        
+
         # report number of parameters
         self._log_info("number of parameters: %.2fM" % (self.get_num_params()/1e6,))
 
@@ -390,24 +398,51 @@ class GPT(nn.Module):
             print(message)
 
     def _load_pretrained_checkpoint(self, checkpoint_path):
-        """Load pretrained weights, excluding heads"""
+        """Load pretrained weights (transformer only), with safe embedding expansion"""
         self._log_info(f"Loading pretrained weights from {checkpoint_path}")
         checkpoint = torch.load(checkpoint_path, map_location='cpu', weights_only=False)
-        
+
         state_dict = checkpoint.get('model', checkpoint)
-        
-        # Filter transformer weights, exclude heads
-        transformer_state_dict = {}
+
+        # Clean keys (remove torch.compile prefix)
+        cleaned_state = {}
         for k, v in state_dict.items():
-            clean_key = k.replace('_orig_mod.', '')  # Remove torch.compile prefix
-            if (clean_key.startswith('transformer.') and 
-                not clean_key.startswith('lm_head') and 
-                not clean_key.startswith('sequence_head')):
-                transformer_state_dict[clean_key] = v
-        
-        # Load with strict=False to allow missing head weights
+            clean_key = k.replace('_orig_mod.', '')
+            cleaned_state[clean_key] = v
+
+        # Load all transformer weights except the token embedding first
+        transformer_state_dict = {}
+        for k, v in cleaned_state.items():
+            if k.startswith('transformer.') and not k.startswith('lm_head') and not k.startswith('sequence_head'):
+                if k == 'transformer.wte.weight':
+                    continue  # handle separately due to potential shape mismatch
+                transformer_state_dict[k] = v
+
         missing_keys, unexpected_keys = self.load_state_dict(transformer_state_dict, strict=False)
-        self._log_info(f"Loaded transformer weights: {len(missing_keys)} missing (expected for new heads), {len(unexpected_keys)} unexpected")
+        self._log_info(f"Loaded transformer (except embeddings): {len(missing_keys)} missing, {len(unexpected_keys)} unexpected")
+
+        # Now handle token embeddings safely
+        wte_key = 'transformer.wte.weight'
+        if wte_key in cleaned_state:
+            ckpt_wte = cleaned_state[wte_key]
+            model_wte = self.transformer.wte.weight
+            if ckpt_wte.dim() != 2 or model_wte.dim() != 2:
+                raise RuntimeError("Unexpected token embedding dimensionality")
+            old_vocab, old_dim = ckpt_wte.shape
+            new_vocab, new_dim = model_wte.shape
+            if old_dim != new_dim:
+                raise RuntimeError(f"Embedding dimension mismatch: ckpt {old_dim} vs model {new_dim}")
+            if old_vocab <= new_vocab:
+                # copy overlapping rows, keep new rows as initialized
+                with torch.no_grad():
+                    model_wte[:old_vocab].copy_(ckpt_wte)
+                added = new_vocab - old_vocab
+                if added > 0:
+                    self._log_info(f"Extended token embeddings by {added} new token(s)")
+            else:
+                raise RuntimeError(f"Checkpoint vocab ({old_vocab}) > model vocab ({new_vocab}); cannot load safely")
+        else:
+            self._log_info("No token embedding found in checkpoint; using initialized embeddings")
 
     def freeze_transformer_weights(self):
         """Freeze transformer for feature extraction"""
@@ -462,7 +497,16 @@ class GPT(nn.Module):
 
         # forward the GPT model itself
         tok_emb = self.transformer.wte(idx) # token embeddings of shape (b, t, n_embd)
-        
+
+        # If dedicated CLS embedding is enabled, swap it in where token == cls_token_id
+        if hasattr(self, 'cls_embedding') and self.config.cls_token_id is not None:
+            cls_id = int(self.config.cls_token_id)
+            with torch.no_grad():
+                # build a mask of CLS positions
+                cls_mask = (idx == cls_id).unsqueeze(-1)  # (b, t, 1)
+            # add the CLS embedding where mask is true; keep grads flowing into cls_embedding only
+            tok_emb = torch.where(cls_mask, self.cls_embedding.view(1, 1, -1).expand_as(tok_emb), tok_emb)
+
         # Add positional embeddings only if not using RoPE
         if hasattr(self.transformer, 'wpe'):
             pos = torch.arange(0, t, dtype=torch.long, device=device) # shape (t)
