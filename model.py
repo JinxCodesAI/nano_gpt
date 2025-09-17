@@ -476,6 +476,34 @@ class GPT(nn.Module):
         for param in self.transformer.parameters():
             param.requires_grad = True
 
+
+    def extend_optimizer_with_unfrozen(self, optimizer, weight_decay, learning_rate):
+        """After unfreezing transformer, add newly-trainable params to optimizer param groups.
+        Mirrors configure_optimizers grouping (dim>=2 -> weight decay; else no decay).
+        """
+        try:
+            existing = {id(p) for g in optimizer.param_groups for p in g.get('params', [])}
+            new_decay, new_nodecay = [], []
+            for name, p in self.named_parameters():
+                if p.requires_grad and id(p) not in existing:
+                    (new_decay if p.dim() >= 2 else new_nodecay).append(p)
+            if len(new_decay) > 0:
+                optimizer.add_param_group({
+                    'params': new_decay,
+                    'weight_decay': weight_decay,
+                    'lr': learning_rate,
+                })
+            if len(new_nodecay) > 0:
+                optimizer.add_param_group({
+                    'params': new_nodecay,
+                    'weight_decay': 0.0,
+                    'lr': learning_rate,
+                })
+            if (len(new_decay) + len(new_nodecay)) > 0:
+                self._log_info(f"Added {len(new_decay)} decayed and {len(new_nodecay)} non-decayed param tensors to optimizer after unfreeze")
+        except Exception as e:
+            self._log_warning(f"Failed to extend optimizer after unfreeze: {e}")
+
     def get_frozen_status(self):
         """Check if transformer is frozen"""
         for param in self.transformer.parameters():

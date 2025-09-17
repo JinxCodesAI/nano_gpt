@@ -390,20 +390,7 @@ while True:
         raw_model.unfreeze_transformer_weights()
 
         # Extend optimizer with newly-trainable transformer params
-        try:
-            existing = {id(p) for g in optimizer.param_groups for p in g.get('params', [])}
-            new_decay, new_nodecay = [], []
-            for n, p in raw_model.named_parameters():
-                if p.requires_grad and id(p) not in existing:
-                    (new_decay if p.dim() >= 2 else new_nodecay).append(p)
-            if len(new_decay) > 0:
-                optimizer.add_param_group({'params': new_decay, 'weight_decay': weight_decay, 'lr': lr})
-            if len(new_nodecay) > 0:
-                optimizer.add_param_group({'params': new_nodecay, 'weight_decay': 0.0, 'lr': lr})
-            if (len(new_decay) + len(new_nodecay)) > 0:
-                logger.log_info(f"Added {len(new_decay)} decayed and {len(new_nodecay)} non-decayed param tensors to optimizer after unfreeze")
-        except Exception as e:
-            logger.log_warning(f"Failed to extend optimizer after unfreeze: {e}")
+        raw_model.extend_optimizer_with_unfrozen(optimizer, weight_decay, lr)
 
         # Adjust learning rate for stability
         for param_group in optimizer.param_groups:
