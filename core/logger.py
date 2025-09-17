@@ -100,17 +100,14 @@ class ConsoleLogger(Logger):
         val_loss = metrics.get('val/loss', 0.0)
         seqvar_avg = metrics.get('loss_modifiers/SequenceScorerVarianceModifier.loss_ratio_avg', None)
         seqcorr_avg = metrics.get('loss_modifiers/SequenceScorerCorrelationModifier.loss_ratio_avg', None)
-        sigm_temp = metrics.get('sigm_temp', None)
 
         parts = [f"step {iter_num}: train loss {train_loss:.4f}, val loss {val_loss:.4f}"]
         if seqvar_avg is not None:
             parts.append(f"seqvar loss_ratio_avg {seqvar_avg:.4f}")
         if seqcorr_avg is not None:
             parts.append(f"seqcorr loss_ratio_avg {seqcorr_avg:.4f}")
-        if sigm_temp is not None:
-            parts.append(f"sigm_temp {sigm_temp:.4f}")
         print(", ".join(parts))
-    
+
     def log_info(self, message: str) -> None:
         """Log general info message to console."""
         if self.master_process:
@@ -186,13 +183,13 @@ class WandBLogger(Logger):
             "mfu": metrics.get('mfu_pct', 0.0),  # Already as percentage
         }
         
-        # Add loss modifier metrics if available
-        loss_modifier_metrics = metrics.get('loss_modifier_metrics', {})
-        for key, value in loss_modifier_metrics.items():
-            log_dict[f"loss_modifiers/{key}"] = value
-        
+        # Add flattened loss modifier metrics if present
+        for key, value in metrics.items():
+            if isinstance(value, (int, float)) and key.startswith("loss_modifiers/"):
+                log_dict[key] = value
+
         self.wandb.log(log_dict)
-    
+
     def log_info(self, message: str) -> None:
         """WandB doesn't log info messages directly."""
         pass

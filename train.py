@@ -109,6 +109,9 @@ freeze_transformer = False  # Feature extraction mode
 init_from_checkpoint = None  # Path to pretrained model
 unfreeze_at_iteration = None  # Dynamic unfreezing
 unfreeze_lr_multiplier = 0.1  # LR multiplier when unfreezing
+# sequence scorer logging (general metrics only, no head-specific params)
+seq_scorer_log_abs_rel_err = True  # running average abs(target - pred)/max(|target|, eps)
+
 # -----------------------------------------------------------------------------
 exec(open('configurator.py').read()) # overrides from command line or config file
 from config.validator import validate_config
@@ -309,6 +312,8 @@ t0 = time.time()
 local_iter_num = 0 # number of iterations in the lifetime of this process
 raw_model = model.module if ddp else model # unwrap DDP container if needed
 running_mfu = -1.0
+running_aare = -1.0
+
 while True:
 
     # determine and set the learning rate for this iteration
@@ -331,18 +336,13 @@ while True:
             "mfu_pct": running_mfu*100,  # Already as percentage for logger
         }
 
-        # Add ScaledSigmoidHead temperature if available (sequence scorer)
-        try:
-            if hasattr(raw_model, 'sequence_head') and hasattr(raw_model.sequence_head, 'temperature'):
-                eval_metrics["sigm_temp"] = float(raw_model.sequence_head.temperature.detach().cpu().item())
-        except Exception:
-            pass
 
-        # Add loss modifier metrics if available
+        # Add loss modifier metrics if available (flatten into top-level keys)
         if not loss_modifier_pipeline.is_empty():
             modifier_metrics = loss_modifier_pipeline.get_all_metrics()
-            eval_metrics["loss_modifier_metrics"] = modifier_metrics
-            # Reset metrics after logging (we print our own averages below regardless)
+            for k, v in modifier_metrics.items():
+                eval_metrics[f"loss_modifiers/{k}"] = v
+            # Reset metrics after logging
             loss_modifier_pipeline.reset_all_metrics()
 
 
@@ -374,6 +374,8 @@ while True:
             param_group['lr'] *= unfreeze_lr_multiplier
 
         logger.log_info(f"Reduced learning rate by factor {unfreeze_lr_multiplier} current lr: {param_group['lr']}")
+    aare_now_val = None
+
 
     # forward backward update, with optional gradient accumulation to simulate larger batch size
     # and using the GradScaler if data type is float16
@@ -387,6 +389,12 @@ while True:
         with ctx:
             logits, loss = model(X, Y, loss_modifiers=loss_modifier_pipeline)
             loss = loss / gradient_accumulation_steps # scale the loss to account for gradient accumulation
+        # Compute average absolute relative error for sequence scorer at last micro-step
+        if (raw_model.config.mode == ModelMode.SEQUENCE_SCORER) and seq_scorer_log_abs_rel_err and (micro_step == gradient_accumulation_steps - 1):
+            with torch.no_grad():
+                denom = torch.clamp(torch.abs(Y), min=1e-6)
+                aare_now = (torch.abs(logits - Y) / denom).mean()
+                aare_now_val = float(aare_now.detach().cpu().item())
         # immediately async prefetch next batch while model is doing the forward pass on the GPU
         X, Y = consumer.get_batch('train', device)
         # backward pass, with gradient scaling if training in fp16
@@ -403,11 +411,16 @@ while True:
     # flush the gradients as soon as we can, no need for this memory anymore
     optimizer.zero_grad(set_to_none=True)
 
+    # Update running AARE if computed this iteration
+    if aare_now_val is not None:
+        running_aare = aare_now_val if running_aare < 0 else 0.9*running_aare + 0.1*aare_now_val
+
     # timing and logging
     t1 = time.time()
     dt = t1 - t0
     if iter_num % log_interval == 0 and master_process:
         # get loss as float. note: this is a CPU-GPU sync point
+
         # scale up to undo the division above, approximating the true total loss (exact would have been a sum)
         lossf = loss.item() * gradient_accumulation_steps
         if local_iter_num >= 5: # let the training loop settle a bit
@@ -423,6 +436,9 @@ while True:
         }
 
         # Log training step
+        if aare_now_val is not None:
+            step_metrics["avg_abs_rel_err"] = running_aare
+
         logger.log_step(step_metrics)
     iter_num += 1
     checkpoint_manager.update_progress(iter_num=iter_num, best_val_loss=best_val_loss)
