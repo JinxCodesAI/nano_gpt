@@ -22,6 +22,8 @@ import math
 import pickle
 from contextlib import nullcontext
 
+import json
+
 import numpy as np
 import torch
 from torch.nn.parallel import DistributedDataParallel as DDP
@@ -161,6 +163,18 @@ logger.log_info(f"tokens per iteration will be: {tokens_per_iter:,}")
 if enabled_modifiers_msg:
     logger.log_info(enabled_modifiers_msg)
 
+# quick & dirty per-batch JSONL logging for sequence scorer investigations
+batch_jsonl_path = None
+batch_jsonl_file = None
+if master_process:
+    try:
+        batch_jsonl_path = os.path.join(out_dir, f"sequence_scorer_batches_{int(time.time())}.jsonl")
+        batch_jsonl_file = open(batch_jsonl_path, "a", encoding="utf-8")
+        logger.log_info(f"Batch JSONL logging enabled: {batch_jsonl_path}")
+    except Exception as e:
+        logger.log_warning(f"Failed to open batch JSONL log file: {e}")
+        batch_jsonl_file = None
+
 if master_process:
     os.makedirs(out_dir, exist_ok=True)
 checkpoint_manager = CheckpointManager(out_dir)
@@ -210,7 +224,7 @@ config['meta'] = meta
 
 # model init
 model_args = dict(n_layer=n_layer, n_head=n_head, n_embd=n_embd, block_size=block_size,
-                  bias=bias, vocab_size=None, dropout=dropout, attention_type=attention_type, 
+                  bias=bias, vocab_size=None, dropout=dropout, attention_type=attention_type,
                   position_encoding=position_encoding,
                   # multi-mode parameters
                   mode=ModelMode(model_mode),
@@ -319,7 +333,7 @@ while True:
         losses = evaluator.evaluate()
         # Reset timer after validation to exclude validation time from MFU calculation
         t0 = time.time()
-        
+
         # Prepare evaluation metrics for logging
         eval_metrics = {
             "iter": iter_num,
@@ -328,17 +342,17 @@ while True:
             "lr": lr,
             "mfu_pct": running_mfu*100,  # Already as percentage for logger
         }
-        
+
         # Add loss modifier metrics if available
         if not loss_modifier_pipeline.is_empty():
             modifier_metrics = loss_modifier_pipeline.get_all_metrics()
             eval_metrics["loss_modifier_metrics"] = modifier_metrics
             # Reset metrics after logging
             loss_modifier_pipeline.reset_all_metrics()
-        
+
         # Log evaluation results
         logger.log_eval(eval_metrics)
-        
+
         if losses['val'] < best_val_loss or always_save_checkpoint:
             best_val_loss = losses['val']
             if iter_num > 0:
@@ -349,17 +363,17 @@ while True:
         break
 
     # Dynamic unfreezing support
-    if (unfreeze_at_iteration is not None and 
-        iter_num == unfreeze_at_iteration and 
+    if (unfreeze_at_iteration is not None and
+        iter_num == unfreeze_at_iteration and
         raw_model.get_frozen_status()):
-        
+
         logger.log_info(f"Unfreezing transformer at iteration {iter_num}")
         raw_model.unfreeze_transformer_weights()
-        
+
         # Adjust learning rate for stability
         for param_group in optimizer.param_groups:
             param_group['lr'] *= unfreeze_lr_multiplier
-        
+
         logger.log_info(f"Reduced learning rate by factor {unfreeze_lr_multiplier}")
 
     # forward backward update, with optional gradient accumulation to simulate larger batch size
@@ -374,10 +388,38 @@ while True:
         with ctx:
             logits, loss = model(X, Y, loss_modifiers=loss_modifier_pipeline)
             loss = loss / gradient_accumulation_steps # scale the loss to account for gradient accumulation
+        # quick & dirty JSONL logging: batch_number, targets, predictions, loss
+        if batch_jsonl_file is not None:
+            try:
+                log_record = {
+                    "iter": int(iter_num),
+                    "micro_step": int(micro_step),
+                    "batch_number": int(local_iter_num),
+                    "loss": float(loss.item() * gradient_accumulation_steps),
+                }
+                if isinstance(logits, torch.Tensor):
+                    preds_cpu = logits.detach().float().cpu()
+                    if preds_cpu.dim() == 1:
+                        log_record["predictions"] = preds_cpu.tolist()
+                    else:
+                        log_record["predictions_shape"] = list(preds_cpu.shape)
+                        log_record["predictions_mean"] = float(preds_cpu.mean().item())
+                        log_record["predictions_std"] = float(preds_cpu.std().item())
+                if isinstance(Y, torch.Tensor):
+                    targets_cpu = Y.detach().float().cpu()
+                    if targets_cpu.dim() == 1:
+                        log_record["targets"] = targets_cpu.tolist()
+                    else:
+                        log_record["targets_shape"] = list(targets_cpu.shape)
+                        log_record["targets_mean"] = float(targets_cpu.float().mean().item())
+                        log_record["targets_std"] = float(targets_cpu.float().std().item())
+                batch_jsonl_file.write(json.dumps(log_record, ensure_ascii=False) + "\n")
+            except Exception:
+                pass
         # immediately async prefetch next batch while model is doing the forward pass on the GPU
         X, Y = consumer.get_batch('train', device)
-        # backward pass, with gradient scaling if training in fp16
-        scaler.scale(loss).backward()
+
+
     # clip the gradient
     if grad_clip != 0.0:
         scaler.unscale_(optimizer)
@@ -398,7 +440,7 @@ while True:
         if local_iter_num >= 5: # let the training loop settle a bit
             mfu = raw_model.estimate_mfu(batch_size * gradient_accumulation_steps, dt)
             running_mfu = mfu if running_mfu == -1.0 else 0.9*running_mfu + 0.1*mfu
-        
+
         # Prepare step metrics for logging
         step_metrics = {
             "iter": iter_num,
@@ -406,7 +448,7 @@ while True:
             "time_ms": dt*1000,
             "mfu_pct": running_mfu*100
         }
-        
+
         # Log training step
         logger.log_step(step_metrics)
     iter_num += 1
@@ -419,4 +461,13 @@ while True:
     t0 = time.time()
 
 if ddp:
+
+# ensure we close the JSONL file on exit
+if master_process and 'batch_jsonl_file' in globals() and batch_jsonl_file is not None:
+    try:
+        batch_jsonl_file.flush()
+        batch_jsonl_file.close()
+    except Exception:
+        pass
+
     destroy_process_group()
