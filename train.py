@@ -18,7 +18,6 @@ $ torchrun --nproc_per_node=8 --nnodes=2 --node_rank=1 --master_addr=123.456.123
 
 import os
 import time
-import math
 import pickle
 from contextlib import nullcontext
 
@@ -195,13 +194,6 @@ consumer = DatasetConsumer(
 iter_num = 0
 best_val_loss = 1e9
 
-# Accumulators for loss modifier diagnostics (no modifier code changes)
-_seqvar_loss_ratio_sum = 0.0
-_seqvar_loss_ratio_count = 0
-_seqvar_latest = None
-_seqcorr_loss_ratio_sum = 0.0
-_seqcorr_loss_ratio_count = 0
-_seqcorr_latest = None
 
 # derive vocab_size from consumer meta
 meta = consumer.meta
@@ -353,21 +345,6 @@ while True:
             # Reset metrics after logging (we print our own averages below regardless)
             loss_modifier_pipeline.reset_all_metrics()
 
-        # Compute and log average loss_ratio from SequenceScorerVarianceModifier before reset
-        if _seqvar_loss_ratio_count > 0:
-            eval_metrics["loss_modifiers/SequenceScorerVarianceModifier.loss_ratio_avg"] = (
-                _seqvar_loss_ratio_sum / max(_seqvar_loss_ratio_count, 1)
-            )
-        # Compute and log average loss_ratio from SequenceScorerCorrelationModifier before reset
-        if _seqcorr_loss_ratio_count > 0:
-            eval_metrics["loss_modifiers/SequenceScorerCorrelationModifier.loss_ratio_avg"] = (
-                _seqcorr_loss_ratio_sum / max(_seqcorr_loss_ratio_count, 1)
-            )
-        # Reset accumulators for next window
-        _seqvar_loss_ratio_sum = 0.0
-        _seqvar_loss_ratio_count = 0
-        _seqcorr_loss_ratio_sum = 0.0
-        _seqcorr_loss_ratio_count = 0
 
         # Log evaluation results
         logger.log_eval(eval_metrics)
@@ -410,55 +387,6 @@ while True:
         with ctx:
             logits, loss = model(X, Y, loss_modifiers=loss_modifier_pipeline)
             loss = loss / gradient_accumulation_steps # scale the loss to account for gradient accumulation
-            # accumulate loss_ratio from SequenceScorerVarianceModifier if available
-            # Compute seqvar factor directly (robust to torch.compile side-effects)
-            try:
-                if (not loss_modifier_pipeline.is_empty() and
-                    config.get('model_mode', model_mode) == 'sequence_scorer' and
-                    config.get('sequence_variance_enabled', False)):
-                    preds_dbg = logits.detach().float().view(-1)
-                    targs_dbg = Y.detach().float().view(-1)
-                    var_pred = preds_dbg.var(unbiased=False)
-                    var_targ = targs_dbg.var(unbiased=False)
-                    eps_dbg = float(config.get('sequence_variance_eps', 1e-8))
-                    scale_dbg = float(config.get('sequence_variance_scale', 2.0))
-                    alpha_dbg = float(config.get('sequence_variance_alpha', 1.5))
-                    denom = torch.clamp(var_pred, min=eps_dbg)
-                    r = var_targ / denom
-                    excess = torch.clamp(r - 1.0, min=0.0)
-                    raw = 1.0 + (scale_dbg - 1.0) * (1.0 - torch.exp(-alpha_dbg * excess))
-                    factor = torch.clamp(raw, min=1.0, max=scale_dbg)
-                    _seqvar_latest = float(factor.item())
-                    _seqvar_loss_ratio_sum += _seqvar_latest
-                    _seqvar_loss_ratio_count += 1
-            except Exception:
-                pass
-            # Compute seqcorr factor directly for logging (correlation-based)
-            try:
-                if (not loss_modifier_pipeline.is_empty() and
-                    config.get('model_mode', model_mode) == 'sequence_scorer' and
-                    config.get('sequence_correlation_enabled', False)):
-                    preds_c = logits.detach().float().view(-1)
-                    targs_c = Y.detach().float().view(-1)
-                    x = preds_c - preds_c.mean()
-                    y = targs_c - targs_c.mean()
-                    eps_c = float(config.get('sequence_correlation_eps', 1e-8))
-                    cov = (x * y).sum()
-                    std_x = torch.sqrt((x * x).sum() + eps_c)
-                    std_y = torch.sqrt((y * y).sum() + eps_c)
-                    corr = cov / (std_x * std_y + eps_c)
-                    # Quadratic factor A*c^2 + B*c + C with the same mapping used in the modifier
-                    alpha_c = float(config.get('sequence_correlation_alpha', 4.0))
-                    sqrt_alpha = math.sqrt(alpha_c)
-                    A = (alpha_c - 2 * sqrt_alpha + 1.0) / 2.0
-                    B = (1.0 - alpha_c) / 2.0
-                    C = sqrt_alpha
-                    factor_c = A * (corr ** 2) + B * corr + C
-                    _seqcorr_latest = float(factor_c.item())
-                    _seqcorr_loss_ratio_sum += _seqcorr_latest
-                    _seqcorr_loss_ratio_count += 1
-            except Exception:
-                pass
         # immediately async prefetch next batch while model is doing the forward pass on the GPU
         X, Y = consumer.get_batch('train', device)
         # backward pass, with gradient scaling if training in fp16
@@ -493,12 +421,6 @@ while True:
             "time_ms": dt*1000,
             "mfu_pct": running_mfu*100
         }
-        # Attach latest sequence variance/correlation loss_ratio if available (no modifier changes)
-        if not loss_modifier_pipeline.is_empty():
-            if _seqvar_latest is not None:
-                step_metrics["seqvar_loss_ratio"] = _seqvar_latest
-            if _seqcorr_latest is not None:
-                step_metrics["seqcorr_loss_ratio"] = _seqcorr_latest
 
         # Log training step
         logger.log_step(step_metrics)
