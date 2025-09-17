@@ -2,13 +2,21 @@
 
 # Dataset configuration
 dataset = 'sequence_scorer'
-batch_size = 16
+batch_size = 4
+gradient_accumulation_steps = 2
 block_size = 1024
+eval_interval = 250
+eval_iters = 10
+log_interval = 10
 
 # MLM model for synthetic text generation
 mlm_checkpoint_path = 'out/7250_1.76_all_LMod_enabled.pt'  # adjust to your MLM checkpoint
+init_from_checkpoint = 'out/7250_1.76_all_LMod_enabled.pt'
+freeze_transformer = True
+unfreeze_at_iteration = 1000
 cls_token_id = 66
 max_backlog_files = 10
+vocab_size = 67
 
 # Load composition configuration (same as char_diffusion)
 composition_config = 'complex'  # reuses data/char_diffusion/config/complex.py
@@ -38,11 +46,11 @@ model_mode = 'sequence_scorer'
 attention_type = 'bidirectional'
 
 # BERT training typically uses lower learning rates
-learning_rate = 5e-4
+learning_rate = 1e-5
 warmup_iters = 500
 max_iters = 10000
 lr_decay_iters = 10000
-min_lr = 5e-5
+min_lr = 1e-5
 beta2 = 0.99
 
 # Model architecture - bidirectional for BERT
@@ -53,10 +61,25 @@ dropout = 0.1
 position_encoding = 'rotary'
 dtype = 'float16'
 
+# Loss modifiers configuration (sequence scoring)
+loss_modifiers_enabled = True
+# Emphasize batches with higher residual variance
+sequence_variance_enabled = True
+sequence_variance_scale = 5.0         # cap (>1.0) for aggressive scaling
+sequence_variance_alpha = 1.5         # growth rate for nonlinear curve
+sequence_variance_eps = 1e-8
+
+# Correlation-based scaling (Pearson)
+sequence_correlation_enabled = True
+sequence_correlation_alpha = 4.0
+sequence_correlation_eps = 1e-8
+
+
+
 # Data generation settings
-batches_per_file = 30
-max_backlog_files = 2
-sleep_seconds = 8.0
+batches_per_file = 100
+max_backlog_files = 20
+sleep_seconds = 1.0
 
 print("Complex sequence scorer configuration loaded")
 

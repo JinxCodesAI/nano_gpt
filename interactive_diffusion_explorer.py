@@ -34,24 +34,31 @@ except ImportError:
         HAS_KEYBOARD = False
 
 # Configuration
-MODEL_PATH = 'out/new_8500.pt'  # Hardcoded model path - change this as needed
+MODEL_PATH = 'out/7250_1.76_all_LMod_enabled.pt'  # Hardcoded model path - change this as needed
 DATA_DIR = 'data'
 DEVICE = 'cuda' if torch.cuda.is_available() else 'cpu'
 DTYPE = 'float16' if DEVICE == 'cuda' else 'float32'
 
 class DiffusionExplorer:
-    def __init__(self):
+    def __init__(self, interactive: bool = True):
+        self.interactive = bool(interactive)
         self.model = None
         self.stoi = None
         self.itos = None
-        self.vocab_size = None
+        self.vocab_size = None  # model vocab size
         self.mask_token_id = None
         self.dataset_name = None
         self.current_batch = None
         self.current_sample_idx = 0
+        # dataset/meta-related fields
+        self.meta = None
+        self.training_type = None
+        self.schema = None
+        self.input_field = None
+        self.target_field = None
         self.ptdtype = {'float32': torch.float32, 'bfloat16': torch.bfloat16, 'float16': torch.float16}[DTYPE]
         self.ctx = nullcontext() if DEVICE == 'cpu' else torch.amp.autocast(device_type=DEVICE, dtype=self.ptdtype)
-        
+
     def clear_screen(self):
         """Clear console screen"""
         os.system('cls' if os.name == 'nt' else 'clear')
@@ -65,7 +72,10 @@ class DiffusionExplorer:
         print()
         
     def wait_for_key(self, prompt: str = "Press any key to continue...") -> str:
-        """Wait for user input"""
+        """Wait for user input. In non-interactive mode, no-op."""
+        if not self.interactive:
+            # Non-interactive mode: skip waiting
+            return ""
         if HAS_KEYBOARD:
             print(prompt)
             if os.name == 'nt':  # Windows
@@ -80,7 +90,7 @@ class DiffusionExplorer:
                     termios.tcsetattr(fd, termios.TCSADRAIN, old_settings)
         else:
             return input(prompt + " (Press Enter)")
-            
+
     def get_menu_choice(self, options: List[str], title: str = "Select an option:") -> int:
         """Display menu and get user choice"""
         while True:
@@ -195,41 +205,79 @@ class DiffusionExplorer:
         return self.load_vocabulary()
     
     def load_vocabulary(self) -> bool:
-        """Load vocabulary for selected dataset"""
-        self.print_header(f"Loading Vocabulary: {self.dataset_name}")
-        
+        """Load dataset meta/schema and reconcile vocabulary with model"""
+        self.print_header(f"Loading Dataset Meta: {self.dataset_name}")
+
         try:
             meta_path = os.path.join(DATA_DIR, self.dataset_name, 'meta.pkl')
-            print(f"📂 Loading vocabulary from: {meta_path}")
-            
+            print(f"📂 Loading meta from: {meta_path}")
+
             with open(meta_path, 'rb') as f:
-                meta = pickle.load(f)
-                
-            self.stoi = meta['stoi']
-            self.itos = meta['itos']
-            vocab_size_meta = meta['vocab_size']
-            
-            # Get model's vocabulary size
-            model_vocab_size = self.model.config.vocab_size
+                self.meta = pickle.load(f)
+
+            # Basic meta
+            self.training_type = self.meta.get('training_type')
+            self.schema = self.meta.get('batch_schema')
+            self.stoi = self.meta.get('stoi')
+            self.itos = self.meta.get('itos')
+            dataset_vocab_size = self.meta.get('vocab_size')
+
+            # Determine special tokens from meta if available
+            self.mask_token_id = self.meta.get('mask_token_id', None)
+            cls_token_id = self.meta.get('cls_token_id', None)
+
+            # Model vocab
+            model_vocab_size = getattr(self.model.config, 'vocab_size', None)
+            if model_vocab_size is None:
+                raise ValueError("Model missing vocab_size in config")
             self.vocab_size = model_vocab_size
-            self.mask_token_id = self.vocab_size - 1
-            
-            print(f"✅ Vocabulary loaded:")
-            print(f"   • Dataset vocab size: {vocab_size_meta}")
+
+            # Report
+            print(f"✅ Meta loaded:")
+            print(f"   • training_type: {self.training_type}")
+            print(f"   • Dataset vocab size: {dataset_vocab_size}")
             print(f"   • Model vocab size: {model_vocab_size}")
-            print(f"   • Using vocab size: {self.vocab_size}")
-            print(f"   • Mask token ID: {self.mask_token_id}")
-            if self.mask_token_id < len(self.itos):
-                print(f"   • Mask token: '{self.itos[self.mask_token_id]}'")
-            
+            if self.mask_token_id is not None:
+                print(f"   • mask_token_id (from meta): {self.mask_token_id}")
+            if cls_token_id is not None:
+                print(f"   • cls_token_id (from meta): {cls_token_id}")
+
+            # If mask_token_id not in meta, assume last id in model vocab for display/decoding purposes
+            if self.mask_token_id is None:
+                self.mask_token_id = self.vocab_size - 1
+
+            # Minimal schema introspection for input/target field names
+            self.input_field, self.target_field = None, None
+            if isinstance(self.schema, list):
+                for field in self.schema:
+                    role = field.get('role') or ''
+                    if role.lower() == 'input' and self.input_field is None:
+                        self.input_field = field.get('name')
+                    if role.lower() == 'target' and self.target_field is None:
+                        self.target_field = field.get('name')
+            # Fallbacks by common names
+            if self.input_field is None:
+                for candidate in ['x', 'input_ids']:
+                    if candidate in (f.get('name') for f in self.schema):
+                        self.input_field = candidate
+                        break
+            if self.target_field is None:
+                for candidate in ['y', 'targets']:
+                    if candidate in (f.get('name') for f in self.schema):
+                        self.target_field = candidate
+                        break
+
+            print(f"   • Detected input field: {self.input_field}")
+            print(f"   • Detected target field: {self.target_field}")
+
             self.wait_for_key()
             return True
-            
+
         except Exception as e:
-            print(f"❌ Error loading vocabulary: {e}")
+            print(f"❌ Error loading meta: {e}")
             self.wait_for_key()
             return False
-    
+
     def select_data_file(self) -> bool:
         """Select data file from dataset"""
         self.print_header(f"Data File Selection: {self.dataset_name}")
@@ -307,65 +355,78 @@ class DiffusionExplorer:
             # List all keys in batch data for debugging
             print(f"🔍 Available keys in batch: {list(batch_data.keys())}")
             
-            # Extract tensors
-            if 'tensors' in batch_data:
-                tensors = batch_data['tensors']
-                x_tensor = tensors.get('x', None)
-                y_tensor = tensors.get('y', None)
-            else:
-                x_tensor = batch_data.get('x', None)
-                y_tensor = batch_data.get('y', None)
-                
+            # Extract tensors using schema/meta to support multiple dataset types
+            input_name = self.input_field or 'x'
+            target_name = self.target_field or 'y'
+
+            def _get_tensor(container, name):
+                if isinstance(container, dict):
+                    return container.get(name)
+                return None
+
+            def _pick_from(container, names: List[str]):
+                for n in names:
+                    v = _get_tensor(container, n)
+                    if v is not None:
+                        return v
+                return None
+
+            tensors = batch_data.get('tensors', batch_data)
+            x_tensor = _pick_from(tensors, [input_name, 'x', 'input_ids'])
+            y_tensor = _pick_from(tensors, [target_name, 'y', 'targets'])
+
             if x_tensor is None or y_tensor is None:
-                print("❌ Could not find 'x' or 'y' tensors in batch file")
-                print("Available keys:", list(batch_data.keys()))
-                if 'tensors' in batch_data:
-                    print("Tensors keys:", list(batch_data['tensors'].keys()))
+                print("❌ Could not find required tensors in batch file per schema")
+                print("Available top-level keys:", list(batch_data.keys()))
+                if isinstance(tensors, dict):
+                    print("Tensors keys:", list(tensors.keys()))
+                print(f"Expected input: {input_name}, target: {target_name}")
                 self.wait_for_key()
                 return False
-                
-            self.current_batch = {'x': x_tensor, 'y': y_tensor}
+
+            self.current_batch = {'input': x_tensor, 'target': y_tensor, 'input_name': input_name, 'target_name': target_name}
             self.current_sample_idx = 0
-            
+
             batch_size, seq_len = x_tensor.shape
             print(f"✅ Batch file loaded:")
             print(f"   • Batch size: {batch_size}")
             print(f"   • Sequence length: {seq_len}")
-            
-            # Show some statistics
-            total_tokens = batch_size * seq_len
+
+            # Show statistics depending on target shape
             ignore_index = -100
-            masked_tokens = (y_tensor != ignore_index).sum().item()
-            mask_percentage = (masked_tokens / total_tokens) * 100
-            
-            # Calculate per-sample masking statistics
-            per_sample_masked = (y_tensor != ignore_index).sum(dim=1).float()  # (batch_size,)
-            per_sample_percentages = (per_sample_masked / seq_len) * 100  # Convert to percentages
-            
-            # Sort percentages for percentile calculations
-            sorted_percentages, _ = torch.sort(per_sample_percentages)
-            
-            min_masked_pct = sorted_percentages[0].item()
-            max_masked_pct = sorted_percentages[-1].item()
-            
-            # Calculate 10th and 90th percentiles
-            p10_idx = int(0.1 * batch_size)
-            p90_idx = int(0.9 * batch_size)
-            p10_masked_pct = sorted_percentages[p10_idx].item()
-            p90_masked_pct = sorted_percentages[p90_idx].item()
-            
-            print(f"   • Total tokens: {total_tokens}")
-            print(f"   • Masked tokens: {masked_tokens}")
-            print(f"   • Overall mask percentage: {mask_percentage:.2f}%")
-            print(f"   • Per-sample mask distribution:")
-            print(f"     - Min: {min_masked_pct:.2f}%")
-            print(f"     - 10th percentile: {p10_masked_pct:.2f}%")
-            print(f"     - 90th percentile: {p90_masked_pct:.2f}%")
-            print(f"     - Max: {max_masked_pct:.2f}%")
-            
+            if y_tensor.dim() == 2 and y_tensor.shape[1] == seq_len:
+                total_tokens = batch_size * seq_len
+                masked_tokens = (y_tensor != ignore_index).sum().item()
+                mask_percentage = (masked_tokens / max(total_tokens, 1)) * 100
+
+                per_sample_masked = (y_tensor != ignore_index).sum(dim=1).float()
+                per_sample_percentages = (per_sample_masked / max(seq_len, 1)) * 100
+                sorted_percentages, _ = torch.sort(per_sample_percentages)
+                min_masked_pct = sorted_percentages[0].item()
+                max_masked_pct = sorted_percentages[-1].item()
+                p10_idx = int(0.1 * batch_size)
+                p90_idx = int(0.9 * batch_size)
+                p10_masked_pct = sorted_percentages[p10_idx].item()
+                p90_masked_pct = sorted_percentages[p90_idx].item()
+                print(f"   • Total tokens: {total_tokens}")
+                print(f"   • Masked tokens: {masked_tokens}")
+                print(f"   • Overall mask percentage: {mask_percentage:.2f}%")
+                print(f"   • Per-sample mask distribution:")
+                print(f"     - Min: {min_masked_pct:.2f}%")
+                print(f"     - 10th percentile: {p10_masked_pct:.2f}%")
+                print(f"     - 90th percentile: {p90_masked_pct:.2f}%")
+                print(f"     - Max: {max_masked_pct:.2f}%")
+            else:
+                # Scalar/regression targets
+                try:
+                    targets_flat = y_tensor.view(-1).to(torch.float32)
+                    print(f"   • Targets stats (min/mean/max): {targets_flat.min().item():.4f} / {targets_flat.mean().item():.4f} / {targets_flat.max().item():.4f}")
+                except Exception:
+                    print(f"   • Targets shape: {tuple(y_tensor.shape)}")
+
             self.wait_for_key()
             return True
-            
+
         except Exception as e:
             print(f"❌ Error loading batch file: {e}")
             self.wait_for_key()
@@ -427,59 +488,68 @@ class DiffusionExplorer:
             self.wait_for_key()
             return
             
-        x_tensor = self.current_batch['x']
-        y_tensor = self.current_batch['y']
+        x_tensor = self.current_batch['input']
+        y_tensor = self.current_batch['target']
         batch_size = x_tensor.shape[0]
         ignore_index = -100
-        
+
+        # Determine dataset style from targets shape
+        is_token_targets = (y_tensor.dim() == 2 and y_tensor.shape[1] == x_tensor.shape[1])
+
         while True:
             self.print_header(f"Sample Navigation: {self.dataset_name}")
-            
+
             seq_len = x_tensor.shape[1]
             print(f"📊 Current sample: {self.current_sample_idx + 1}/{batch_size} (sequence length: {seq_len})")
-            print(f"🔧 Navigation: ← Previous | → Next | U Unmask | G Generate | Q Quit")
+            if is_token_targets:
+                print(f"🔧 Navigation: ← Previous | → Next | U Unmask | G Generate | Q Quit")
+            else:
+                print(f"🔧 Navigation: ← Previous | → Next | Q Quit")
             print("-" * 80)
-            
+
             # Show current sample
             x_tokens = x_tensor[self.current_sample_idx]
-            y_tokens = y_tensor[self.current_sample_idx]
-            
             x_decoded = self.decode_tokens(x_tokens)
-            
-            # Show target tokens for masked positions
-            y_decoded_parts = []
-            masked_positions = []
-            for j, (x_tok, y_tok) in enumerate(zip(x_tokens.tolist(), y_tokens.tolist())):
-                if y_tok != ignore_index:
-                    y_decoded_parts.append(self.itos.get(y_tok, f'[UNK:{y_tok}]'))
-                    masked_positions.append(j)
-                else:
-                    y_decoded_parts.append('_')
-            
-            print(f"📝 Input (x):  {repr(x_decoded)}")
-            print(f"🎯 Target (y): {''.join(y_decoded_parts)}")
-            print(f"🎭 Masked positions: {len(masked_positions)} positions")
-            
+            print(f"📝 Input ({self.current_batch['input_name']}):  {repr(x_decoded)}")
+
+            if is_token_targets:
+                # Show per-token targets for masked positions
+                y_tokens = y_tensor[self.current_sample_idx]
+                y_decoded_parts = []
+                masked_positions = []
+                for j, (x_tok, y_tok) in enumerate(zip(x_tokens.tolist(), y_tokens.tolist())):
+                    if y_tok != ignore_index:
+                        y_decoded_parts.append(self.itos.get(y_tok, f'[UNK:{y_tok}]'))
+                        masked_positions.append(j)
+                    else:
+                        y_decoded_parts.append('_')
+                print(f"🎯 Target ({self.current_batch['target_name']}): {''.join(y_decoded_parts)}")
+                print(f"🎭 Masked positions: {len(masked_positions)} positions")
+            else:
+                target_val = y_tensor[self.current_sample_idx].item() if y_tensor.dim() == 1 else y_tensor[self.current_sample_idx].squeeze().item()
+                print(f"🎯 Target ({self.current_batch['target_name']}): {target_val:.4f}")
+
             print(f"\nCommands:")
             print(f"  ← / A - Previous sample")
-            print(f"  → / D - Next sample") 
-            print(f"  U - Run model unmasking on this sample")
-            print(f"  G - Generate test sample")
+            print(f"  → / D - Next sample")
+            if is_token_targets:
+                print(f"  U - Run model unmasking on this sample")
+                print(f"  G - Generate test sample")
             print(f"  Q - Quit to main menu")
-            
+
             key = self.wait_for_key("Enter command: ").lower()
-            
+
             if key in ['q']:
                 break
             elif key in ['a'] or (HAS_KEYBOARD and key == '\x1b'):  # Left arrow or A
                 self.current_sample_idx = (self.current_sample_idx - 1) % batch_size
             elif key in ['d'] or (HAS_KEYBOARD and key == '\x1b'):  # Right arrow or D
                 self.current_sample_idx = (self.current_sample_idx + 1) % batch_size
-            elif key in ['u']:
+            elif key in ['u'] and is_token_targets:
                 self.run_model_unmasking()
-            elif key in ['g']:
+            elif key in ['g'] and is_token_targets:
                 self.generate_test_sample()
-    
+
     def run_model_unmasking(self):
         """Run model unmasking on current sample"""
         if self.current_batch is None:
@@ -489,9 +559,15 @@ class DiffusionExplorer:
             
         self.print_header("Model Unmasking")
         
-        x_tensor = self.current_batch['x']
+        x_tensor = self.current_batch['input']
+        y_tensor = self.current_batch['target']
+        # Enforce only MLM-style is supported here
+        if not (y_tensor.dim() == 2 and y_tensor.shape[1] == x_tensor.shape[1]):
+            print("Unmasking only supported for MLM-style datasets with per-token targets.")
+            self.wait_for_key()
+            return
         sample_tokens = x_tensor[self.current_sample_idx:self.current_sample_idx+1].to(DEVICE)  # Keep batch dim
-        
+
         print(f"🔄 Running model unmasking...")
         original_tokens = sample_tokens[0]
         original_text = self.decode_tokens(original_tokens)
@@ -595,18 +671,22 @@ class DiffusionExplorer:
             self.wait_for_key()
             return
         
-        # Get sample text for masking - reconstruct original unmasked text
-        x_tensor = self.current_batch['x']
-        y_tensor = self.current_batch['y']
-        
+        # Only supported for MLM-style datasets with per-token targets
+        x_tensor = self.current_batch['input']
+        y_tensor = self.current_batch['target']
+        if not (y_tensor.dim() == 2 and y_tensor.shape[1] == x_tensor.shape[1]):
+            print("This action is only available for MLM-style datasets with token targets.")
+            self.wait_for_key()
+            return
+
         # Reconstruct the original unmasked text
         original_sample_tokens = self.reconstruct_original_text(
-            x_tensor[self.current_sample_idx], 
+            x_tensor[self.current_sample_idx],
             y_tensor[self.current_sample_idx]
         )
         base_sample = original_sample_tokens.unsqueeze(0)  # Add batch dimension
         original_text = self.decode_tokens(original_sample_tokens)
-        
+
         print(f"📝 Base sample: {repr(original_text)}")
         
         # Select masking strategy
@@ -778,9 +858,11 @@ class DiffusionExplorer:
                     if self.current_batch is None:
                         options.append("📂 Select Data File")
                     else:
-                        batch_info = f"📂 Change Data File (Current: {self.current_batch['x'].shape[0]} samples)"
+                        current_input = self.current_batch.get('input') if isinstance(self.current_batch, dict) else None
+                        num_samples = int(current_input.shape[0]) if current_input is not None else 0
+                        batch_info = f"📂 Change Data File (Current: {num_samples} samples)"
                         options.append(batch_info)
-                        
+
                     if self.current_batch is not None:
                         options.append("🔍 Navigate Samples")
                         

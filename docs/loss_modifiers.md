@@ -73,7 +73,7 @@ Mechanics (how it works):
 Per-sample illustration (sample weights):
 Assume batch size = 4, per-sample **normalized** entropies after per-position averaging are H = [0.2, 0.6, 1.0, 0.4], threshold=0.5, weight=1.0.
 - Clamped entropies: H* = [0.5, 0.6, 1.0, 0.5]
-- Raw weights w_raw = 1 / (H* + eps) ≈ [2.0, 1.667, 1.0, 2.0] 
+- Raw weights w_raw = 1 / (H* + eps) ≈ [2.0, 1.667, 1.0, 2.0]
 - Sum of raw weights: 6.667
 - **Normalized weights**: w = w_raw × (4 / 6.667) ≈ [1.2, 1.0, 0.6, 1.2] (sum = 4.0)
 - Final loss = mean_i(w_i * L_i) where L_i is the per-sample masked mean loss.
@@ -88,7 +88,7 @@ Logged metrics:
 
 **Per-Position Entropy** (all sequence positions):
 - per_position_mean_entropy: Mean normalized entropy across all positions [0,1]
-- per_position_max_entropy, per_position_min_entropy: Range of position entropies [0,1] 
+- per_position_max_entropy, per_position_min_entropy: Range of position entropies [0,1]
 - per_position_entropy_std: Standard deviation of position entropies
 
 **Per-Sample Entropy** (averaged per sequence):
@@ -98,7 +98,7 @@ Logged metrics:
 
 **Weight Statistics** (after normalization):
 - weight_mean: Mean per-sample weight (should ≈ 1.0 due to normalization)
-- weight_max, weight_min: Range of normalized per-sample weights  
+- weight_max, weight_min: Range of normalized per-sample weights
 - weight_std: Standard deviation of per-sample weights
 
 **Loss Modification**:
@@ -122,7 +122,7 @@ entropy_modifier_verbose = True  # Enable detailed logging
 ```
 
 Verbose mode reports:
-- **Positions with no wrong answer probability**: When model is extremely confident 
+- **Positions with no wrong answer probability**: When model is extremely confident
 - **Positions with ≤1 wrong token**: Cannot compute meaningful entropy (forced to 0)
 - **Entropy values clamped**: Values outside [0,1] range corrected
 - **Non-finite values detected**: NaN/inf values replaced with safe defaults
@@ -154,6 +154,73 @@ Same batch with normalized entropy, old behavior comparison:
 - **Consistent behavior**: Same entropy threshold and weight settings work across different models!
 
 Use cases:
+
+### 4. Sequence Scorer Variance Modifier
+
+Purpose: For SEQUENCE_SCORER mode, scale the scalar loss by a factor derived from the ratio of batch variances var(targets) / var(predictions). This emphasizes updates when targets are more diverse than current predictions and helps counteract output cramping.
+
+Parameters (from config or CLI):
+- sequence_variance_enabled (bool): Enable this modifier
+- sequence_variance_scale (float): Upper cap for the multiplicative factor (>1.0). Example: 2.0
+- sequence_variance_alpha (float): Growth rate for the nonlinear curve. Example: 1.5
+- sequence_variance_eps (float): Numerical stability epsilon when dividing by small variance. Default 1e-8
+
+Configuration example:
+```python
+loss_modifiers_enabled = True
+sequence_variance_enabled = True
+sequence_variance_scale = 2.0
+sequence_variance_alpha = 1.5
+sequence_variance_eps = 1e-8
+```
+
+Mechanics:
+1) In SEQUENCE_SCORER mode, model returns logits shaped (B,) with values in [0,1].
+2) Compute r = var(targets) / max(var(predictions), eps) across the batch (unbiased=False).
+3) Compute factor via an aggressive but saturating nonlinearity:
+   factor = 1 + (scale - 1) * (1 - exp(-alpha * max(r - 1, 0)))
+   This equals 1 when r <= 1, increases rapidly for r > 1, and saturates at 'scale'.
+4) Scale the scalar base loss: loss <- loss * factor
+
+Metrics Logged:
+- variance_pred, variance_target
+- ratio_y_over_x (r), factor_applied
+- alpha, scale_cap
+- original_loss, final_loss, loss_ratio
+
+
+### 5. Sequence Scorer Correlation Modifier
+
+Purpose: For SEQUENCE_SCORER mode, scale the scalar loss by a non-linear mapping of the Pearson correlation between predictions and targets. Penalizes anti-correlation strongest, neutral moderately, perfect positive correlation not penalized.
+
+Mapping (c ∈ [-1, 1]):
+- c =  1 → factor = 1.0 (no change)
+- c =  0 → factor = √alpha
+- c = -1 → factor = alpha
+
+Parameters:
+- sequence_correlation_enabled (bool)
+- sequence_correlation_alpha (float ≥ 1.0): Maximum factor at c = -1
+- sequence_correlation_eps (float): Numerical stability for std computations
+
+Configuration example:
+```python
+loss_modifiers_enabled = True
+sequence_correlation_enabled = True
+sequence_correlation_alpha = 4.0
+sequence_correlation_eps = 1e-8
+```
+
+Mechanics:
+1) Compute Pearson correlation over batch between preds and targets (detach preds for correlation).
+2) Compute factor via quadratic A c^2 + B c + C that passes (1→1), (0→√alpha), (-1→alpha).
+3) Scale base loss: loss <- loss * factor.
+
+Metrics Logged:
+- correlation (c), multiplier (factor)
+- alpha, A, B, C
+- original_loss, final_loss, loss_ratio
+
 - Emphasize updates when the model’s wrong predictions are diverse (more informative errors).
 - Down‑weight updates when the model fixates on specific wrong tokens (possibly noisy/confusing cases).
 - Track confidence patterns via entropy metrics during training.
@@ -209,7 +276,7 @@ loss_modifiers_enabled = True
 mask_ratio_weight_enabled = True
 mask_ratio_weight_power = 0.5        # Square root inverse weighting
 mask_ratio_weight_min_weight = 0.1   # Prevent extreme deweighting
-mask_ratio_weight_max_weight = 10.0  # Prevent extreme upweighting  
+mask_ratio_weight_max_weight = 10.0  # Prevent extreme upweighting
 mask_ratio_weight_eps = 1e-8         # Numerical stability
 ```
 
@@ -227,7 +294,7 @@ Batch with 3 sequences, seq_len=4, power=0.5, min_weight=0.1, max_weight=10.0:
 # Sample sequences with different masking patterns
 targets = [
     [5, 10, -100, -100],    # 50% valid tokens
-    [3, 4, 1, 2],           # 100% valid tokens  
+    [3, 4, 1, 2],           # 100% valid tokens
     [7, -100, -100, -100]   # 25% valid tokens
 ]
 
@@ -242,13 +309,13 @@ weights = [
 ]
 
 # If per-sequence losses are [1.5, 1.2, 2.0]:
-# Final loss = mean([1.41*1.5, 1.0*1.2, 2.0*2.0]) 
+# Final loss = mean([1.41*1.5, 1.0*1.2, 2.0*2.0])
 #            = mean([2.12, 1.2, 4.0]) = 2.44
 ```
 
 **Weight Distribution Analysis**:
 - **High mask ratio (1.0)**: Full sequence valid → weight ≈ 1.0 (baseline)
-- **Medium mask ratio (0.5)**: Half sequence valid → weight ≈ 1.41 (+41% emphasis)  
+- **Medium mask ratio (0.5)**: Half sequence valid → weight ≈ 1.41 (+41% emphasis)
 - **Low mask ratio (0.25)**: Quarter sequence valid → weight = 2.0 (+100% emphasis)
 - **Very low mask ratio (0.1)**: Heavy masking → weight ≈ 3.16 (clamped if > max_weight)
 

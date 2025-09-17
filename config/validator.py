@@ -46,5 +46,25 @@ def validate_config(cfg: Dict[str, Any]) -> None:
             raise ValueError("vocab_size must be int if provided")
 
     # Additional hooks could validate training_type specific requirements once meta is available
+    # Sequence scorer specific: ensure CLS id fits within vocab
+    mm = cfg.get('model_mode') or cfg.get('mode')
+    if isinstance(mm, str):
+        mm_lower = mm.lower()
+    else:
+        mm_lower = str(mm).lower() if mm is not None else None
+    if mm_lower == 'sequence_scorer':
+        cls_id = cfg.get('cls_token_id', None)
+        if cls_id is not None:
+            if not isinstance(cls_id, int):
+                raise ValueError(f"cls_token_id must be int, got {type(cls_id)}")
+            vocab_size = cfg.get('vocab_size', None)
+            if not isinstance(vocab_size, int):
+                raise ValueError("sequence_scorer requires integer vocab_size when cls_token_id is set")
+            if cls_id >= vocab_size:
+                raise ValueError(
+                    f"Config error: sequence_scorer requires vocab_size >= cls_token_id + 1. "
+                    f"Got vocab_size={vocab_size}, cls_token_id={cls_id}. "
+                    f"Set vocab_size to {cls_id + 1} or higher.")
+
     # For now we keep it minimal and strict on essentials.
 

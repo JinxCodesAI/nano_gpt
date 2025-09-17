@@ -18,9 +18,9 @@ $ torchrun --nproc_per_node=8 --nnodes=2 --node_rank=1 --master_addr=123.456.123
 
 import os
 import time
-import math
 import pickle
 from contextlib import nullcontext
+
 
 import numpy as np
 import torch
@@ -54,7 +54,7 @@ wandb_project = 'owt'
 wandb_run_name = 'run' # 'run' + str(time.time())
 # data
 dataset = 'openwebtext'
-gradient_accumulation_steps = 5 * 8 # used to simulate larger batch sizes
+gradient_accumulation_steps = 1 # used to simulate larger batch sizes
 batch_size = 12 # if gradient_accumulation_steps > 1, this is the micro-batch size
 block_size = 1024
 target_size = None # target sequence length, defaults to block_size if None
@@ -110,10 +110,11 @@ init_from_checkpoint = None  # Path to pretrained model
 unfreeze_at_iteration = None  # Dynamic unfreezing
 unfreeze_lr_multiplier = 0.1  # LR multiplier when unfreezing
 # -----------------------------------------------------------------------------
-config_keys = [k for k,v in globals().items() if not k.startswith('_') and isinstance(v, (int, float, bool, str, list))]
 exec(open('configurator.py').read()) # overrides from command line or config file
 from config.validator import validate_config
 validate_config(globals())
+# Recompute config_keys AFTER applying external config so new keys are included
+config_keys = [k for k,v in globals().items() if not k.startswith('_') and isinstance(v, (int, float, bool, str, list))]
 config = {k: globals()[k] for k in config_keys} # will be useful for logging
 
 # initialize loss modifier pipeline
@@ -193,6 +194,7 @@ consumer = DatasetConsumer(
 iter_num = 0
 best_val_loss = 1e9
 
+
 # derive vocab_size from consumer meta
 meta = consumer.meta
 meta_vocab_size = meta.get('vocab_size', vocab_size)
@@ -210,7 +212,7 @@ config['meta'] = meta
 
 # model init
 model_args = dict(n_layer=n_layer, n_head=n_head, n_embd=n_embd, block_size=block_size,
-                  bias=bias, vocab_size=None, dropout=dropout, attention_type=attention_type, 
+                  bias=bias, vocab_size=None, dropout=dropout, attention_type=attention_type,
                   position_encoding=position_encoding,
                   # multi-mode parameters
                   mode=ModelMode(model_mode),
@@ -319,7 +321,7 @@ while True:
         losses = evaluator.evaluate()
         # Reset timer after validation to exclude validation time from MFU calculation
         t0 = time.time()
-        
+
         # Prepare evaluation metrics for logging
         eval_metrics = {
             "iter": iter_num,
@@ -328,17 +330,25 @@ while True:
             "lr": lr,
             "mfu_pct": running_mfu*100,  # Already as percentage for logger
         }
-        
+
+        # Add ScaledSigmoidHead temperature if available (sequence scorer)
+        try:
+            if hasattr(raw_model, 'sequence_head') and hasattr(raw_model.sequence_head, 'temperature'):
+                eval_metrics["sigm_temp"] = float(raw_model.sequence_head.temperature.detach().cpu().item())
+        except Exception:
+            pass
+
         # Add loss modifier metrics if available
         if not loss_modifier_pipeline.is_empty():
             modifier_metrics = loss_modifier_pipeline.get_all_metrics()
             eval_metrics["loss_modifier_metrics"] = modifier_metrics
-            # Reset metrics after logging
+            # Reset metrics after logging (we print our own averages below regardless)
             loss_modifier_pipeline.reset_all_metrics()
-        
+
+
         # Log evaluation results
         logger.log_eval(eval_metrics)
-        
+
         if losses['val'] < best_val_loss or always_save_checkpoint:
             best_val_loss = losses['val']
             if iter_num > 0:
@@ -349,18 +359,21 @@ while True:
         break
 
     # Dynamic unfreezing support
-    if (unfreeze_at_iteration is not None and 
-        iter_num == unfreeze_at_iteration and 
+    if (unfreeze_at_iteration is not None and
+        iter_num == unfreeze_at_iteration and
         raw_model.get_frozen_status()):
-        
+
         logger.log_info(f"Unfreezing transformer at iteration {iter_num}")
         raw_model.unfreeze_transformer_weights()
-        
+
+        # Extend optimizer with newly-trainable transformer params (infer lr/wd when None)
+        raw_model.extend_optimizer_with_unfrozen(optimizer, weight_decay=None, learning_rate=None)
+
         # Adjust learning rate for stability
         for param_group in optimizer.param_groups:
             param_group['lr'] *= unfreeze_lr_multiplier
-        
-        logger.log_info(f"Reduced learning rate by factor {unfreeze_lr_multiplier}")
+
+        logger.log_info(f"Reduced learning rate by factor {unfreeze_lr_multiplier} current lr: {param_group['lr']}")
 
     # forward backward update, with optional gradient accumulation to simulate larger batch size
     # and using the GradScaler if data type is float16
@@ -378,11 +391,13 @@ while True:
         X, Y = consumer.get_batch('train', device)
         # backward pass, with gradient scaling if training in fp16
         scaler.scale(loss).backward()
+
     # clip the gradient
     if grad_clip != 0.0:
         scaler.unscale_(optimizer)
         torch.nn.utils.clip_grad_norm_(model.parameters(), grad_clip)
     # step the optimizer and scaler if training in fp16
+
     scaler.step(optimizer)
     scaler.update()
     # flush the gradients as soon as we can, no need for this memory anymore
@@ -398,7 +413,7 @@ while True:
         if local_iter_num >= 5: # let the training loop settle a bit
             mfu = raw_model.estimate_mfu(batch_size * gradient_accumulation_steps, dt)
             running_mfu = mfu if running_mfu == -1.0 else 0.9*running_mfu + 0.1*mfu
-        
+
         # Prepare step metrics for logging
         step_metrics = {
             "iter": iter_num,
@@ -406,7 +421,7 @@ while True:
             "time_ms": dt*1000,
             "mfu_pct": running_mfu*100
         }
-        
+
         # Log training step
         logger.log_step(step_metrics)
     iter_num += 1
@@ -420,3 +435,4 @@ while True:
 
 if ddp:
     destroy_process_group()
+

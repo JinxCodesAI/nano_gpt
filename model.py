@@ -1,3 +1,4 @@
+
 """
 Full definition of a GPT Language Model, all of it in this single file.
 References:
@@ -28,17 +29,17 @@ class RotaryPositionalEmbedding(nn.Module):
     "RoFormer: Enhanced Transformer with Rotary Position Embedding"
     https://arxiv.org/abs/2104.09864
     """
-    
+
     def __init__(self, dim, max_position_embeddings=2048, base=10000, device=None):
         super().__init__()
         self.dim = dim
         self.max_position_embeddings = max_position_embeddings
         self.base = base
-        
+
         # Create frequency bands
         inv_freq = 1.0 / (self.base ** (torch.arange(0, self.dim, 2).float().to(device) / self.dim))
         self.register_buffer("inv_freq", inv_freq, persistent=False)
-        
+
         # Build here to make `torch.jit.trace` work.
         self._set_cos_sin_cache(
             seq_len=max_position_embeddings, device=self.inv_freq.device, dtype=torch.get_default_dtype()
@@ -47,7 +48,7 @@ class RotaryPositionalEmbedding(nn.Module):
     def _set_cos_sin_cache(self, seq_len, device, dtype):
         self.max_seq_len_cached = seq_len
         t = torch.arange(self.max_seq_len_cached, device=device, dtype=self.inv_freq.dtype)
-        
+
         freqs = torch.einsum("i,j->ij", t, self.inv_freq)
         # Different from paper, but it uses a different permutation in order to obtain the same calculation
         emb = torch.cat((freqs, freqs), dim=-1)
@@ -105,13 +106,13 @@ class CausalSelfAttention(nn.Module):
         self.n_head = config.n_head
         self.n_embd = config.n_embd
         self.dropout = config.dropout
-        
+
         # Rotary positional embeddings
         self.head_dim = config.n_embd // config.n_head
         position_encoding = getattr(config, 'position_encoding', 'absolute')
         if position_encoding == 'rotary':
             self.rotary_emb = RotaryPositionalEmbedding(
-                self.head_dim, 
+                self.head_dim,
                 max_position_embeddings=config.block_size,
                 device=None  # Will be set when model is moved to device
             )
@@ -175,13 +176,13 @@ class BidirectionalSelfAttention(nn.Module):
         self.n_head = config.n_head
         self.n_embd = config.n_embd
         self.dropout = config.dropout
-        
+
         # Rotary positional embeddings
         self.head_dim = config.n_embd // config.n_head
         position_encoding = getattr(config, 'position_encoding', 'absolute')
         if position_encoding == 'rotary':
             self.rotary_emb = RotaryPositionalEmbedding(
-                self.head_dim, 
+                self.head_dim,
                 max_position_embeddings=config.block_size,
                 device=None  # Will be set when model is moved to device
             )
@@ -241,6 +242,22 @@ class MLP(nn.Module):
         x = self.c_proj(x)
         x = self.dropout(x)
         return x
+class ScaledSigmoidHead(nn.Module):
+    """Linear head with a learnable temperature scaled sigmoid to control squashing."""
+    def __init__(self, input_dim):
+        super().__init__()
+        self.base_predictor = nn.Linear(input_dim, 1, bias=False)
+        # Initialize temperature > 1 to start more squashed; model can adjust
+        self.temperature = nn.Parameter(torch.ones(1) * 2.0)
+        self.A = nn.Parameter(torch.ones(1) * 1.0)
+        self.B = nn.Parameter(torch.ones(1) * 0.0)
+
+    def forward(self, x):
+        linear_output = self.base_predictor(x)
+        # ensure non-negative temperature via ReLU; apply affine transform A*sigmoid + B
+        y = torch.sigmoid(linear_output * self.A + self.B)
+        return y
+
 
 class Block(nn.Module):
 
@@ -279,34 +296,34 @@ class GPTConfig:
     ignore_index: int = -100 # Standard PyTorch ignore index for loss computation
     attention_type: str = 'causal' # 'causal' for autoregressive, 'bidirectional' for BERT-style
     position_encoding: str = 'absolute' # 'absolute' or 'rotary'
-    
+
     # Multi-mode support
     mode: ModelMode = ModelMode.LANGUAGE_MODEL
     num_token_classes: int = 2  # For token classification
     cls_token_id: int = None  # For sequence scoring
-    
+
     # Transfer learning support
     freeze_transformer: bool = False
     init_from_checkpoint: str = None
     unfreeze_at_iteration: int = None
     unfreeze_lr_multiplier: float = 0.1
-    
+
     # Backward compatibility
     binary_classification: bool = False  # Legacy support
-    
+
     def __post_init__(self):
         # Handle backward compatibility
         if self.binary_classification and self.mode == ModelMode.LANGUAGE_MODEL:
             self._log_warning("binary_classification=True detected, converting to TOKEN_CLASSIFIER mode")
             self.mode = ModelMode.TOKEN_CLASSIFIER
             self.num_token_classes = 2
-        
+
         # Enforce bidirectional attention for classification tasks
         if self.mode in [ModelMode.TOKEN_CLASSIFIER, ModelMode.SEQUENCE_SCORER]:
             if self.attention_type != 'bidirectional':
                 self._log_warning(f"{self.mode.value} requires bidirectional attention. Changing from '{self.attention_type}' to 'bidirectional'")
                 self.attention_type = 'bidirectional'
-    
+
     def _log_warning(self, message):
         """Log warning message - will be enhanced when logger is available"""
         print(f"WARNING: {message}")
@@ -327,16 +344,16 @@ class GPT(nn.Module):
             h = nn.ModuleList([Block(config) for _ in range(config.n_layer)]),
             ln_f = LayerNorm(config.n_embd, bias=config.bias),
         )
-        
+
         # Only add absolute position embeddings if not using RoPE
         if config.position_encoding == 'absolute':
             transformer_components['wpe'] = nn.Embedding(config.block_size, config.n_embd)
             self._log_info("Using absolute position embeddings")
         else:
             self._log_info("Using Rotary Position Embeddings (RoPE)")
-        
+
         self.transformer = nn.ModuleDict(transformer_components)
-        
+
         # Create mode-specific output heads
         if self.config.mode == ModelMode.LANGUAGE_MODEL:
             # Existing language modeling head
@@ -351,15 +368,12 @@ class GPT(nn.Module):
             self.lm_head = nn.Linear(config.n_embd, config.num_token_classes, bias=False)
             self._log_info(f"Token classifier head: {config.num_token_classes} classes per token")
         elif self.config.mode == ModelMode.SEQUENCE_SCORER:
-            # Sequence-level scoring head
-            self.sequence_head = nn.Sequential(
-                nn.Linear(config.n_embd, 1, bias=False),
-                nn.Sigmoid()
-            )
+            # Sequence-level scoring head with learnable temperature scaling
+            self.sequence_head = ScaledSigmoidHead(config.n_embd)
             # Initialize with small weights for stability
             with torch.no_grad():
-                self.sequence_head[0].weight.normal_(0.0, 0.01)
-            self._log_info("Sequence scorer head: continuous score 0-1")
+                self.sequence_head.base_predictor.weight.normal_(0.0, 0.01)
+            self._log_info("Sequence scorer head: ScaledSigmoidHead (0-1)")
         else:
             raise ValueError(f"Unknown model mode: {self.config.mode}")
 
@@ -370,14 +384,22 @@ class GPT(nn.Module):
             if pn.endswith('c_proj.weight'):
                 torch.nn.init.normal_(p, mean=0.0, std=0.02/math.sqrt(2 * config.n_layer))
 
+        # Add dedicated CLS embedding parameter (optional, used in SEQUENCE_SCORER)
+        if self.config.mode == ModelMode.SEQUENCE_SCORER and self.config.cls_token_id is not None:
+            # A standalone parameter so freezing the transformer does not freeze CLS
+            self.cls_embedding = nn.Parameter(torch.empty(self.config.n_embd))
+            with torch.no_grad():
+                torch.nn.init.normal_(self.cls_embedding, mean=0.0, std=0.02)
+            self._log_info("Dedicated CLS embedding enabled")
+
         # Transfer learning: load pretrained weights if specified
         if config.init_from_checkpoint is not None and config.init_from_checkpoint != "":
             self._load_pretrained_checkpoint(config.init_from_checkpoint)
-        
+
         # Transfer learning: freeze transformer if requested
         if config.freeze_transformer:
             self.freeze_transformer_weights()
-        
+
         # report number of parameters
         self._log_info("number of parameters: %.2fM" % (self.get_num_params()/1e6,))
 
@@ -389,24 +411,51 @@ class GPT(nn.Module):
             print(message)
 
     def _load_pretrained_checkpoint(self, checkpoint_path):
-        """Load pretrained weights, excluding heads"""
+        """Load pretrained weights (transformer only), with safe embedding expansion"""
         self._log_info(f"Loading pretrained weights from {checkpoint_path}")
         checkpoint = torch.load(checkpoint_path, map_location='cpu', weights_only=False)
-        
+
         state_dict = checkpoint.get('model', checkpoint)
-        
-        # Filter transformer weights, exclude heads
-        transformer_state_dict = {}
+
+        # Clean keys (remove torch.compile prefix)
+        cleaned_state = {}
         for k, v in state_dict.items():
-            clean_key = k.replace('_orig_mod.', '')  # Remove torch.compile prefix
-            if (clean_key.startswith('transformer.') and 
-                not clean_key.startswith('lm_head') and 
-                not clean_key.startswith('sequence_head')):
-                transformer_state_dict[clean_key] = v
-        
-        # Load with strict=False to allow missing head weights
+            clean_key = k.replace('_orig_mod.', '')
+            cleaned_state[clean_key] = v
+
+        # Load all transformer weights except the token embedding first
+        transformer_state_dict = {}
+        for k, v in cleaned_state.items():
+            if k.startswith('transformer.') and not k.startswith('lm_head') and not k.startswith('sequence_head'):
+                if k == 'transformer.wte.weight':
+                    continue  # handle separately due to potential shape mismatch
+                transformer_state_dict[k] = v
+
         missing_keys, unexpected_keys = self.load_state_dict(transformer_state_dict, strict=False)
-        self._log_info(f"Loaded transformer weights: {len(missing_keys)} missing (expected for new heads), {len(unexpected_keys)} unexpected")
+        self._log_info(f"Loaded transformer (except embeddings): {len(missing_keys)} missing, {len(unexpected_keys)} unexpected")
+
+        # Now handle token embeddings safely
+        wte_key = 'transformer.wte.weight'
+        if wte_key in cleaned_state:
+            ckpt_wte = cleaned_state[wte_key]
+            model_wte = self.transformer.wte.weight
+            if ckpt_wte.dim() != 2 or model_wte.dim() != 2:
+                raise RuntimeError("Unexpected token embedding dimensionality")
+            old_vocab, old_dim = ckpt_wte.shape
+            new_vocab, new_dim = model_wte.shape
+            if old_dim != new_dim:
+                raise RuntimeError(f"Embedding dimension mismatch: ckpt {old_dim} vs model {new_dim}")
+            if old_vocab <= new_vocab:
+                # copy overlapping rows, keep new rows as initialized
+                with torch.no_grad():
+                    model_wte[:old_vocab].copy_(ckpt_wte)
+                added = new_vocab - old_vocab
+                if added > 0:
+                    self._log_info(f"Extended token embeddings by {added} new token(s)")
+            else:
+                raise RuntimeError(f"Checkpoint vocab ({old_vocab}) > model vocab ({new_vocab}); cannot load safely")
+        else:
+            self._log_info("No token embedding found in checkpoint; using initialized embeddings")
 
     def freeze_transformer_weights(self):
         """Freeze transformer for feature extraction"""
@@ -426,6 +475,53 @@ class GPT(nn.Module):
         self._log_info("Unfreezing transformer weights for fine-tuning")
         for param in self.transformer.parameters():
             param.requires_grad = True
+
+
+    def extend_optimizer_with_unfrozen(self, optimizer, weight_decay=None, learning_rate=None):
+        """After unfreezing transformer, add newly-trainable params to optimizer.
+        - If learning_rate is None: infer from existing optimizer groups (median lr or optimizer.defaults['lr']).
+        - If weight_decay is None: infer positive WD from existing groups (median over >0 values), else 0.0.
+        Mirrors configure_optimizers grouping (dim>=2 -> weight decay; else no decay).
+        """
+        try:
+            # infer LR if not provided
+            if learning_rate is None:
+                lrs = [pg.get('lr') for pg in optimizer.param_groups if pg.get('lr', None) is not None]
+                if lrs:
+                    lrs_sorted = sorted(lrs)
+                    learning_rate = lrs_sorted[len(lrs_sorted)//2]
+                else:
+                    learning_rate = optimizer.defaults.get('lr', 0.0)
+            # infer WD if not provided
+            if weight_decay is None:
+                wds = [pg.get('weight_decay', 0.0) for pg in optimizer.param_groups if pg.get('weight_decay', 0.0) > 0.0]
+                if wds:
+                    wds_sorted = sorted(wds)
+                    weight_decay = wds_sorted[len(wds_sorted)//2]
+                else:
+                    weight_decay = 0.0
+
+            existing = {id(p) for g in optimizer.param_groups for p in g.get('params', [])}
+            new_decay, new_nodecay = [], []
+            for name, p in self.named_parameters():
+                if p.requires_grad and id(p) not in existing:
+                    (new_decay if p.dim() >= 2 else new_nodecay).append(p)
+            if len(new_decay) > 0:
+                optimizer.add_param_group({
+                    'params': new_decay,
+                    'weight_decay': weight_decay,
+                    'lr': learning_rate,
+                })
+            if len(new_nodecay) > 0:
+                optimizer.add_param_group({
+                    'params': new_nodecay,
+                    'weight_decay': 0.0,
+                    'lr': learning_rate,
+                })
+            if (len(new_decay) + len(new_nodecay)) > 0:
+                self._log_info(f"Added {len(new_decay)} decayed and {len(new_nodecay)} non-decayed param tensors to optimizer after unfreeze (lr={learning_rate}, wd={weight_decay})")
+        except Exception as e:
+            self._log_warning(f"Failed to extend optimizer after unfreeze: {e}")
 
     def get_frozen_status(self):
         """Check if transformer is frozen"""
@@ -461,7 +557,16 @@ class GPT(nn.Module):
 
         # forward the GPT model itself
         tok_emb = self.transformer.wte(idx) # token embeddings of shape (b, t, n_embd)
-        
+
+        # If dedicated CLS embedding is enabled, swap it in where token == cls_token_id
+        if hasattr(self, 'cls_embedding') and self.config.cls_token_id is not None:
+            cls_id = int(self.config.cls_token_id)
+            with torch.no_grad():
+                # build a mask of CLS positions
+                cls_mask = (idx == cls_id).unsqueeze(-1)  # (b, t, 1)
+            # add the CLS embedding where mask is true; keep grads flowing into cls_embedding only
+            tok_emb = torch.where(cls_mask, self.cls_embedding.view(1, 1, -1).expand_as(tok_emb), tok_emb)
+
         # Add positional embeddings only if not using RoPE
         if hasattr(self.transformer, 'wpe'):
             pos = torch.arange(0, t, dtype=torch.long, device=device) # shape (t)
@@ -470,7 +575,7 @@ class GPT(nn.Module):
         else:
             # When using RoPE, no absolute position embeddings are needed
             x = self.transformer.drop(tok_emb)
-            
+
         for block in self.transformer.h:
             x = block(x)
         x = self.transformer.ln_f(x)
@@ -485,12 +590,12 @@ class GPT(nn.Module):
 
     def _forward_sequence_scorer(self, x, targets, loss_modifiers):
         """Sequence scoring forward pass"""
-        cls_output = x[:, 0, :]  # Extract [CLS] token
+        cls_output = x[:, 0, :]
         logits = self.sequence_head(cls_output).squeeze(-1)
-        
         if targets is not None:
+
             base_loss = F.mse_loss(logits, targets.float())
-            
+
             # Apply loss modifiers if available and compatible with sequence scoring
             if loss_modifiers is not None and not loss_modifiers.is_empty():
                 # Note: Some modifiers may not be applicable to sequence scoring
@@ -502,20 +607,20 @@ class GPT(nn.Module):
                 loss = base_loss
         else:
             loss = None
-        
+
         return logits, loss
 
     def _forward_token_classifier(self, x, targets, loss_modifiers):
         """Token classification forward pass"""
         logits = self.lm_head(x)
-        
+
         if targets is not None:
             num_classes = self.config.num_token_classes
             if targets.dim() == 3:  # Soft targets
                 base_loss = F.cross_entropy(logits.view(-1, num_classes), targets.view(-1, num_classes))
             else:  # Hard targets with dynamic weighting
                 base_loss = self._compute_weighted_classification_loss(logits, targets, num_classes)
-            
+
             # Apply loss modifiers if available
             if loss_modifiers is not None and not loss_modifiers.is_empty():
                 mask = targets != -1  # Valid token mask
@@ -527,7 +632,7 @@ class GPT(nn.Module):
                 loss = base_loss
         else:
             loss = None
-        
+
         return logits, loss
 
     def _forward_language_model(self, x, targets, loss_modifiers):
@@ -547,8 +652,8 @@ class GPT(nn.Module):
                 mask = targets != self.config.ignore_index
                 base_loss = (per_position_loss * mask.float()).sum() / (mask.float().sum() + 1e-8)
                 loss = loss_modifiers.modify_loss(
-                    logits, targets, base_loss, mask=mask, 
-                    per_position_loss=per_position_loss, 
+                    logits, targets, base_loss, mask=mask,
+                    per_position_loss=per_position_loss,
                     ignore_index=self.config.ignore_index,
                     model_mode=self.config.mode
                 )
@@ -558,7 +663,7 @@ class GPT(nn.Module):
             # Inference optimization
             logits = self.lm_head(x[:, [-1], :])
             loss = None
-        
+
         return logits, loss
 
     def _compute_weighted_classification_loss(self, logits, targets, num_classes):
@@ -580,7 +685,7 @@ class GPT(nn.Module):
                                  weight=class_weights, ignore_index=-1)
         else:
             loss = F.cross_entropy(logits.view(-1, num_classes), flattened_targets, ignore_index=-1)
-        
+
         return loss
 
     def crop_block_size(self, block_size):
@@ -589,11 +694,11 @@ class GPT(nn.Module):
         # but want to use a smaller block size for some smaller, simpler model
         assert block_size <= self.config.block_size
         self.config.block_size = block_size
-        
+
         # Only crop position embeddings if they exist (not using RoPE)
         if hasattr(self.transformer, 'wpe'):
             self.transformer.wpe.weight = nn.Parameter(self.transformer.wpe.weight[:block_size])
-            
+
         for block in self.transformer.h:
             # Only causal attention has bias buffer
             if hasattr(block.attn, 'bias'):
@@ -602,7 +707,7 @@ class GPT(nn.Module):
             if hasattr(block.attn, 'rotary_emb') and block.attn.rotary_emb is not None:
                 block.attn.rotary_emb.max_position_embeddings = block_size
                 block.attn.rotary_emb._set_cos_sin_cache(
-                    seq_len=block_size, 
+                    seq_len=block_size,
                     device=block.attn.rotary_emb.inv_freq.device,
                     dtype=torch.get_default_dtype()
                 )
@@ -700,10 +805,10 @@ class GPT(nn.Module):
         N = self.get_num_params()
         cfg = self.config
         L, H, Q, T = cfg.n_layer, cfg.n_head, cfg.n_embd//cfg.n_head, cfg.block_size
-        
+
         # Standard transformer FLOPS
         flops_per_token = 6*N + 12*L*H*Q*T
-        
+
         # Add RoPE overhead if using rotary position encoding
         if getattr(cfg, 'position_encoding', 'absolute') == 'rotary':
             # RoPE operations: 8 ops per head per sequence position (4 ops each for Q and K)
@@ -712,7 +817,7 @@ class GPT(nn.Module):
             flops_per_fwdbwd = flops_per_token * T + rope_flops_per_fwdbwd
         else:
             flops_per_fwdbwd = flops_per_token * T
-            
+
         flops_per_iter = flops_per_fwdbwd * fwdbwd_per_iter
         # express our flops throughput as ratio of A100 bfloat16 peak flops
         flops_achieved = flops_per_iter * (1.0/dt) # per second
@@ -746,3 +851,4 @@ class GPT(nn.Module):
             idx = torch.cat((idx, idx_next), dim=1)
 
         return idx
+
