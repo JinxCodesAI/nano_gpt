@@ -389,8 +389,8 @@ while True:
         logger.log_info(f"Unfreezing transformer at iteration {iter_num}")
         raw_model.unfreeze_transformer_weights()
 
-        # Extend optimizer with newly-trainable transformer params
-        raw_model.extend_optimizer_with_unfrozen(optimizer, weight_decay, lr)
+        # Extend optimizer with newly-trainable transformer params (infer lr/wd when None)
+        raw_model.extend_optimizer_with_unfrozen(optimizer, weight_decay=None, learning_rate=None)
 
         # Adjust learning rate for stability
         for param_group in optimizer.param_groups:

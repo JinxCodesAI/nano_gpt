@@ -477,11 +477,30 @@ class GPT(nn.Module):
             param.requires_grad = True
 
 
-    def extend_optimizer_with_unfrozen(self, optimizer, weight_decay, learning_rate):
-        """After unfreezing transformer, add newly-trainable params to optimizer param groups.
+    def extend_optimizer_with_unfrozen(self, optimizer, weight_decay=None, learning_rate=None):
+        """After unfreezing transformer, add newly-trainable params to optimizer.
+        - If learning_rate is None: infer from existing optimizer groups (median lr or optimizer.defaults['lr']).
+        - If weight_decay is None: infer positive WD from existing groups (median over >0 values), else 0.0.
         Mirrors configure_optimizers grouping (dim>=2 -> weight decay; else no decay).
         """
         try:
+            # infer LR if not provided
+            if learning_rate is None:
+                lrs = [pg.get('lr') for pg in optimizer.param_groups if pg.get('lr', None) is not None]
+                if lrs:
+                    lrs_sorted = sorted(lrs)
+                    learning_rate = lrs_sorted[len(lrs_sorted)//2]
+                else:
+                    learning_rate = optimizer.defaults.get('lr', 0.0)
+            # infer WD if not provided
+            if weight_decay is None:
+                wds = [pg.get('weight_decay', 0.0) for pg in optimizer.param_groups if pg.get('weight_decay', 0.0) > 0.0]
+                if wds:
+                    wds_sorted = sorted(wds)
+                    weight_decay = wds_sorted[len(wds_sorted)//2]
+                else:
+                    weight_decay = 0.0
+
             existing = {id(p) for g in optimizer.param_groups for p in g.get('params', [])}
             new_decay, new_nodecay = [], []
             for name, p in self.named_parameters():
@@ -500,7 +519,7 @@ class GPT(nn.Module):
                     'lr': learning_rate,
                 })
             if (len(new_decay) + len(new_nodecay)) > 0:
-                self._log_info(f"Added {len(new_decay)} decayed and {len(new_nodecay)} non-decayed param tensors to optimizer after unfreeze")
+                self._log_info(f"Added {len(new_decay)} decayed and {len(new_nodecay)} non-decayed param tensors to optimizer after unfreeze (lr={learning_rate}, wd={weight_decay})")
         except Exception as e:
             self._log_warning(f"Failed to extend optimizer after unfreeze: {e}")
 
