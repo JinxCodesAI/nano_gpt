@@ -16,6 +16,7 @@ freeze_transformer = True
 unfreeze_at_iteration = 1000
 cls_token_id = 66
 max_backlog_files = 10
+vocab_size = 67
 
 # Load composition configuration (same as char_diffusion)
 composition_config = 'complex'  # reuses data/char_diffusion/config/complex.py
@@ -45,7 +46,7 @@ model_mode = 'sequence_scorer'
 attention_type = 'bidirectional'
 
 # BERT training typically uses lower learning rates
-learning_rate = 1e-4
+learning_rate = 1e-5
 warmup_iters = 500
 max_iters = 10000
 lr_decay_iters = 10000
