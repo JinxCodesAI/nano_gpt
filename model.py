@@ -29,17 +29,17 @@ class RotaryPositionalEmbedding(nn.Module):
     "RoFormer: Enhanced Transformer with Rotary Position Embedding"
     https://arxiv.org/abs/2104.09864
     """
-    
+
     def __init__(self, dim, max_position_embeddings=2048, base=10000, device=None):
         super().__init__()
         self.dim = dim
         self.max_position_embeddings = max_position_embeddings
         self.base = base
-        
+
         # Create frequency bands
         inv_freq = 1.0 / (self.base ** (torch.arange(0, self.dim, 2).float().to(device) / self.dim))
         self.register_buffer("inv_freq", inv_freq, persistent=False)
-        
+
         # Build here to make `torch.jit.trace` work.
         self._set_cos_sin_cache(
             seq_len=max_position_embeddings, device=self.inv_freq.device, dtype=torch.get_default_dtype()
@@ -48,7 +48,7 @@ class RotaryPositionalEmbedding(nn.Module):
     def _set_cos_sin_cache(self, seq_len, device, dtype):
         self.max_seq_len_cached = seq_len
         t = torch.arange(self.max_seq_len_cached, device=device, dtype=self.inv_freq.dtype)
-        
+
         freqs = torch.einsum("i,j->ij", t, self.inv_freq)
         # Different from paper, but it uses a different permutation in order to obtain the same calculation
         emb = torch.cat((freqs, freqs), dim=-1)
@@ -106,13 +106,13 @@ class CausalSelfAttention(nn.Module):
         self.n_head = config.n_head
         self.n_embd = config.n_embd
         self.dropout = config.dropout
-        
+
         # Rotary positional embeddings
         self.head_dim = config.n_embd // config.n_head
         position_encoding = getattr(config, 'position_encoding', 'absolute')
         if position_encoding == 'rotary':
             self.rotary_emb = RotaryPositionalEmbedding(
-                self.head_dim, 
+                self.head_dim,
                 max_position_embeddings=config.block_size,
                 device=None  # Will be set when model is moved to device
             )
@@ -176,13 +176,13 @@ class BidirectionalSelfAttention(nn.Module):
         self.n_head = config.n_head
         self.n_embd = config.n_embd
         self.dropout = config.dropout
-        
+
         # Rotary positional embeddings
         self.head_dim = config.n_embd // config.n_head
         position_encoding = getattr(config, 'position_encoding', 'absolute')
         if position_encoding == 'rotary':
             self.rotary_emb = RotaryPositionalEmbedding(
-                self.head_dim, 
+                self.head_dim,
                 max_position_embeddings=config.block_size,
                 device=None  # Will be set when model is moved to device
             )
@@ -242,6 +242,20 @@ class MLP(nn.Module):
         x = self.c_proj(x)
         x = self.dropout(x)
         return x
+class ScaledSigmoidHead(nn.Module):
+    """Linear head with a learnable temperature scaled sigmoid to control squashing."""
+    def __init__(self, input_dim):
+        super().__init__()
+        self.base_predictor = nn.Linear(input_dim, 1, bias=False)
+        # Initialize temperature > 1 to start more squashed; model can adjust
+        self.temperature = nn.Parameter(torch.ones(1) * 2.0)
+
+    def forward(self, x):
+        linear_output = self.base_predictor(x)
+        # ensure non-negative temperature via ReLU
+        scaled_output = torch.sigmoid(linear_output / F.relu(self.temperature))
+        return scaled_output
+
 
 class Block(nn.Module):
 
@@ -280,34 +294,34 @@ class GPTConfig:
     ignore_index: int = -100 # Standard PyTorch ignore index for loss computation
     attention_type: str = 'causal' # 'causal' for autoregressive, 'bidirectional' for BERT-style
     position_encoding: str = 'absolute' # 'absolute' or 'rotary'
-    
+
     # Multi-mode support
     mode: ModelMode = ModelMode.LANGUAGE_MODEL
     num_token_classes: int = 2  # For token classification
     cls_token_id: int = None  # For sequence scoring
-    
+
     # Transfer learning support
     freeze_transformer: bool = False
     init_from_checkpoint: str = None
     unfreeze_at_iteration: int = None
     unfreeze_lr_multiplier: float = 0.1
-    
+
     # Backward compatibility
     binary_classification: bool = False  # Legacy support
-    
+
     def __post_init__(self):
         # Handle backward compatibility
         if self.binary_classification and self.mode == ModelMode.LANGUAGE_MODEL:
             self._log_warning("binary_classification=True detected, converting to TOKEN_CLASSIFIER mode")
             self.mode = ModelMode.TOKEN_CLASSIFIER
             self.num_token_classes = 2
-        
+
         # Enforce bidirectional attention for classification tasks
         if self.mode in [ModelMode.TOKEN_CLASSIFIER, ModelMode.SEQUENCE_SCORER]:
             if self.attention_type != 'bidirectional':
                 self._log_warning(f"{self.mode.value} requires bidirectional attention. Changing from '{self.attention_type}' to 'bidirectional'")
                 self.attention_type = 'bidirectional'
-    
+
     def _log_warning(self, message):
         """Log warning message - will be enhanced when logger is available"""
         print(f"WARNING: {message}")
@@ -328,16 +342,16 @@ class GPT(nn.Module):
             h = nn.ModuleList([Block(config) for _ in range(config.n_layer)]),
             ln_f = LayerNorm(config.n_embd, bias=config.bias),
         )
-        
+
         # Only add absolute position embeddings if not using RoPE
         if config.position_encoding == 'absolute':
             transformer_components['wpe'] = nn.Embedding(config.block_size, config.n_embd)
             self._log_info("Using absolute position embeddings")
         else:
             self._log_info("Using Rotary Position Embeddings (RoPE)")
-        
+
         self.transformer = nn.ModuleDict(transformer_components)
-        
+
         # Create mode-specific output heads
         if self.config.mode == ModelMode.LANGUAGE_MODEL:
             # Existing language modeling head
@@ -352,15 +366,12 @@ class GPT(nn.Module):
             self.lm_head = nn.Linear(config.n_embd, config.num_token_classes, bias=False)
             self._log_info(f"Token classifier head: {config.num_token_classes} classes per token")
         elif self.config.mode == ModelMode.SEQUENCE_SCORER:
-            # Sequence-level scoring head
-            self.sequence_head = nn.Sequential(
-                nn.Linear(config.n_embd, 1, bias=False),
-                nn.Sigmoid()
-            )
+            # Sequence-level scoring head with learnable temperature scaling
+            self.sequence_head = ScaledSigmoidHead(config.n_embd)
             # Initialize with small weights for stability
             with torch.no_grad():
-                self.sequence_head[0].weight.normal_(0.0, 0.01)
-            self._log_info("Sequence scorer head: continuous score 0-1")
+                self.sequence_head.base_predictor.weight.normal_(0.0, 0.01)
+            self._log_info("Sequence scorer head: ScaledSigmoidHead (0-1)")
         else:
             raise ValueError(f"Unknown model mode: {self.config.mode}")
 
@@ -515,7 +526,7 @@ class GPT(nn.Module):
         else:
             # When using RoPE, no absolute position embeddings are needed
             x = self.transformer.drop(tok_emb)
-            
+
         for block in self.transformer.h:
             x = block(x)
         x = self.transformer.ln_f(x)
@@ -535,7 +546,7 @@ class GPT(nn.Module):
         if targets is not None:
 
             base_loss = F.mse_loss(logits, targets.float())
-            
+
             # Apply loss modifiers if available and compatible with sequence scoring
             if loss_modifiers is not None and not loss_modifiers.is_empty():
                 print("Applying loss modifiers for sequence scoring...")
@@ -548,20 +559,20 @@ class GPT(nn.Module):
                 loss = base_loss
         else:
             loss = None
-        
+
         return logits, loss
 
     def _forward_token_classifier(self, x, targets, loss_modifiers):
         """Token classification forward pass"""
         logits = self.lm_head(x)
-        
+
         if targets is not None:
             num_classes = self.config.num_token_classes
             if targets.dim() == 3:  # Soft targets
                 base_loss = F.cross_entropy(logits.view(-1, num_classes), targets.view(-1, num_classes))
             else:  # Hard targets with dynamic weighting
                 base_loss = self._compute_weighted_classification_loss(logits, targets, num_classes)
-            
+
             # Apply loss modifiers if available
             if loss_modifiers is not None and not loss_modifiers.is_empty():
                 mask = targets != -1  # Valid token mask
@@ -573,7 +584,7 @@ class GPT(nn.Module):
                 loss = base_loss
         else:
             loss = None
-        
+
         return logits, loss
 
     def _forward_language_model(self, x, targets, loss_modifiers):
@@ -593,8 +604,8 @@ class GPT(nn.Module):
                 mask = targets != self.config.ignore_index
                 base_loss = (per_position_loss * mask.float()).sum() / (mask.float().sum() + 1e-8)
                 loss = loss_modifiers.modify_loss(
-                    logits, targets, base_loss, mask=mask, 
-                    per_position_loss=per_position_loss, 
+                    logits, targets, base_loss, mask=mask,
+                    per_position_loss=per_position_loss,
                     ignore_index=self.config.ignore_index,
                     model_mode=self.config.mode
                 )
@@ -604,7 +615,7 @@ class GPT(nn.Module):
             # Inference optimization
             logits = self.lm_head(x[:, [-1], :])
             loss = None
-        
+
         return logits, loss
 
     def _compute_weighted_classification_loss(self, logits, targets, num_classes):
@@ -626,7 +637,7 @@ class GPT(nn.Module):
                                  weight=class_weights, ignore_index=-1)
         else:
             loss = F.cross_entropy(logits.view(-1, num_classes), flattened_targets, ignore_index=-1)
-        
+
         return loss
 
     def crop_block_size(self, block_size):
@@ -635,11 +646,11 @@ class GPT(nn.Module):
         # but want to use a smaller block size for some smaller, simpler model
         assert block_size <= self.config.block_size
         self.config.block_size = block_size
-        
+
         # Only crop position embeddings if they exist (not using RoPE)
         if hasattr(self.transformer, 'wpe'):
             self.transformer.wpe.weight = nn.Parameter(self.transformer.wpe.weight[:block_size])
-            
+
         for block in self.transformer.h:
             # Only causal attention has bias buffer
             if hasattr(block.attn, 'bias'):
@@ -648,7 +659,7 @@ class GPT(nn.Module):
             if hasattr(block.attn, 'rotary_emb') and block.attn.rotary_emb is not None:
                 block.attn.rotary_emb.max_position_embeddings = block_size
                 block.attn.rotary_emb._set_cos_sin_cache(
-                    seq_len=block_size, 
+                    seq_len=block_size,
                     device=block.attn.rotary_emb.inv_freq.device,
                     dtype=torch.get_default_dtype()
                 )
@@ -746,10 +757,10 @@ class GPT(nn.Module):
         N = self.get_num_params()
         cfg = self.config
         L, H, Q, T = cfg.n_layer, cfg.n_head, cfg.n_embd//cfg.n_head, cfg.block_size
-        
+
         # Standard transformer FLOPS
         flops_per_token = 6*N + 12*L*H*Q*T
-        
+
         # Add RoPE overhead if using rotary position encoding
         if getattr(cfg, 'position_encoding', 'absolute') == 'rotary':
             # RoPE operations: 8 ops per head per sequence position (4 ops each for Q and K)
@@ -758,7 +769,7 @@ class GPT(nn.Module):
             flops_per_fwdbwd = flops_per_token * T + rope_flops_per_fwdbwd
         else:
             flops_per_fwdbwd = flops_per_token * T
-            
+
         flops_per_iter = flops_per_fwdbwd * fwdbwd_per_iter
         # express our flops throughput as ratio of A100 bfloat16 peak flops
         flops_achieved = flops_per_iter * (1.0/dt) # per second
