@@ -220,12 +220,20 @@ class SequenceScorerProvider(DataProviderBase):
                 input_ids_extra = add_cls_token(original_text, self.cls_token_id, self.block_size)
                 targets_extra = torch.zeros(extra_count, dtype=torch.float32)
 
-                # Append extras on top of existing validation data
+                # Align extras to base tensor devices before concatenation
                 if 'input_ids' in tensors and 'targets' in tensors:
+                    dev_inputs = tensors['input_ids'].device
+                    dev_targets = tensors['targets'].device
+                    input_ids_extra = input_ids_extra.to(dev_inputs)
+                    targets_extra = targets_extra.to(dev_targets)
                     tensors['input_ids'] = torch.cat([tensors['input_ids'], input_ids_extra], dim=0)
                     tensors['targets'] = torch.cat([tensors['targets'].to(torch.float32), targets_extra], dim=0)
                 else:
                     # Fallback for legacy x/y schema
+                    dev_inputs = tensors['x'].device
+                    dev_targets = tensors['y'].device
+                    input_ids_extra = input_ids_extra.to(dev_inputs)
+                    targets_extra = targets_extra.to(dev_targets)
                     tensors['x'] = torch.cat([tensors['x'], input_ids_extra], dim=0)
                     tensors['y'] = torch.cat([tensors['y'].to(torch.float32), targets_extra], dim=0)
 
@@ -349,6 +357,9 @@ class SequenceScorerProvider(DataProviderBase):
                         original_text_extra = torch.tensor(original_sequences_extra, dtype=torch.long)
                         input_ids_extra = add_cls_token(original_text_extra, self.cls_token_id, self.block_size)
                         targets_extra = torch.zeros(extra_count, dtype=torch.float32)
+                        # Align devices before concatenation
+                        input_ids_extra = input_ids_extra.to(shuffled_inputs.device)
+                        targets_extra = targets_extra.to(shuffled_targets.device)
                         # Append to tensors
                         shuffled_inputs = torch.cat([shuffled_inputs, input_ids_extra], dim=0)
                         shuffled_targets = torch.cat([shuffled_targets, targets_extra], dim=0)
