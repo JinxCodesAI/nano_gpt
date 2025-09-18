@@ -36,6 +36,8 @@ from loss_modifiers import create_loss_modifier_pipeline
 from core.scheduler import CosineLRScheduler
 from core.evaluator import Evaluator
 from core.logger import create_logger
+from core.training_step import TrainingStep
+
 torch._dynamo.config.suppress_errors = True
 
 # -----------------------------------------------------------------------------
@@ -303,6 +305,17 @@ evaluator = Evaluator(
     device=device
 )
 
+# initialize training step handler
+training_step = TrainingStep(
+    model=model,
+    optimizer=optimizer,
+    scaler=scaler,
+    gradient_accumulation_steps=gradient_accumulation_steps,
+    grad_clip=grad_clip,
+    ddp=ddp,
+    ctx=ctx,
+)
+
 
 checkpoint_manager.update_progress(iter_num=iter_num, best_val_loss=best_val_loss)
 # training loop
@@ -365,33 +378,10 @@ while True:
 
         logger.log_info(f"Reduced learning rate by factor {unfreeze_lr_multiplier} current lr: {param_group['lr']}")
 
-    # forward backward update, with optional gradient accumulation to simulate larger batch size
-    # and using the GradScaler if data type is float16
-    for micro_step in range(gradient_accumulation_steps):
-        if ddp:
-            # in DDP training we only need to sync gradients at the last micro step.
-            # the official way to do this is with model.no_sync() context manager, but
-            # I really dislike that this bloats the code and forces us to repeat code
-            # looking at the source of that context manager, it just toggles this variable
-            model.require_backward_grad_sync = (micro_step == gradient_accumulation_steps - 1)
-        with ctx:
-            logits, loss = model(X, Y, loss_modifiers=loss_modifier_pipeline)
-            loss = loss / gradient_accumulation_steps # scale the loss to account for gradient accumulation
-        # immediately async prefetch next batch while model is doing the forward pass on the GPU
-        X, Y = consumer.get_batch('train', device)
-        # backward pass, with gradient scaling if training in fp16
-        scaler.scale(loss).backward()
-
-    # clip the gradient
-    if grad_clip != 0.0:
-        scaler.unscale_(optimizer)
-        torch.nn.utils.clip_grad_norm_(model.parameters(), grad_clip)
-    # step the optimizer and scaler if training in fp16
-
-    scaler.step(optimizer)
-    scaler.update()
-    # flush the gradients as soon as we can, no need for this memory anymore
-    optimizer.zero_grad(set_to_none=True)
+    # forward/backward/update handled by TrainingStep
+    loss, X, Y = training_step.execute_step(
+        X, Y, loss_modifier_pipeline, consumer, device
+    )
 
     # timing and logging
     t1 = time.time()
