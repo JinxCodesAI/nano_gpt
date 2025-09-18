@@ -6,29 +6,31 @@ logic extracted from the original estimate_loss() function in train.py.
 """
 
 import torch
+from model import ModelMode
+
 from typing import Dict
 
 
 class Evaluator:
     """
     Handles model evaluation over train/val splits.
-    
+
     Encapsulates the exact logic from the original estimate_loss() function
     to maintain identical behavior while improving modularity.
     """
-    
+
     def __init__(
-        self, 
-        model, 
-        consumer, 
-        loss_modifier_pipeline, 
+        self,
+        model,
+        consumer,
+        loss_modifier_pipeline,
         eval_iters: int,
         ctx,
         device: str
     ):
         """
         Initialize evaluator with required components.
-        
+
         Args:
             model: GPT model to evaluate
             consumer: DatasetConsumer for getting batches
@@ -43,37 +45,77 @@ class Evaluator:
         self.eval_iters = eval_iters
         self.ctx = ctx
         self.device = device
-    
+
     @torch.no_grad()
     def evaluate(self, splits=None) -> Dict[str, float]:
         """
         Estimate loss over specified splits using many batches.
-        
+
         This function replicates the exact logic from the original estimate_loss()
         function to ensure identical behavior.
-        
+
         Args:
             splits: List of splits to evaluate ['train', 'val']. If None, evaluates both.
-            
+
         Returns:
             Dictionary mapping split names to average loss values
         """
         if splits is None:
             splits = ['train', 'val']
-        
+
         out = {}
         self.model.eval()
-        
+
+        # Determine model mode (DDP-safe)
+        raw_model = self.model.module if hasattr(self.model, 'module') else self.model
+        is_sequence_scorer = getattr(raw_model.config, 'mode', None) == ModelMode.SEQUENCE_SCORER
+
+
         # Temporarily disable loss modifiers during evaluation to get comparable baseline metrics
         with self.loss_modifier_pipeline.temporarily_disabled():
             for split in splits:
-                losses = torch.zeros(self.eval_iters)
-                for k in range(self.eval_iters):
-                    X, Y = self.consumer.get_batch(split, self.device)
-                    with self.ctx:
-                        logits, loss = self.model(X, Y, loss_modifiers=self.loss_modifier_pipeline)
-                    losses[k] = loss.item()
-                out[split] = losses.mean()
-        
+                # For non-sequence scorer or for train split: original behavior
+                if (not is_sequence_scorer) or (split != 'val'):
+                    losses = torch.zeros(self.eval_iters)
+                    for k in range(self.eval_iters):
+                        X, Y = self.consumer.get_batch(split, self.device)
+                        with self.ctx:
+                            _, loss = self.model(X, Y, loss_modifiers=self.loss_modifier_pipeline)
+                        losses[k] = loss.item()
+                    out[split] = losses.mean().item()
+                else:
+                    # Sequence scorer, validation split: two-stage evaluation
+                    nonzero_losses = []
+                    zero_preds = []
+                    for k in range(self.eval_iters):
+                        X, Y = self.consumer.get_batch(split, self.device)
+                        mask_nonzero = (Y > 0)
+                        mask_zero = (Y == 0)
+                        if mask_nonzero.any():
+                            Xnz = X[mask_nonzero]
+                            Ynz = Y[mask_nonzero]
+                            with self.ctx:
+                                _, loss_nz = self.model(Xnz, Ynz, loss_modifiers=self.loss_modifier_pipeline)
+                            nonzero_losses.append(float(loss_nz.item()))
+                        if mask_zero.any():
+                            Xz = X[mask_zero]
+                            with self.ctx:
+                                logits_z, _ = self.model(Xz, targets=None, loss_modifiers=self.loss_modifier_pipeline)
+                            zero_preds.append(logits_z.detach().float().cpu())
+                    if len(nonzero_losses) > 0:
+                        out['val'] = float(sum(nonzero_losses) / len(nonzero_losses))
+                    else:
+                        out['val'] = float('nan')
+                    if len(zero_preds) > 0:
+                        preds = torch.cat(zero_preds, dim=0).view(-1)
+                        out['val/zero_mean'] = float(preds.mean().item())
+                        try:
+                            out['val/zero_p90'] = float(torch.quantile(preds, torch.tensor(0.9)).item())
+                        except Exception:
+                            sorted_preds, _ = torch.sort(preds)
+                            n = sorted_preds.numel()
+                            idx = max(int(0.9 * (n - 1)), 0)
+                            out['val/zero_p90'] = float(sorted_preds[idx].item())
+
         self.model.train()
         return out

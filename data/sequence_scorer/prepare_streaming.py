@@ -159,11 +159,115 @@ class SequenceScorerProvider(DataProviderBase):
         return self._sample_default_batch(split, rng)
 
     def produce_one_file(self, split: str, seq: int) -> None:
-        """Override to handle stage-based generation at file level."""
+        """Override to handle stage-based generation at file level.
+
+        - If stage-based is enabled: delegate to stage-based producer
+        - Else: for validation split only, generate base batches and append ~10% extra
+          unmodified (zero-target) samples on top of existing data. For train, fall back
+          to base implementation.
+        """
         if self.use_all_stages_for_training:
             self._produce_stage_based_file(split, seq)
-        else:
+            return
+
+        # Default path (no stages)
+        if split != "val":
+            # Train split unchanged: use base implementation
             super().produce_one_file(split, seq)
+            return
+
+        # Validation split augmentation: create base batches then append extra zero-target samples
+        import time
+        rng = torch.Generator()
+        per_seed = (self.seed * 1000003) ^ (hash(split) & 0xFFFFFFFF) ^ seq
+        rng.manual_seed(per_seed)
+
+        # Collect base batches using provider's sampling (unchanged behavior)
+        batches = [self.sample_batch(split, rng) for _ in range(self.batches_per_file)]
+
+        # Concatenate tensors across batches
+        tensor_keys = [k for k in batches[0].keys() if isinstance(batches[0][k], torch.Tensor)]
+        tensors = {}
+        for k in tensor_keys:
+            tensors[k] = torch.cat([b[k] for b in batches], dim=0)
+
+        # Collect non-tensor metadata from batches (compatible with base implementation)
+        batch_metadata = {}
+        for k in batches[0].keys():
+            if k not in tensor_keys and k not in batch_metadata:
+                values = []
+                for batch in batches:
+                    if k in batch:
+                        if isinstance(batch[k], list):
+                            values.extend(batch[k])
+                        else:
+                            values.append(batch[k])
+                batch_metadata[k] = values
+
+        # Compute number of extra zero-target samples (~10% of base), floor per user instruction
+        first_key = next(iter(tensors))
+        base_total = int(tensors[first_key].shape[0])
+        extra_count = int(base_total * 0.10)
+
+        if extra_count > 0:
+            # Build extra ORIGINAL (unmasked, uncorrupted) sequences from validation ids
+            ids = self.val_ids
+            max_start_idx = len(ids) - (self.block_size - 1)
+            if max_start_idx > 0:
+                ix = torch.randint(0, max_start_idx, (extra_count,), generator=rng).tolist()
+                original_sequences = [ids[i : i + (self.block_size - 1)] for i in ix]
+                original_text = torch.tensor(original_sequences, dtype=torch.long)
+                input_ids_extra = add_cls_token(original_text, self.cls_token_id, self.block_size)
+                targets_extra = torch.zeros(extra_count, dtype=torch.float32)
+
+                # Align extras to base tensor devices before concatenation
+                if 'input_ids' in tensors and 'targets' in tensors:
+                    dev_inputs = tensors['input_ids'].device
+                    dev_targets = tensors['targets'].device
+                    input_ids_extra = input_ids_extra.to(dev_inputs)
+                    targets_extra = targets_extra.to(dev_targets)
+                    tensors['input_ids'] = torch.cat([tensors['input_ids'], input_ids_extra], dim=0)
+                    tensors['targets'] = torch.cat([tensors['targets'].to(torch.float32), targets_extra], dim=0)
+                else:
+                    # Fallback for legacy x/y schema
+                    dev_inputs = tensors['x'].device
+                    dev_targets = tensors['y'].device
+                    input_ids_extra = input_ids_extra.to(dev_inputs)
+                    targets_extra = targets_extra.to(dev_targets)
+                    tensors['x'] = torch.cat([tensors['x'], input_ids_extra], dim=0)
+                    tensors['y'] = torch.cat([tensors['y'].to(torch.float32), targets_extra], dim=0)
+
+        # If we augmented validation, reshuffle combined tensors to interleave extras
+        if split == "val":
+            key_inputs = 'input_ids' if 'input_ids' in tensors else 'x'
+            key_targets = 'targets' if 'targets' in tensors else 'y'
+            total = tensors[key_inputs].shape[0]
+            perm_cpu = torch.randperm(total, generator=rng)
+            perm_inputs = perm_cpu.to(tensors[key_inputs].device)
+            perm_targets = perm_cpu.to(tensors[key_targets].device)
+            tensors[key_inputs] = tensors[key_inputs][perm_inputs]
+            tensors[key_targets] = tensors[key_targets][perm_targets]
+
+        # Assemble metadata and write file atomically (parity with base)
+        metadata = {
+            "batch_size": self.batch_size,
+            "num_batches": self.batches_per_file,
+            "file_idx": seq,
+            "split": split,
+            "produced_at": int(time.time() * 1000),
+        }
+        metadata.update(batch_metadata)
+
+        d = self.train_dir if split == "train" else self.val_dir
+        ts = metadata["produced_at"]
+        tmp_name = f".tmp-{ts}-{seq:06d}.pt"
+        final_name = f"{ts}-{seq:06d}-{self.batches_per_file}.pt"
+        tmp_path = os.path.join(d, tmp_name)
+        final_path = os.path.join(d, final_name)
+        torch.save({"tensors": tensors, "metadata": metadata}, tmp_path)
+        os.replace(tmp_path, final_path)
+        if self.verbose:
+            print(f"{self._log_prefix()} produced (val augmented) file: {final_path}")
 
     def _sample_default_batch(self, split: str, rng) -> Dict[str, torch.Tensor]:
         ids = self.train_ids if split == "train" else self.val_ids
@@ -252,6 +356,36 @@ class SequenceScorerProvider(DataProviderBase):
             shuffled_inputs = combined_inputs[shuffle_indices]
             shuffled_targets = combined_targets[shuffle_indices]
             shuffled_stage_info = [all_stage_info[i] for i in shuffle_indices.tolist()]
+
+            # Validation split augmentation: append ~10% extra original (zero-target) samples on top
+            if split == "val":
+                extra_count = int(shuffled_inputs.shape[0] * 0.10)
+                if extra_count > 0:
+                    max_start_idx_extra = len(ids) - (self.block_size - 1)
+                    if max_start_idx_extra > 0:
+                        ix_extra = torch.randint(0, max_start_idx_extra, (extra_count,), generator=rng).tolist()
+                        original_sequences_extra = [ids[i : i + (self.block_size - 1)] for i in ix_extra]
+                        original_text_extra = torch.tensor(original_sequences_extra, dtype=torch.long)
+                        input_ids_extra = add_cls_token(original_text_extra, self.cls_token_id, self.block_size)
+                        targets_extra = torch.zeros(extra_count, dtype=torch.float32)
+                        # Align devices before concatenation
+                        input_ids_extra = input_ids_extra.to(shuffled_inputs.device)
+                        targets_extra = targets_extra.to(shuffled_targets.device)
+                        # Append to tensors
+                        shuffled_inputs = torch.cat([shuffled_inputs, input_ids_extra], dim=0)
+                        shuffled_targets = torch.cat([shuffled_targets, targets_extra], dim=0)
+                        shuffled_stage_info.extend([{"extra_zero": True}] * extra_count)
+
+            # After augmentation, reshuffle to interleave extras with base samples
+            if split == "val":
+                total = shuffled_inputs.shape[0]
+                perm_cpu = torch.randperm(total, generator=rng)
+                perm_inputs = perm_cpu.to(shuffled_inputs.device)
+                perm_targets = perm_cpu.to(shuffled_targets.device)
+                shuffled_inputs = shuffled_inputs[perm_inputs]
+                shuffled_targets = shuffled_targets[perm_targets]
+                # stage_info is Python list; use CPU indices directly
+                shuffled_stage_info = [shuffled_stage_info[i] for i in perm_cpu.tolist()]
 
             tensors = {"input_ids": shuffled_inputs, "targets": shuffled_targets}
 
