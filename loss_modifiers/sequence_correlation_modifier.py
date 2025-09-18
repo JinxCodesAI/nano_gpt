@@ -18,15 +18,7 @@ import torch
 import torch.nn.functional as F
 from .base import BaseLossModifier
 
-# Import ModelMode safely
-try:
-    from model import ModelMode
-except Exception:
-    from enum import Enum
-    class ModelMode(Enum):
-        LANGUAGE_MODEL = "language_model"
-        TOKEN_CLASSIFIER = "token_classifier"
-        SEQUENCE_SCORER = "sequence_scorer"
+from model import ModelMode
 
 
 class SequenceScorerCorrelationModifier(BaseLossModifier):

@@ -13,6 +13,7 @@ from typing import Dict, Any, List, Optional
 import torch
 import torch.nn.functional as F
 from .base import BaseLossModifier
+from model import ModelMode
 
 
 class TargetSmoothingModifier(BaseLossModifier):
@@ -105,20 +106,8 @@ class TargetSmoothingModifier(BaseLossModifier):
         
         return smoothed
     
-    def supports_mode(self, mode):
-        """Check mode compatibility"""
-        try:
-            from model import ModelMode
-        except ImportError:
-            from .base import ModelMode
-        
-        if mode == ModelMode.LANGUAGE_MODEL:
-            return True
-        elif mode == ModelMode.TOKEN_CLASSIFIER:
-            return True  # Label smoothing works well for classification
-        elif mode == ModelMode.SEQUENCE_SCORER:
-            return False  # N/A for regression tasks
-        return False
+    def supports_mode(self, mode: ModelMode) -> bool:
+        return mode in (ModelMode.LANGUAGE_MODEL, ModelMode.TOKEN_CLASSIFIER)
 
     def modify_loss(
         self,

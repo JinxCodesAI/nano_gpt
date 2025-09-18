@@ -9,16 +9,7 @@ from abc import ABC, abstractmethod
 from typing import Dict, Any, Optional
 import torch
 
-# Import ModelMode - we'll need to handle the import path
-try:
-    from model import ModelMode
-except ImportError:
-    # Handle case where model.py isn't in path during isolated testing
-    from enum import Enum
-    class ModelMode(Enum):
-        LANGUAGE_MODEL = "language_model"
-        TOKEN_CLASSIFIER = "token_classifier" 
-        SEQUENCE_SCORER = "sequence_scorer"
+from model import ModelMode
 
 
 class BaseLossModifier(ABC):

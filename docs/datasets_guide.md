@@ -13,6 +13,13 @@ This guide explains how to add a new dataset to the streaming data pipeline and 
   - data/<your_dataset>/input.* (raw files), optional
   - data/<your_dataset>/queue/train and data/<your_dataset>/queue/val are created by provider
 
+### Model vs Data roles (unambiguous)
+
+- model_mode (in your training config) is the single switch that governs model architecture and training behavior. Valid values map to ModelMode in model.py: 'language_model', 'token_classifier', 'sequence_scorer'.
+- training_type (in provider meta) is a data/schema descriptor produced by your DataProvider (e.g., 'LM', 'MLM'). It helps consumers understand batch structure but does not choose model architecture.
+- When you want BERT-style masked language modeling, set model_mode = 'language_model' and attention_type = 'bidirectional' in your config. The provider can still set meta['training_type'] = 'MLM' to describe the dataset.
+- The training loop reads model_mode from the config; it does not read training_type.
+
 ### Step 1: Implement a Provider
 Create data/<your_dataset>/prepare_streaming.py by subclassing DataProviderBase.
 

@@ -32,6 +32,21 @@ python train.py --loss_modifiers_enabled=True \
 ```
 
 ## Available Modifiers
+### Supported Modes (ModelMode)
+
+- Single source of truth: ModelMode is defined in model.py. All modifiers refer to this definition.
+- Each modifier declares a supports_mode(ModelMode) method; the pipeline automatically filters by the current model mode.
+
+Supported modes per modifier:
+- EntropyModifier: LANGUAGE_MODEL, TOKEN_CLASSIFIER
+- TargetSmoothingModifier: LANGUAGE_MODEL, TOKEN_CLASSIFIER
+- MaskRatioWeightModifier: LANGUAGE_MODEL, TOKEN_CLASSIFIER
+- SequenceScorerVarianceModifier: SEQUENCE_SCORER only
+- SequenceScorerCorrelationModifier: SEQUENCE_SCORER only
+- MetricsCollectorModifier: all modes (metrics-only; does not change loss)
+
+Note: If a modifier does not support the active mode, it is skipped with zero overhead.
+
 
 ### 1. Entropy Modifier
 
