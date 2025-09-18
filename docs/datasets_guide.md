@@ -105,6 +105,21 @@ def schema(self, split: str) -> Optional[List[Dict]]:
 
 If your batch_schema is not x/y (e.g., MLM), adapt the training step to accept a dict instead of (X, Y) when you extend the model/trainer; DatasetConsumer already returns a dict in those cases.
 
+### Sequence scorer: validation-only augmentation (zero-target extras)
+- Applies to the `data/sequence_scorer` provider only.
+- For `split == 'val'`, the provider appends ~10% extra unmasked/original samples with targets set to 0 on top of each validation file.
+- Guarantees:
+  - Base validation sample counts remain intact. Metadata `num_batches` stays equal to `batches_per_file`; file naming is unchanged.
+  - Extras are optional. It is valid for a file or an evaluation window to contain 0 zero‑target samples; the consumer and evaluator behave properly in that case.
+  - DatasetConsumer does not need to special‑case extras; it will read them if present.
+- Interleaving: after extras are appended, the provider reshuffles the combined tensors so zero‑target samples are interleaved with the base validation content (helps the evaluator see some zeros earlier).
+- Compatibility: no changes required in train.py; evaluation may compute the standard validation loss on non‑zero targets and separate zero‑only statistics when zero‑target samples are present.
+
+Troubleshooting (reshuffle/permutation and device alignment)
+- If you concatenate extras to base tensors, ensure all tensors are moved to the same device before `torch.cat`.
+- When using a CPU `torch.Generator` with `torch.randperm`, create the permutation on CPU and then move a copy to each tensor’s device before indexing. For CPU tensors, keep indices on CPU; for Python lists (e.g., stage_info), index with CPU integers.
+
+
 ### Design rules and tips
 - Fail loudly on misconfiguration: do not provide silent fallbacks for missing directories or meta.
 - Keep provider code focused on sample logic; leave file naming, atomic writes, backlog control to the base class.
