@@ -242,7 +242,8 @@ class SequenceScorerProvider(DataProviderBase):
             key_inputs = 'input_ids' if 'input_ids' in tensors else 'x'
             key_targets = 'targets' if 'targets' in tensors else 'y'
             total = tensors[key_inputs].shape[0]
-            perm = torch.randperm(total, generator=rng, device=tensors[key_inputs].device)
+            perm = torch.randperm(total, generator=rng)
+            perm = perm.to(tensors[key_inputs].device)
             tensors[key_inputs] = tensors[key_inputs][perm]
             tensors[key_targets] = tensors[key_targets][perm]
 
@@ -377,7 +378,8 @@ class SequenceScorerProvider(DataProviderBase):
             # After augmentation, reshuffle to interleave extras with base samples
             if split == "val":
                 total = shuffled_inputs.shape[0]
-                perm = torch.randperm(total, generator=rng, device=shuffled_inputs.device)
+                perm = torch.randperm(total, generator=rng)
+                perm = perm.to(shuffled_inputs.device)
                 shuffled_inputs = shuffled_inputs[perm]
                 shuffled_targets = shuffled_targets[perm]
                 # stage_info is Python list; perm is tensor on device -> move to cpu list
