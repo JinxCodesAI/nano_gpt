@@ -436,6 +436,12 @@ while True:
         }
 
         # Log training step
+        # Include loss modifier metrics in step logs (cumulative since last eval)
+        if not loss_modifier_pipeline.is_empty():
+            _mod_step_metrics = loss_modifier_pipeline.get_all_metrics()
+            for k, v in _mod_step_metrics.items():
+                step_metrics[f"loss_modifiers/{k}"] = v
+
         if aare_now_val is not None:
             step_metrics["avg_abs_rel_err"] = running_aare
 

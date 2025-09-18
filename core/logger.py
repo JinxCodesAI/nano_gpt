@@ -155,16 +155,33 @@ class WandBLogger(Logger):
     def log_step(self, metrics: Dict[str, Any]) -> None:
         """
         Log training step metrics to WandB (every log_interval).
-        
-        Note: Only logs basic step metrics, not evaluation data.
+        Includes: iter, train/loss, time_ms, mfu, avg_abs_rel_err (if present),
+        and any flattened loss_modifiers/* metrics present in the metrics dict.
         """
         if not (self.enabled and self.master_process and self.wandb):
             return
-        
-        # For step logging, we typically don't log to wandb every step
-        # Only evaluation metrics go to wandb in the original code
-        pass
-    
+
+        log_dict = {}
+        # Core step metrics
+        if 'iter' in metrics:
+            log_dict['iter'] = metrics['iter']
+        if 'loss' in metrics:
+            log_dict['train/loss'] = metrics['loss']
+        if 'time_ms' in metrics:
+            log_dict['time_ms'] = metrics['time_ms']
+        if 'mfu_pct' in metrics:
+            log_dict['mfu'] = metrics['mfu_pct']
+        if 'avg_abs_rel_err' in metrics:
+            log_dict['avg_abs_rel_err'] = metrics['avg_abs_rel_err']
+
+        # Add any flattened loss modifier metrics if present in step metrics
+        for key, value in metrics.items():
+            if isinstance(value, (int, float)) and isinstance(key, str) and key.startswith('loss_modifiers/'):
+                log_dict[key] = value
+
+        if log_dict:
+            self.wandb.log(log_dict)
+
     def log_eval(self, metrics: Dict[str, Any]) -> None:
         """
         Log evaluation metrics to WandB (every eval_interval).
