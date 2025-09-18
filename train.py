@@ -37,6 +37,7 @@ from core.scheduler import CosineLRScheduler
 from core.evaluator import Evaluator
 from core.logger import create_logger
 from core.training_step import TrainingStep
+from core.trainer import Trainer
 
 torch._dynamo.config.suppress_errors = True
 
@@ -321,84 +322,31 @@ training_step = TrainingStep(
 )
 
 
-checkpoint_manager.update_progress(iter_num=iter_num, best_val_loss=best_val_loss)
-# training loop
-X, Y = consumer.get_batch('train', device) # fetch the very first batch
-t0 = time.time()
-local_iter_num = 0 # number of iterations in the lifetime of this process
-raw_model = model.module if ddp else model # unwrap DDP container if needed
-running_mfu = -1.0
-while True:
+# Delegate the main training loop to the Trainer orchestrator
+trainer = Trainer(
+    model=model,
+    optimizer=optimizer,
+    scheduler=scheduler,
+    evaluator=evaluator,
+    logger=logger,
+    training_step=training_step,
+    checkpoint_manager=checkpoint_manager,
+    consumer=consumer,
+    device=device,
+    ddp=ddp,
+    master_process=master_process,
+    eval_interval=eval_interval,
+    log_interval=log_interval,
+    max_iters=max_iters,
+    always_save_checkpoint=always_save_checkpoint,
+    eval_only=eval_only,
+    batch_size=batch_size,
+    gradient_accumulation_steps=gradient_accumulation_steps,
+    iter_num=iter_num,
+    best_val_loss=best_val_loss,
+)
 
-    # determine and set the learning rate for this iteration (via TrainingStep)
-    lr = training_step.set_learning_rate(iter_num)
-
-    # evaluate the loss on train/val sets and write checkpoints
-    if iter_num % eval_interval == 0 and master_process:
-        losses = evaluator.evaluate()
-        # Reset timer after validation to exclude validation time from MFU calculation
-        t0 = time.time()
-
-        # Prepare evaluation metrics for logging
-        eval_metrics = {
-            "iter": iter_num,
-            "train/loss": losses['train'],
-            "val/loss": losses['val'],
-            "lr": lr,
-            "mfu_pct": running_mfu*100,  # Already as percentage for logger
-        }
-
-
-
-
-        # Log evaluation results
-        logger.log_eval(eval_metrics)
-
-        if losses['val'] < best_val_loss or always_save_checkpoint:
-            best_val_loss = losses['val']
-            if iter_num > 0:
-                checkpoint_manager.update_progress(iter_num=iter_num, best_val_loss=best_val_loss)
-                ckpt_path = checkpoint_manager.save()
-                logger.log_checkpoint(f"saving checkpoint to {ckpt_path}")
-    if iter_num == 0 and eval_only:
-        break
-
-    # Dynamic unfreezing support (moved into TrainingStep)
-    training_step.maybe_unfreeze(iter_num)
-
-    # forward/backward/update handled by TrainingStep
-    loss, X, Y = training_step.execute_step(
-        X, Y, loss_modifier_pipeline, consumer, device
-    )
-
-    # timing and logging
-    t1 = time.time()
-    dt = t1 - t0
-    if iter_num % log_interval == 0 and master_process:
-        # get loss as float. note: this is a CPU-GPU sync point
-        # scale up to undo the division above, approximating the true total loss (exact would have been a sum)
-        lossf = loss.item() * gradient_accumulation_steps
-        if local_iter_num >= 5: # let the training loop settle a bit
-            mfu = raw_model.estimate_mfu(batch_size * gradient_accumulation_steps, dt)
-            running_mfu = mfu if running_mfu == -1.0 else 0.9*running_mfu + 0.1*mfu
-
-        # Prepare step metrics for logging
-        step_metrics = {
-            "iter": iter_num,
-            "loss": lossf,
-            "time_ms": dt*1000,
-            "mfu_pct": running_mfu*100
-        }
-
-        logger.log_step(step_metrics)
-    iter_num += 1
-    checkpoint_manager.update_progress(iter_num=iter_num, best_val_loss=best_val_loss)
-    local_iter_num += 1
-
-    # termination conditions
-    if iter_num > max_iters:
-        break
-    t0 = time.time()
+trainer.train()
 
 if ddp:
     destroy_process_group()
