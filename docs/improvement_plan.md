@@ -22,7 +22,7 @@ This document outlines a step-by-step refactoring plan to extract core classes f
 
 ### ✅ Step 1.1: Create LR Scheduler Classes
 - **File**: `core/scheduler.py` ✅ **CREATED**
-- **Classes**: 
+- **Classes**:
   - `LRScheduler` (abstract base class) ✅ **IMPLEMENTED**
   - `CosineLRScheduler` (implements current `get_lr` logic) ✅ **IMPLEMENTED**
 - **Testing**: ✅ **VERIFIED** - Identical LR values for various iteration numbers
@@ -31,7 +31,7 @@ This document outlines a step-by-step refactoring plan to extract core classes f
 - ✅ **COMPLETED** - Replaced direct `get_lr(iter_num)` calls with `scheduler.get_lr(iter_num)`
 - ✅ **VERIFIED** - Zero functional changes, just abstraction
 
-**✅ Validation PASSED**: 
+**✅ Validation PASSED**:
 - ✅ Training curves are identical (mathematically verified)
 - ✅ LR logging values match exactly across all test cases
 - ✅ All existing configurations work unchanged
@@ -97,6 +97,24 @@ This document outlines a step-by-step refactoring plan to extract core classes f
 
 ---
 
+### ✅ Milestone 3 – Enhancements Since Initial Plan (COMPLETED)
+
+- WandB step logging added: WandBLogger.log_step now logs at log_interval (iter, train/loss, time_ms, mfu) and includes loss_modifiers/* metrics.
+- Logger owns modifier metrics: WandBLogger (and the logger factory) accept an optional loss_modifier_pipeline and pull metrics directly.
+  - train.py no longer flattens/forwards modifier metrics (DRY preserved, smaller train.py).
+  - On step: merge pipeline metrics without reset; on eval: merge and then reset.
+- Metric-only modifier introduced: loss_modifiers/metrics_collector.py
+  - Generic MetricsCollectorModifier computes AARE for sequence_scorer under no_grad, emits instantaneous and EMA metrics.
+  - Enabled via config flag seq_scorer_log_abs_rel_err; no changes to train.py required.
+- Pipeline factory correctness:
+  - Ensured SequenceScorerVarianceModifier is appended when sequence_variance_enabled=True.
+  - Correlation and variance modifiers both emit metrics under loss_modifiers/<ModifierName>/*.
+
+Compatibility: No change to user-facing configs or CLI. Existing configs continue to work; enabling a modifier in config both activates it and exposes its metrics automatically.
+
+---
+
+
 ## Milestone 4: Extract Training Step Handler (Medium-High Risk)
 
 **Rationale**: The training loop has complex state but clear forward/backward logic boundaries.
@@ -127,7 +145,7 @@ This document outlines a step-by-step refactoring plan to extract core classes f
 **Validation**:
 - Training loss trajectories should be identical
 - Gradient norms should match
-- MFU calculations should be unchanged  
+- MFU calculations should be unchanged
 - DDP behavior should be identical
 
 ---
@@ -158,21 +176,21 @@ This document outlines a step-by-step refactoring plan to extract core classes f
   ```python
   # Configuration and initialization (existing logic)
   config = load_config()
-  
-  # Component creation (existing factory logic)  
+
+  # Component creation (existing factory logic)
   model = create_model(config)
   optimizer = create_optimizer(model, config)
   # ... other components
-  
+
   # Core class instantiation
   scheduler = CosineLRScheduler(config)
   evaluator = Evaluator(model, consumer, loss_modifier_pipeline, eval_iters, ctx)
   logger = create_logger(config)
   training_step = TrainingStep(model, optimizer, scaler, config, ddp, ctx)
-  
+
   trainer = Trainer(
       model=model,
-      optimizer=optimizer, 
+      optimizer=optimizer,
       scheduler=scheduler,
       evaluator=evaluator,
       logger=logger,
@@ -180,7 +198,7 @@ This document outlines a step-by-step refactoring plan to extract core classes f
       checkpoint_manager=checkpoint_manager,
       config=config
   )
-  
+
   # Execute training
   trainer.train()
   ```
@@ -208,7 +226,7 @@ core/
 ### Additional Files Created
 ```
 test_milestone1_scheduler.py    ✅ Validation test for LR Scheduler
-test_milestone3_logger.py       ✅ Validation test for Logger classes  
+test_milestone3_logger.py       ✅ Validation test for Logger classes
 test_logger_only.py            ✅ Simple logger validation
 MILESTONE3_SUMMARY.md          ✅ Detailed milestone 3 documentation
 ```
@@ -221,7 +239,7 @@ MILESTONE3_SUMMARY.md          ✅ Detailed milestone 3 documentation
 
 ### Backwards Compatibility
 - All existing command-line arguments must work unchanged
-- All existing configuration files must work unchanged  
+- All existing configuration files must work unchanged
 - All existing checkpoint formats must be loadable
 - All existing metrics and logging must be preserved
 
@@ -271,7 +289,7 @@ After completing all milestones:
 ## Timeline Estimate
 
 - **Milestone 1**: 1-2 days (low risk, straightforward)
-- **Milestone 2**: 1-2 days (low risk, clear boundaries)  
+- **Milestone 2**: 1-2 days (low risk, clear boundaries)
 - **Milestone 3**: 2-3 days (medium risk, multiple loggers)
 - **Milestone 4**: 3-4 days (high risk, complex training logic)
 - **Milestone 5**: 2-3 days (orchestration and integration)
