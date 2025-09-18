@@ -21,6 +21,7 @@ from .target_smoothing_modifier import TargetSmoothingModifier
 from .mask_ratio_weight_modifier import MaskRatioWeightModifier
 from .sequence_variance_modifier import SequenceScorerVarianceModifier
 from .sequence_correlation_modifier import SequenceScorerCorrelationModifier
+from .metrics_collector import MetricsCollectorModifier
 
 __all__ = [
     'BaseLossModifier',
@@ -30,6 +31,7 @@ __all__ = [
     'MaskRatioWeightModifier',
     'SequenceScorerVarianceModifier',
     'SequenceScorerCorrelationModifier',
+    'MetricsCollectorModifier',
     'create_loss_modifier_pipeline',
 ]
 
@@ -127,5 +129,15 @@ def create_loss_modifier_pipeline(config):
             'sequence_correlation_eps': get_config_value('sequence_correlation_eps', 1e-8),
         }
         modifiers.append(SequenceScorerCorrelationModifier(seq_corr_config))
+
+    # Generic metrics collector (currently: sequence scorer AARE)
+    if get_config_value('seq_scorer_log_abs_rel_err', False):
+        metrics_config = {
+            'enabled': True,
+            'collect_sequence_scorer_aare': True,
+            'ema_alpha': get_config_value('sequence_metrics_ema_alpha', 0.1),
+            'eps': get_config_value('sequence_metrics_eps', 1e-6),
+        }
+        modifiers.append(MetricsCollectorModifier(metrics_config))
 
     return LossModifierPipeline(modifiers)

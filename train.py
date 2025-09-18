@@ -312,7 +312,6 @@ t0 = time.time()
 local_iter_num = 0 # number of iterations in the lifetime of this process
 raw_model = model.module if ddp else model # unwrap DDP container if needed
 running_mfu = -1.0
-running_aare = -1.0
 
 while True:
 
@@ -374,7 +373,6 @@ while True:
             param_group['lr'] *= unfreeze_lr_multiplier
 
         logger.log_info(f"Reduced learning rate by factor {unfreeze_lr_multiplier} current lr: {param_group['lr']}")
-    aare_now_val = None
 
 
     # forward backward update, with optional gradient accumulation to simulate larger batch size
@@ -389,12 +387,6 @@ while True:
         with ctx:
             logits, loss = model(X, Y, loss_modifiers=loss_modifier_pipeline)
             loss = loss / gradient_accumulation_steps # scale the loss to account for gradient accumulation
-        # Compute average absolute relative error for sequence scorer at last micro-step
-        if (raw_model.config.mode == ModelMode.SEQUENCE_SCORER) and seq_scorer_log_abs_rel_err and (micro_step == gradient_accumulation_steps - 1):
-            with torch.no_grad():
-                denom = torch.clamp(torch.abs(Y), min=1e-6)
-                aare_now = (torch.abs(logits - Y) / denom).mean()
-                aare_now_val = float(aare_now.detach().cpu().item())
         # immediately async prefetch next batch while model is doing the forward pass on the GPU
         X, Y = consumer.get_batch('train', device)
         # backward pass, with gradient scaling if training in fp16
@@ -411,9 +403,6 @@ while True:
     # flush the gradients as soon as we can, no need for this memory anymore
     optimizer.zero_grad(set_to_none=True)
 
-    # Update running AARE if computed this iteration
-    if aare_now_val is not None:
-        running_aare = aare_now_val if running_aare < 0 else 0.9*running_aare + 0.1*aare_now_val
 
     # timing and logging
     t1 = time.time()
@@ -442,8 +431,6 @@ while True:
             for k, v in _mod_step_metrics.items():
                 step_metrics[f"loss_modifiers/{k}"] = v
 
-        if aare_now_val is not None:
-            step_metrics["avg_abs_rel_err"] = running_aare
 
         logger.log_step(step_metrics)
     iter_num += 1
