@@ -62,8 +62,8 @@ attention_type = 'bidirectional' # Critical for BERT-style training
 position_encoding = 'rotary'
 dtype = 'float16'
 
-# Training type for masked language modeling
-training_type = 'MLM' # Masked Language Modeling
+# Model mode for masked language modeling (BERT-style)
+model_mode = 'language_model'
 
 # Diffusion/masking specific config
 mask_probability = 0.15  # Standard BERT masking rate

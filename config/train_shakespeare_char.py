@@ -33,7 +33,7 @@ dropout = 0.2
 attention_type = 'causal' # 'causal' or 'bidirectional'
 position_encoding = 'absolute' # 'absolute' or 'rotary'
 
-training_type = 'LM' # 'MLM' for masked LM, 'TOKEN_CLASSIFICATION' for token level classification, 'SEQUENCE_SCORING' for sequence classification
+model_mode = 'language_model'  # unified; governs model architecture and training
 
 # on macbook also add
 # device = 'cpu'  # run on cpu only

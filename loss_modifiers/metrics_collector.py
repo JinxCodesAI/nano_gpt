@@ -15,7 +15,8 @@ Currently implemented metrics:
 from typing import Dict, Any
 import torch
 
-from .base import BaseLossModifier, ModelMode
+from .base import BaseLossModifier
+from model import ModelMode
 
 
 class MetricsCollectorModifier(BaseLossModifier):

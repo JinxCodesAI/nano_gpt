@@ -12,6 +12,7 @@ weights to compensate for having less signal in the loss calculation.
 from typing import Dict, Any, Optional
 import torch
 from .base import BaseLossModifier
+from model import ModelMode
 
 
 class MaskRatioWeightModifier(BaseLossModifier):
@@ -90,20 +91,8 @@ class MaskRatioWeightModifier(BaseLossModifier):
         
         return weights
     
-    def supports_mode(self, mode):
-        """Check mode compatibility"""
-        try:
-            from model import ModelMode
-        except ImportError:
-            from .base import ModelMode
-        
-        if mode == ModelMode.LANGUAGE_MODEL:
-            return True
-        elif mode == ModelMode.TOKEN_CLASSIFIER:
-            return True  # Can work for classification too
-        elif mode == ModelMode.SEQUENCE_SCORER:
-            return False  # Not meaningful for sequence-level tasks
-        return False
+    def supports_mode(self, mode: ModelMode) -> bool:
+        return mode in (ModelMode.LANGUAGE_MODEL, ModelMode.TOKEN_CLASSIFIER)
 
     def modify_loss(
         self,
