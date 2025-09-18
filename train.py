@@ -109,6 +109,7 @@ freeze_transformer = False  # Feature extraction mode
 init_from_checkpoint = None  # Path to pretrained model
 unfreeze_at_iteration = None  # Dynamic unfreezing
 unfreeze_lr_multiplier = 0.1  # LR multiplier when unfreezing
+seq_scorer_log_abs_rel_err = True  # running average abs(target - pred)/max(|target|, eps)
 # -----------------------------------------------------------------------------
 exec(open('configurator.py').read()) # overrides from command line or config file
 from config.validator import validate_config
@@ -153,7 +154,8 @@ logger = create_logger(
     wandb_project=wandb_project,
     wandb_run_name=wandb_run_name,
     config=config,
-    master_process=master_process
+    master_process=master_process,
+    loss_modifier_pipeline=loss_modifier_pipeline
 )
 
 logger.log_info(f"tokens per iteration will be: {tokens_per_iter:,}")
@@ -331,19 +333,7 @@ while True:
             "mfu_pct": running_mfu*100,  # Already as percentage for logger
         }
 
-        # Add ScaledSigmoidHead temperature if available (sequence scorer)
-        try:
-            if hasattr(raw_model, 'sequence_head') and hasattr(raw_model.sequence_head, 'temperature'):
-                eval_metrics["sigm_temp"] = float(raw_model.sequence_head.temperature.detach().cpu().item())
-        except Exception:
-            pass
 
-        # Add loss modifier metrics if available
-        if not loss_modifier_pipeline.is_empty():
-            modifier_metrics = loss_modifier_pipeline.get_all_metrics()
-            eval_metrics["loss_modifier_metrics"] = modifier_metrics
-            # Reset metrics after logging (we print our own averages below regardless)
-            loss_modifier_pipeline.reset_all_metrics()
 
 
         # Log evaluation results
@@ -422,7 +412,6 @@ while True:
             "mfu_pct": running_mfu*100
         }
 
-        # Log training step
         logger.log_step(step_metrics)
     iter_num += 1
     checkpoint_manager.update_progress(iter_num=iter_num, best_val_loss=best_val_loss)
