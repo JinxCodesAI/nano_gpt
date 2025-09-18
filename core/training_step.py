@@ -7,7 +7,7 @@ without changing functionality or timing semantics (including prefetching
 next batches inside the micro-step loop).
 """
 
-from typing import Tuple
+from typing import Tuple, Optional
 import torch
 
 
@@ -26,6 +26,11 @@ class TrainingStep:
         grad_clip: float,
         ddp: bool,
         ctx,
+        *,
+        scheduler=None,
+        unfreeze_at_iteration: Optional[int] = None,
+        unfreeze_lr_multiplier: float = 0.1,
+        logger: Optional[any] = None,
     ) -> None:
         self.model = model
         self.optimizer = optimizer
@@ -34,6 +39,54 @@ class TrainingStep:
         self.grad_clip = float(grad_clip)
         self.ddp = bool(ddp)
         self.ctx = ctx
+        # extended responsibilities
+        self.scheduler = scheduler
+        self.unfreeze_at_iteration = unfreeze_at_iteration
+        self.unfreeze_lr_multiplier = float(unfreeze_lr_multiplier)
+        self.logger = logger
+
+    def set_learning_rate(self, iter_num: int) -> float:
+        """
+        Set optimizer learning rate for this iteration using the attached scheduler.
+        Returns the LR that was set. No-op if scheduler is None.
+        """
+        if self.scheduler is None:
+            return next((pg.get('lr', 0.0) for pg in self.optimizer.param_groups), 0.0)
+        lr = self.scheduler.get_lr(iter_num)
+        for pg in self.optimizer.param_groups:
+            pg['lr'] = lr
+        return lr
+
+    def maybe_unfreeze(self, iter_num: int) -> None:
+        """
+        Perform dynamic unfreezing at the configured iteration, extend optimizer
+        with newly-trainable params, and reduce LR by the configured multiplier.
+        Preserves original ordering: this should be called AFTER evaluation at a given step.
+        """
+        if self.unfreeze_at_iteration is None:
+            return
+        if iter_num != self.unfreeze_at_iteration:
+            return
+
+        raw_model = self.model.module if self.ddp else self.model
+        try:
+            if hasattr(raw_model, 'get_frozen_status') and raw_model.get_frozen_status():
+                if self.logger:
+                    self.logger.log_info(f"Unfreezing transformer at iteration {iter_num}")
+                # Unfreeze and extend optimizer
+                raw_model.unfreeze_transformer_weights()
+                raw_model.extend_optimizer_with_unfrozen(self.optimizer, weight_decay=None, learning_rate=None)
+                # Adjust learning rate for stability across all param groups
+                for param_group in self.optimizer.param_groups:
+                    param_group['lr'] *= self.unfreeze_lr_multiplier
+                if self.logger:
+                    # Use last param_group lr for message (same across groups after scaling)
+                    self.logger.log_info(
+                        f"Reduced learning rate by factor {self.unfreeze_lr_multiplier} current lr: {param_group['lr']}"
+                    )
+        except Exception as e:
+            if self.logger:
+                self.logger.log_info(f"Warning: dynamic unfreeze encountered an error: {e}")
 
     def execute_step(
         self,

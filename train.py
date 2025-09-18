@@ -314,6 +314,10 @@ training_step = TrainingStep(
     grad_clip=grad_clip,
     ddp=ddp,
     ctx=ctx,
+    scheduler=scheduler,
+    unfreeze_at_iteration=unfreeze_at_iteration,
+    unfreeze_lr_multiplier=unfreeze_lr_multiplier,
+    logger=logger,
 )
 
 
@@ -326,10 +330,8 @@ raw_model = model.module if ddp else model # unwrap DDP container if needed
 running_mfu = -1.0
 while True:
 
-    # determine and set the learning rate for this iteration
-    lr = scheduler.get_lr(iter_num)
-    for param_group in optimizer.param_groups:
-        param_group['lr'] = lr
+    # determine and set the learning rate for this iteration (via TrainingStep)
+    lr = training_step.set_learning_rate(iter_num)
 
     # evaluate the loss on train/val sets and write checkpoints
     if iter_num % eval_interval == 0 and master_process:
@@ -361,22 +363,8 @@ while True:
     if iter_num == 0 and eval_only:
         break
 
-    # Dynamic unfreezing support
-    if (unfreeze_at_iteration is not None and
-        iter_num == unfreeze_at_iteration and
-        raw_model.get_frozen_status()):
-
-        logger.log_info(f"Unfreezing transformer at iteration {iter_num}")
-        raw_model.unfreeze_transformer_weights()
-
-        # Extend optimizer with newly-trainable transformer params (infer lr/wd when None)
-        raw_model.extend_optimizer_with_unfrozen(optimizer, weight_decay=None, learning_rate=None)
-
-        # Adjust learning rate for stability
-        for param_group in optimizer.param_groups:
-            param_group['lr'] *= unfreeze_lr_multiplier
-
-        logger.log_info(f"Reduced learning rate by factor {unfreeze_lr_multiplier} current lr: {param_group['lr']}")
+    # Dynamic unfreezing support (moved into TrainingStep)
+    training_step.maybe_unfreeze(iter_num)
 
     # forward/backward/update handled by TrainingStep
     loss, X, Y = training_step.execute_step(
