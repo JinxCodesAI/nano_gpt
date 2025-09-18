@@ -237,6 +237,15 @@ class SequenceScorerProvider(DataProviderBase):
                     tensors['x'] = torch.cat([tensors['x'], input_ids_extra], dim=0)
                     tensors['y'] = torch.cat([tensors['y'].to(torch.float32), targets_extra], dim=0)
 
+        # If we augmented validation, reshuffle combined tensors to interleave extras
+        if split == "val":
+            key_inputs = 'input_ids' if 'input_ids' in tensors else 'x'
+            key_targets = 'targets' if 'targets' in tensors else 'y'
+            total = tensors[key_inputs].shape[0]
+            perm = torch.randperm(total, generator=rng, device=tensors[key_inputs].device)
+            tensors[key_inputs] = tensors[key_inputs][perm]
+            tensors[key_targets] = tensors[key_targets][perm]
+
         # Assemble metadata and write file atomically (parity with base)
         metadata = {
             "batch_size": self.batch_size,
@@ -364,6 +373,15 @@ class SequenceScorerProvider(DataProviderBase):
                         shuffled_inputs = torch.cat([shuffled_inputs, input_ids_extra], dim=0)
                         shuffled_targets = torch.cat([shuffled_targets, targets_extra], dim=0)
                         shuffled_stage_info.extend([{"extra_zero": True}] * extra_count)
+
+            # After augmentation, reshuffle to interleave extras with base samples
+            if split == "val":
+                total = shuffled_inputs.shape[0]
+                perm = torch.randperm(total, generator=rng, device=shuffled_inputs.device)
+                shuffled_inputs = shuffled_inputs[perm]
+                shuffled_targets = shuffled_targets[perm]
+                # stage_info is Python list; perm is tensor on device -> move to cpu list
+                shuffled_stage_info = [shuffled_stage_info[i] for i in perm.cpu().tolist()]
 
             tensors = {"input_ids": shuffled_inputs, "targets": shuffled_targets}
 
