@@ -88,6 +88,11 @@ class Trainer:
                     "lr": lr,
                     "mfu_pct": running_mfu * 100,
                 }
+                # Pass-through zero-target validation stats if provided by evaluator
+                if 'val/zero_mean' in losses:
+                    eval_metrics['val/zero_mean'] = losses['val/zero_mean']
+                if 'val/zero_p90' in losses:
+                    eval_metrics['val/zero_p90'] = losses['val/zero_p90']
                 # Log evaluation results
                 self.logger.log_eval(eval_metrics)
 

@@ -4,6 +4,7 @@
 
 """Advanced configuration for sequence scoring dataset with stage-based generation"""
 wandb_log = True
+wandb_run_name = 'sequence_scorer_complex'
 
 # Dataset configuration
 dataset = 'sequence_scorer'
