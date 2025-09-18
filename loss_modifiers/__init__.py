@@ -120,6 +120,8 @@ def create_loss_modifier_pipeline(config):
             'sequence_variance_alpha': get_config_value('sequence_variance_alpha', 1.5),
             'sequence_variance_eps': get_config_value('sequence_variance_eps', 1e-8),
         }
+        modifiers.append(SequenceScorerVarianceModifier(seq_var_config))
+
     # Sequence Scorer Correlation Modifier
     seq_corr_enabled = get_config_value('sequence_correlation_enabled', False)
     if seq_corr_enabled:
