@@ -242,10 +242,11 @@ class SequenceScorerProvider(DataProviderBase):
             key_inputs = 'input_ids' if 'input_ids' in tensors else 'x'
             key_targets = 'targets' if 'targets' in tensors else 'y'
             total = tensors[key_inputs].shape[0]
-            perm = torch.randperm(total, generator=rng)
-            perm = perm.to(tensors[key_inputs].device)
-            tensors[key_inputs] = tensors[key_inputs][perm]
-            tensors[key_targets] = tensors[key_targets][perm]
+            perm_cpu = torch.randperm(total, generator=rng)
+            perm_inputs = perm_cpu.to(tensors[key_inputs].device)
+            perm_targets = perm_cpu.to(tensors[key_targets].device)
+            tensors[key_inputs] = tensors[key_inputs][perm_inputs]
+            tensors[key_targets] = tensors[key_targets][perm_targets]
 
         # Assemble metadata and write file atomically (parity with base)
         metadata = {
@@ -378,12 +379,13 @@ class SequenceScorerProvider(DataProviderBase):
             # After augmentation, reshuffle to interleave extras with base samples
             if split == "val":
                 total = shuffled_inputs.shape[0]
-                perm = torch.randperm(total, generator=rng)
-                perm = perm.to(shuffled_inputs.device)
-                shuffled_inputs = shuffled_inputs[perm]
-                shuffled_targets = shuffled_targets[perm]
-                # stage_info is Python list; perm is tensor on device -> move to cpu list
-                shuffled_stage_info = [shuffled_stage_info[i] for i in perm.cpu().tolist()]
+                perm_cpu = torch.randperm(total, generator=rng)
+                perm_inputs = perm_cpu.to(shuffled_inputs.device)
+                perm_targets = perm_cpu.to(shuffled_targets.device)
+                shuffled_inputs = shuffled_inputs[perm_inputs]
+                shuffled_targets = shuffled_targets[perm_targets]
+                # stage_info is Python list; use CPU indices directly
+                shuffled_stage_info = [shuffled_stage_info[i] for i in perm_cpu.tolist()]
 
             tensors = {"input_ids": shuffled_inputs, "targets": shuffled_targets}
 
