@@ -1,4 +1,9 @@
+
+
+
+
 """Advanced configuration for sequence scoring dataset with stage-based generation"""
+wandb_log = True
 
 # Dataset configuration
 dataset = 'sequence_scorer'
@@ -13,7 +18,7 @@ log_interval = 10
 mlm_checkpoint_path = 'out/7250_1.76_all_LMod_enabled.pt'  # adjust to your MLM checkpoint
 init_from_checkpoint = 'out/7250_1.76_all_LMod_enabled.pt'
 freeze_transformer = True
-unfreeze_at_iteration = 1000
+unfreeze_at_iteration = 500
 cls_token_id = 66
 max_backlog_files = 10
 vocab_size = 67

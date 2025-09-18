@@ -100,17 +100,14 @@ class ConsoleLogger(Logger):
         val_loss = metrics.get('val/loss', 0.0)
         seqvar_avg = metrics.get('loss_modifiers/SequenceScorerVarianceModifier.loss_ratio_avg', None)
         seqcorr_avg = metrics.get('loss_modifiers/SequenceScorerCorrelationModifier.loss_ratio_avg', None)
-        sigm_temp = metrics.get('sigm_temp', None)
 
         parts = [f"step {iter_num}: train loss {train_loss:.4f}, val loss {val_loss:.4f}"]
         if seqvar_avg is not None:
             parts.append(f"seqvar loss_ratio_avg {seqvar_avg:.4f}")
         if seqcorr_avg is not None:
             parts.append(f"seqcorr loss_ratio_avg {seqcorr_avg:.4f}")
-        if sigm_temp is not None:
-            parts.append(f"sigm_temp {sigm_temp:.4f}")
         print(", ".join(parts))
-    
+
     def log_info(self, message: str) -> None:
         """Log general info message to console."""
         if self.master_process:
@@ -125,27 +122,30 @@ class ConsoleLogger(Logger):
 class WandBLogger(Logger):
     """
     Weights & Biases logger that handles wandb.log calls.
-    
+
     Replicates exact same logging behavior as original code with proper
     interval-based logging and loss modifier metrics integration.
     """
-    
-    def __init__(self, project: str, run_name: str, config: Dict[str, Any], 
-                 master_process: bool = True, enabled: bool = True):
+
+    def __init__(self, project: str, run_name: str, config: Dict[str, Any],
+                 master_process: bool = True, enabled: bool = True,
+                 loss_modifier_pipeline: Optional[Any] = None):
         """
         Initialize WandB logger.
-        
+
         Args:
             project: WandB project name
-            run_name: WandB run name  
+            run_name: WandB run name
             config: Configuration dict to log to WandB
             master_process: Whether this is the master process (for DDP)
             enabled: Whether WandB logging is enabled
+            loss_modifier_pipeline: Optional pipeline to pull modifier metrics from
         """
         self.master_process = master_process
         self.enabled = enabled
         self.wandb = None
-        
+        self.pipeline = loss_modifier_pipeline
+
         if self.enabled and self.master_process:
             try:
                 import wandb
@@ -154,20 +154,48 @@ class WandBLogger(Logger):
             except ImportError:
                 print("Warning: wandb not available, disabling wandb logging")
                 self.enabled = False
-    
+
     def log_step(self, metrics: Dict[str, Any]) -> None:
         """
         Log training step metrics to WandB (every log_interval).
-        
-        Note: Only logs basic step metrics, not evaluation data.
+        Includes: iter, train/loss, time_ms, mfu, avg_abs_rel_err (if present),
+        and any flattened loss_modifiers/* metrics present in the metrics dict.
         """
         if not (self.enabled and self.master_process and self.wandb):
             return
-        
-        # For step logging, we typically don't log to wandb every step
-        # Only evaluation metrics go to wandb in the original code
-        pass
-    
+
+        log_dict = {}
+        # Core step metrics
+        if 'iter' in metrics:
+            log_dict['iter'] = metrics['iter']
+        if 'loss' in metrics:
+            log_dict['train/loss'] = metrics['loss']
+        if 'time_ms' in metrics:
+            log_dict['time_ms'] = metrics['time_ms']
+        if 'mfu_pct' in metrics:
+            log_dict['mfu'] = metrics['mfu_pct']
+        if 'avg_abs_rel_err' in metrics:
+            log_dict['avg_abs_rel_err'] = metrics['avg_abs_rel_err']
+
+        # Add any flattened loss modifier metrics if present in step metrics
+        for key, value in metrics.items():
+            if isinstance(value, (int, float)) and isinstance(key, str) and key.startswith('loss_modifiers/'):
+                log_dict[key] = value
+
+        # If a pipeline is provided, merge its current metrics (do not reset on step)
+        if self.pipeline is not None:
+            try:
+                if not self.pipeline.is_empty():
+                    for k, v in self.pipeline.get_all_metrics().items():
+                        if isinstance(v, (int, float)):
+                            log_dict[f"loss_modifiers/{k}"] = v
+            except Exception:
+                # Logging should not disrupt training if pipeline access fails
+                pass
+
+        if log_dict:
+            self.wandb.log(log_dict)
+
     def log_eval(self, metrics: Dict[str, Any]) -> None:
         """
         Log evaluation metrics to WandB (every eval_interval).
@@ -186,13 +214,25 @@ class WandBLogger(Logger):
             "mfu": metrics.get('mfu_pct', 0.0),  # Already as percentage
         }
         
-        # Add loss modifier metrics if available
-        loss_modifier_metrics = metrics.get('loss_modifier_metrics', {})
-        for key, value in loss_modifier_metrics.items():
-            log_dict[f"loss_modifiers/{key}"] = value
-        
+        # Add flattened loss modifier metrics if present
+        for key, value in metrics.items():
+            if isinstance(value, (int, float)) and key.startswith("loss_modifiers/"):
+                log_dict[key] = value
+
+        # If a pipeline is provided, merge its current metrics and then reset
+        if self.pipeline is not None:
+            try:
+                if not self.pipeline.is_empty():
+                    for k, v in self.pipeline.get_all_metrics().items():
+                        if isinstance(v, (int, float)):
+                            log_dict[f"loss_modifiers/{k}"] = v
+                    # Reset metrics after eval logging
+                    self.pipeline.reset_all_metrics()
+            except Exception:
+                pass
+
         self.wandb.log(log_dict)
-    
+
     def log_info(self, message: str) -> None:
         """WandB doesn't log info messages directly."""
         pass
@@ -240,8 +280,9 @@ class CompositeLogger(Logger):
             logger.log_checkpoint(message)
 
 
-def create_logger(wandb_log: bool, wandb_project: str, wandb_run_name: str, 
-                  config: Dict[str, Any], master_process: bool = True) -> Logger:
+def create_logger(wandb_log: bool, wandb_project: str, wandb_run_name: str,
+                  config: Dict[str, Any], master_process: bool = True,
+                  loss_modifier_pipeline: Optional[Any] = None) -> Logger:
     """
     Factory function to create appropriate logger based on configuration.
     
@@ -264,12 +305,13 @@ def create_logger(wandb_log: bool, wandb_project: str, wandb_run_name: str,
     if wandb_log:
         loggers.append(WandBLogger(
             project=wandb_project,
-            run_name=wandb_run_name, 
+            run_name=wandb_run_name,
             config=config,
             master_process=master_process,
-            enabled=True
+            enabled=True,
+            loss_modifier_pipeline=loss_modifier_pipeline
         ))
-    
+
     if len(loggers) == 1:
         return loggers[0]
     else:
