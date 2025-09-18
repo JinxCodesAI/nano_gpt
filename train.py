@@ -109,9 +109,7 @@ freeze_transformer = False  # Feature extraction mode
 init_from_checkpoint = None  # Path to pretrained model
 unfreeze_at_iteration = None  # Dynamic unfreezing
 unfreeze_lr_multiplier = 0.1  # LR multiplier when unfreezing
-# sequence scorer logging (general metrics only, no head-specific params)
 seq_scorer_log_abs_rel_err = True  # running average abs(target - pred)/max(|target|, eps)
-
 # -----------------------------------------------------------------------------
 exec(open('configurator.py').read()) # overrides from command line or config file
 from config.validator import validate_config
@@ -156,7 +154,8 @@ logger = create_logger(
     wandb_project=wandb_project,
     wandb_run_name=wandb_run_name,
     config=config,
-    master_process=master_process
+    master_process=master_process,
+    loss_modifier_pipeline=loss_modifier_pipeline
 )
 
 logger.log_info(f"tokens per iteration will be: {tokens_per_iter:,}")
@@ -312,7 +311,6 @@ t0 = time.time()
 local_iter_num = 0 # number of iterations in the lifetime of this process
 raw_model = model.module if ddp else model # unwrap DDP container if needed
 running_mfu = -1.0
-
 while True:
 
     # determine and set the learning rate for this iteration
@@ -336,13 +334,6 @@ while True:
         }
 
 
-        # Add loss modifier metrics if available (flatten into top-level keys)
-        if not loss_modifier_pipeline.is_empty():
-            modifier_metrics = loss_modifier_pipeline.get_all_metrics()
-            for k, v in modifier_metrics.items():
-                eval_metrics[f"loss_modifiers/{k}"] = v
-            # Reset metrics after logging
-            loss_modifier_pipeline.reset_all_metrics()
 
 
         # Log evaluation results
@@ -374,7 +365,6 @@ while True:
 
         logger.log_info(f"Reduced learning rate by factor {unfreeze_lr_multiplier} current lr: {param_group['lr']}")
 
-
     # forward backward update, with optional gradient accumulation to simulate larger batch size
     # and using the GradScaler if data type is float16
     for micro_step in range(gradient_accumulation_steps):
@@ -403,13 +393,11 @@ while True:
     # flush the gradients as soon as we can, no need for this memory anymore
     optimizer.zero_grad(set_to_none=True)
 
-
     # timing and logging
     t1 = time.time()
     dt = t1 - t0
     if iter_num % log_interval == 0 and master_process:
         # get loss as float. note: this is a CPU-GPU sync point
-
         # scale up to undo the division above, approximating the true total loss (exact would have been a sum)
         lossf = loss.item() * gradient_accumulation_steps
         if local_iter_num >= 5: # let the training loop settle a bit
@@ -423,14 +411,6 @@ while True:
             "time_ms": dt*1000,
             "mfu_pct": running_mfu*100
         }
-
-        # Log training step
-        # Include loss modifier metrics in step logs (cumulative since last eval)
-        if not loss_modifier_pipeline.is_empty():
-            _mod_step_metrics = loss_modifier_pipeline.get_all_metrics()
-            for k, v in _mod_step_metrics.items():
-                step_metrics[f"loss_modifiers/{k}"] = v
-
 
         logger.log_step(step_metrics)
     iter_num += 1
