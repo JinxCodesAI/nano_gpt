@@ -214,6 +214,9 @@ logger.log_info(f"found vocab_size = {meta_vocab_size} (from consumer.meta); eff
 # attach dataset meta to config to inform checkpoint naming (contains training_type)
 config['meta'] = meta
 
+# provide config to checkpoint manager early so it can resolve training_type-based paths
+checkpoint_manager.set_metadata(model_args={}, config=config)
+
 
 # model init
 model_args = dict(n_layer=n_layer, n_head=n_head, n_embd=n_embd, block_size=block_size,
@@ -238,6 +241,8 @@ if init_from == 'scratch':
     model = GPT(gptconf, logger=logger)
 elif init_from == 'resume':
     logger.log_info(f"Resuming training from {out_dir}")
+    logger.log_info(f"Attempting to load checkpoint: {checkpoint_manager.path}")
+
     # resume training from a checkpoint via CheckpointManager
     checkpoint = checkpoint_manager.load(device=device)
     checkpoint_model_args = checkpoint['model_args']
@@ -270,6 +275,10 @@ optimizer = model.configure_optimizers(weight_decay, learning_rate, (beta1, beta
 checkpoint_manager.register_optimizer(optimizer)
 
 if init_from == 'resume':
+    # If resuming past the unfreeze point, mirror optimizer param group structure
+    if unfreeze_at_iteration is not None and iter_num >= unfreeze_at_iteration:
+        raw_model.unfreeze_transformer_weights()
+        raw_model.extend_optimizer_with_unfrozen(optimizer)
     optimizer.load_state_dict(checkpoint['optimizer'])
 checkpoint = None # free up memory
 

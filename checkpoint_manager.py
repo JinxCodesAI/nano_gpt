@@ -1,5 +1,6 @@
 from __future__ import annotations
 import os
+import json
 from typing import Any, Dict, Optional
 
 import torch
@@ -35,20 +36,22 @@ class CheckpointManager:
     def path(self) -> str:
         return os.path.join(self.out_dir, self.filename)
 
-    def _versioned_name(self) -> str:
-        # training type and iteration in filename, fallback to 'unknown'
-        ttype = 'unknown'
+    def _get_training_type_str(self, strict: bool = True) -> Optional[str]:
+        """Return training_type string from config.meta. If strict and missing, return None."""
         try:
             if self._config and isinstance(self._config, dict):
-                # prefer meta training_type if present
                 meta = self._config.get('meta')
                 if isinstance(meta, dict) and 'training_type' in meta:
-                    ttype = str(meta['training_type'])
-                elif 'dataset' in self._config:
-                    # fallback to dataset name as a hint if training_type unknown
-                    ttype = str(self._config['dataset'])
+                    return str(meta['training_type'])
+                if not strict and 'dataset' in self._config:
+                    return str(self._config['dataset'])
         except Exception:
             pass
+        return None
+
+    def _versioned_name(self) -> str:
+        # training type and iteration in filename, fallback to 'unknown' ONLY for naming
+        ttype = self._get_training_type_str(strict=False) or 'unknown'
         return f"ckpt_{ttype}_{self._iter_num}.pt"
 
     # Registration / state update API
@@ -65,6 +68,56 @@ class CheckpointManager:
     def update_progress(self, iter_num: int, best_val_loss: float) -> None:
         self._iter_num = iter_num
         self._best_val_loss = best_val_loss
+
+    def _meta_file_path(self) -> str:
+        return os.path.join(self.out_dir, 'ckpt_meta.json')
+
+    def _load_meta(self) -> Dict[str, Any]:
+        p = self._meta_file_path()
+        if os.path.exists(p):
+            try:
+                with open(p, 'r', encoding='utf-8') as f:
+                    return json.load(f)
+            except Exception:
+                return {}
+        return {}
+
+    def _save_meta(self, data: Dict[str, Any]) -> None:
+        os.makedirs(self.out_dir, exist_ok=True)
+        with open(self._meta_file_path(), 'w', encoding='utf-8') as f:
+            json.dump(data, f)
+
+    def _list_versioned(self) -> list[str]:
+        if not os.path.exists(self.out_dir):
+            return []
+        return [f for f in os.listdir(self.out_dir) if f.startswith('ckpt_') and f.endswith('.pt')]
+
+    def _resolve_latest(self, training_type: str) -> Optional[str]:
+        """Return the latest versioned checkpoint path for given training_type or None."""
+        files = self._list_versioned()
+        candidates = []
+        for f in files:
+            name = f[:-3]  # drop .pt
+            parts = name.split('_')
+            if len(parts) < 3:
+                continue
+            # expected format: ckpt_{training_type}_{iter}
+            prefix = parts[0]
+            iter_part = parts[-1]
+            ttype = '_'.join(parts[1:-1])
+            if prefix != 'ckpt':
+                continue
+            if ttype != training_type:
+                continue
+            try:
+                it = int(iter_part)
+            except ValueError:
+                continue
+            candidates.append((it, f))
+        if not candidates:
+            return None
+        candidates.sort(key=lambda x: x[0])
+        return os.path.join(self.out_dir, candidates[-1][1])
 
     def save(self) -> str:
         """
@@ -83,21 +136,41 @@ class CheckpointManager:
             'best_val_loss': self._best_val_loss,
             'config': self._config,
         }
-        # write stable path
+        # write stable path (kept for compatibility, not used for resume decisions)
         torch.save(checkpoint, self.path)
         # write versioned filename with training type and iteration
         versioned = os.path.join(self.out_dir, self._versioned_name())
         torch.save(checkpoint, versioned)
+        # update metadata for strict resume
+        ttype = self._get_training_type_str(strict=True)
+        if ttype:
+            meta = self._load_meta()
+            meta[str(ttype)] = {"last_path": os.path.basename(versioned), "iter": self._iter_num}
+            self._save_meta(meta)
         return versioned
 
-    def load(self, device: Optional[torch.device | str] = None) -> Dict[str, Any]:
+    def load(self, device: Optional[torch.device | str] = None, training_type_hint: Optional[str] = None) -> Dict[str, Any]:
         """
-        Load checkpoint from disk and return the raw checkpoint dict.
+        Load checkpoint from disk using strict resolution rules:
+        1) If metadata exists for training_type, load that path.
+        2) Else, resolve latest versioned checkpoint for training_type.
+        No fallback to the stable ckpt.pt.
         """
-        if not os.path.exists(self.path):
-            raise FileNotFoundError(f"Checkpoint not found at {self.path}")
-        ckpt = torch.load(self.path, map_location=device)
-        return ckpt
+        ttype = training_type_hint or self._get_training_type_str(strict=True)
+        if not ttype:
+            raise ValueError("training_type missing in config.meta; cannot resolve checkpoint deterministically")
+        # 1) metadata preference
+        meta = self._load_meta()
+        if str(ttype) in meta:
+            p = os.path.join(self.out_dir, meta[str(ttype)]['last_path'])
+            if not os.path.exists(p):
+                raise FileNotFoundError(f"Metadata points to missing checkpoint: {p}")
+            return torch.load(p, map_location=device, weights_only=False)
+        # 2) scan versioned files strictly by training_type
+        cand = self._resolve_latest(str(ttype))
+        if cand is None or not os.path.exists(cand):
+            raise FileNotFoundError(f"No versioned checkpoint found for training_type={ttype} in {self.out_dir}")
+        return torch.load(cand, map_location=device, weights_only=False)
 
     @staticmethod
     def _cleanup_state_dict_keys(state_dict: Dict[str, torch.Tensor]) -> Dict[str, torch.Tensor]:

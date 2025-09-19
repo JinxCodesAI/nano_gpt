@@ -24,6 +24,8 @@ cls_token_id = 66
 max_backlog_files = 10
 vocab_size = 67
 
+init_from = 'resume'
+
 # Load composition configuration (same as char_diffusion)
 composition_config = 'complex'  # reuses data/char_diffusion/config/complex.py
 
