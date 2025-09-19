@@ -31,10 +31,15 @@ class CheckpointManager:
         self._config: Optional[Dict[str, Any]] = None
         self._iter_num: int = 0
         self._best_val_loss: float = float('inf')
+        self._last_loaded_path: Optional[str] = None
 
     @property
     def path(self) -> str:
         return os.path.join(self.out_dir, self.filename)
+
+    @property
+    def last_loaded_path(self) -> Optional[str]:
+        return self._last_loaded_path
 
     def _get_training_type_str(self, strict: bool = True) -> Optional[str]:
         """Return training_type string from config.meta. If strict and missing, return None."""
@@ -119,6 +124,22 @@ class CheckpointManager:
         candidates.sort(key=lambda x: x[0])
         return os.path.join(self.out_dir, candidates[-1][1])
 
+    def resolve_load_path(self, training_type_hint: Optional[str] = None) -> str:
+        """Return the exact path that would be loaded under strict rules (no load)."""
+        ttype = training_type_hint or self._get_training_type_str(strict=True)
+        if not ttype:
+            raise ValueError("training_type missing in config.meta; cannot resolve checkpoint deterministically")
+        meta = self._load_meta()
+        if str(ttype) in meta:
+            p = os.path.join(self.out_dir, meta[str(ttype)]['last_path'])
+            if not os.path.exists(p):
+                raise FileNotFoundError(f"Metadata points to missing checkpoint: {p}")
+            return p
+        cand = self._resolve_latest(str(ttype))
+        if cand is None or not os.path.exists(cand):
+            raise FileNotFoundError(f"No versioned checkpoint found for training_type={ttype} in {self.out_dir}")
+        return cand
+
     def save(self) -> str:
         """
         Save checkpoint to disk using registered state.
@@ -156,21 +177,9 @@ class CheckpointManager:
         2) Else, resolve latest versioned checkpoint for training_type.
         No fallback to the stable ckpt.pt.
         """
-        ttype = training_type_hint or self._get_training_type_str(strict=True)
-        if not ttype:
-            raise ValueError("training_type missing in config.meta; cannot resolve checkpoint deterministically")
-        # 1) metadata preference
-        meta = self._load_meta()
-        if str(ttype) in meta:
-            p = os.path.join(self.out_dir, meta[str(ttype)]['last_path'])
-            if not os.path.exists(p):
-                raise FileNotFoundError(f"Metadata points to missing checkpoint: {p}")
-            return torch.load(p, map_location=device, weights_only=False)
-        # 2) scan versioned files strictly by training_type
-        cand = self._resolve_latest(str(ttype))
-        if cand is None or not os.path.exists(cand):
-            raise FileNotFoundError(f"No versioned checkpoint found for training_type={ttype} in {self.out_dir}")
-        return torch.load(cand, map_location=device, weights_only=False)
+        p = self.resolve_load_path(training_type_hint=training_type_hint)
+        self._last_loaded_path = p
+        return torch.load(p, map_location=device, weights_only=False)
 
     @staticmethod
     def _cleanup_state_dict_keys(state_dict: Dict[str, torch.Tensor]) -> Dict[str, torch.Tensor]:

@@ -241,7 +241,8 @@ if init_from == 'scratch':
     model = GPT(gptconf, logger=logger)
 elif init_from == 'resume':
     logger.log_info(f"Resuming training from {out_dir}")
-    logger.log_info(f"Attempting to load checkpoint: {checkpoint_manager.path}")
+    resolved_ckpt_path = checkpoint_manager.resolve_load_path()
+    logger.log_info(f"Attempting to load checkpoint: {resolved_ckpt_path}")
 
     # resume training from a checkpoint via CheckpointManager
     checkpoint = checkpoint_manager.load(device=device)
