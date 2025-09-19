@@ -146,7 +146,9 @@ class DatasetConsumer:
     def _maybe_delete_consumed(self, split: str, path: str) -> None:
         if self._mode != "queue":
             return
-        # delete only in queue mode
+        # Keep validation files for circular reuse; delete only training files in queue mode
+        if split == "val":
+            return
         try:
             os.remove(path)
             if self.verbose:
@@ -195,7 +197,13 @@ class DatasetConsumer:
         if self._loaded_data[split] is None:
             # choose file index; in queue mode pick the first available
             if self._mode == "queue":
-                self._current_file_idx[split] = 0
+                if split == "train":
+                    # In training, always pick the first available file (queue semantics)
+                    self._current_file_idx[split] = 0
+                else:
+                    # In validation, preserve current index for circular reuse
+                    if self._current_file_idx[split] >= len(self._split_files[split]):
+                        self._current_file_idx[split] = 0
             tensors, metadata = self._load_file(split, self._current_file_idx[split])
             self._loaded_data[split] = tensors
             self._loaded_metadata[split] = metadata
