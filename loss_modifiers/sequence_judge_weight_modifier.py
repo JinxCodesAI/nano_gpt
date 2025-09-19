@@ -179,12 +179,12 @@ class SequenceScoringJudgeWeightModifier(BaseLossModifier):
         # Prefer scaling per-position loss if provided to avoid pipeline overwrite
         per_position_loss: Optional[torch.Tensor] = kwargs.get('per_position_loss', None)
         if per_position_loss is not None:
-            # Broadcast per-sample factor across positions
-            scaled_ppl = per_position_loss * factor.view(-1, 1)
+            # Broadcast per-sample multiplier across positions
+            scaled_ppl = per_position_loss * multiplier.view(-1, 1)
             return {'per_position_loss': scaled_ppl}
 
-        # Fallback: scale scalar loss by mean factor
-        return loss * factor.mean()
+        # Fallback: scale scalar loss by mean multiplier
+        return loss * multiplier.mean()
 
     def get_metrics(self) -> Dict[str, Any]:
         return dict(self._metrics)
