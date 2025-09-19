@@ -47,6 +47,12 @@ class DummySeqScorer:
     def __init__(self):
         self.config = DummySeqScorer.Cfg()
 
+    def eval(self):
+        return self
+
+    def train(self):
+        return self
+
     def __call__(self, X, targets=None, loss_modifiers=None):
         # For non-zero loss: return synthetic loss (mean of inputs)
         if targets is not None:

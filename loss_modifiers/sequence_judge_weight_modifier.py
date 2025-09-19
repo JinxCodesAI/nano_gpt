@@ -52,6 +52,9 @@ class SequenceScoringJudgeWeightModifier(BaseLossModifier):
             'float16': torch.float16,
         }.get(dtype_str, torch.bfloat16)
 
+        # EMA state for multiplayer std across steps
+        self._mul_std_ema: Optional[float] = None
+
         # Eager-load judge to fail fast
         self._judge = self._load_judge(ckpt_path)
         self._cls_token_id: Optional[int] = getattr(self._judge.config, 'cls_token_id', None)
@@ -68,7 +71,13 @@ class SequenceScoringJudgeWeightModifier(BaseLossModifier):
         return state_dict
 
     def _load_judge(self, ckpt_path: str) -> GPT:
-        ckpt = torch.load(ckpt_path, map_location='cpu')
+        # Torch 2.6 defaults weights_only=True which breaks pickled dict checkpoints.
+        # Prefer explicit weights_only=False, with fallback for older torch versions.
+        try:
+            ckpt = torch.load(ckpt_path, map_location='cpu', weights_only=False)
+        except TypeError:
+            # Older PyTorch without weights_only kwarg
+            ckpt = torch.load(ckpt_path, map_location='cpu')
         if 'model' not in ckpt or 'model_args' not in ckpt:
             raise ValueError("Judge checkpoint must contain 'model' and 'model_args'")
         model_args = dict(ckpt['model_args'])
@@ -76,16 +85,26 @@ class SequenceScoringJudgeWeightModifier(BaseLossModifier):
         mode = ModelMode(model_args.get('mode', 'sequence_scorer'))
         if mode != ModelMode.SEQUENCE_SCORER:
             raise ValueError(f"Judge checkpoint mode must be SEQUENCE_SCORER, got {mode}")
+        # Do NOT chain-load judge's original pretrain; we have full weights here
+        model_args['init_from_checkpoint'] = None
+        # The judge is used only for inference inside the modifier: don't freeze
+        model_args['freeze_transformer'] = False
         gptconf = GPTConfig(**model_args)
         judge = GPT(gptconf)
         state_dict = self._cleanup_state_dict_keys(ckpt['model'])
         judge.load_state_dict(state_dict)
         judge.to(self.device)
-        # dtype cast of parameters/buffers
+        # dtype cast of parameters (floating point only) and buffers in-place
         for p in judge.parameters():
-            p.data = p.data.to(self.ptdtype)
-        for bname, buf in judge.named_buffers():
-            judge.register_buffer(bname, buf.to(self.ptdtype), persistent=False)
+            if torch.is_floating_point(p):
+                p.data = p.data.to(self.ptdtype)
+        cast_bufs = 0
+        for _, buf in judge.named_buffers(recurse=True):
+            if torch.is_floating_point(buf):
+                buf.data = buf.data.to(self.ptdtype)
+                cast_bufs += 1
+        # minimal debug to aid diagnosis during bring-up
+        print(f"[JudgeLoader] Loaded judge on {self.device} as {self.ptdtype}; cast {cast_bufs} floating buffers")
         judge.eval()
         return judge
 
@@ -163,17 +182,24 @@ class SequenceScoringJudgeWeightModifier(BaseLossModifier):
         # Per-sample factor
         multiplier = torch.clamp((factor) ** self.exponent, min=self.min_factor, max=self.max_factor)
 
-        # Metrics (only requested ones)
+        # Metrics: only multiplayer_median and multiplayer_std_ema (EMA factor 0.99)
         with torch.no_grad():
+            med = torch.median(multiplier.detach().float())
+            cur_std = multiplier.detach().float().std(unbiased=False)
+            cur_std_val = float(cur_std.cpu().item())
+            if self._mul_med_ema is None:
+                self._mul_med_ema = med
+            else:
+                alpha = 0.99
+                self._mul_med_ema = float(alpha * self._mul_med_ema + (1.0 - alpha) * med)
+            if self._mul_std_ema is None:
+                self._mul_std_ema = cur_std_val
+            else:
+                alpha = 0.99
+                self._mul_std_ema = float(alpha * self._mul_std_ema + (1.0 - alpha) * cur_std_val)
             self._metrics = {
-                'mean_multiplier': float(multiplier.mean().detach().cpu().item()),
-                'min_multiplier': float(multiplier.min().detach().cpu().item()),
-                'max_multiplier': float(multiplier.max().detach().cpu().item()),
-                'multiplier_std': float(multiplier.std(unbiased=False).detach().cpu().item()),
-                'mean_factor': float(factor.mean().detach().cpu().item()),
-                'min_factor': float(factor.min().detach().cpu().item()),
-                'max_factor': float(factor.max().detach().cpu().item()),
-                'factor_std': float(factor.std(unbiased=False).detach().cpu().item()),
+                'multiplayer_median': self._mul_med_ema,
+                'multiplayer_std_ema': self._mul_std_ema,
             }
 
         # Prefer scaling per-position loss if provided to avoid pipeline overwrite
