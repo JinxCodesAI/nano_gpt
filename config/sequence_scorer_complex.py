@@ -4,20 +4,20 @@
 
 """Advanced configuration for sequence scoring dataset with stage-based generation"""
 wandb_log = True
-wandb_run_name = 'sequence_scorer_complex'
+wandb_run_name = 'sequence_scorer_complex_epoch_1'
 
 # Dataset configuration
 dataset = 'sequence_scorer'
 batch_size = 4
-gradient_accumulation_steps = 2
+gradient_accumulation_steps = 8
 block_size = 1024
 eval_interval = 250
 eval_iters = 10
 log_interval = 10
 
 # MLM model for synthetic text generation
-mlm_checkpoint_path = 'out/7250_1.76_all_LMod_enabled.pt'  # adjust to your MLM checkpoint
-init_from_checkpoint = 'out/7250_1.76_all_LMod_enabled.pt'
+mlm_checkpoint_path = 'out-char-diffusion/7750_1.78_all_LMod_enabled(epoch 1).pt'  # adjust to your MLM checkpoint
+init_from_checkpoint = 'out-char-diffusion/7750_1.78_all_LMod_enabled(epoch 1).pt'
 freeze_transformer = True
 unfreeze_at_iteration = 500
 cls_token_id = 66
@@ -86,6 +86,15 @@ sequence_correlation_eps = 1e-8
 batches_per_file = 100
 max_backlog_files = 20
 sleep_seconds = 1.0
+
+# Evaluation controls for sequence_scorer
+# Ensure zero-only stats are always available and deterministic
+# (These do not affect val loss; they only draw extra batches for zero-only metrics.)
+eval_zero_stats_min_zeros = 16
+# cap the number of extra batches to avoid long evals if zeros are rare
+eval_zero_stats_max_extra_batches = 100
+# reset validation stream at the start of each eval for determinism
+eval_reset_val_stream = True
 
 print("Complex sequence scorer configuration loaded")
 

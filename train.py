@@ -303,7 +303,10 @@ evaluator = Evaluator(
     loss_modifier_pipeline=loss_modifier_pipeline,
     eval_iters=eval_iters,
     ctx=ctx,
-    device=device
+    device=device,
+    min_zero_for_stats=globals().get('eval_zero_stats_min_zeros', 0),
+    max_extra_batches_for_zero_stats=globals().get('eval_zero_stats_max_extra_batches', 0),
+    reset_val_stream_each_eval=globals().get('eval_reset_val_stream', False),
 )
 
 # initialize training step handler

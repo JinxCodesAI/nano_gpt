@@ -26,7 +26,10 @@ class Evaluator:
         loss_modifier_pipeline,
         eval_iters: int,
         ctx,
-        device: str
+        device: str,
+        min_zero_for_stats: int = 0,
+        max_extra_batches_for_zero_stats: int = 0,
+        reset_val_stream_each_eval: bool = False,
     ):
         """
         Initialize evaluator with required components.
@@ -38,6 +41,9 @@ class Evaluator:
             eval_iters: Number of evaluation iterations per split
             ctx: Context manager for autocast (nullcontext or torch.amp.autocast)
             device: Device string for getting batches (e.g., 'cuda', 'cuda:0', 'cpu')
+            min_zero_for_stats: Minimum zero-target samples required to compute zero-only stats; 0 disables top-up
+            max_extra_batches_for_zero_stats: Upper bound on extra val batches drawn to top-up zero-only stats
+            reset_val_stream_each_eval: If True, reset consumer val stream at evaluation start for determinism
         """
         self.model = model
         self.consumer = consumer
@@ -45,6 +51,9 @@ class Evaluator:
         self.eval_iters = eval_iters
         self.ctx = ctx
         self.device = device
+        self.min_zero_for_stats = int(min_zero_for_stats or 0)
+        self.max_extra_batches_for_zero_stats = int(max_extra_batches_for_zero_stats or 0)
+        self.reset_val_stream_each_eval = bool(reset_val_stream_each_eval)
 
     @torch.no_grad()
     def evaluate(self, splits=None) -> Dict[str, float]:
@@ -73,6 +82,12 @@ class Evaluator:
 
         # Temporarily disable loss modifiers during evaluation to get comparable baseline metrics
         with self.loss_modifier_pipeline.temporarily_disabled():
+            # Optionally reset validation stream to a fixed start for deterministic eval windows
+            if self.reset_val_stream_each_eval and 'val' in splits:
+                try:
+                    self.consumer.reset_state('val')
+                except Exception:
+                    pass
             for split in splits:
                 # For non-sequence scorer or for train split: original behavior
                 if (not is_sequence_scorer) or (split != 'val'):
@@ -87,6 +102,9 @@ class Evaluator:
                     # Sequence scorer, validation split: two-stage evaluation
                     nonzero_losses = []
                     zero_preds = []
+                    zeros_collected = 0
+
+                    # First pass: fixed eval_iters window (for val loss comparability)
                     for k in range(self.eval_iters):
                         X, Y = self.consumer.get_batch(split, self.device)
                         mask_nonzero = (Y > 0)
@@ -102,10 +120,28 @@ class Evaluator:
                             with self.ctx:
                                 logits_z, _ = self.model(Xz, targets=None, loss_modifiers=self.loss_modifier_pipeline)
                             zero_preds.append(logits_z.detach().float().cpu())
+                            zeros_collected += int(mask_zero.sum().item())
+
+                    # Optional top-up: draw extra val batches only to stabilize zero-only stats
+                    if (self.min_zero_for_stats > 0 and zeros_collected < self.min_zero_for_stats
+                        and self.max_extra_batches_for_zero_stats > 0):
+                        extra = 0
+                        while extra < self.max_extra_batches_for_zero_stats and zeros_collected < self.min_zero_for_stats:
+                            X, Y = self.consumer.get_batch(split, self.device)
+                            mask_zero = (Y == 0)
+                            if mask_zero.any():
+                                Xz = X[mask_zero]
+                                with self.ctx:
+                                    logits_z, _ = self.model(Xz, targets=None, loss_modifiers=self.loss_modifier_pipeline)
+                                zero_preds.append(logits_z.detach().float().cpu())
+                                zeros_collected += int(mask_zero.sum().item())
+                            extra += 1
+
                     if len(nonzero_losses) > 0:
                         out['val'] = float(sum(nonzero_losses) / len(nonzero_losses))
                     else:
                         out['val'] = float('nan')
+
                     if len(zero_preds) > 0:
                         preds = torch.cat(zero_preds, dim=0).view(-1)
                         out['val/zero_mean'] = float(preds.mean().item())
