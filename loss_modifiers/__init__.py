@@ -19,6 +19,7 @@ from .pipeline import LossModifierPipeline
 from .entropy_modifier import EntropyModifier
 from .target_smoothing_modifier import TargetSmoothingModifier
 from .mask_ratio_weight_modifier import MaskRatioWeightModifier
+from .sequence_judge_weight_modifier import SequenceScoringJudgeWeightModifier
 from .sequence_variance_modifier import SequenceScorerVarianceModifier
 from .sequence_correlation_modifier import SequenceScorerCorrelationModifier
 from .metrics_collector import MetricsCollectorModifier
@@ -29,6 +30,7 @@ __all__ = [
     'EntropyModifier',
     'TargetSmoothingModifier',
     'MaskRatioWeightModifier',
+    'SequenceScoringJudgeWeightModifier',
     'SequenceScorerVarianceModifier',
     'SequenceScorerCorrelationModifier',
     'MetricsCollectorModifier',
@@ -110,6 +112,22 @@ def create_loss_modifier_pipeline(config):
             'eps': get_config_value('mask_ratio_weight_eps', 1e-8),
         }
         modifiers.append(MaskRatioWeightModifier(mask_weight_config))
+
+    # Judge Weight Modifier (Sequence scoring-based)
+    judge_weight_enabled = get_config_value('judge_weight_modifier_enabled', False)
+    if judge_weight_enabled:
+        judge_weight_config = {
+            'enabled': True,
+            'judge_weight_checkpoint': get_config_value('judge_weight_checkpoint', None),
+            'judge_weight_exponent': get_config_value('judge_weight_exponent', 1.0),
+            'judge_weight_min_factor': get_config_value('judge_weight_min_factor', 0.1),
+            'judge_weight_max_factor': get_config_value('judge_weight_max_factor', 10.0),
+            'judge_weight_eps': get_config_value('judge_weight_eps', 1e-6),
+            # Inherit device/dtype from main run config
+            'device': get_config_value('device', 'cuda' if __import__('torch').cuda.is_available() else 'cpu'),
+            'dtype': get_config_value('dtype', 'float32'),
+        }
+        modifiers.append(SequenceScoringJudgeWeightModifier(judge_weight_config))
 
     # Sequence Scorer Variance Modifier
     seq_var_enabled = get_config_value('sequence_variance_enabled', False)

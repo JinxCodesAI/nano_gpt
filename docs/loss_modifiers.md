@@ -351,6 +351,55 @@ weights = [
 - `min_weight`, `max_weight`: Range of applied weights [min_weight, max_weight]
 - `weight_std`: Standard deviation of sequence weights
 
+
+### Sequence Scoring Judge Weight Modifier
+
+Purpose: In LANGUAGE_MODEL mode, dynamically reweight each sequence’s loss using a separate SEQUENCE_SCORER “judge” model that outputs a per‑sample wrongness factor in [0,1] (lower is better). The modifier compares this wrongness to the masking ratio and scales loss by (wrongness / masking_ratio)^exponent with clamping.
+
+How it works:
+1) Sampling: From current LM logits (B, T, V), sample one token per position (single pass). No iterative decoding.
+2) Judge input: If the judge config contains a CLS token id, prepend it; crop to the judge’s block_size.
+3) Scoring: Run the judge in eval+no_grad to obtain wrongness per sample (shape (B,), values in [0,1]).
+4) Masking ratio: Compute per sample from targets (or provided mask): mask = (targets != ignore_index); ratio = sum(mask_i)/T.
+5) Factor per sample: factor_i = clamp((wrong_i / clamp(ratio_i, eps))^exponent, min_factor, max_factor).
+6) Loss application:
+   - If a per_position_loss tensor is present (e.g., produced by Target Smoothing), multiply it by factor_i per sample and let the pipeline aggregate.
+   - Otherwise, multiply the scalar loss by mean(factor).
+
+Supported modes: LANGUAGE_MODEL only.
+
+Configuration (keys):
+- loss_modifiers_enabled = True
+- judge_weight_modifier_enabled (bool)
+- judge_weight_checkpoint (str): Path to SEQUENCE_SCORER checkpoint; loaded eagerly (fail‑fast)
+- judge_weight_exponent (float, default 1.0)
+- judge_weight_min_factor (float, default 0.1)
+- judge_weight_max_factor (float, default 10.0)
+- judge_weight_eps (float, default 1e-6)
+- device, dtype: reused from main training config
+
+Example:
+```python
+loss_modifiers_enabled = True
+
+# Sequence Scoring Judge Weight
+judge_weight_modifier_enabled = True
+judge_weight_checkpoint = "out/judge/ckpt_sequence_scorer.pt"
+judge_weight_exponent = 1.0
+judge_weight_min_factor = 0.1
+judge_weight_max_factor = 10.0
+judge_weight_eps = 1e-6
+```
+
+Metrics logged:
+- mean_wrongness, min_wrongness, max_wrongness, wrongness_std
+- mean_factor,   min_factor,   max_factor,   factor_std
+
+Notes:
+- No changes to base classes or pipeline are required; this is an additive modifier.
+- Judge is loaded on startup to fail fast on configuration issues; runs on the same device/dtype settings as the main model.
+- Sampling uses a single multinomial draw per position at temperature=1.
+
 ## Configuration Files
 
 ### Via Command Line
