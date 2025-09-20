@@ -78,6 +78,9 @@ show_progress = True  # Show basic progress information
 
 # Standard sampling parameters (only used if sampling_method='standard')
 start_text = ""  # Starting text for standard sampling
+# Ensure remasking_model is defined (optional component); defaults to None for inference
+remasking_model = None
+
 std_temperature = 0.8
 top_k = 200  # Top-k sampling
 
@@ -412,6 +415,11 @@ print(f"{'='*60}")
 
 # Generate samples
 start_time = time.time()
+# Metrics for judge evaluation (filled when metric == QualityMetric.JUDGE)
+judge_time = None
+judge_tokens_total = None
+judge_tokens_per_sec = None
+
 
 with torch.no_grad():
     with ctx:
@@ -446,12 +454,23 @@ with torch.no_grad():
                 if judge_model is None:
                     raise ValueError("quality_metric 'Judge' requires a valid judge model to be loaded")
                 print("\nEvaluating quality with Judge model...")
+                _judge_start = time.time()
                 judge_scores = calculate_judge_scores(
                     judge_model=judge_model,
                     tokens=generated_tokens,
                     device=device,
                     ctx=ctx
                 )
+                judge_time = time.time() - _judge_start
+                # Compute judge token throughput: batch_size * effective sequence length (with CLS if used)
+                judge_seq_len = int(generated_tokens.size(1))
+                cls_id = getattr(judge_model.config, 'cls_token_id', None)
+                if cls_id is not None:
+                    judge_seq_len += 1
+                max_t = getattr(judge_model.config, 'block_size', judge_seq_len)
+                judge_tokens_per_sample = int(min(judge_seq_len, max_t))
+                judge_tokens_total = int(num_samples * judge_tokens_per_sample)
+                judge_tokens_per_sec = (judge_tokens_total / judge_time) if judge_time > 0 else float('inf')
             else:
                 # No quality metric requested
                 pass
@@ -519,7 +538,11 @@ print(f"\n{'='*60}")
 print("PERFORMANCE SUMMARY")
 print(f"Total wall time: {_full_time:.2f} s | Time per sample: {_time_per_sample:.2f} s")
 print(f"Throughput: {_tokens_per_sec:.2f} tokens/s (tokens: {_total_tokens})")
-
+if judge_time is not None:
+    _judge_time_per_sample = judge_time / max(1, num_samples)
+    print(f"Judge time: {judge_time:.2f} s | Time per sample: {_judge_time_per_sample:.2f} s")
+    if judge_tokens_total is not None and judge_tokens_per_sec is not None:
+        print(f"Judge throughput: {judge_tokens_per_sec:.2f} tokens/s (judge tokens: {judge_tokens_total})")
 
 print(f"\n{'='*60}")
 print(f"GENERATION COMPLETE")
