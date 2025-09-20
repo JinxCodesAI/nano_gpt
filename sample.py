@@ -33,7 +33,7 @@ out_dir = 'out-char-diffusion'
 checkpoint_name = '8500_1.81_all_LMod_enabled(epoch 2).pt'  # Main model checkpoint
 
 # Generation parameters
-num_samples = 4  # Number of samples to generate
+num_samples = 16  # Number of samples to generate
 sequence_length = 1024  # Total length of generated sequence
 max_new_tokens = 100  # For regular sampling (non-diffusion)
 seed = -1
@@ -65,7 +65,7 @@ class QualityMetric(Enum):
 
 quality_metric = QualityMetric.JUDGE
 # Judge (sequence scorer) checkpoint name (relative to out_dir); required if quality_metric == QualityMetric.JUDGE
-judge_checkpoint_name = 'scoring_p90_0.0128.pt'
+judge_checkpoint_name = 'scoring_p90_0.0096_epoch_3.pt'
 
 # Schedule parameters
 schedule_type = 'linear'  # 'linear' or 'custom'
