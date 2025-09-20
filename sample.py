@@ -47,13 +47,13 @@ temperature = 0.8  # Temperature for sampling
 top_p = 1.0  # Nucleus sampling parameter (1.0 = disabled)
 repetition_penalty = 1.0  # Penalty for repeating recent tokens
 repetition_window = 10  # Look back window for repetition penalty
-diffusion_iterations = 50  # Number of demasking iterations
+diffusion_iterations = 30  # Number of demasking iterations
 start_ratio = 0.95  # Initial ratio of tokens to remask (95%)
 end_ratio = 0.05   # Final ratio of tokens to remask (5%)
 
 # Remasking parameters
 randomness_strength = 0.4  # Balance between random (1.0) and model-guided (0.0) remasking
-intelligent_remasking = True  # Enable self-confidence based remasking when no remasking model
+intelligent_remasking = False  # Enable self-confidence based remasking when no remasking model
 
 # Schedule parameters
 schedule_type = 'linear'  # 'linear' or 'custom'
@@ -246,7 +246,7 @@ def diffusion_generate(model, batch_size, total_length, iterations, mask_token_i
             log_iteration_progress(iteration, iterations, tokens, mask_token_id, decode_fn)
 
         # Step 1: Predict tokens for masked positions
-        tokens, prediction_tokens = predict_and_sample_tokens(
+        tokens, prediction_tokens, logits = predict_and_sample_tokens(
             model=model,
             tokens=tokens,
             mask_token_id=mask_token_id,
@@ -256,7 +256,8 @@ def diffusion_generate(model, batch_size, total_length, iterations, mask_token_i
             repetition_window=repetition_window,
             vocab_size=vocab_size,
             device=device,
-            verbose=verbose and use_verbose_logging
+            verbose=verbose and use_verbose_logging,
+            return_logits=True
         )
 
         # Step 2: Remask for next iteration (except last iteration)
@@ -276,37 +277,27 @@ def diffusion_generate(model, batch_size, total_length, iterations, mask_token_i
                 device=device,
                 base_model=model,
                 intelligent_remasking=intelligent_remasking,
-                verbose=verbose and use_verbose_logging
+                verbose=verbose and use_verbose_logging,
+                logits_from_predict=logits
             )
 
     return tokens
 
 def standard_generate(model, start_ids, max_new_tokens, temperature=1.0, top_k=None):
     """
-    Standard autoregressive generation
+    Standard autoregressive generation (batched across num_samples)
     """
     model.eval()
-    
-    if len(start_ids) == 0:
-        # Start with a random token if no start text
-        start_ids = [torch.randint(0, vocab_size, (1,)).item()]
-    
-    for batch_idx in range(num_samples):
-        if batch_idx == 0:
-            idx = torch.tensor(start_ids, dtype=torch.long, device=device)[None, ...]
-        else:
-            # Generate different samples by using different starting tokens
-            idx = torch.tensor(start_ids, dtype=torch.long, device=device)[None, ...]
-            if len(start_ids) == 0:
-                idx = torch.randint(0, vocab_size, (1, 1), device=device)
-        
-        generated = model.generate(idx, max_new_tokens, temperature=temperature, top_k=top_k)
 
-        if batch_idx == 0:
-            all_generated = generated
-        else:
-            all_generated = torch.cat([all_generated, generated], dim=0)
-    
+    # Build initial batch
+    if start_ids:
+        idx = torch.tensor([start_ids] * num_samples, dtype=torch.long, device=device)
+    else:
+        # If no start text, randomize the first token per sample
+        idx = torch.randint(0, vocab_size, (num_samples, 1), device=device)
+
+    # Single batched generate call
+    all_generated = model.generate(idx, max_new_tokens, temperature=temperature, top_k=top_k)
     return all_generated
 
 # -----------------------------------------------------------------------------
@@ -420,7 +411,7 @@ with torch.no_grad():
                 remasking_model=remasking_model,
                 verbose=use_verbose_logging
             )
-
+            _end_wall = time.time()
             # Calculate self-confidence scores
             print("\nCalculating self-confidence scores...")
             confidence_scores = calculate_selfconfidence_ratio(
@@ -441,6 +432,7 @@ with torch.no_grad():
                 temperature=std_temperature,
                 top_k=top_k
             )
+            _end_wall = time.time()
             confidence_scores = [0.0] * num_samples  # Not calculated for standard sampling
 
 generation_time = time.time() - start_time
@@ -475,7 +467,7 @@ for i in range(num_samples):
         print(f"\nStats: {total_chars} chars, most common: {', '.join(char_stats)}")
 
 # Performance summary based on full wall time from generation start to this point
-_end_wall = time.time()
+
 if generation_start_wall_time is not None:
     _full_time = _end_wall - generation_start_wall_time
 else:
