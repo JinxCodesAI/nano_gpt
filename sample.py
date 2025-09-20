@@ -44,7 +44,15 @@ compile = False  # Use PyTorch 2.0 compilation (disabled due to triton issues)
 # Sampling method
 sampling_method = 'diffusion'  # 'diffusion' or 'standard'
 
-prefix = "ROMEO:\nAy me! sad hours seem long."
+seed_text = "ROMEO:\nAy me! sad hours seem long."
+
+class SeedPlacement(Enum):
+    PREFIX = 'prefix'
+    RANDOM_PLACEMENT = 'random'
+
+# Seed placement mode
+seed_placement = SeedPlacement.PREFIX
+
 
 # Diffusion parameters (only used if sampling_method='diffusion')
 temperature = 0.8  # Temperature for sampling
@@ -230,7 +238,7 @@ def log_iteration_progress(iteration, total_iterations, tokens, mask_token_id, d
         print(f"  Sample: {preview}")
 
 def diffusion_generate(model, batch_size, total_length, iterations, mask_token_id, vocab_size,
-                      decode_fn, remasking_model=None, verbose=False, prefix_ids=None):
+                      decode_fn, remasking_model=None, verbose=False, seed_ids=None, placement=SeedPlacement.PREFIX):
     """
     Generate text using diffusion-based iterative demasking
 
@@ -240,15 +248,25 @@ def diffusion_generate(model, batch_size, total_length, iterations, mask_token_i
     # Start with all positions masked
     tokens = torch.full((batch_size, total_length), mask_token_id, dtype=torch.long, device=device)
 
-    # Apply fixed prefix (never to be masked) if provided
+    # Apply seed text (never to be masked) if provided
     protected_mask = torch.zeros((batch_size, total_length), dtype=torch.bool, device=device)
-    if prefix_ids is not None and len(prefix_ids) > 0:
-        _plen = min(len(prefix_ids), total_length)
-        prefix_tensor = torch.tensor(prefix_ids[:_plen], dtype=torch.long, device=device)
-        tokens[:, :_plen] = prefix_tensor.unsqueeze(0)
-        protected_mask[:, :_plen] = True
+    if seed_ids is not None and len(seed_ids) > 0:
+        seed_len = min(len(seed_ids), total_length)
+        # Determine placement start index
+        if placement == SeedPlacement.RANDOM_PLACEMENT:
+            max_start = total_length - seed_len
+            if max_start >= 0:
+                start_idx = int(torch.randint(0, max_start + 1, (1,), device=device).item())
+            else:
+                start_idx = 0
+                seed_len = total_length
+        else:
+            start_idx = 0
+        seed_tensor = torch.tensor(seed_ids[:seed_len], dtype=torch.long, device=device)
+        tokens[:, start_idx:start_idx+seed_len] = seed_tensor.unsqueeze(0)
+        protected_mask[:, start_idx:start_idx+seed_len] = True
         if verbose:
-            print(f"DEBUG: Applied prefix length: {_plen}")
+            print(f"DEBUG: Applied seed length: {seed_len} at index: {start_idx}")
 
     # Debug: Check initial token setup
     if verbose:
@@ -360,10 +378,10 @@ vocab_size = model_vocab_size
 mask_token_id = vocab_size - 1
 print(f"Using mask_token_id: {mask_token_id} ('{itos[mask_token_id] if mask_token_id < len(itos) else '[MASK]'}')")
 print(f"Actual vocabulary size for sampling: {vocab_size - 1} (excluding mask token)")
-# Tokenize fixed prefix to prepend and protect from remasking
-prefix_ids = [stoi[c] for c in prefix if c in stoi] if prefix else []
-if use_verbose_logging and prefix_ids:
-    print(f"Prefix configured: length {len(prefix_ids)}")
+# Tokenize seed text to insert and protect from remasking
+seed_ids = [stoi[c] for c in seed_text if c in stoi] if seed_text else []
+if use_verbose_logging and seed_ids:
+    print(f"Seed text configured: length {len(seed_ids)} | placement: {seed_placement.name}")
 
 
 # Create decode functions
@@ -453,7 +471,8 @@ with torch.no_grad():
                 decode_fn=decode,
                 remasking_model=remasking_model,
                 verbose=use_verbose_logging,
-                prefix_ids=prefix_ids
+                seed_ids=seed_ids,
+                placement=seed_placement
             )
             _end_wall = time.time()
             # Calculate quality metric
