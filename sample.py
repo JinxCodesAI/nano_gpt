@@ -10,10 +10,11 @@ from contextlib import nullcontext
 from collections import Counter
 
 import torch
-from model import GPTConfig, GPT
+from model import GPTConfig, GPT, ModelMode
 from sample_utils import (
     linear_remasking_schedule, nucleus_sample, apply_remasking,
-    calculate_selfconfidence_ratio, predict_and_sample_tokens, apply_remasking_step
+    calculate_selfconfidence_ratio, predict_and_sample_tokens, apply_remasking_step,
+    calculate_judge_scores,
 )
 
 
@@ -31,7 +32,7 @@ checkpoint_name = '8500_1.81_all_LMod_enabled(epoch 2).pt'  # Main model checkpo
 remasking_checkpoint_name = None  # Optional: remasking model checkpoint
 
 # Generation parameters
-num_samples = 16  # Number of samples to generate
+num_samples = 4  # Number of samples to generate
 sequence_length = 1024  # Total length of generated sequence
 max_new_tokens = 100  # For regular sampling (non-diffusion)
 seed = -1
@@ -53,7 +54,12 @@ end_ratio = 0.05   # Final ratio of tokens to remask (5%)
 
 # Remasking parameters
 randomness_strength = 0.4  # Balance between random (1.0) and model-guided (0.0) remasking
-intelligent_remasking = False  # Enable self-confidence based remasking when no remasking model
+intelligent_remasking = True  # Enable self-confidence based remasking when no remasking model
+
+# Quality metric configuration: 'None' | 'Self' | 'Judge'
+quality_metric = 'Self'
+# Judge (sequence scorer) checkpoint name (relative to out_dir); required if quality_metric == 'Judge'
+judge_checkpoint_name = None
 
 # Schedule parameters
 schedule_type = 'linear'  # 'linear' or 'custom'
@@ -100,7 +106,7 @@ ctx = nullcontext() if device_type == 'cpu' else torch.amp.autocast(device_type=
 # -----------------------------------------------------------------------------
 
 def load_model_from_checkpoint(checkpoint_path, device, compile_model=False):
-    """Load model from checkpoint""" 
+    """Load model from checkpoint"""
     print(f"Loading model from {checkpoint_path}")
     if not os.path.exists(checkpoint_path):
         raise FileNotFoundError(f"Checkpoint not found: {checkpoint_path}")
@@ -209,7 +215,7 @@ def diffusion_generate(model, batch_size, total_length, iterations, mask_token_i
                       decode_fn, remasking_model=None, verbose=False):
     """
     Generate text using diffusion-based iterative demasking
-    
+
     Returns:
         Generated tokens (batch_size, total_length)
     """
@@ -222,11 +228,11 @@ def diffusion_generate(model, batch_size, total_length, iterations, mask_token_i
         print(f"DEBUG: mask_token_id: {mask_token_id}, vocab_size: {vocab_size}")
         print(f"DEBUG: All tokens set to mask_token_id: {torch.all(tokens == mask_token_id).item()}")
         print(f"DEBUG: Token value range: {tokens.min().item()} to {tokens.max().item()}")
-    
+
     # Mark the wall-clock start of generation aligned with the first progress log
     global generation_start_wall_time
     generation_start_wall_time = time.time()
-    
+
     if verbose or show_progress:
         print(f"Starting diffusion generation:")
         print(f"  - Samples: {batch_size}")
@@ -240,7 +246,7 @@ def diffusion_generate(model, batch_size, total_length, iterations, mask_token_i
         else:
             print(f"  - Using random remasking")
         print("=" * 60)
-    
+
     for iteration in range(iterations):
         if verbose or show_progress:
             log_iteration_progress(iteration, iterations, tokens, mask_token_id, decode_fn)
@@ -364,12 +370,25 @@ if remasking_checkpoint_name is not None:
     if os.path.exists(remasking_checkpoint_path):
         try:
             remasking_model, _ = load_model_from_checkpoint(remasking_checkpoint_path, device, compile)
-            print("Remasking model loaded successfully")
+
+
         except Exception as e:
             print(f"Failed to load remasking model: {e}")
             remasking_model = None
     else:
         print(f"Remasking checkpoint not found: {remasking_checkpoint_path}")
+
+# Load judge (sequence scorer) model if requested
+judge_model = None
+if quality_metric.lower() == 'judge':
+    if judge_checkpoint_name is None:
+        raise ValueError("quality_metric is 'Judge' but judge_checkpoint_name is not provided")
+    judge_checkpoint_path = os.path.join(out_dir, judge_checkpoint_name)
+    if not os.path.exists(judge_checkpoint_path):
+        raise FileNotFoundError(f"Judge checkpoint not found: {judge_checkpoint_path}")
+    judge_model, _ = load_model_from_checkpoint(judge_checkpoint_path, device, compile=False)
+    if getattr(judge_model.config, 'mode', None) != ModelMode.SEQUENCE_SCORER:
+        raise ValueError("Judge model must be configured with mode=SEQUENCE_SCORER")
 
 # Print generation settings
 print(f"\n{'='*60}")
@@ -412,15 +431,32 @@ with torch.no_grad():
                 verbose=use_verbose_logging
             )
             _end_wall = time.time()
-            # Calculate self-confidence scores
-            print("\nCalculating self-confidence scores...")
-            confidence_scores = calculate_selfconfidence_ratio(
-                model=model,
-                tokens=generated_tokens,
-                mask_token_id=mask_token_id,
-                device=device,
-                ctx=ctx
-            )
+            # Calculate quality metric
+            metric = (quality_metric or 'None').lower()
+            confidence_scores = None
+            judge_scores = None
+            if metric == 'self':
+                print("\nCalculating self-confidence scores...")
+                confidence_scores = calculate_selfconfidence_ratio(
+                    model=model,
+                    tokens=generated_tokens,
+                    mask_token_id=mask_token_id,
+                    device=device,
+                    ctx=ctx
+                )
+            elif metric == 'judge':
+                if judge_model is None:
+                    raise ValueError("quality_metric 'Judge' requires a valid judge model to be loaded")
+                print("\nEvaluating quality with Judge model...")
+                judge_scores = calculate_judge_scores(
+                    judge_model=judge_model,
+                    tokens=generated_tokens,
+                    device=device,
+                    ctx=ctx
+                )
+            else:
+                # No quality metric requested
+                pass
 
         else:
             # Standard generation
@@ -433,7 +469,6 @@ with torch.no_grad():
                 top_k=top_k
             )
             _end_wall = time.time()
-            confidence_scores = [0.0] * num_samples  # Not calculated for standard sampling
 
 generation_time = time.time() - start_time
 
@@ -448,9 +483,14 @@ for i in range(num_samples):
     print(f"\n{'─'*40}")
     print(f"SAMPLE {i+1}/{num_samples}")
     if sampling_method == 'diffusion':
-        confidence = confidence_scores[i]
-        raw_prob = math.exp(confidence) if confidence > -100 else 0.0
-        print(f"Self-confidence: {confidence:.4f} (prob: {raw_prob:.6f})")
+        metric = (quality_metric or 'None').lower()
+        if metric == 'self' and 'confidence_scores' in locals() and confidence_scores is not None:
+            confidence = confidence_scores[i]
+            raw_prob = math.exp(confidence) if confidence > -100 else 0.0
+            print(f"Self-confidence: {confidence:.4f} (prob: {raw_prob:.6f})")
+        elif metric == 'judge' and 'judge_scores' in locals() and judge_scores is not None:
+            score = float(judge_scores[i].item()) if hasattr(judge_scores, 'shape') else float(judge_scores[i])
+            print(f"Quality score (Judge): {score:.4f}")
     print(f"{'─'*40}")
 
     sample_text = decode(generated_tokens[i])
