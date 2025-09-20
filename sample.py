@@ -9,6 +9,8 @@ import pickle
 from contextlib import nullcontext
 from collections import Counter
 
+from enum import Enum
+
 import torch
 from model import GPTConfig, GPT, ModelMode
 from sample_utils import (
@@ -56,9 +58,14 @@ end_ratio = 0.05   # Final ratio of tokens to remask (5%)
 randomness_strength = 0.4  # Balance between random (1.0) and model-guided (0.0) remasking
 intelligent_remasking = True  # Enable self-confidence based remasking when no remasking model
 
-# Quality metric configuration: 'None' | 'Self' | 'Judge'
-quality_metric = 'Self'
-# Judge (sequence scorer) checkpoint name (relative to out_dir); required if quality_metric == 'Judge'
+# Quality metric configuration
+class QualityMetric(Enum):
+    NONE = 'None'
+    SELF = 'Self'
+    JUDGE = 'Judge'
+
+quality_metric = QualityMetric.SELF
+# Judge (sequence scorer) checkpoint name (relative to out_dir); required if quality_metric == QualityMetric.JUDGE
 judge_checkpoint_name = None
 
 # Schedule parameters
@@ -380,7 +387,7 @@ if remasking_checkpoint_name is not None:
 
 # Load judge (sequence scorer) model if requested
 judge_model = None
-if quality_metric.lower() == 'judge':
+if quality_metric == QualityMetric.JUDGE:
     if judge_checkpoint_name is None:
         raise ValueError("quality_metric is 'Judge' but judge_checkpoint_name is not provided")
     judge_checkpoint_path = os.path.join(out_dir, judge_checkpoint_name)
@@ -432,10 +439,10 @@ with torch.no_grad():
             )
             _end_wall = time.time()
             # Calculate quality metric
-            metric = (quality_metric or 'None').lower()
+            metric = quality_metric
             confidence_scores = None
             judge_scores = None
-            if metric == 'self':
+            if metric == QualityMetric.SELF:
                 print("\nCalculating self-confidence scores...")
                 confidence_scores = calculate_selfconfidence_ratio(
                     model=model,
@@ -444,7 +451,7 @@ with torch.no_grad():
                     device=device,
                     ctx=ctx
                 )
-            elif metric == 'judge':
+            elif metric == QualityMetric.JUDGE:
                 if judge_model is None:
                     raise ValueError("quality_metric 'Judge' requires a valid judge model to be loaded")
                 print("\nEvaluating quality with Judge model...")
@@ -483,12 +490,12 @@ for i in range(num_samples):
     print(f"\n{'─'*40}")
     print(f"SAMPLE {i+1}/{num_samples}")
     if sampling_method == 'diffusion':
-        metric = (quality_metric or 'None').lower()
-        if metric == 'self' and 'confidence_scores' in locals() and confidence_scores is not None:
+        metric = quality_metric
+        if metric == QualityMetric.SELF and 'confidence_scores' in locals() and confidence_scores is not None:
             confidence = confidence_scores[i]
             raw_prob = math.exp(confidence) if confidence > -100 else 0.0
             print(f"Self-confidence: {confidence:.4f} (prob: {raw_prob:.6f})")
-        elif metric == 'judge' and 'judge_scores' in locals() and judge_scores is not None:
+        elif metric == QualityMetric.JUDGE and 'judge_scores' in locals() and judge_scores is not None:
             score = float(judge_scores[i].item()) if hasattr(judge_scores, 'shape') else float(judge_scores[i])
             print(f"Quality score (Judge): {score:.4f}")
     print(f"{'─'*40}")
