@@ -11,7 +11,7 @@ always_save_checkpoint = False
 
 wandb_log = True  # override via command line if you like
 wandb_project = 'char-diffusion'
-wandb_run_name = 'bert-char-judge-weight-epoch-2'
+wandb_run_name = 'bert-char-judge-weight-epoch-3b'
 
 dataset = 'char_diffusion'
 
@@ -102,11 +102,11 @@ mask_ratio_weight_eps = 1e-8
 # Uses a SEQUENCE_SCORER judge checkpoint to compute wrongness and scale LM loss.
 judge_weight_modifier_enabled = True
 # NOTE: Adjust path if the checkpoint is not located at repo root.
-judge_weight_checkpoint = "out\scoring_p90_0.0082_epoch_2.pt"
+judge_weight_checkpoint = "out\scoring_p90_0.0096_epoch_3.pt"
 # Exponent applied to (wrongness / mask_ratio)
-judge_weight_exponent = 1.0
+judge_weight_exponent = 2.0
 # Clamps for the final multiplier
-judge_weight_min_factor = 0.1
-judge_weight_max_factor = 10.0
+judge_weight_min_factor = 0.0333
+judge_weight_max_factor = 30.0
 judge_weight_eps = 1e-6
 

@@ -126,7 +126,10 @@ class DatasetConsumer:
             file_idx = 0
             self._current_file_idx[split] = 0
         path = files[file_idx]
-        data = torch.load(path, map_location="cpu")
+        try:
+            data = torch.load(path, map_location="cpu")
+        except Exception as e:
+            raise RuntimeError(f"DatasetConsumer failed to load batch file for split={split}: {path}. {type(e).__name__}: {e}") from e
         # normalize data dict
         tensors: Dict[str, torch.Tensor] = {}
         metadata: Dict = data.get("metadata", {})

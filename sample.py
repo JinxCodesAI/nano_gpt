@@ -12,22 +12,27 @@ from collections import Counter
 import torch
 from model import GPTConfig, GPT
 from sample_utils import (
-    linear_remasking_schedule, nucleus_sample, apply_remasking, 
+    linear_remasking_schedule, nucleus_sample, apply_remasking,
     calculate_selfconfidence_ratio, predict_and_sample_tokens, apply_remasking_step
 )
+
+
+# Global timestamp to mark the beginning of generation (aligned with the
+# "Starting diffusion generation" log inside diffusion_generate)
+generation_start_wall_time = None
 
 # -----------------------------------------------------------------------------
 # Configuration
 # -----------------------------------------------------------------------------
 # Model loading
 init_from = 'resume'  # 'resume' to load from checkpoint
-out_dir = 'out'
-checkpoint_name = '7250_1.76_all_LMod_enabled.pt'  # Main model checkpoint
+out_dir = 'out-char-diffusion'
+checkpoint_name = '8500_1.81_all_LMod_enabled(epoch 2).pt'  # Main model checkpoint
 remasking_checkpoint_name = None  # Optional: remasking model checkpoint
 
 # Generation parameters
-num_samples = 4  # Number of samples to generate
-sequence_length = 512  # Total length of generated sequence
+num_samples = 16  # Number of samples to generate
+sequence_length = 1024  # Total length of generated sequence
 max_new_tokens = 100  # For regular sampling (non-diffusion)
 seed = -1
 device = 'cuda'
@@ -95,64 +100,63 @@ ctx = nullcontext() if device_type == 'cpu' else torch.amp.autocast(device_type=
 # -----------------------------------------------------------------------------
 
 def load_model_from_checkpoint(checkpoint_path, device, compile_model=False):
-    """Load model from checkpoint"""
+    """Load model from checkpoint""" 
     print(f"Loading model from {checkpoint_path}")
-    
     if not os.path.exists(checkpoint_path):
         raise FileNotFoundError(f"Checkpoint not found: {checkpoint_path}")
-    
+
     checkpoint = torch.load(checkpoint_path, map_location=device, weights_only=False)
-    
+
     # Extract model configuration
     if 'model_args' in checkpoint:
         model_args = checkpoint['model_args']
     else:
         # Fallback for older checkpoints
         raise ValueError("Checkpoint missing 'model_args'. Please check checkpoint format.")
-    
+
     # Ensure backward compatibility
     if 'attention_type' not in model_args:
         model_args['attention_type'] = 'causal'
     if 'position_encoding' not in model_args:
         model_args['position_encoding'] = 'absolute'
-    
+
     # Print model configuration for debugging
     print(f"Model config from checkpoint:")
     print(f"  - vocab_size: {model_args.get('vocab_size')}")
     print(f"  - block_size: {model_args.get('block_size')}")
     print(f"  - attention_type: {model_args.get('attention_type')}")
     print(f"  - position_encoding: {model_args.get('position_encoding')}")
-    
+
     # Create model
     gptconf = GPTConfig(**model_args)
     model = GPT(gptconf)
-    
+
     # Load state dict
     state_dict = checkpoint['model']
-    
+
     # Remove compilation prefix if present
     unwanted_prefix = '_orig_mod.'
     for k, v in list(state_dict.items()):
         if k.startswith(unwanted_prefix):
             state_dict[k[len(unwanted_prefix):]] = state_dict.pop(k)
-    
+
     model.load_state_dict(state_dict)
     model.eval()
     model.to(device)
-    
+
     if compile_model:
         print("Compiling model...")
         model = torch.compile(model)
-    
+
     print(f"Model loaded successfully")
     print(f"  - Parameters: {model.get_num_params()/1e6:.1f}M")
-    
+
     return model, checkpoint
 
 def load_vocabulary(checkpoint, fallback_dataset='shakespeare_char'):
     """Load vocabulary from checkpoint or fallback dataset"""
     dataset_name = None
-    
+
     # Try to get dataset name from checkpoint
     if 'config' in checkpoint:
         config = checkpoint['config']
@@ -160,24 +164,24 @@ def load_vocabulary(checkpoint, fallback_dataset='shakespeare_char'):
             dataset_name = config.get('dataset')
         elif hasattr(config, 'get'):
             dataset_name = config.get('dataset')
-    
+
     if not dataset_name:
         dataset_name = fallback_dataset
         print(f"Dataset name not found in checkpoint, using fallback: {dataset_name}")
-    
+
     meta_path = os.path.join('data', dataset_name, 'meta.pkl')
-    
+
     if not os.path.exists(meta_path):
         raise FileNotFoundError(f"Vocabulary file not found: {meta_path}")
-    
+
     with open(meta_path, 'rb') as f:
         meta = pickle.load(f)
-    
+
     stoi, itos = meta['stoi'], meta['itos']
     vocab_size = meta['vocab_size']
-    
+
     print(f"Vocabulary loaded from {dataset_name}: {vocab_size} tokens")
-    
+
     return stoi, itos, vocab_size, dataset_name
 
 # -----------------------------------------------------------------------------
@@ -188,13 +192,13 @@ def log_iteration_progress(iteration, total_iterations, tokens, mask_token_id, d
     """Log progress during diffusion iterations"""
     if not show_progress:
         return
-        
+
     masked_count = (tokens == mask_token_id).sum().item()
     total_tokens = tokens.numel()
     masked_ratio = masked_count / total_tokens
-    
+
     print(f"Iteration {iteration+1}/{total_iterations}: {masked_count}/{total_tokens} tokens masked ({masked_ratio:.1%})")
-    
+
     if iteration == 0 or iteration == total_iterations - 1:
         # Show sample for first and last iterations
         sample_text = decode_fn(tokens[0])
@@ -211,7 +215,7 @@ def diffusion_generate(model, batch_size, total_length, iterations, mask_token_i
     """
     # Start with all positions masked
     tokens = torch.full((batch_size, total_length), mask_token_id, dtype=torch.long, device=device)
-    
+
     # Debug: Check initial token setup
     if verbose:
         print(f"DEBUG: Initial tokens shape: {tokens.shape}")
@@ -219,10 +223,14 @@ def diffusion_generate(model, batch_size, total_length, iterations, mask_token_i
         print(f"DEBUG: All tokens set to mask_token_id: {torch.all(tokens == mask_token_id).item()}")
         print(f"DEBUG: Token value range: {tokens.min().item()} to {tokens.max().item()}")
     
+    # Mark the wall-clock start of generation aligned with the first progress log
+    global generation_start_wall_time
+    generation_start_wall_time = time.time()
+    
     if verbose or show_progress:
         print(f"Starting diffusion generation:")
         print(f"  - Samples: {batch_size}")
-        print(f"  - Length: {total_length}")  
+        print(f"  - Length: {total_length}")
         print(f"  - Iterations: {iterations}")
         print(f"  - Temperature: {temperature}")
         if remasking_model is not None:
@@ -236,7 +244,7 @@ def diffusion_generate(model, batch_size, total_length, iterations, mask_token_i
     for iteration in range(iterations):
         if verbose or show_progress:
             log_iteration_progress(iteration, iterations, tokens, mask_token_id, decode_fn)
-        
+
         # Step 1: Predict tokens for masked positions
         tokens, prediction_tokens = predict_and_sample_tokens(
             model=model,
@@ -250,7 +258,7 @@ def diffusion_generate(model, batch_size, total_length, iterations, mask_token_i
             device=device,
             verbose=verbose and use_verbose_logging
         )
-        
+
         # Step 2: Remask for next iteration (except last iteration)
         if iteration < iterations - 1:
             tokens = apply_remasking_step(
@@ -270,7 +278,7 @@ def diffusion_generate(model, batch_size, total_length, iterations, mask_token_i
                 intelligent_remasking=intelligent_remasking,
                 verbose=verbose and use_verbose_logging
             )
-    
+
     return tokens
 
 def standard_generate(model, start_ids, max_new_tokens, temperature=1.0, top_k=None):
@@ -293,7 +301,7 @@ def standard_generate(model, start_ids, max_new_tokens, temperature=1.0, top_k=N
                 idx = torch.randint(0, vocab_size, (1, 1), device=device)
         
         generated = model.generate(idx, max_new_tokens, temperature=temperature, top_k=top_k)
-        
+
         if batch_idx == 0:
             all_generated = generated
         else:
@@ -332,7 +340,7 @@ def decode(token_ids):
     """Decode tokens to text"""
     if hasattr(token_ids, 'tolist'):
         token_ids = token_ids.tolist()
-    
+
     result = []
     for token_id in token_ids:
         if token_id == mask_token_id:
@@ -347,7 +355,7 @@ def decode_with_mask_char(token_ids, mask_char='#'):
     """Decode tokens to text with custom mask character"""
     if hasattr(token_ids, 'tolist'):
         token_ids = token_ids.tolist()
-    
+
     result = []
     for token_id in token_ids:
         if token_id == mask_token_id:
@@ -412,7 +420,7 @@ with torch.no_grad():
                 remasking_model=remasking_model,
                 verbose=use_verbose_logging
             )
-            
+
             # Calculate self-confidence scores
             print("\nCalculating self-confidence scores...")
             confidence_scores = calculate_selfconfidence_ratio(
@@ -422,7 +430,7 @@ with torch.no_grad():
                 device=device,
                 ctx=ctx
             )
-            
+
         else:
             # Standard generation
             start_ids = [stoi[c] for c in start_text if c in stoi] if start_text else []
@@ -452,19 +460,36 @@ for i in range(num_samples):
         raw_prob = math.exp(confidence) if confidence > -100 else 0.0
         print(f"Self-confidence: {confidence:.4f} (prob: {raw_prob:.6f})")
     print(f"{'─'*40}")
-    
+
     sample_text = decode(generated_tokens[i])
     print(sample_text)
-    
+
     # Show some statistics
     if sampling_method == 'diffusion':
         char_counts = Counter(sample_text)
         total_chars = len(sample_text)
-        
+
         # Show most common characters
         top_chars = char_counts.most_common(5)
         char_stats = [f"'{c}': {count}" for c, count in top_chars]
         print(f"\nStats: {total_chars} chars, most common: {', '.join(char_stats)}")
+
+# Performance summary based on full wall time from generation start to this point
+_end_wall = time.time()
+if generation_start_wall_time is not None:
+    _full_time = _end_wall - generation_start_wall_time
+else:
+    _full_time = _end_wall - start_time
+_tokens_per_sample = sequence_length if sampling_method == 'diffusion' else max_new_tokens
+_total_tokens = num_samples * _tokens_per_sample
+_time_per_sample = _full_time / max(1, num_samples)
+_tokens_per_sec = (_total_tokens / _full_time) if _full_time > 0 else float('inf')
+
+print(f"\n{'='*60}")
+print("PERFORMANCE SUMMARY")
+print(f"Total wall time: {_full_time:.2f} s | Time per sample: {_time_per_sample:.2f} s")
+print(f"Throughput: {_tokens_per_sec:.2f} tokens/s (tokens: {_total_tokens})")
+
 
 print(f"\n{'='*60}")
 print(f"GENERATION COMPLETE")

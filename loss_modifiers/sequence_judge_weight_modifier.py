@@ -54,6 +54,7 @@ class SequenceScoringJudgeWeightModifier(BaseLossModifier):
 
         # EMA state for multiplayer std across steps
         self._mul_std_ema: Optional[float] = None
+        self._mul_med_ema: Optional[float] = None
 
         # Eager-load judge to fail fast
         self._judge = self._load_judge(ckpt_path)
