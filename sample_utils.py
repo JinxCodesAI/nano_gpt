@@ -114,7 +114,7 @@ def apply_repetition_penalty(logits, input_ids, penalty=1.0, window=10):
 def predict_and_sample_tokens(model, tokens, mask_token_id, temperature=1.0, top_p=1.0,
                             repetition_penalty=1.0, repetition_window=10, vocab_size=None,
                             device='cuda', debug_logging_fn=None, itos=None, stoi=None,
-                            verbose=False, log_debug=False):
+                            verbose=False, log_debug=False, return_logits=False):
     """
     Predict and sample new tokens for masked positions
     
@@ -207,7 +207,10 @@ def predict_and_sample_tokens(model, tokens, mask_token_id, temperature=1.0, top
         # Update prediction tokens
         prediction_tokens[batch_idx, mask_indices] = new_tokens
     
-    return prediction_tokens, prediction_tokens
+    if return_logits:
+        return prediction_tokens, prediction_tokens, logits
+    else:
+        return prediction_tokens, prediction_tokens
 
 
 def calculate_selfconfidence_ratio(model, tokens, mask_token_id, device='cuda', ctx=None):
@@ -394,7 +397,7 @@ def _select_tokens_with_confidence(tokens, unmaskable_indices, num_to_mask,
 def apply_remasking_step(tokens, prediction_tokens, iteration, iterations, schedule_type='linear',
                         masking_ratios=None, start_ratio=0.9, end_ratio=0.1, remasking_model=None,
                         randomness_strength=0.5, mask_token_id=None, device='cuda', base_model=None,
-                        intelligent_remasking=False, verbose=False):
+                        intelligent_remasking=False, verbose=False, logits_from_predict=None):
     """
     Apply remasking step with different scheduling options
     
@@ -432,15 +435,80 @@ def apply_remasking_step(tokens, prediction_tokens, iteration, iterations, sched
     if verbose:
         print(f"  Remasking with ratio: {mask_ratio:.3f}")
     
-    # Apply remasking
+    # Vectorized remasking
+    batch_size, seq_len = prediction_tokens.shape
+    if mask_token_id is None:
+        raise ValueError("mask_token_id must be provided")
+
+    # How many to mask per row (global k)
+    k = int(seq_len * mask_ratio)
+    if k <= 0:
+        return prediction_tokens
+
+    unmaskable = (prediction_tokens != mask_token_id)
+
+    if remasking_model is not None:
+        # Batched remasking model forward once
+        with torch.no_grad():
+            logits_r, _ = remasking_model(prediction_tokens)
+        # Assume binary: take class-1 confidence; fall back to last dim if shape ambiguous
+        if logits_r.dim() == 3 and logits_r.size(-1) > 1:
+            confidence = logits_r[:, :, 1]
+        else:
+            # Single logit per position; treat larger as more confident
+            confidence = logits_r.squeeze(-1)
+        # Lower confidence => more likely to mask: score = -confidence
+        scores = -confidence
+        scores = scores.masked_fill(~unmaskable, -1e9)
+        if randomness_strength > 0:
+            scores = (1 - randomness_strength) * scores + randomness_strength * torch.rand_like(scores)
+        if k > 0:
+            topk_idx = scores.topk(k, dim=1, largest=True).indices
+            select = torch.zeros_like(scores, dtype=torch.bool)
+            select.scatter_(1, topk_idx, True)
+            select &= unmaskable
+            remasked_tokens = prediction_tokens.clone()
+            remasked_tokens[select] = mask_token_id
+            return remasked_tokens
+        return prediction_tokens
+
+    if intelligent_remasking:
+        if logits_from_predict is None:
+            # Fallback: per-sample (slower) path using base_model
+            return apply_remasking(
+                tokens=prediction_tokens,
+                mask_ratio=mask_ratio,
+                mask_token_id=mask_token_id,
+                remasking_model=None,
+                randomness_strength=randomness_strength,
+                base_model=base_model,
+                intelligent_remasking=True,
+            )
+        # Use logits from main forward, batched
+        probs = F.softmax(logits_from_predict, dim=-1)
+        p_taken = probs.gather(-1, prediction_tokens.unsqueeze(-1)).squeeze(-1)
+        scores = 1.0 - p_taken  # uncertainty
+        scores = scores.masked_fill(~unmaskable, -1e9)
+        if randomness_strength > 0:
+            scores = (1 - randomness_strength) * scores + randomness_strength * torch.rand_like(scores)
+        if k > 0:
+            topk_idx = scores.topk(k, dim=1, largest=True).indices
+            select = torch.zeros_like(scores, dtype=torch.bool)
+            select.scatter_(1, topk_idx, True)
+            select &= unmaskable
+            remasked_tokens = prediction_tokens.clone()
+            remasked_tokens[select] = mask_token_id
+            return remasked_tokens
+        return prediction_tokens
+
+    # Random remasking fallback
     remasked_tokens = apply_remasking(
         tokens=prediction_tokens,
         mask_ratio=mask_ratio,
         mask_token_id=mask_token_id,
-        remasking_model=remasking_model,
+        remasking_model=None,
         randomness_strength=randomness_strength,
-        base_model=base_model,
-        intelligent_remasking=intelligent_remasking
+        base_model=None,
+        intelligent_remasking=False,
     )
-    
     return remasked_tokens
