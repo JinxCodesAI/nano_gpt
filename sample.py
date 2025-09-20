@@ -31,7 +31,6 @@ generation_start_wall_time = None
 init_from = 'resume'  # 'resume' to load from checkpoint
 out_dir = 'out-char-diffusion'
 checkpoint_name = '8500_1.81_all_LMod_enabled(epoch 2).pt'  # Main model checkpoint
-remasking_checkpoint_name = None  # Optional: remasking model checkpoint
 
 # Generation parameters
 num_samples = 4  # Number of samples to generate
@@ -132,6 +131,13 @@ def load_model_from_checkpoint(checkpoint_path, device, compile_model=False):
         model_args['attention_type'] = 'causal'
     if 'position_encoding' not in model_args:
         model_args['position_encoding'] = 'absolute'
+
+    # Inference-time safety: do not chain-load any additional pretrained checkpoint
+    # Some judge checkpoints may carry init_from_checkpoint used during training; disable it here
+    if 'init_from_checkpoint' in model_args and model_args.get('init_from_checkpoint'):
+        # Print once to aid debugging, then clear
+        print(f"Ignoring training-only init_from_checkpoint: {model_args['init_from_checkpoint']}")
+        model_args['init_from_checkpoint'] = None
 
     # Print model configuration for debugging
     print(f"Model config from checkpoint:")
@@ -369,21 +375,6 @@ def decode_with_mask_char(token_ids, mask_char='#'):
         else:
             result.append('[UNK]')
     return ''.join(result)
-
-# Load optional remasking model
-remasking_model = None
-if remasking_checkpoint_name is not None:
-    remasking_checkpoint_path = os.path.join(out_dir, remasking_checkpoint_name)
-    if os.path.exists(remasking_checkpoint_path):
-        try:
-            remasking_model, _ = load_model_from_checkpoint(remasking_checkpoint_path, device, compile)
-
-
-        except Exception as e:
-            print(f"Failed to load remasking model: {e}")
-            remasking_model = None
-    else:
-        print(f"Remasking checkpoint not found: {remasking_checkpoint_path}")
 
 # Load judge (sequence scorer) model if requested
 judge_model = None
