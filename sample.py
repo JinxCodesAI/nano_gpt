@@ -44,14 +44,14 @@ compile = False  # Use PyTorch 2.0 compilation (disabled due to triton issues)
 # Sampling method
 sampling_method = 'diffusion'  # 'diffusion' or 'standard'
 
-seed_text = "ROMEO:\nAy me! sad hours seem long."
+seed_text = "GREY:\nHere come the lords of Buckingham and Derby.\n\nBUCKINGHAM:\nGood time of day unto your royal grace!"
 
 class SeedPlacement(Enum):
     PREFIX = 'prefix'
     RANDOM_PLACEMENT = 'random'
 
 # Seed placement mode
-seed_placement = SeedPlacement.PREFIX
+seed_placement = SeedPlacement.RANDOM_PLACEMENT
 
 
 # Diffusion parameters (only used if sampling_method='diffusion')
@@ -576,9 +576,13 @@ print(f"\n{'='*60}")
 print("PERFORMANCE SUMMARY")
 print(f"Total wall time: {_full_time:.2f} s | Time per sample: {_time_per_sample:.2f} s")
 print(f"Throughput: {_tokens_per_sec:.2f} tokens/s (tokens: {_total_tokens})")
+
 if judge_time is not None:
     _judge_time_per_sample = judge_time / max(1, num_samples)
     print(f"Judge time: {judge_time:.2f} s | Time per sample: {_judge_time_per_sample:.2f} s")
+    print(f"Average judge score: {judge_scores.mean().item():.4f}")
+    print(f"Best judge score: {judge_scores.max().item():.4f}")
+    print(f"Worst judge score: {judge_scores.min().item():.4f}")
     if judge_tokens_total is not None and judge_tokens_per_sec is not None:
         print(f"Judge throughput: {judge_tokens_per_sec:.2f} tokens/s (judge tokens: {judge_tokens_total})")
 
