@@ -64,9 +64,9 @@ class QualityMetric(Enum):
     SELF = 'Self'
     JUDGE = 'Judge'
 
-quality_metric = QualityMetric.SELF
+quality_metric = QualityMetric.JUDGE
 # Judge (sequence scorer) checkpoint name (relative to out_dir); required if quality_metric == QualityMetric.JUDGE
-judge_checkpoint_name = None
+judge_checkpoint_name = 'scoring_p90_0.0128.pt'
 
 # Schedule parameters
 schedule_type = 'linear'  # 'linear' or 'custom'
@@ -393,7 +393,7 @@ if quality_metric == QualityMetric.JUDGE:
     judge_checkpoint_path = os.path.join(out_dir, judge_checkpoint_name)
     if not os.path.exists(judge_checkpoint_path):
         raise FileNotFoundError(f"Judge checkpoint not found: {judge_checkpoint_path}")
-    judge_model, _ = load_model_from_checkpoint(judge_checkpoint_path, device, compile=False)
+    judge_model, _ = load_model_from_checkpoint(judge_checkpoint_path, device, compile_model=False)
     if getattr(judge_model.config, 'mode', None) != ModelMode.SEQUENCE_SCORER:
         raise ValueError("Judge model must be configured with mode=SEQUENCE_SCORER")
 
