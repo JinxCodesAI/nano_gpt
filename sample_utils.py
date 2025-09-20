@@ -314,7 +314,8 @@ def calculate_judge_scores(judge_model, tokens, device='cuda', ctx=None):
 
 
 def apply_remasking(tokens, mask_ratio, mask_token_id, remasking_model=None,
-                   randomness_strength=0.5, base_model=None, intelligent_remasking=False):
+                   randomness_strength=0.5, base_model=None, intelligent_remasking=False,
+                   protected_mask=None):
     """
     Apply remasking to tokens based on confidence or random selection
 
@@ -346,8 +347,10 @@ def apply_remasking(tokens, mask_ratio, mask_token_id, remasking_model=None,
     for batch_idx in range(batch_size):
         batch_tokens = tokens[batch_idx]
 
-        # Find non-masked positions
+        # Find non-masked positions and exclude protected positions (e.g., prefix)
         unmaskable_positions = (batch_tokens != mask_token_id)
+        if protected_mask is not None:
+            unmaskable_positions = unmaskable_positions & (~protected_mask[batch_idx])
         unmaskable_indices = torch.nonzero(unmaskable_positions).squeeze(-1)
 
         if len(unmaskable_indices) == 0:
@@ -434,7 +437,8 @@ def _select_tokens_with_confidence(tokens, unmaskable_indices, num_to_mask,
 def apply_remasking_step(tokens, prediction_tokens, iteration, iterations, schedule_type='linear',
                         masking_ratios=None, start_ratio=0.9, end_ratio=0.1, remasking_model=None,
                         randomness_strength=0.5, mask_token_id=None, device='cuda', base_model=None,
-                        intelligent_remasking=False, verbose=False, logits_from_predict=None):
+                        intelligent_remasking=False, verbose=False, logits_from_predict=None,
+                        protected_mask=None):
     """
     Apply remasking step with different scheduling options
 
@@ -483,6 +487,8 @@ def apply_remasking_step(tokens, prediction_tokens, iteration, iterations, sched
         return prediction_tokens
 
     unmaskable = (prediction_tokens != mask_token_id)
+    if protected_mask is not None:
+        unmaskable = unmaskable & (~protected_mask)
 
     if remasking_model is not None:
         # Batched remasking model forward once
@@ -520,6 +526,7 @@ def apply_remasking_step(tokens, prediction_tokens, iteration, iterations, sched
                 randomness_strength=randomness_strength,
                 base_model=base_model,
                 intelligent_remasking=True,
+                protected_mask=protected_mask,
             )
         # Use logits from main forward, batched
         probs = F.softmax(logits_from_predict, dim=-1)

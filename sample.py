@@ -44,6 +44,8 @@ compile = False  # Use PyTorch 2.0 compilation (disabled due to triton issues)
 # Sampling method
 sampling_method = 'diffusion'  # 'diffusion' or 'standard'
 
+prefix = "ROMEO:\nAy me! sad hours seem long."
+
 # Diffusion parameters (only used if sampling_method='diffusion')
 temperature = 0.8  # Temperature for sampling
 top_p = 1.0  # Nucleus sampling parameter (1.0 = disabled)
@@ -228,7 +230,7 @@ def log_iteration_progress(iteration, total_iterations, tokens, mask_token_id, d
         print(f"  Sample: {preview}")
 
 def diffusion_generate(model, batch_size, total_length, iterations, mask_token_id, vocab_size,
-                      decode_fn, remasking_model=None, verbose=False):
+                      decode_fn, remasking_model=None, verbose=False, prefix_ids=None):
     """
     Generate text using diffusion-based iterative demasking
 
@@ -237,6 +239,16 @@ def diffusion_generate(model, batch_size, total_length, iterations, mask_token_i
     """
     # Start with all positions masked
     tokens = torch.full((batch_size, total_length), mask_token_id, dtype=torch.long, device=device)
+
+    # Apply fixed prefix (never to be masked) if provided
+    protected_mask = torch.zeros((batch_size, total_length), dtype=torch.bool, device=device)
+    if prefix_ids is not None and len(prefix_ids) > 0:
+        _plen = min(len(prefix_ids), total_length)
+        prefix_tensor = torch.tensor(prefix_ids[:_plen], dtype=torch.long, device=device)
+        tokens[:, :_plen] = prefix_tensor.unsqueeze(0)
+        protected_mask[:, :_plen] = True
+        if verbose:
+            print(f"DEBUG: Applied prefix length: {_plen}")
 
     # Debug: Check initial token setup
     if verbose:
@@ -300,7 +312,8 @@ def diffusion_generate(model, batch_size, total_length, iterations, mask_token_i
                 base_model=model,
                 intelligent_remasking=intelligent_remasking,
                 verbose=verbose and use_verbose_logging,
-                logits_from_predict=logits
+                logits_from_predict=logits,
+                protected_mask=protected_mask
             )
 
     return tokens
@@ -347,6 +360,11 @@ vocab_size = model_vocab_size
 mask_token_id = vocab_size - 1
 print(f"Using mask_token_id: {mask_token_id} ('{itos[mask_token_id] if mask_token_id < len(itos) else '[MASK]'}')")
 print(f"Actual vocabulary size for sampling: {vocab_size - 1} (excluding mask token)")
+# Tokenize fixed prefix to prepend and protect from remasking
+prefix_ids = [stoi[c] for c in prefix if c in stoi] if prefix else []
+if use_verbose_logging and prefix_ids:
+    print(f"Prefix configured: length {len(prefix_ids)}")
+
 
 # Create decode functions
 def decode(token_ids):
@@ -434,7 +452,8 @@ with torch.no_grad():
                 vocab_size=vocab_size,  # Full vocab size (includes mask token)
                 decode_fn=decode,
                 remasking_model=remasking_model,
-                verbose=use_verbose_logging
+                verbose=use_verbose_logging,
+                prefix_ids=prefix_ids
             )
             _end_wall = time.time()
             # Calculate quality metric
