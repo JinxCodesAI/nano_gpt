@@ -11,59 +11,60 @@ from typing import Dict, List, Any
 import torch
 
 from data.common.provider_base import DataProviderBase
-from .file_utils import write_file_atomic, ensure_queue_dirs, get_backlog_size, get_max_sequence_number  
+from .file_utils import write_file_atomic, ensure_queue_dirs, get_backlog_size, get_max_sequence_number
 from .masking_utils import apply_stage_masking, apply_random_masking_cpu
 
 
-def apply_bert_style_corruption_cpu(x: torch.Tensor, mask: torch.Tensor, 
-                                  mask_token_id: int, vocab_size: int, rng) -> torch.Tensor:
+def apply_bert_style_corruption_cpu(x: torch.Tensor, mask: torch.Tensor,
+                                  mask_token_id: int, base_vocab_size: int, rng) -> torch.Tensor:
     """
     Optimized BERT-style corruption using tensor operations.
     Applies 80/10/10 rule: 80% [MASK], 10% random token, 10% unchanged.
-    
+
     Args:
         x: Original input tokens (batch_size, seq_len)
         mask: Boolean mask of positions to corrupt (batch_size, seq_len)
         mask_token_id: The ID of the [MASK] token
-        vocab_size: Size of vocabulary for random token generation
+        base_vocab_size: Size of base character vocabulary (excludes special tokens like [MASK], [SEP])
         rng: Torch random number generator for consistent randomization
-        
+
     Returns:
         corrupted_x: Input with BERT-style corruption applied
     """
     corrupted_x = x.clone()
-    
+
     # Generate random values for all masked positions at once
     rand_vals = torch.rand(mask.shape, generator=rng)
-    
+
     # Create masks for the three corruption types
     mask_positions = mask & (rand_vals < 0.8)  # 80%: [MASK] token
     random_positions = mask & (rand_vals >= 0.8) & (rand_vals < 0.9)  # 10%: random token
     # 10%: unchanged (no mask needed)
-    
+
     # Apply [MASK] tokens
     corrupted_x[mask_positions] = mask_token_id
-    
-    # Apply random tokens
+
+    # Apply random tokens from base vocab only (exclude specials)
     if random_positions.any():
         num_random = random_positions.sum().item()
-        random_tokens = torch.randint(0, vocab_size, (num_random,), generator=rng)
+        random_tokens = torch.randint(0, base_vocab_size, (num_random,), generator=rng)
         corrupted_x[random_positions] = random_tokens
-    
+
     return corrupted_x
 
 
-def apply_random_masking_cpu(x: torch.Tensor, mask_probability: float, 
-                           mask_token_id: int, vocab_size: int, rng=None) -> tuple[torch.Tensor, torch.Tensor]:
+def apply_random_masking_cpu(x: torch.Tensor, mask_probability: float,
+                           mask_token_id: int, base_vocab_size: int, rng=None, attention_mask: torch.Tensor | None = None) -> tuple[torch.Tensor, torch.Tensor]:
     """
     Optimized random masking for BERT-style training using tensor operations.
-    
+
     Args:
         x: Input tokens (batch_size, seq_len)
         mask_probability: Probability of masking each token (0.0 to 1.0)
         mask_token_id: Token ID for [MASK] token
-        vocab_size: Size of vocabulary for random token generation
-        
+        base_vocab_size: Size of base character vocabulary (excludes [MASK], [SEP])
+        attention_mask: Optional boolean/int mask where 1 denotes valid positions to consider
+
     Returns:
         corrupted_x: Input with masking applied
         mask: Boolean mask indicating which positions were selected for prediction
@@ -71,10 +72,12 @@ def apply_random_masking_cpu(x: torch.Tensor, mask_probability: float,
     # Generate random mask using provided RNG
     mask_tensor = torch.rand(x.shape, generator=rng)
     mask = mask_tensor < mask_probability
-    
+    if attention_mask is not None:
+        mask = mask & attention_mask.bool()
+
     # Apply BERT-style corruption
-    corrupted_x = apply_bert_style_corruption_cpu(x, mask, mask_token_id, vocab_size, rng)
-    
+    corrupted_x = apply_bert_style_corruption_cpu(x, mask, mask_token_id, base_vocab_size, rng)
+
     return corrupted_x, mask
 
 
@@ -92,47 +95,69 @@ class CharDiffusionProvider(DataProviderBase):
         self.unmasking_stages = cfg.get('unmasking_stages', None)
         self.validation_stages = cfg.get('validation_stages', None)
 
+        # Line-aligned sequences configuration (default True)
+        self.enable_line_aligned_sequences = cfg.get('enable_line_aligned_sequences', True)
+
+
         super().__init__(*args, **kwargs)
 
         # Load Shakespeare data - fail if not present
         input_file_path = os.path.join(self.data_dir, 'input.txt')
         with open(input_file_path, 'r') as f:
             data = f.read()
-        
-        # Create vocabulary
+
+        # Create vocabulary (base chars + [MASK] + [SEP])
         chars = sorted(list(set(data)))
-        self.vocab_size = len(chars) + 1  # +1 for [MASK] token
+        self.base_vocab_size = len(chars)  # excludes special tokens
         self.stoi = {ch: i for i, ch in enumerate(chars)}
         self.itos = {i: ch for i, ch in enumerate(chars)}
-        
-        # Add [MASK] token
-        self.mask_token_id = len(chars)
+
+        # Special tokens
+        self.mask_token_id = self.base_vocab_size
+        self.sep_token_id = self.base_vocab_size + 1
         self.stoi['[MASK]'] = self.mask_token_id
         self.itos[self.mask_token_id] = '[MASK]'
-        
+        self.stoi['[SEP]'] = self.sep_token_id
+        self.itos[self.sep_token_id] = '[SEP]'
+        self.vocab_size = self.base_vocab_size + 2
+        self.newline_token_id = self.stoi.get('\n', None)
+
         # Create train/val splits
         n = len(data)
         train_data = data[: int(n * 0.9)]
         val_data = data[int(n * 0.9) :]
         self.train_ids = [self.stoi[c] for c in train_data]
         self.val_ids = [self.stoi[c] for c in val_data]
-        
+
+        # Precompute line lists (with newlines kept) and their token ids for line-aligned sampling
+        self.train_lines = train_data.splitlines(keepends=True)
+        self.val_lines = val_data.splitlines(keepends=True)
+        self.train_lines_ids = [[self.stoi[c] for c in line] for line in self.train_lines]
+        self.val_lines_ids = [[self.stoi[c] for c in line] for line in self.val_lines]
+
+        if self.enable_line_aligned_sequences and self.newline_token_id is None:
+            raise ValueError("enable_line_aligned_sequences=True requires '\n' to be in the vocabulary")
+
+
         # Validate and initialize stage configuration
         self._validate_stage_config()
         self._initialize_stage_distribution()
-        
+
         if self.verbose:
             print(f"CharDiffusionProvider initialized:")
-            print(f"  vocab_size: {self.vocab_size} (including [MASK])")
+            print(f"  base_vocab_size: {self.base_vocab_size}")
+            print(f"  vocab_size: {self.vocab_size} (including [MASK],[SEP])")
             print(f"  mask_probability: {self.mask_probability}")
             print(f"  mask_token_id: {self.mask_token_id}")
+            print(f"  sep_token_id: {self.sep_token_id}")
+            print(f"  enable_line_aligned_sequences: {self.enable_line_aligned_sequences}")
             print(f"  train_data_size: {len(self.train_ids)}")
             print(f"  val_data_size: {len(self.val_ids)}")
             if self.use_all_stages_for_training is not None:
                 print(f"  use_all_stages_for_training: {self.use_all_stages_for_training}")
                 print(f"  training_stages: {len(self.unmasking_stages) if self.unmasking_stages else 0}")
                 print(f"  validation_stages: {len(self.validation_stages) if self.validation_stages else 0}")
-                
+
                 if self.train_stage_distribution:
                     print(f"  train_stage_distribution:")
                     for i, stage_info in enumerate(self.train_stage_distribution):
@@ -150,19 +175,19 @@ class CharDiffusionProvider(DataProviderBase):
                             print(f"    Stage {i}: {stage_type} (spans={spans}) -> {count} samples per file")
                         else:
                             print(f"    Stage {i}: {stage_type} -> {count} samples per file")
-    
+
     def _validate_stage_config(self):
         """Validate stage configuration and raise exceptions for unsupported options."""
         if self.use_all_stages_for_training is not None:
             if not self.use_all_stages_for_training:
                 raise NotImplementedError("use_all_stages_for_training=False is not yet implemented")
-            
+
             if not self.unmasking_stages:
                 raise ValueError("unmasking_stages must be provided when use_all_stages_for_training=True")
-                
+
             if not self.validation_stages:
                 raise ValueError("validation_stages must be provided when use_all_stages_for_training=True")
-    
+
     def _initialize_stage_distribution(self):
         """Initialize stage distribution for batch generation."""
         if self.use_all_stages_for_training:
@@ -172,14 +197,14 @@ class CharDiffusionProvider(DataProviderBase):
         else:
             self.train_stage_distribution = None
             self.val_stage_distribution = None
-    
+
     def _calculate_stage_distribution(self, stages: List[Dict]) -> List[Dict]:
         """
         Calculate how many samples of each stage type to generate per file.
-        
+
         Args:
             stages: List of stage configurations
-            
+
         Returns:
             List of dicts with stage config and sample count
         """
@@ -187,7 +212,7 @@ class CharDiffusionProvider(DataProviderBase):
         total_samples = self.batches_per_file * self.batch_size
         samples_per_stage = total_samples // total_stages
         remainder = total_samples % total_stages
-        
+
         distribution = []
         for i, stage in enumerate(stages):
             # Distribute remainder across first stages
@@ -197,19 +222,20 @@ class CharDiffusionProvider(DataProviderBase):
                     'config': stage,
                     'count': count
                 })
-        
+
         return distribution
 
     def build_meta(self) -> Dict:
         """Build metadata for BERT-style masked language modeling."""
         if self.block_size is None:
             raise ValueError("block_size must be set for CharDiffusionProvider")
-        
+
         return {
             "dataset_name": "char_diffusion",
             "training_type": "MLM",  # Masked Language Modeling
             "vocab_size": self.vocab_size,
             "mask_token_id": self.mask_token_id,
+            "sep_token_id": self.sep_token_id,
             "mask_probability": self.mask_probability,
             "ignore_index": self.ignore_index,
             "stoi": self.stoi,
@@ -217,6 +243,7 @@ class CharDiffusionProvider(DataProviderBase):
             "batch_schema": [
                 {"name": "x", "dtype": "int64", "shape": [self.block_size], "role": "input"},
                 {"name": "y", "dtype": "int64", "shape": [self.block_size], "role": "target"},
+                {"name": "attention_mask", "dtype": "int64", "shape": [self.block_size], "role": "mask"},
             ],
         }
 
@@ -224,94 +251,135 @@ class CharDiffusionProvider(DataProviderBase):
         """Sample a batch with stage-aware masking or default BERT-style masking."""
         if self.use_all_stages_for_training:
             # For stage-based generation, we need to generate all samples for the file at once
-            # This method will be called by the base class for each batch, but we need to 
+            # This method will be called by the base class for each batch, but we need to
             # coordinate across all batches in the file. We'll handle this differently.
             raise NotImplementedError("Stage-based sampling requires file-level generation")
         else:
             return self._sample_default_batch(split, rng)
-    
+
     def _sample_default_batch(self, split: str, rng) -> Dict[str, Any]:
-        """Sample a batch with default BERT-style masking."""
-        ids = self.train_ids if split == "train" else self.val_ids
-        max_start_idx = len(ids) - self.block_size
-        
-        # Use the provided RNG for proper randomization
-        ix = torch.randint(0, max_start_idx, (self.batch_size,), generator=rng).tolist()
-        
-        # Create sequences as tensor
-        x_list = [ids[i : i + self.block_size] for i in ix]
-        x = torch.tensor(x_list, dtype=torch.long)
-        
-        # Apply BERT-style masking with the same RNG for consistency
-        corrupted_x, mask = apply_random_masking_cpu(
-            x, self.mask_probability, self.mask_token_id, 
-            self.vocab_size - 1,  # Exclude [MASK] token from random generation
-            rng
-        )
-        
-        # Create labels: ignore_index for non-masked positions (ignored in loss), original token for masked
-        labels = torch.where(mask, x, self.ignore_index)
-        
-        return {
-            "x": corrupted_x,
-            "y": labels,
-        }
-    
+        """Sample a batch with default BERT-style masking or line-aligned variable-length sequences."""
+        if self.enable_line_aligned_sequences:
+            # Line-aligned, variable-length up to block_size with [SEP] and attention_mask
+            lines_ids = self.train_lines_ids if split == "train" else self.val_lines_ids
+            num_lines = len(lines_ids)
+            if num_lines == 0:
+                raise ValueError(f"No lines available for split {split}")
+
+            x = torch.zeros((self.batch_size, self.block_size), dtype=torch.long)
+            attention_mask = torch.zeros((self.batch_size, self.block_size), dtype=torch.long)
+
+            for b in range(self.batch_size):
+                start_idx = int(torch.randint(0, num_lines, (1,), generator=rng).item())
+                remaining = self.block_size - 1  # leave space for [SEP]
+                seq_ids: List[int] = []
+                li = start_idx
+                while remaining > 0 and li < num_lines:
+                    line_ids = lines_ids[li]
+                    if len(line_ids) <= remaining:
+                        seq_ids.extend(line_ids)
+                        remaining -= len(line_ids)
+                        li += 1
+                    else:
+                        # Overlong line: truncate and force newline at the end of available space
+                        take = max(0, remaining - 1)
+                        if take > 0:
+                            seq_ids.extend(line_ids[:take])
+                        if self.newline_token_id is not None and remaining > 0:
+                            seq_ids.append(self.newline_token_id)
+                        remaining = 0
+                        break
+
+                valid_len = min(len(seq_ids), self.block_size - 1)
+                if valid_len > 0:
+                    x[b, :valid_len] = torch.tensor(seq_ids[:valid_len], dtype=torch.long)
+                # Append [SEP]
+                x[b, valid_len] = self.sep_token_id
+                attention_mask[b, : valid_len + 1] = 1
+
+            # Apply BERT-style masking only on valid positions (including [SEP])
+            corrupted_x, mask = apply_random_masking_cpu(
+                x, self.mask_probability, self.mask_token_id, self.base_vocab_size, rng, attention_mask=attention_mask
+            )
+            labels = torch.where(mask, x, torch.full_like(x, self.ignore_index))
+
+            return {
+                "x": corrupted_x,
+                "y": labels,
+                "attention_mask": attention_mask,
+            }
+        else:
+            # Legacy fixed-window sampling
+            ids = self.train_ids if split == "train" else self.val_ids
+            max_start_idx = len(ids) - self.block_size
+            ix = torch.randint(0, max_start_idx, (self.batch_size,), generator=rng).tolist()
+            x_list = [ids[i : i + self.block_size] for i in ix]
+            x = torch.tensor(x_list, dtype=torch.long)
+
+            corrupted_x, mask = apply_random_masking_cpu(
+                x, self.mask_probability, self.mask_token_id, self.base_vocab_size, rng
+            )
+            labels = torch.where(mask, x, torch.full_like(x, self.ignore_index))
+            return {
+                "x": corrupted_x,
+                "y": labels,
+            }
+
     def _sample_stage_based_batch(self, split: str, rng) -> Dict[str, Any]:
         """Sample a batch using stage-based masking configuration."""
         ids = self.train_ids if split == "train" else self.val_ids
         max_start_idx = len(ids) - self.block_size
-        
+
         # Get stage distribution for this split
         stage_distribution = self.train_stage_distribution if split == "train" else self.val_stage_distribution
-        
+
         # Generate samples according to stage distribution within a single batch
         all_x = []
         all_y = []
         stage_info_list = []
-        
+
         for stage_info in stage_distribution:
             stage_config = stage_info['config']
             count = stage_info['count']
-            
+
             if count == 0:
                 continue
-                
+
             # Sample sequences for this stage
             ix = torch.randint(0, max_start_idx, (count,), generator=rng).tolist()
             x_list = [ids[i : i + self.block_size] for i in ix]
             x_stage = torch.tensor(x_list, dtype=torch.long)
-            
+
             # Apply stage-specific masking
             corrupted_x, mask = apply_stage_masking(
-                x_stage, stage_config, self.mask_token_id, 
+                x_stage, stage_config, self.mask_token_id,
                 self.vocab_size - 1, rng
             )
-            
+
             # Create labels: ignore_index for non-masked positions, original token for masked
             labels = torch.where(mask, x_stage, self.ignore_index)
-            
+
             all_x.append(corrupted_x)
             all_y.append(labels)
-            
+
             # Track stage info for debugging
             stage_info_list.extend([stage_config] * count)
-        
+
         # Concatenate all samples and shuffle them randomly to mix different stage types
         if all_x:
             combined_x = torch.cat(all_x, dim=0)
             combined_y = torch.cat(all_y, dim=0)
-            
+
             # Randomly shuffle the samples to mix different stage types
             total_samples = combined_x.shape[0]
             shuffle_indices = torch.randperm(total_samples, generator=rng)
-            
+
             shuffled_x = combined_x[shuffle_indices]
             shuffled_y = combined_y[shuffle_indices]
-            
+
             # Create shuffled stage info for debugging
             shuffled_stage_info = [stage_info_list[i] for i in shuffle_indices.tolist()]
-            
+
             return {
                 "x": shuffled_x,
                 "y": shuffled_y,
@@ -320,7 +388,7 @@ class CharDiffusionProvider(DataProviderBase):
         else:
             # Fallback to default masking if no stages configured
             return self._sample_default_batch(split, rng)
-    
+
     def produce_one_file(self, split: str, seq: int) -> None:
         """Override to handle stage-based generation at file level."""
         if self.use_all_stages_for_training:
@@ -328,75 +396,75 @@ class CharDiffusionProvider(DataProviderBase):
         else:
             # Use default file production for non-stage-based generation
             super().produce_one_file(split, seq)
-    
+
     def _produce_stage_based_file(self, split: str, seq: int) -> None:
         """Generate an entire file with stage-based sampling."""
         import time
-        
+
         rng = torch.Generator()
         # derive deterministic seed per split/seq (same as base class)
         per_seed = (self.seed * 1000003) ^ (hash(split) & 0xFFFFFFFF) ^ seq
         rng.manual_seed(per_seed)
-        
+
         ids = self.train_ids if split == "train" else self.val_ids
         max_start_idx = len(ids) - self.block_size
-        
+
         # Get stage distribution for this split
         stage_distribution = self.train_stage_distribution if split == "train" else self.val_stage_distribution
-        
+
         # Generate all samples according to stage distribution
         all_x = []
         all_y = []
         all_stage_info = []
-        
+
         for stage_info in stage_distribution:
             stage_config = stage_info['config']
             count = stage_info['count']
-            
+
             if count == 0:
                 continue
-                
+
             # Sample sequences for this stage
             ix = torch.randint(0, max_start_idx, (count,), generator=rng).tolist()
             x_list = [ids[i : i + self.block_size] for i in ix]
             x_stage = torch.tensor(x_list, dtype=torch.long)
-            
+
             # Apply stage-specific masking
             corrupted_x, mask = apply_stage_masking(
-                x_stage, stage_config, self.mask_token_id, 
+                x_stage, stage_config, self.mask_token_id,
                 self.vocab_size - 1, rng
             )
-            
+
             # Create labels: ignore_index for non-masked positions, original token for masked
             labels = torch.where(mask, x_stage, self.ignore_index)
-            
+
             all_x.append(corrupted_x)
             all_y.append(labels)
-            
+
             # Track stage info for each sample
             all_stage_info.extend([stage_config] * count)
-        
+
         # Concatenate all samples
         if all_x:
             combined_x = torch.cat(all_x, dim=0)
             combined_y = torch.cat(all_y, dim=0)
-            
+
             # Randomly shuffle all samples to mix different stage types
             total_samples = combined_x.shape[0]
             shuffle_indices = torch.randperm(total_samples, generator=rng)
-            
+
             shuffled_x = combined_x[shuffle_indices]
             shuffled_y = combined_y[shuffle_indices]
-            
+
             # Create shuffled stage info
             shuffled_stage_info = [all_stage_info[i] for i in shuffle_indices.tolist()]
-            
+
             # Organize into batches
             tensors = {
                 "x": shuffled_x,
                 "y": shuffled_y,
             }
-            
+
             metadata = {
                 "batch_size": self.batch_size,
                 "num_batches": self.batches_per_file,
@@ -406,7 +474,7 @@ class CharDiffusionProvider(DataProviderBase):
                 "stage_info": shuffled_stage_info,
                 "stage_distribution": stage_distribution  # Include stage distribution info
             }
-            
+
             # Write atomic
             d = self.train_dir if split == "train" else self.val_dir
             ts = metadata["produced_at"]
@@ -436,7 +504,7 @@ def main():
     parser.add_argument('--sleep_seconds', type=float, default=2.0)
     parser.add_argument('--seed', type=int, default=1337)
     parser.add_argument('--verbose', action='store_true')
-    parser.add_argument('--composition_config', type=str, default=None, 
+    parser.add_argument('--composition_config', type=str, default=None,
                        help='Name of composition config to load (e.g., "complex")')
 
     args = parser.parse_args()
@@ -450,7 +518,7 @@ def main():
             spec = importlib.util.spec_from_file_location(f"{args.composition_config}_config", config_path)
             config_module = importlib.util.module_from_spec(spec)
             spec.loader.exec_module(config_module)
-            
+
             # Extract stage-related parameters
             for attr_name in ['use_all_stages_for_training', 'unmasking_stages', 'validation_stages']:
                 if hasattr(config_module, attr_name):

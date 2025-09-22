@@ -128,7 +128,7 @@ class CausalSelfAttention(nn.Module):
             self.register_buffer("bias", torch.tril(torch.ones(config.block_size, config.block_size))
                                         .view(1, 1, config.block_size, config.block_size))
 
-    def forward(self, x):
+    def forward(self, x, attention_mask=None):
         B, T, C = x.size() # batch size, sequence length, embedding dimensionality (n_embd)
 
         # calculate query, key, values for all heads in batch and move head forward to be the batch dim
@@ -143,14 +143,31 @@ class CausalSelfAttention(nn.Module):
             position_ids = torch.arange(T, device=x.device).unsqueeze(0)
             q, k = apply_rotary_pos_emb(q, k, cos, sin, position_ids)
 
+        # Build key padding mask for attention (mask out keys where attention_mask==0)
+        sdpa_attn_mask = None
+        if attention_mask is not None:
+            # Boolean mask where True indicates positions to mask out
+            key_padding = (attention_mask == 0)  # (B, T)
+            sdpa_attn_mask = key_padding[:, None, None, :]  # (B, 1, 1, T)
+
         # causal self-attention; Self-attend: (B, nh, T, hs) x (B, nh, hs, T) -> (B, nh, T, T)
         if self.flash:
             # efficient attention using Flash Attention CUDA kernels
-            y = torch.nn.functional.scaled_dot_product_attention(q, k, v, attn_mask=None, dropout_p=self.dropout if self.training else 0, is_causal=True)
+            y = torch.nn.functional.scaled_dot_product_attention(
+                q, k, v,
+                attn_mask=sdpa_attn_mask,
+                dropout_p=self.dropout if self.training else 0,
+                is_causal=True,
+            )
         else:
             # manual implementation of attention
             att = (q @ k.transpose(-2, -1)) * (1.0 / math.sqrt(k.size(-1)))
+            # causal mask
             att = att.masked_fill(self.bias[:,:,:T,:T] == 0, float('-inf'))
+            # key padding mask
+            if attention_mask is not None:
+                key_padding = (attention_mask == 0).view(B, 1, 1, T)
+                att = att.masked_fill(key_padding, float('-inf'))
             att = F.softmax(att, dim=-1)
             att = self.attn_dropout(att)
             y = att @ v # (B, nh, T, T) x (B, nh, T, hs) -> (B, nh, T, hs)
@@ -195,7 +212,7 @@ class BidirectionalSelfAttention(nn.Module):
             # Note: This warning occurs during model init, before logger is available
             print("WARNING: using slow attention. Flash Attention requires PyTorch >= 2.0")
 
-    def forward(self, x):
+    def forward(self, x, attention_mask=None):
         B, T, C = x.size() # batch size, sequence length, embedding dimensionality (n_embd)
 
         # calculate query, key, values for all heads in batch and move head forward to be the batch dim
@@ -210,14 +227,28 @@ class BidirectionalSelfAttention(nn.Module):
             position_ids = torch.arange(T, device=x.device).unsqueeze(0)
             q, k = apply_rotary_pos_emb(q, k, cos, sin, position_ids)
 
+        # Build key padding mask for attention (mask out keys where attention_mask==0)
+        sdpa_attn_mask = None
+        if attention_mask is not None:
+            key_padding = (attention_mask == 0)  # (B, T)
+            sdpa_attn_mask = key_padding[:, None, None, :]  # (B, 1, 1, T)
+
         # bidirectional self-attention; Self-attend: (B, nh, T, hs) x (B, nh, hs, T) -> (B, nh, T, T)
         if self.flash:
             # efficient attention using Flash Attention CUDA kernels
-            y = torch.nn.functional.scaled_dot_product_attention(q, k, v, attn_mask=None, dropout_p=self.dropout if self.training else 0, is_causal=False)
+            y = torch.nn.functional.scaled_dot_product_attention(
+                q, k, v,
+                attn_mask=sdpa_attn_mask,
+                dropout_p=self.dropout if self.training else 0,
+                is_causal=False,
+            )
         else:
             # manual implementation of attention
             att = (q @ k.transpose(-2, -1)) * (1.0 / math.sqrt(k.size(-1)))
-            # No masking for bidirectional attention
+            # key padding mask
+            if attention_mask is not None:
+                key_padding = (attention_mask == 0).view(B, 1, 1, T)
+                att = att.masked_fill(key_padding, float('-inf'))
             att = F.softmax(att, dim=-1)
             att = self.attn_dropout(att)
             y = att @ v # (B, nh, T, T) x (B, nh, T, hs) -> (B, nh, T, hs)
@@ -279,8 +310,8 @@ class Block(nn.Module):
         self.ln_2 = LayerNorm(config.n_embd, bias=config.bias)
         self.mlp = MLP(config)
 
-    def forward(self, x):
-        x = x + self.attn(self.ln_1(x))
+    def forward(self, x, attention_mask=None):
+        x = x + self.attn(self.ln_1(x), attention_mask=attention_mask)
         x = x + self.mlp(self.ln_2(x))
         return x
 
@@ -550,7 +581,7 @@ class GPT(nn.Module):
         elif isinstance(module, nn.Embedding):
             torch.nn.init.normal_(module.weight, mean=0.0, std=0.02)
 
-    def forward(self, idx, targets=None, loss_modifiers=None):
+    def forward(self, idx, targets=None, attention_mask=None, loss_modifiers=None):
         device = idx.device
         b, t = idx.size()
         assert t <= self.config.block_size, f"Cannot forward sequence of length {t}, block size is only {self.config.block_size}"
@@ -577,7 +608,7 @@ class GPT(nn.Module):
             x = self.transformer.drop(tok_emb)
 
         for block in self.transformer.h:
-            x = block(x)
+            x = block(x, attention_mask=attention_mask)
         x = self.transformer.ln_f(x)
 
         # Mode-specific output and loss computation

@@ -273,12 +273,13 @@ class DatasetConsumer:
         for k in list(batch_tensors.keys()):
             batch_tensors[k] = _to_device(batch_tensors[k])
 
-        # return legacy tuple when possible
-        if "x" in batch_tensors and "y" in batch_tensors:
+        # return legacy tuple only when there are exactly two fields (x and y)
+        if "x" in batch_tensors and "y" in batch_tensors and len(batch_tensors) == 2:
             return batch_tensors["x"], batch_tensors["y"]
-        # normalize common schema keys to tuple expected by train/evaluator
-        if "input_ids" in batch_tensors and "targets" in batch_tensors:
+        # normalize common schema keys to tuple only when exactly two fields are present
+        if "input_ids" in batch_tensors and "targets" in batch_tensors and len(batch_tensors) == 2:
             return batch_tensors["input_ids"], batch_tensors["targets"]
+        # otherwise, return full dict to allow passing extra fields like attention_mask
         return batch_tensors
 
     def reset_state(self, split: Optional[str] = None) -> None:

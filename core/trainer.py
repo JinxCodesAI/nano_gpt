@@ -63,8 +63,8 @@ class Trainer:
             iter_num=self.iter_num, best_val_loss=self.best_val_loss
         )
 
-        # fetch the very first batch
-        X, Y = self.consumer.get_batch('train', self.device)
+        # fetch the very first batch (dict or tuple)
+        batch = self.consumer.get_batch('train', self.device)
         t0 = time.time()
         local_iter_num = 0
         raw_model = self.model.module if self.ddp else self.model
@@ -112,8 +112,8 @@ class Trainer:
             self.training_step.maybe_unfreeze(self.iter_num)
 
             # forward/backward/update handled by TrainingStep
-            loss, X, Y = self.training_step.execute_step(
-                X, Y, self.evaluator.loss_modifier_pipeline, self.consumer, self.device
+            loss, batch = self.training_step.execute_step(
+                batch, self.evaluator.loss_modifier_pipeline, self.consumer, self.device
             )
 
             # timing and logging
