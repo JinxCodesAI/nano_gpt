@@ -272,7 +272,8 @@ class DatasetConsumer:
 
         for k in list(batch_tensors.keys()):
             batch_tensors[k] = _to_device(batch_tensors[k])
-
+        
+        # TODO: looks like technical debt
         # return legacy tuple only when there are exactly two fields (x and y)
         if "x" in batch_tensors and "y" in batch_tensors and len(batch_tensors) == 2:
             return batch_tensors["x"], batch_tensors["y"]
