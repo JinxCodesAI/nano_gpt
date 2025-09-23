@@ -144,7 +144,7 @@ class CharDiffusionProvider(DataProviderBase):
         self.val_line_offsets = torch.cat([torch.tensor([0], dtype=torch.long), self.val_cumsum[:-1]])
         self.train_tokens_flat = torch.tensor([t for line in self.train_lines_ids for t in line], dtype=torch.long)
         self.val_tokens_flat = torch.tensor([t for line in self.val_lines_ids for t in line], dtype=torch.long)
-        # Valid start lines: skip blank lines (which are just a single newline)
+        # Valid start lines: skip blank-only lines (just a single '\n')
         self.train_valid_starts = torch.tensor([i for i, ids in enumerate(self.train_lines_ids) if len(ids) > 1], dtype=torch.long)
         self.val_valid_starts = torch.tensor([i for i, ids in enumerate(self.val_lines_ids) if len(ids) > 1], dtype=torch.long)
 
@@ -283,12 +283,11 @@ class CharDiffusionProvider(DataProviderBase):
             x = torch.zeros((self.batch_size, self.block_size), dtype=torch.long)
             attention_mask = torch.zeros((self.batch_size, self.block_size), dtype=torch.long)
 
-            # Vectorized start selection (skip blank lines)
+            # Vectorized start selection (skip blank-only lines)
             valid_starts = self.train_valid_starts if split == "train" else self.val_valid_starts
             if valid_starts.numel() == 0:
                 raise ValueError(f"No valid (non-blank) start lines for split {split}")
-            start_ix = torch.randint(0, valid_starts.numel(), (self.batch_size,), generator=rng)
-            starts = valid_starts[start_ix]
+            starts = valid_starts[torch.randint(0, valid_starts.numel(), (self.batch_size,), generator=rng)]
 
             # Select precomputed tensors for split
             line_lens = self.train_line_lens if split == "train" else self.val_line_lens
@@ -319,16 +318,6 @@ class CharDiffusionProvider(DataProviderBase):
 
                     valid_len = sum_full
 
-                    # If budget remains, take a truncated prefix of next line and force newline
-                    if remaining > 0 and (e + 1) < num_lines:
-                        take = max(0, int(remaining) - 1)
-                        if take > 0:
-                            p0 = int(line_offsets[e + 1].item())
-                            x[b, valid_len:valid_len + take] = tokens_flat[p0:p0 + take]
-                            valid_len += take
-                        if self.newline_token_id is not None and remaining > 0:
-                            x[b, valid_len] = self.newline_token_id
-                            valid_len += 1
                 else:
                     # No full line fits; take truncated prefix of first line and force newline
                     budget = B

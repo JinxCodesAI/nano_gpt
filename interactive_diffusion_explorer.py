@@ -47,8 +47,6 @@ class DiffusionExplorer:
         self.itos = None
         self.vocab_size = None  # model vocab size
         self.mask_token_id = None
-        self.sep_token_id = None
-
         self.dataset_name = None
         self.current_batch = None
         self.current_sample_idx = 0
@@ -226,9 +224,9 @@ class DiffusionExplorer:
 
             # Determine special tokens from meta if available
             self.mask_token_id = self.meta.get('mask_token_id', None)
-            cls_token_id = self.meta.get('cls_token_id', None)
             self.sep_token_id = self.meta.get('sep_token_id', None)
 
+            cls_token_id = self.meta.get('cls_token_id', None)
 
             # Model vocab
             model_vocab_size = getattr(self.model.config, 'vocab_size', None)
@@ -243,9 +241,6 @@ class DiffusionExplorer:
             print(f"   • Model vocab size: {model_vocab_size}")
             if self.mask_token_id is not None:
                 print(f"   • mask_token_id (from meta): {self.mask_token_id}")
-            if self.sep_token_id is not None:
-                print(f"   • sep_token_id (from meta): {self.sep_token_id}")
-
             if cls_token_id is not None:
                 print(f"   • cls_token_id (from meta): {cls_token_id}")
 
@@ -452,7 +447,7 @@ class DiffusionExplorer:
         for token_id in tokens:
             if token_id == self.mask_token_id:
                 result.append('[MASK]')
-            elif self.sep_token_id is not None and token_id == self.sep_token_id:
+            elif getattr(self, 'sep_token_id', None) is not None and token_id == self.sep_token_id:
                 result.append('[SEP]')
             elif token_id < len(self.itos):
                 result.append(self.itos[token_id])
