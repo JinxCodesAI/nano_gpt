@@ -7,6 +7,7 @@ logging/timing behavior.
 
 import time
 from typing import Optional
+from core.batch import Batch
 
 import torch
 
@@ -64,7 +65,7 @@ class Trainer:
         )
 
         # fetch the very first batch (dict or tuple)
-        batch = self.consumer.get_batch('train', self.device)
+        batch: Batch = self.consumer.get_batch('train', self.device)
         t0 = time.time()
         local_iter_num = 0
         raw_model = self.model.module if self.ddp else self.model

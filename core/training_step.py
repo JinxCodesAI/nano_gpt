@@ -7,11 +7,10 @@ without changing functionality or timing semantics (including prefetching
 next batches inside the micro-step loop).
 """
 
-from typing import Tuple, Optional, Union, Dict, Any
+from typing import Tuple, Optional, Any
+from core.batch import Batch, unpack_batch
 import torch
 
-
-Batch = Union[Tuple[torch.Tensor, torch.Tensor], Dict[str, torch.Tensor]]
 
 class TrainingStep:
     """
@@ -113,23 +112,6 @@ class TrainingStep:
         """
         last_loss = None
 
-        def _unpack(b):
-            if isinstance(b, tuple):
-                X, Y = b
-                attn = None
-                return X, Y, attn
-            if isinstance(b, dict):
-                if 'x' in b:
-                    X = b['x']
-                else:
-                    X = b.get('input_ids')
-                if 'y' in b:
-                    Y = b['y']
-                else:
-                    Y = b.get('targets')
-                attn = b.get('attention_mask', None)
-                return X, Y, attn
-            raise TypeError("Unsupported batch type for training_step")
 
         for micro_step in range(self.grad_accum_steps):
             if self.ddp:
@@ -137,7 +119,7 @@ class TrainingStep:
                 self.model.require_backward_grad_sync = (
                     micro_step == self.grad_accum_steps - 1
                 )
-            X, Y, attention_mask = _unpack(batch)
+            X, Y, attention_mask = unpack_batch(batch)
             with self.ctx:
                 _, loss = self.model(X, Y, attention_mask=attention_mask, loss_modifiers=loss_modifiers)
                 # Scale the loss to account for gradient accumulation

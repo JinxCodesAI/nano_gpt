@@ -7,6 +7,7 @@ logic extracted from the original estimate_loss() function in train.py.
 
 import torch
 from model import ModelMode
+from core.batch import Batch, unpack_batch
 
 from typing import Dict
 
@@ -89,15 +90,6 @@ class Evaluator:
                 except Exception:
                     pass
 
-            def _unpack(b):
-                if isinstance(b, tuple):
-                    X, Y = b
-                    return X, Y, None
-                else:
-                    X = b.get('x', b.get('input_ids'))
-                    Y = b.get('y', b.get('targets'))
-                    attn = b.get('attention_mask', None)
-                    return X, Y, attn
 
             for split in splits:
                 # For non-sequence scorer or for train split: original behavior
@@ -105,7 +97,7 @@ class Evaluator:
                     losses = torch.zeros(self.eval_iters)
                     for k in range(self.eval_iters):
                         batch = self.consumer.get_batch(split, self.device)
-                        X, Y, attn = _unpack(batch)
+                        X, Y, attn = unpack_batch(batch)
                         with self.ctx:
                             _, loss = self.model(X, Y, attention_mask=attn, loss_modifiers=self.loss_modifier_pipeline)
                         losses[k] = loss.item()
@@ -119,7 +111,7 @@ class Evaluator:
                     # First pass: fixed eval_iters window (for val loss comparability)
                     for k in range(self.eval_iters):
                         batch = self.consumer.get_batch(split, self.device)
-                        X, Y, attn = _unpack(batch)
+                        X, Y, attn = unpack_batch(batch)
                         mask_nonzero = (Y > 0)
                         mask_zero = (Y == 0)
                         if mask_nonzero.any():
@@ -141,7 +133,7 @@ class Evaluator:
                         extra = 0
                         while extra < self.max_extra_batches_for_zero_stats and zeros_collected < self.min_zero_for_stats:
                             batch = self.consumer.get_batch(split, self.device)
-                            X, Y, attn = _unpack(batch)
+                            X, Y, attn = unpack_batch(batch)
                             mask_zero = (Y == 0)
                             if mask_zero.any():
                                 Xz = X[mask_zero]
