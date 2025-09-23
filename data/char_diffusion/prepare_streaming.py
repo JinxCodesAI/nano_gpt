@@ -435,72 +435,112 @@ class CharDiffusionProvider(DataProviderBase):
             # Use default file production for non-stage-based generation
             super().produce_one_file(split, seq)
 
+    def _build_line_aligned(self, split: str, count: int, rng) -> tuple[torch.Tensor, torch.Tensor]:
+        """Build line-aligned sequences (x, attention_mask) for 'count' samples.
+        Reuses the same logic as in _sample_default_batch but for an arbitrary count.
+        """
+        lines_ids = self.train_lines_ids if split == "train" else self.val_lines_ids
+        if len(lines_ids) == 0:
+            raise ValueError(f"No lines available for split {split}")
+
+        x = torch.zeros((count, self.block_size), dtype=torch.long)
+        attention_mask = torch.zeros((count, self.block_size), dtype=torch.long)
+
+        valid_starts = self.train_valid_starts if split == "train" else self.val_valid_starts
+        if valid_starts.numel() == 0:
+            raise ValueError(f"No valid (non-blank) start lines for split {split}")
+        starts = valid_starts[torch.randint(0, valid_starts.numel(), (count,), generator=rng)]
+
+        line_lens = self.train_line_lens if split == "train" else self.val_line_lens
+        cumsum = self.train_cumsum if split == "train" else self.val_cumsum
+        line_offsets = self.train_line_offsets if split == "train" else self.val_line_offsets
+        tokens_flat = self.train_tokens_flat if split == "train" else self.val_tokens_flat
+
+        B = self.block_size - 1
+        s_prev = torch.where(starts > 0, cumsum[starts - 1], torch.zeros_like(starts, dtype=torch.long))
+        thresholds = s_prev + B
+        last_idx = torch.searchsorted(cumsum, thresholds, right=True) - 1
+
+        for b in range(count):
+            s = int(starts[b].item())
+            e = int(last_idx[b].item())
+            if e >= s:
+                sum_full = int((cumsum[e] - (cumsum[s - 1] if s > 0 else 0)).item())
+                start_ptr = int(line_offsets[s].item())
+                end_ptr_full = int((line_offsets[e] + line_lens[e]).item())
+                if sum_full > 0:
+                    x[b, :sum_full] = tokens_flat[start_ptr:end_ptr_full]
+                valid_len = sum_full
+            else:
+                budget = B
+                take = max(0, int(budget) - 1)
+                if take > 0:
+                    p0 = int(line_offsets[s].item())
+                    x[b, :take] = tokens_flat[p0:p0 + take]
+                valid_len = take
+                if self.newline_token_id is not None and budget > 0:
+                    x[b, valid_len] = self.newline_token_id
+                    valid_len += 1
+            x[b, valid_len] = self.sep_token_id
+            attention_mask[b, : valid_len + 1] = 1
+        return x, attention_mask
+
     def _produce_stage_based_file(self, split: str, seq: int) -> None:
-        """Generate an entire file with stage-based sampling."""
+        """Generate an entire file with stage-based sampling using line-aligned sequences."""
         import time
 
         rng = torch.Generator()
-        # derive deterministic seed per split/seq (same as base class)
         per_seed = (self.seed * 1000003) ^ (hash(split) & 0xFFFFFFFF) ^ seq
         rng.manual_seed(per_seed)
-
-        ids = self.train_ids if split == "train" else self.val_ids
-        max_start_idx = len(ids) - self.block_size
 
         # Get stage distribution for this split
         stage_distribution = self.train_stage_distribution if split == "train" else self.val_stage_distribution
 
-        # Generate all samples according to stage distribution
         all_x = []
         all_y = []
+        all_attn = []
         all_stage_info = []
 
         for stage_info in stage_distribution:
             stage_config = stage_info['config']
             count = stage_info['count']
-
             if count == 0:
                 continue
-
-            # Sample sequences for this stage
-            ix = torch.randint(0, max_start_idx, (count,), generator=rng).tolist()
-            x_list = [ids[i : i + self.block_size] for i in ix]
-            x_stage = torch.tensor(x_list, dtype=torch.long)
-
-            # Apply stage-specific masking
-            corrupted_x, mask = apply_stage_masking(
-                x_stage, stage_config, self.mask_token_id,
-                self.vocab_size - 1, rng
+            # Build line-aligned base x and attention masks
+            base_x, attn = self._build_line_aligned(split, count, rng)
+            # Apply stage masking
+            stage_x, stage_mask = apply_stage_masking(
+                base_x, stage_config, self.mask_token_id, self.vocab_size - 1, rng
             )
+            # Restrict masking to valid positions (exclude [SEP] and padding after it)
+            allowed_mask = attn.bool() & (base_x != self.sep_token_id)
+            sanitized_mask = stage_mask & allowed_mask
+            sanitized_x = stage_x.clone()
+            sanitized_x[~allowed_mask] = base_x[~allowed_mask]
+            labels = torch.where(sanitized_mask, base_x, torch.full_like(base_x, self.ignore_index))
 
-            # Create labels: ignore_index for non-masked positions, original token for masked
-            labels = torch.where(mask, x_stage, self.ignore_index)
-
-            all_x.append(corrupted_x)
+            all_x.append(sanitized_x)
             all_y.append(labels)
-
-            # Track stage info for each sample
+            all_attn.append(attn)
             all_stage_info.extend([stage_config] * count)
 
-        # Concatenate all samples
         if all_x:
             combined_x = torch.cat(all_x, dim=0)
             combined_y = torch.cat(all_y, dim=0)
+            combined_attn = torch.cat(all_attn, dim=0)
 
-            # Randomly shuffle all samples to mix different stage types
             total_samples = combined_x.shape[0]
             shuffle_indices = torch.randperm(total_samples, generator=rng)
 
             shuffled_x = combined_x[shuffle_indices]
             shuffled_y = combined_y[shuffle_indices]
-
-            # Create shuffled stage info
+            shuffled_attn = combined_attn[shuffle_indices]
             shuffled_stage_info = [all_stage_info[i] for i in shuffle_indices.tolist()]
 
-            # Organize into batches
             tensors = {
                 "x": shuffled_x,
                 "y": shuffled_y,
+                "attention_mask": shuffled_attn,
             }
 
             metadata = {
@@ -510,10 +550,9 @@ class CharDiffusionProvider(DataProviderBase):
                 "split": split,
                 "produced_at": int(time.time() * 1000),
                 "stage_info": shuffled_stage_info,
-                "stage_distribution": stage_distribution  # Include stage distribution info
+                "stage_distribution": stage_distribution,
             }
 
-            # Write atomic
             d = self.train_dir if split == "train" else self.val_dir
             ts = metadata["produced_at"]
             tmp_name = f".tmp-{ts}-{seq:06d}.pt"
@@ -525,7 +564,6 @@ class CharDiffusionProvider(DataProviderBase):
             if self.verbose:
                 print(f"[provider] produced stage-based file: {final_path}")
         else:
-            # Fallback to default generation
             super().produce_one_file(split, seq)
 
 

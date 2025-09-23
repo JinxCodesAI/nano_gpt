@@ -135,7 +135,16 @@ class DataProviderBase:
 
     def run(self, splits: Iterable[str] = ("train", "val")) -> None:
         self.ensure_dirs()
-        if not os.path.exists(self.meta_path):
+        # Determine if we're starting from a fresh/empty queue (no .pt files yet)
+        fresh_start = True
+        for split in splits:
+            d = self.train_dir if split == "train" else self.val_dir
+            os.makedirs(d, exist_ok=True)
+            existing = [fn for fn in os.listdir(d) if fn.endswith('.pt') and not fn.startswith('.tmp-')]
+            if len(existing) > 0:
+                fresh_start = False
+        # (Re)write meta if it doesn't exist OR when starting from an empty queue
+        if (not os.path.exists(self.meta_path)) or fresh_start:
             meta = self.build_meta()
             self.write_meta(meta)
         # initialize sequence counter by scanning existing files
