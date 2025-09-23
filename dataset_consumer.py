@@ -7,8 +7,7 @@ Features:
 - Deletes fully-consumed files to signal provider (only in queue mode)
 - Exposes meta.pkl and basic stats
 
-Note: For now we maintain the (X, Y) return path when schema has x/y. If a
-schema is present with other fields, get_batch returns a dict[str, Tensor].
+Note: get_batch always returns a dict[str, Tensor] (e.g., x, y, attention_mask).
 """
 from __future__ import annotations
 
@@ -16,7 +15,7 @@ import os
 import time
 import glob
 import pickle
-from typing import Dict, List, Optional, Tuple, Union
+from typing import Dict, List, Optional
 
 import torch
 
@@ -189,10 +188,10 @@ class DatasetConsumer:
             time.sleep(self.wait_sleep_seconds)
 
     # ---- public API ----
-    def get_batch(self, split: str, device) -> Union[Tuple[torch.Tensor, torch.Tensor], Dict[str, torch.Tensor]]:
+    def get_batch(self, split: str, device) -> Dict[str, torch.Tensor]:
         """Fetch next batch for the split. Blocks if needed.
 
-        Returns (X, Y) if keys 'x' and 'y' are available, else a dict[str, Tensor].
+        Always returns a dict[str, Tensor] (e.g., x, y, attention_mask).
         """
         self._ensure_data_available(split)
 
@@ -273,14 +272,6 @@ class DatasetConsumer:
         for k in list(batch_tensors.keys()):
             batch_tensors[k] = _to_device(batch_tensors[k])
         
-        # TODO: looks like technical debt
-        # return legacy tuple only when there are exactly two fields (x and y)
-        if "x" in batch_tensors and "y" in batch_tensors and len(batch_tensors) == 2:
-            return batch_tensors["x"], batch_tensors["y"]
-        # normalize common schema keys to tuple only when exactly two fields are present
-        if "input_ids" in batch_tensors and "targets" in batch_tensors and len(batch_tensors) == 2:
-            return batch_tensors["input_ids"], batch_tensors["targets"]
-        # otherwise, return full dict to allow passing extra fields like attention_mask
         return batch_tensors
 
     def reset_state(self, split: Optional[str] = None) -> None:

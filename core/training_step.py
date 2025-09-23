@@ -100,7 +100,7 @@ class TrainingStep:
         Execute one full optimizer step with gradient accumulation.
 
         Args:
-            batch: Current batch (tuple or dict). Supports keys x/y[/attention_mask] or input_ids/targets
+            batch: Current batch dict. Supports keys x/y[/attention_mask] or input_ids/targets
             loss_modifiers: Loss modifier pipeline to pass to the model
             consumer: DatasetConsumer to prefetch the next batch
             device: Device string for consumer.get_batch
@@ -108,7 +108,7 @@ class TrainingStep:
         Returns:
             (loss, next_batch):
                 - loss: the (scaled by 1/grad_accum_steps) loss from the last micro-step
-                - next_batch: next prefetched batch (tuple or dict), ready for the next iteration
+                - next_batch: next prefetched batch (dict), ready for the next iteration
         """
         last_loss = None
 

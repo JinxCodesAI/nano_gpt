@@ -64,7 +64,7 @@ class Trainer:
             iter_num=self.iter_num, best_val_loss=self.best_val_loss
         )
 
-        # fetch the very first batch (dict or tuple)
+        # fetch the very first batch (dict)
         batch: Batch = self.consumer.get_batch('train', self.device)
         t0 = time.time()
         local_iter_num = 0
