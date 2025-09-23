@@ -144,6 +144,10 @@ class CharDiffusionProvider(DataProviderBase):
         self.val_line_offsets = torch.cat([torch.tensor([0], dtype=torch.long), self.val_cumsum[:-1]])
         self.train_tokens_flat = torch.tensor([t for line in self.train_lines_ids for t in line], dtype=torch.long)
         self.val_tokens_flat = torch.tensor([t for line in self.val_lines_ids for t in line], dtype=torch.long)
+        # Valid start lines: skip blank lines (which are just a single newline)
+        self.train_valid_starts = torch.tensor([i for i, ids in enumerate(self.train_lines_ids) if len(ids) > 1], dtype=torch.long)
+        self.val_valid_starts = torch.tensor([i for i, ids in enumerate(self.val_lines_ids) if len(ids) > 1], dtype=torch.long)
+
 
         if self.enable_line_aligned_sequences and self.newline_token_id is None:
             raise ValueError("enable_line_aligned_sequences=True requires '\n' to be in the vocabulary")
@@ -279,8 +283,12 @@ class CharDiffusionProvider(DataProviderBase):
             x = torch.zeros((self.batch_size, self.block_size), dtype=torch.long)
             attention_mask = torch.zeros((self.batch_size, self.block_size), dtype=torch.long)
 
-            # Vectorized start selection
-            starts = torch.randint(0, num_lines, (self.batch_size,), generator=rng)
+            # Vectorized start selection (skip blank lines)
+            valid_starts = self.train_valid_starts if split == "train" else self.val_valid_starts
+            if valid_starts.numel() == 0:
+                raise ValueError(f"No valid (non-blank) start lines for split {split}")
+            start_ix = torch.randint(0, valid_starts.numel(), (self.batch_size,), generator=rng)
+            starts = valid_starts[start_ix]
 
             # Select precomputed tensors for split
             line_lens = self.train_line_lens if split == "train" else self.val_line_lens
@@ -337,9 +345,10 @@ class CharDiffusionProvider(DataProviderBase):
                 x[b, valid_len] = self.sep_token_id
                 attention_mask[b, : valid_len + 1] = 1
 
-            # Apply BERT-style masking only on valid positions (including [SEP])
+            # Apply BERT-style masking only on valid positions (excluding [SEP])
+            allowed_mask = attention_mask.bool() & (x != self.sep_token_id)
             corrupted_x, mask = apply_random_masking_cpu(
-                x, self.mask_probability, self.mask_token_id, self.base_vocab_size, rng, attention_mask=attention_mask
+                x, self.mask_probability, self.mask_token_id, self.base_vocab_size, rng, attention_mask=allowed_mask
             )
             labels = torch.where(mask, x, torch.full_like(x, self.ignore_index))
 
