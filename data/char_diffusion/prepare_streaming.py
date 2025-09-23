@@ -135,6 +135,16 @@ class CharDiffusionProvider(DataProviderBase):
         self.train_lines_ids = [[self.stoi[c] for c in line] for line in self.train_lines]
         self.val_lines_ids = [[self.stoi[c] for c in line] for line in self.val_lines]
 
+        # Precompute tensors for efficient line packing
+        self.train_line_lens = torch.tensor([len(x) for x in self.train_lines_ids], dtype=torch.long)
+        self.val_line_lens = torch.tensor([len(x) for x in self.val_lines_ids], dtype=torch.long)
+        self.train_cumsum = self.train_line_lens.cumsum(dim=0)
+        self.val_cumsum = self.val_line_lens.cumsum(dim=0)
+        self.train_line_offsets = torch.cat([torch.tensor([0], dtype=torch.long), self.train_cumsum[:-1]])
+        self.val_line_offsets = torch.cat([torch.tensor([0], dtype=torch.long), self.val_cumsum[:-1]])
+        self.train_tokens_flat = torch.tensor([t for line in self.train_lines_ids for t in line], dtype=torch.long)
+        self.val_tokens_flat = torch.tensor([t for line in self.val_lines_ids for t in line], dtype=torch.long)
+
         if self.enable_line_aligned_sequences and self.newline_token_id is None:
             raise ValueError("enable_line_aligned_sequences=True requires '\n' to be in the vocabulary")
 
@@ -269,31 +279,61 @@ class CharDiffusionProvider(DataProviderBase):
             x = torch.zeros((self.batch_size, self.block_size), dtype=torch.long)
             attention_mask = torch.zeros((self.batch_size, self.block_size), dtype=torch.long)
 
-            for b in range(self.batch_size):
-                start_idx = int(torch.randint(0, num_lines, (1,), generator=rng).item())
-                remaining = self.block_size - 1  # leave space for [SEP]
-                seq_ids: List[int] = []
-                li = start_idx
-                while remaining > 0 and li < num_lines:
-                    line_ids = lines_ids[li]
-                    if len(line_ids) <= remaining:
-                        seq_ids.extend(line_ids)
-                        remaining -= len(line_ids)
-                        li += 1
-                    else:
-                        # Overlong line: truncate and force newline at the end of available space
-                        take = max(0, remaining - 1)
-                        if take > 0:
-                            seq_ids.extend(line_ids[:take])
-                        if self.newline_token_id is not None and remaining > 0:
-                            seq_ids.append(self.newline_token_id)
-                        remaining = 0
-                        break
+            # Vectorized start selection
+            starts = torch.randint(0, num_lines, (self.batch_size,), generator=rng)
 
-                valid_len = min(len(seq_ids), self.block_size - 1)
-                if valid_len > 0:
-                    x[b, :valid_len] = torch.tensor(seq_ids[:valid_len], dtype=torch.long)
-                # Append [SEP]
+            # Select precomputed tensors for split
+            line_lens = self.train_line_lens if split == "train" else self.val_line_lens
+            cumsum = self.train_cumsum if split == "train" else self.val_cumsum
+            line_offsets = self.train_line_offsets if split == "train" else self.val_line_offsets
+            tokens_flat = self.train_tokens_flat if split == "train" else self.val_tokens_flat
+
+            # Compute last fully includable line index for each start using searchsorted on cumsum
+            B = self.block_size - 1  # budget before [SEP]
+            s_prev = torch.where(starts > 0, cumsum[starts - 1], torch.zeros_like(starts, dtype=torch.long))
+            thresholds = s_prev + B
+            last_idx = torch.searchsorted(cumsum, thresholds, right=True) - 1
+
+            for b in range(self.batch_size):
+                s = int(starts[b].item())
+                e = int(last_idx[b].item())
+
+                if e >= s:
+                    # Sum of fully included lines [s..e]
+                    sum_full = int((cumsum[e] - (cumsum[s - 1] if s > 0 else 0)).item())
+                    remaining = B - sum_full
+
+                    # Copy fully included contiguous region
+                    start_ptr = int(line_offsets[s].item())
+                    end_ptr_full = int((line_offsets[e] + line_lens[e]).item())
+                    if sum_full > 0:
+                        x[b, :sum_full] = tokens_flat[start_ptr:end_ptr_full]
+
+                    valid_len = sum_full
+
+                    # If budget remains, take a truncated prefix of next line and force newline
+                    if remaining > 0 and (e + 1) < num_lines:
+                        take = max(0, int(remaining) - 1)
+                        if take > 0:
+                            p0 = int(line_offsets[e + 1].item())
+                            x[b, valid_len:valid_len + take] = tokens_flat[p0:p0 + take]
+                            valid_len += take
+                        if self.newline_token_id is not None and remaining > 0:
+                            x[b, valid_len] = self.newline_token_id
+                            valid_len += 1
+                else:
+                    # No full line fits; take truncated prefix of first line and force newline
+                    budget = B
+                    take = max(0, int(budget) - 1)
+                    if take > 0:
+                        p0 = int(line_offsets[s].item())
+                        x[b, :take] = tokens_flat[p0:p0 + take]
+                    valid_len = take
+                    if self.newline_token_id is not None and budget > 0:
+                        x[b, valid_len] = self.newline_token_id
+                        valid_len += 1
+
+                # Append [SEP] and set attention mask
                 x[b, valid_len] = self.sep_token_id
                 attention_mask[b, : valid_len + 1] = 1
 
