@@ -605,7 +605,7 @@ class DiffusionExplorer:
                     print(f"🎭 Found {len(masked_positions)} masked positions")
                     
                     # Get ground truth for comparison if available
-                    y_tensor = self.current_batch['y']
+                    y_tensor = self.current_batch['target']
                     ground_truth = y_tensor[self.current_sample_idx]
                     ignore_index = -100
                     
