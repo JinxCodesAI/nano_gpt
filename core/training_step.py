@@ -7,9 +7,11 @@ without changing functionality or timing semantics (including prefetching
 next batches inside the micro-step loop).
 """
 
-from typing import Tuple, Optional
+from typing import Tuple, Optional, Union, Dict, Any
 import torch
 
+
+Batch = Union[Tuple[torch.Tensor, torch.Tensor], Dict[str, torch.Tensor]]
 
 class TrainingStep:
     """
@@ -30,7 +32,7 @@ class TrainingStep:
         scheduler=None,
         unfreeze_at_iteration: Optional[int] = None,
         unfreeze_lr_multiplier: float = 0.1,
-        logger: Optional[any] = None,
+        logger: Optional[Any] = None,
     ) -> None:
         self.model = model
         self.optimizer = optimizer
@@ -90,11 +92,11 @@ class TrainingStep:
 
     def execute_step(
         self,
-        batch,
+        batch: Batch,
         loss_modifiers,
         consumer,
         device: str,
-    ) -> Tuple[torch.Tensor, any]:
+    ) -> Tuple[torch.Tensor, Batch]:
         """
         Execute one full optimizer step with gradient accumulation.
 
