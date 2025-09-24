@@ -278,8 +278,13 @@ class CharDiffusionProvider(DataProviderBase):
     def _sample_default_batch(self, split: str, rng) -> Dict[str, Any]:
         """Sample a batch with default BERT-style masking or line-aligned variable-length sequences."""
         if self.enable_line_aligned_sequences:
-            # Build line-aligned sequences with masking and [PAD] padding
-            corrupted_x, labels = self._build_line_aligned_with_padding(split, self.batch_size, rng)
+            # Step 1: Build variable-length line-aligned sequences
+            x, content_lengths = self._build_line_aligned_variable_length(split, self.batch_size, rng)
+
+            # Step 2: Apply random masking to variable-length content
+            corrupted_x, labels = self._apply_masking_and_pad(
+                x, content_lengths, self.mask_probability, self.mask_token_id, self.base_vocab_size, rng
+            )
 
             return {
                 "x": corrupted_x,
@@ -324,8 +329,13 @@ class CharDiffusionProvider(DataProviderBase):
             if count == 0:
                 continue
 
-            # Build line-aligned sequences with stage masking and [PAD] padding
-            corrupted_x, labels = self._build_line_aligned_with_stage_padding(split, count, stage_config, rng)
+            # Step 1: Build variable-length line-aligned sequences
+            x, content_lengths = self._build_line_aligned_variable_length(split, count, rng)
+
+            # Step 2: Apply stage masking to variable-length content
+            corrupted_x, labels = self._apply_stage_masking_and_pad(
+                x, content_lengths, stage_config, self.mask_token_id, self.base_vocab_size, rng
+            )
 
             all_x.append(corrupted_x)
             all_y.append(labels)
@@ -365,9 +375,9 @@ class CharDiffusionProvider(DataProviderBase):
             # Use default file production for non-stage-based generation
             super().produce_one_file(split, seq)
 
-    def _build_line_aligned_with_padding(self, split: str, count: int, rng) -> tuple[torch.Tensor, torch.Tensor]:
-        """Build line-aligned sequences, apply masking, then pad with [PAD] tokens.
-        Returns (corrupted_x, labels) with [PAD] tokens never masked.
+    def _build_line_aligned_variable_length(self, split: str, count: int, rng) -> tuple[torch.Tensor, torch.Tensor]:
+        """Step 1: Build variable-length line-aligned sequences (shared by all masking approaches).
+        Returns (x, content_lengths) where x contains content and content_lengths tracks actual lengths.
         """
         lines_ids = self.train_lines_ids if split == "train" else self.val_lines_ids
         if len(lines_ids) == 0:
@@ -422,17 +432,22 @@ class CharDiffusionProvider(DataProviderBase):
                     x[b, content_lengths[b]] = self.newline_token_id
                     content_lengths[b] += 1
 
-        # Apply masking only to content (not padding)
+        return x, content_lengths
+
+    def _apply_masking_and_pad(self, x: torch.Tensor, content_lengths: torch.Tensor,
+                              mask_probability: float, mask_token_id: int, base_vocab_size: int, rng) -> tuple[torch.Tensor, torch.Tensor]:
+        """Step 2 & 3: Apply random masking to variable-length content, then pad with [PAD] tokens."""
+        count = x.shape[0]
         corrupted_x = x.clone()
         labels = torch.full_like(x, self.ignore_index)
 
         for b in range(count):
             content_len = int(content_lengths[b].item())
             if content_len > 0:
-                # Apply masking only to the content portion
+                # Step 2: Apply masking only to the content portion
                 content = x[b, :content_len].unsqueeze(0)  # Add batch dim
                 corrupted_content, mask = apply_random_masking_base_vocab_only(
-                    content, self.mask_probability, self.mask_token_id, self.base_vocab_size, rng
+                    content, mask_probability, mask_token_id, base_vocab_size, rng
                 )
 
                 # Update corrupted sequence and labels for content only
@@ -441,7 +456,36 @@ class CharDiffusionProvider(DataProviderBase):
                     mask.squeeze(0), x[b, :content_len], self.ignore_index
                 )
 
-            # Fill remaining positions with [PAD] tokens (never masked)
+            # Step 3: Fill remaining positions with [PAD] tokens
+            if content_lengths[b] < self.block_size:
+                corrupted_x[b, content_lengths[b]:] = self.pad_token_id
+                # labels already set to ignore_index for padding positions
+
+        return corrupted_x, labels
+
+    def _apply_stage_masking_and_pad(self, x: torch.Tensor, content_lengths: torch.Tensor,
+                                    stage_config: Dict[str, Any], mask_token_id: int, base_vocab_size: int, rng) -> tuple[torch.Tensor, torch.Tensor]:
+        """Step 2 & 3: Apply stage masking to variable-length content, then pad with [PAD] tokens."""
+        count = x.shape[0]
+        corrupted_x = x.clone()
+        labels = torch.full_like(x, self.ignore_index)
+
+        for b in range(count):
+            content_len = int(content_lengths[b].item())
+            if content_len > 0:
+                # Step 2: Apply stage masking only to the content portion
+                content = x[b, :content_len].unsqueeze(0)  # Add batch dim
+                corrupted_content, mask = apply_stage_masking(
+                    content, stage_config, mask_token_id, base_vocab_size, rng
+                )
+
+                # Update corrupted sequence and labels for content only
+                corrupted_x[b, :content_len] = corrupted_content.squeeze(0)
+                labels[b, :content_len] = torch.where(
+                    mask.squeeze(0), x[b, :content_len], self.ignore_index
+                )
+
+            # Step 3: Fill remaining positions with [PAD] tokens
             if content_lengths[b] < self.block_size:
                 corrupted_x[b, content_lengths[b]:] = self.pad_token_id
                 # labels already set to ignore_index for padding positions
@@ -470,8 +514,13 @@ class CharDiffusionProvider(DataProviderBase):
             if count == 0:
                 continue
 
-            # Build line-aligned sequences with stage masking and [PAD] padding
-            corrupted_x, labels = self._build_line_aligned_with_stage_padding(split, count, stage_config, rng)
+            # Step 1: Build variable-length line-aligned sequences
+            x, content_lengths = self._build_line_aligned_variable_length(split, count, rng)
+
+            # Step 2 & 3: Apply stage masking and pad
+            corrupted_x, labels = self._apply_stage_masking_and_pad(
+                x, content_lengths, stage_config, self.mask_token_id, self.base_vocab_size, rng
+            )
 
             all_x.append(corrupted_x)
             all_y.append(labels)
@@ -502,89 +551,6 @@ class CharDiffusionProvider(DataProviderBase):
             filename = f"{split}_{seq:06d}_{total_samples}.pt"
             filepath = os.path.join(self.queue_dir, split, filename)
             write_file_atomic(filepath, {"tensors": tensors, "metadata": metadata})
-
-    def _build_line_aligned_with_stage_padding(self, split: str, count: int, stage_config: Dict[str, Any], rng) -> tuple[torch.Tensor, torch.Tensor]:
-        """Build line-aligned sequences, apply stage masking, then pad with [PAD] tokens.
-        Returns (corrupted_x, labels) with [PAD] tokens never masked.
-        """
-        lines_ids = self.train_lines_ids if split == "train" else self.val_lines_ids
-        if len(lines_ids) == 0:
-            raise ValueError(f"No lines available for split {split}")
-
-        # Start with zeros (will be filled with actual content)
-        x = torch.zeros((count, self.block_size), dtype=torch.long)
-        content_lengths = torch.zeros(count, dtype=torch.long)
-
-        valid_starts = self.train_valid_starts if split == "train" else self.val_valid_starts
-        if valid_starts.numel() == 0:
-            raise ValueError(f"No valid (non-blank) start lines for split {split}")
-        starts = valid_starts[torch.randint(0, valid_starts.numel(), (count,), generator=rng)]
-
-        line_lens = self.train_line_lens if split == "train" else self.val_line_lens
-        cumsum = self.train_cumsum if split == "train" else self.val_cumsum
-        line_offsets = self.train_line_offsets if split == "train" else self.val_line_offsets
-        tokens_flat = self.train_tokens_flat if split == "train" else self.val_tokens_flat
-
-        # Use full block_size for content
-        B = self.block_size
-        s_prev = torch.where(starts > 0, cumsum[starts - 1], torch.zeros_like(starts, dtype=torch.long))
-        thresholds = s_prev + B
-        last_idx = torch.searchsorted(cumsum, thresholds, right=True) - 1
-
-        for b in range(count):
-            s = int(starts[b].item())
-            e = int(last_idx[b].item())
-            if e >= s:
-                sum_full = int((cumsum[e] - (cumsum[s - 1] if s > 0 else 0)).item())
-                start_ptr = int(line_offsets[s].item())
-                end_ptr_full = int((line_offsets[e] + line_lens[e]).item())
-                if sum_full > 0:
-                    # Fill with actual content
-                    content_len = min(sum_full, self.block_size)
-                    x[b, :content_len] = tokens_flat[start_ptr:start_ptr + content_len]
-                    content_lengths[b] = content_len
-            else:
-                # Single line case
-                budget = B
-                take = max(0, int(budget) - 1)
-                if take > 0:
-                    p0 = int(line_offsets[s].item())
-                    content_len = min(take, self.block_size)
-                    x[b, :content_len] = tokens_flat[p0:p0 + content_len]
-                    content_lengths[b] = content_len
-                else:
-                    content_lengths[b] = 0
-
-                # Add newline if there's space and we have a newline token
-                if self.newline_token_id is not None and content_lengths[b] < self.block_size:
-                    x[b, content_lengths[b]] = self.newline_token_id
-                    content_lengths[b] += 1
-
-        # Apply stage masking only to content (not padding)
-        corrupted_x = x.clone()
-        labels = torch.full_like(x, self.ignore_index)
-
-        for b in range(count):
-            content_len = int(content_lengths[b].item())
-            if content_len > 0:
-                # Apply stage masking only to the content portion
-                content = x[b, :content_len].unsqueeze(0)  # Add batch dim
-                corrupted_content, mask = apply_stage_masking(
-                    content, stage_config, self.mask_token_id, self.base_vocab_size, rng
-                )
-
-                # Update corrupted sequence and labels for content only
-                corrupted_x[b, :content_len] = corrupted_content.squeeze(0)
-                labels[b, :content_len] = torch.where(
-                    mask.squeeze(0), x[b, :content_len], self.ignore_index
-                )
-
-            # Fill remaining positions with [PAD] tokens (never masked)
-            if content_lengths[b] < self.block_size:
-                corrupted_x[b, content_lengths[b]:] = self.pad_token_id
-                # labels already set to ignore_index for padding positions
-
-        return corrupted_x, labels
 
         if all_x:
             combined_x = torch.cat(all_x, dim=0)
