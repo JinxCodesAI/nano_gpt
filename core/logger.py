@@ -89,37 +89,7 @@ class ConsoleLogger(Logger):
             extras.append(f"seqcorr {seqcorr:.4f}")
         extras_str = (", " + ", ".join(extras)) if extras else ""
         print(f"iter {iter_num}: loss {loss:.4f}, time {dt_ms:.2f}ms, mfu {mfu_pct:.2f}%{extras_str}")
-        # Optional diagnostics if present in metrics
-        diag_keys = [
-            "diag/supervised_per_token",
-            "diag/valid_len_mean",
-            "diag/supervised_outside_attn",
-            "diag/pct_mask",
-            "diag/pct_random",
-            "diag/pct_unchanged",
-            "diag/mask_ratio_p10",
-            "diag/mask_ratio_p50",
-            "diag/mask_ratio_p90",
-            "diag/mask_ratio_p10_cum",
-            "diag/mask_ratio_p50_cum",
-            "diag/mask_ratio_p90_cum",
-            "diag/loss_attn_sub",
-            "diag/loss_noattn_sub",
-            "diag/loss_noattn_minus_attn",
-        ]
-        present = {k: metrics[k] for k in diag_keys if k in metrics}
-        if present:
-            parts = []
-            for k, v in present.items():
-                if isinstance(v, float):
-                    # format as pct for pct_* keys, else 4 decimals
-                    if k.startswith("diag/pct_"):
-                        parts.append(f"{k.split('/')[-1]} {v*100:.1f}%")
-                    else:
-                        parts.append(f"{k.split('/')[-1]} {v:.4f}")
-                else:
-                    parts.append(f"{k.split('/')[-1]} {v}")
-            print("  diag:" + ", ".join(parts))
+
 
     def log_eval(self, metrics: Dict[str, Any]) -> None:
         """Log evaluation results to console (every eval_interval)."""

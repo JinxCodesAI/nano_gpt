@@ -345,6 +345,8 @@ class CharDiffusionProvider(DataProviderBase):
             )
             labels = torch.where(mask, x, torch.full_like(x, self.ignore_index))
 
+
+
             return {
                 "x": corrupted_x,
                 "y": labels,
