@@ -119,9 +119,9 @@ class TrainingStep:
                 self.model.require_backward_grad_sync = (
                     micro_step == self.grad_accum_steps - 1
                 )
-            X, Y, attention_mask = unpack_batch(batch)
+            X, Y = unpack_batch(batch)
             with self.ctx:
-                _, loss = self.model(X, Y, attention_mask=attention_mask, loss_modifiers=loss_modifiers)
+                _, loss = self.model(X, Y, loss_modifiers=loss_modifiers)
                 # Scale the loss to account for gradient accumulation
                 loss = loss / self.grad_accum_steps
 

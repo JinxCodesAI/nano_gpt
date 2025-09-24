@@ -936,28 +936,36 @@ class DiffusionExplorer:
                 print(f"   ❌ Attention mask shapes are inconsistent across samples")
                 validation_passed = False
 
-        # 3) Check [SEP] token presence (optional - may not be used in all approaches)
-        print("\n3️⃣ Checking [SEP] token presence...")
-        sep_token_id = getattr(self, 'sep_token_id', None)
-        if sep_token_id is not None:
-            sep_counts = (x_tensor == sep_token_id).sum(dim=1)
-            samples_with_one_sep = (sep_counts == 1).sum().item()
-            samples_with_zero_sep = (sep_counts == 0).sum().item()
-            samples_with_multi_sep = (sep_counts > 1).sum().item()
+        # 3) Check [PAD] token presence and structure
+        print("\n3️⃣ Checking [PAD] token structure...")
+        pad_token_id = getattr(self, 'pad_token_id', None)
+        if pad_token_id is not None:
+            pad_counts = (x_tensor == pad_token_id).sum(dim=1)
+            samples_with_no_pad = (pad_counts == 0).sum().item()
+            samples_with_pad = (pad_counts > 0).sum().item()
 
-            print(f"   • Samples with exactly 1 [SEP]: {samples_with_one_sep}/{batch_size}")
-            print(f"   • Samples with 0 [SEP]: {samples_with_zero_sep}/{batch_size}")
-            print(f"   • Samples with >1 [SEP]: {samples_with_multi_sep}/{batch_size}")
+            print(f"   • Samples with no [PAD]: {samples_with_no_pad}/{batch_size}")
+            print(f"   • Samples with [PAD]: {samples_with_pad}/{batch_size}")
 
-            if samples_with_zero_sep == batch_size:
-                print(f"   ✅ No [SEP] tokens used (space-padded approach)")
-            elif samples_with_one_sep == batch_size:
-                print(f"   ✅ All samples have exactly 1 [SEP] token")
-            else:
-                print(f"   ❌ Inconsistent [SEP] token usage")
+            # Check that [PAD] tokens are at the end
+            pad_structure_violations = 0
+            for b in range(batch_size):
+                if pad_counts[b] > 0:
+                    # Find first [PAD] position
+                    pad_positions = (x_tensor[b] == pad_token_id).nonzero(as_tuple=True)[0]
+                    first_pad = pad_positions[0].item()
+                    # Check if all positions from first_pad onwards are [PAD]
+                    remaining_positions = x_tensor[b, first_pad:]
+                    if not (remaining_positions == pad_token_id).all():
+                        pad_structure_violations += 1
+
+            if pad_structure_violations > 0:
+                print(f"   ❌ {pad_structure_violations} samples have non-contiguous [PAD] tokens")
                 validation_passed = False
+            else:
+                print(f"   ✅ All [PAD] tokens are properly positioned at sequence ends")
         else:
-            print(f"   ⚠️  [SEP] token ID not found in meta")
+            print(f"   ⚠️  [PAD] token ID not found in meta")
 
         # 4) Target has non-zero number of elements with value not equal to ignore_index
         print("\n4️⃣ Checking target supervision...")
@@ -978,77 +986,38 @@ class DiffusionExplorer:
         else:
             print(f"   ✅ All samples have supervised targets")
 
-        # 5) Check target positions (relative to [SEP] if present, otherwise just validate targets exist)
+        # 5) Check target positions (should not be in [PAD] regions)
         print("\n5️⃣ Checking target positions...")
-        if sep_token_id is not None:
-            # Check if [SEP] tokens are actually used
-            total_sep_count = (x_tensor == sep_token_id).sum().item()
-            if total_sep_count > 0:
-                # [SEP] tokens are used - validate positions relative to [SEP]
-                violations = 0
-                for b in range(batch_size):
-                    # Find [SEP] position
-                    sep_positions = (x_tensor[b] == sep_token_id).nonzero(as_tuple=True)[0]
-                    if len(sep_positions) == 1:
-                        sep_pos = sep_positions[0].item()
-                        # Check if any supervised targets are at or after [SEP]
-                        supervised_positions = (y_tensor[b] != ignore_index).nonzero(as_tuple=True)[0]
-                        invalid_positions = supervised_positions >= sep_pos
-                        if invalid_positions.any():
-                            violations += 1
+        if pad_token_id is not None:
+            # Check if any supervised targets are in [PAD] regions
+            violations = 0
+            for b in range(batch_size):
+                # Find [PAD] positions
+                pad_positions = (x_tensor[b] == pad_token_id).nonzero(as_tuple=True)[0]
+                if len(pad_positions) > 0:
+                    # Check if any supervised targets are in [PAD] positions
+                    supervised_positions = (y_tensor[b] != ignore_index).nonzero(as_tuple=True)[0]
+                    pad_set = set(pad_positions.tolist())
+                    supervised_set = set(supervised_positions.tolist())
+                    if pad_set.intersection(supervised_set):
+                        violations += 1
 
-                print(f"   • Samples with targets at/after [SEP]: {violations}/{batch_size}")
-                if violations > 0:
-                    print(f"   ❌ Some targets are positioned at or after [SEP]")
-                    validation_passed = False
-                else:
-                    print(f"   ✅ All targets are positioned before [SEP]")
+            print(f"   • Samples with targets in [PAD] regions: {violations}/{batch_size}")
+            if violations > 0:
+                print(f"   ❌ Some targets are positioned in [PAD] regions")
+                validation_passed = False
             else:
-                # No [SEP] tokens used - space-padded approach
-                print(f"   ✅ Space-padded approach - targets can be anywhere in sequence")
+                print(f"   ✅ No targets in [PAD] regions")
         else:
-            print(f"   ✅ No [SEP] token validation needed")
+            print(f"   ✅ No [PAD] token validation needed")
 
-        # 6) Check attention mask structure (if present)
+        # 6) Check attention mask structure (should not be present in new approach)
         print("\n6️⃣ Checking attention mask structure...")
         if attn_tensor is not None:
-            if sep_token_id is not None:
-                # Check if [SEP] tokens are actually used
-                total_sep_count = (x_tensor == sep_token_id).sum().item()
-                if total_sep_count > 0:
-                    # [SEP] approach - validate mask structure
-                    mask_violations = 0
-                    for b in range(batch_size):
-                        # Find [SEP] position
-                        sep_positions = (x_tensor[b] == sep_token_id).nonzero(as_tuple=True)[0]
-                        if len(sep_positions) == 1:
-                            sep_pos = sep_positions[0].item()
-
-                            # Check mask before [SEP] (should be all 1s)
-                            before_sep_mask = attn_tensor[b, :sep_pos+1]  # Include [SEP] position
-                            if not (before_sep_mask == 1).all():
-                                mask_violations += 1
-                                continue
-
-                            # Check mask after [SEP] (should be all 0s)
-                            if sep_pos + 1 < seq_len:
-                                after_sep_mask = attn_tensor[b, sep_pos+1:]
-                                if not (after_sep_mask == 0).all():
-                                    mask_violations += 1
-
-                    print(f"   • Samples with incorrect attention mask: {mask_violations}/{batch_size}")
-                    if mask_violations > 0:
-                        print(f"   ❌ Some attention masks are incorrectly structured")
-                        validation_passed = False
-                    else:
-                        print(f"   ✅ All attention masks are correctly structured")
-                else:
-                    # Space-padded approach with attention mask - just report presence
-                    print(f"   ✅ Attention mask present (space-padded approach)")
-            else:
-                print(f"   ✅ Attention mask present")
+            print(f"   ⚠️  Attention mask present but not expected in [PAD] token approach")
+            print(f"   ⚠️  Consider removing attention_mask from batch files")
         else:
-            print(f"   ✅ No attention mask (space-padded approach without attention mask)")
+            print(f"   ✅ No attention mask (correct for [PAD] token approach)")
 
         # 7) Print percentage of targets not equal to ignore_index (min, max, median across all samples)
         print("\n7️⃣ Target supervision statistics...")

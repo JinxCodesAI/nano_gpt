@@ -8,16 +8,15 @@ import torch
 Batch = Dict[str, torch.Tensor]
 
 
-def unpack_batch(b: Batch) -> Tuple[torch.Tensor, torch.Tensor, Optional[torch.Tensor]]:
+def unpack_batch(b: Batch) -> Tuple[torch.Tensor, torch.Tensor]:
     """
-    Normalize batch dict to (X, Y, attention_mask).
+    Normalize batch dict to (X, Y).
 
-    Expects dict with keys {x|input_ids, y|targets, attention_mask?}.
+    Expects dict with keys {x|input_ids, y|targets}.
     """
     if not isinstance(b, dict):
         raise TypeError("Batch must be a dict[str, Tensor]")
     X = b.get('x', b.get('input_ids'))
     Y = b.get('y', b.get('targets'))
-    attn = b.get('attention_mask', None)
-    return X, Y, attn
+    return X, Y
 

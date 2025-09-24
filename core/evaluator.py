@@ -97,9 +97,9 @@ class Evaluator:
                     losses = torch.zeros(self.eval_iters)
                     for k in range(self.eval_iters):
                         batch = self.consumer.get_batch(split, self.device)
-                        X, Y, attn = unpack_batch(batch)
+                        X, Y = unpack_batch(batch)
                         with self.ctx:
-                            _, loss = self.model(X, Y, attention_mask=attn, loss_modifiers=self.loss_modifier_pipeline)
+                            _, loss = self.model(X, Y, loss_modifiers=self.loss_modifier_pipeline)
                         losses[k] = loss.item()
                     out[split] = losses.mean().item()
                 else:
@@ -111,7 +111,7 @@ class Evaluator:
                     # First pass: fixed eval_iters window (for val loss comparability)
                     for k in range(self.eval_iters):
                         batch = self.consumer.get_batch(split, self.device)
-                        X, Y, attn = unpack_batch(batch)
+                        X, Y = unpack_batch(batch)
                         mask_nonzero = (Y > 0)
                         mask_zero = (Y == 0)
                         if mask_nonzero.any():
@@ -133,12 +133,12 @@ class Evaluator:
                         extra = 0
                         while extra < self.max_extra_batches_for_zero_stats and zeros_collected < self.min_zero_for_stats:
                             batch = self.consumer.get_batch(split, self.device)
-                            X, Y, attn = unpack_batch(batch)
+                            X, Y = unpack_batch(batch)
                             mask_zero = (Y == 0)
                             if mask_zero.any():
                                 Xz = X[mask_zero]
                                 with self.ctx:
-                                    logits_z, _ = self.model(Xz, targets=None, attention_mask=None, loss_modifiers=self.loss_modifier_pipeline)
+                                    logits_z, _ = self.model(Xz, targets=None, loss_modifiers=self.loss_modifier_pipeline)
                                 zero_preds.append(logits_z.detach().float().cpu())
                                 zeros_collected += int(mask_zero.sum().item())
                             extra += 1
