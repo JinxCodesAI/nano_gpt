@@ -54,7 +54,7 @@ def apply_bert_style_corruption_cpu(x: torch.Tensor, mask: torch.Tensor,
 
 
 def apply_random_masking_cpu(x: torch.Tensor, mask_probability: float,
-                           mask_token_id: int, base_vocab_size: int, rng=None, attention_mask: torch.Tensor | None = None) -> tuple[torch.Tensor, torch.Tensor]:
+                           mask_token_id: int, base_vocab_size: int, rng=None) -> tuple[torch.Tensor, torch.Tensor]:
     """
     Optimized random masking for BERT-style training using tensor operations.
 
@@ -63,7 +63,6 @@ def apply_random_masking_cpu(x: torch.Tensor, mask_probability: float,
         mask_probability: Probability of masking each token (0.0 to 1.0)
         mask_token_id: Token ID for [MASK] token
         base_vocab_size: Size of base character vocabulary (excludes [MASK], [SEP])
-        attention_mask: Optional boolean/int mask where 1 denotes valid positions to consider
 
     Returns:
         corrupted_x: Input with masking applied
@@ -72,8 +71,6 @@ def apply_random_masking_cpu(x: torch.Tensor, mask_probability: float,
     # Generate random mask using provided RNG
     mask_tensor = torch.rand(x.shape, generator=rng)
     mask = mask_tensor < mask_probability
-    if attention_mask is not None:
-        mask = mask & attention_mask.bool()
 
     # Apply BERT-style corruption
     corrupted_x = apply_bert_style_corruption_cpu(x, mask, mask_token_id, base_vocab_size, rng)
@@ -338,12 +335,32 @@ class CharDiffusionProvider(DataProviderBase):
                 x[b, valid_len] = self.sep_token_id
                 attention_mask[b, : valid_len + 1] = 1
 
-            # Apply BERT-style masking only on valid positions (excluding [SEP])
-            allowed_mask = attention_mask.bool() & (x != self.sep_token_id)
-            corrupted_x, mask = apply_random_masking_cpu(
-                x, self.mask_probability, self.mask_token_id, self.base_vocab_size, rng, attention_mask=allowed_mask
+            # Use unified approach: extract valid content, apply masking, reconstruct
+            valid_contents = self._extract_valid_content(x, attention_mask)
+
+            # Apply random masking to variable-length content
+            masked_contents = []
+            masks = []
+
+            for content in valid_contents:
+                if len(content) == 0:
+                    # Handle empty content
+                    masked_contents.append(content)
+                    masks.append(torch.tensor([], dtype=torch.bool))
+                    continue
+
+                # Apply random masking to this sample's content
+                content_batch = content.unsqueeze(0)  # Add batch dimension
+                corrupted_content, mask = apply_random_masking_cpu(
+                    content_batch, self.mask_probability, self.mask_token_id, self.base_vocab_size, rng
+                )
+                masked_contents.append(corrupted_content.squeeze(0))  # Remove batch dimension
+                masks.append(mask.squeeze(0))
+
+            # Reconstruct full tensors with proper padding and [SEP] tokens
+            corrupted_x, labels, attention_mask = self._reconstruct_full_tensors(
+                masked_contents, masks, x, attention_mask
             )
-            labels = torch.where(mask, x, torch.full_like(x, self.ignore_index))
 
 
 
@@ -370,16 +387,19 @@ class CharDiffusionProvider(DataProviderBase):
             }
 
     def _sample_stage_based_batch(self, split: str, rng) -> Dict[str, Any]:
-        """Sample a batch using stage-based masking configuration."""
-        ids = self.train_ids if split == "train" else self.val_ids
-        max_start_idx = len(ids) - self.block_size
-
+        """Sample a batch using stage-based masking configuration with line-aligned sequences."""
         # Get stage distribution for this split
         stage_distribution = self.train_stage_distribution if split == "train" else self.val_stage_distribution
 
-        # Generate samples according to stage distribution within a single batch
+        # Calculate total samples needed
+        total_samples = sum(stage_info['count'] for stage_info in stage_distribution)
+        if total_samples == 0:
+            return self._sample_default_batch(split, rng)
+
+        # Generate samples according to stage distribution
         all_x = []
         all_y = []
+        all_attn = []
         stage_info_list = []
 
         for stage_info in stage_distribution:
@@ -389,22 +409,39 @@ class CharDiffusionProvider(DataProviderBase):
             if count == 0:
                 continue
 
-            # Sample sequences for this stage
-            ix = torch.randint(0, max_start_idx, (count,), generator=rng).tolist()
-            x_list = [ids[i : i + self.block_size] for i in ix]
-            x_stage = torch.tensor(x_list, dtype=torch.long)
+            # 1. Build line-aligned base sequences for this stage
+            base_x, attention_mask = self._build_line_aligned(split, count, rng)
 
-            # Apply stage-specific masking
-            corrupted_x, mask = apply_stage_masking(
-                x_stage, stage_config, self.mask_token_id,
-                self.base_vocab_size, rng
+            # 2. Extract valid content (excluding [SEP]) from each sample
+            valid_contents = self._extract_valid_content(base_x, attention_mask)
+
+            # 3. Apply stage-specific masking to variable-length content
+            masked_contents = []
+            masks = []
+
+            for content in valid_contents:
+                if len(content) == 0:
+                    # Handle empty content
+                    masked_contents.append(content)
+                    masks.append(torch.tensor([], dtype=torch.bool))
+                    continue
+
+                # Apply stage masking to this sample's content
+                content_batch = content.unsqueeze(0)  # Add batch dimension
+                corrupted_content, mask = apply_stage_masking(
+                    content_batch, stage_config, self.mask_token_id, self.base_vocab_size, rng
+                )
+                masked_contents.append(corrupted_content.squeeze(0))  # Remove batch dimension
+                masks.append(mask.squeeze(0))
+
+            # 4. Reconstruct full tensors with proper padding and [SEP] tokens
+            stage_x, stage_y, stage_attn = self._reconstruct_full_tensors(
+                masked_contents, masks, base_x, attention_mask
             )
 
-            # Create labels: ignore_index for non-masked positions, original token for masked
-            labels = torch.where(mask, x_stage, self.ignore_index)
-
-            all_x.append(corrupted_x)
-            all_y.append(labels)
+            all_x.append(stage_x)
+            all_y.append(stage_y)
+            all_attn.append(stage_attn)
 
             # Track stage info for debugging
             stage_info_list.extend([stage_config] * count)
@@ -413,6 +450,7 @@ class CharDiffusionProvider(DataProviderBase):
         if all_x:
             combined_x = torch.cat(all_x, dim=0)
             combined_y = torch.cat(all_y, dim=0)
+            combined_attn = torch.cat(all_attn, dim=0)
 
             # Randomly shuffle the samples to mix different stage types
             total_samples = combined_x.shape[0]
@@ -420,6 +458,7 @@ class CharDiffusionProvider(DataProviderBase):
 
             shuffled_x = combined_x[shuffle_indices]
             shuffled_y = combined_y[shuffle_indices]
+            shuffled_attn = combined_attn[shuffle_indices]
 
             # Create shuffled stage info for debugging
             shuffled_stage_info = [stage_info_list[i] for i in shuffle_indices.tolist()]
@@ -427,6 +466,7 @@ class CharDiffusionProvider(DataProviderBase):
             return {
                 "x": shuffled_x,
                 "y": shuffled_y,
+                "attention_mask": shuffled_attn,
                 "stage_info": shuffled_stage_info  # Add stage info for debugging
             }
         else:
@@ -491,14 +531,78 @@ class CharDiffusionProvider(DataProviderBase):
             attention_mask[b, : valid_len + 1] = 1
         return x, attention_mask
 
+    def _extract_valid_content(self, x: torch.Tensor, attention_mask: torch.Tensor) -> List[torch.Tensor]:
+        """Extract variable-length valid content (excluding [SEP]) from each sample."""
+        valid_contents = []
+        batch_size = x.shape[0]
+
+        for b in range(batch_size):
+            # Find valid positions (attention_mask==1)
+            valid_positions = (attention_mask[b] == 1).nonzero(as_tuple=True)[0]
+            if len(valid_positions) == 0:
+                # Edge case: no valid positions, create minimal content
+                valid_contents.append(torch.tensor([], dtype=x.dtype))
+                continue
+
+            # Extract valid tokens, excluding [SEP] (which should be the last valid token)
+            valid_tokens = x[b, valid_positions]
+            if len(valid_tokens) > 0 and valid_tokens[-1] == self.sep_token_id:
+                # Remove [SEP] token from content to be masked
+                valid_content = valid_tokens[:-1]
+            else:
+                valid_content = valid_tokens
+
+            valid_contents.append(valid_content)
+
+        return valid_contents
+
+    def _reconstruct_full_tensors(self, valid_contents: List[torch.Tensor], masks: List[torch.Tensor],
+                                 original_x: torch.Tensor, attention_mask: torch.Tensor) -> tuple:
+        """Reconstruct full (batch_size, seq_len) tensors from variable-length masked content."""
+        batch_size, seq_len = original_x.shape
+
+        # Start with original sequences
+        corrupted_x = original_x.clone()
+        labels = torch.full_like(original_x, self.ignore_index)
+
+        for b in range(batch_size):
+            if len(valid_contents[b]) == 0:
+                continue
+
+            # Find where valid content should be placed (excluding [SEP])
+            valid_positions = (attention_mask[b] == 1).nonzero(as_tuple=True)[0]
+            if len(valid_positions) == 0:
+                continue
+
+            # Content positions (all valid positions except the last [SEP])
+            content_positions = valid_positions[:-1] if len(valid_positions) > 1 else torch.tensor([], dtype=torch.long)
+
+            if len(content_positions) > 0 and len(valid_contents[b]) > 0:
+                # Ensure we don't exceed available positions
+                content_len = min(len(content_positions), len(valid_contents[b]))
+
+                # Place masked content
+                corrupted_x[b, content_positions[:content_len]] = valid_contents[b][:content_len]
+
+                # Set labels for supervised positions
+                if len(masks[b]) > 0:
+                    supervised_mask = masks[b][:content_len]
+                    original_content = original_x[b, content_positions[:content_len]]
+                    labels[b, content_positions[:content_len]] = torch.where(
+                        supervised_mask, original_content, self.ignore_index
+                    )
+
+        return corrupted_x, labels, attention_mask
+
     def _produce_stage_based_file(self, split: str, seq: int) -> None:
-        """Generate an entire file with stage-based sampling using line-aligned sequences."""
+        """Generate an entire file with stage-based sampling using unified line-aligned approach."""
         import time
 
         rng = torch.Generator()
         per_seed = (self.seed * 1000003) ^ (hash(split) & 0xFFFFFFFF) ^ seq
         rng.manual_seed(per_seed)
 
+        # Use the same logic as _sample_stage_based_batch but for file-level generation
         # Get stage distribution for this split
         stage_distribution = self.train_stage_distribution if split == "train" else self.val_stage_distribution
 
@@ -512,22 +616,40 @@ class CharDiffusionProvider(DataProviderBase):
             count = stage_info['count']
             if count == 0:
                 continue
-            # Build line-aligned base x and attention masks
-            base_x, attn = self._build_line_aligned(split, count, rng)
-            # Apply stage masking
-            stage_x, stage_mask = apply_stage_masking(
-                base_x, stage_config, self.mask_token_id, self.base_vocab_size, rng
-            )
-            # Restrict masking to valid positions (exclude [SEP] and padding after it)
-            allowed_mask = attn.bool() & (base_x != self.sep_token_id)
-            sanitized_mask = stage_mask & allowed_mask
-            sanitized_x = stage_x.clone()
-            sanitized_x[~allowed_mask] = base_x[~allowed_mask]
-            labels = torch.where(sanitized_mask, base_x, torch.full_like(base_x, self.ignore_index))
 
-            all_x.append(sanitized_x)
-            all_y.append(labels)
-            all_attn.append(attn)
+            # 1. Build line-aligned base sequences for this stage
+            base_x, attention_mask = self._build_line_aligned(split, count, rng)
+
+            # 2. Extract valid content (excluding [SEP]) from each sample
+            valid_contents = self._extract_valid_content(base_x, attention_mask)
+
+            # 3. Apply stage-specific masking to variable-length content
+            masked_contents = []
+            masks = []
+
+            for content in valid_contents:
+                if len(content) == 0:
+                    # Handle empty content
+                    masked_contents.append(content)
+                    masks.append(torch.tensor([], dtype=torch.bool))
+                    continue
+
+                # Apply stage masking to this sample's content
+                content_batch = content.unsqueeze(0)  # Add batch dimension
+                corrupted_content, mask = apply_stage_masking(
+                    content_batch, stage_config, self.mask_token_id, self.base_vocab_size, rng
+                )
+                masked_contents.append(corrupted_content.squeeze(0))  # Remove batch dimension
+                masks.append(mask.squeeze(0))
+
+            # 4. Reconstruct full tensors with proper padding and [SEP] tokens
+            stage_x, stage_y, stage_attn = self._reconstruct_full_tensors(
+                masked_contents, masks, base_x, attention_mask
+            )
+
+            all_x.append(stage_x)
+            all_y.append(stage_y)
+            all_attn.append(stage_attn)
             all_stage_info.extend([stage_config] * count)
 
         if all_x:
