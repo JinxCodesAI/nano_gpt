@@ -143,7 +143,60 @@ class DatasetConsumer:
                     continue
                 if isinstance(v, torch.Tensor):
                     tensors[k] = v
+
+        # Filter out samples with zero supervised targets
+        tensors, metadata = self._filter_zero_supervision_samples(tensors, metadata)
+
         return tensors, metadata
+
+    def _filter_zero_supervision_samples(self, tensors: Dict[str, torch.Tensor], metadata: Dict) -> tuple[Dict[str, torch.Tensor], Dict]:
+        """Filter out samples that have zero supervised targets (all targets == ignore_index)."""
+        ignore_index = -100
+
+        # Find target tensor - try common names
+        target_tensor = None
+        target_key = None
+        for key in ['y', 'targets']:
+            if key in tensors:
+                target_tensor = tensors[key]
+                target_key = key
+                break
+
+        if target_tensor is None:
+            # No target tensor found, return as-is
+            return tensors, metadata
+
+        # Find samples with at least one supervised target
+        supervised_mask = (target_tensor != ignore_index).any(dim=1)  # (batch_size,)
+        num_supervised = supervised_mask.sum().item()
+        total_samples = target_tensor.shape[0]
+
+        if num_supervised == total_samples:
+            # All samples have supervision, no filtering needed
+            return tensors, metadata
+
+        if num_supervised == 0:
+            # No samples have supervision - this shouldn't happen but handle gracefully
+            print(f"[consumer] WARNING: No samples with supervision found in batch file")
+            return tensors, metadata
+
+        # Filter all tensors to keep only supervised samples
+        filtered_tensors = {}
+        for key, tensor in tensors.items():
+            filtered_tensors[key] = tensor[supervised_mask]
+
+        # Update metadata if it contains stage_info or other per-sample data
+        filtered_metadata = metadata.copy()
+        if 'stage_info' in metadata and isinstance(metadata['stage_info'], list):
+            # Filter stage_info to match filtered samples
+            original_stage_info = metadata['stage_info']
+            if len(original_stage_info) == total_samples:
+                filtered_stage_info = [original_stage_info[i] for i in range(total_samples) if supervised_mask[i]]
+                filtered_metadata['stage_info'] = filtered_stage_info
+
+        print(f"[consumer] Filtered out {total_samples - num_supervised} samples with zero supervision (kept {num_supervised}/{total_samples})")
+
+        return filtered_tensors, filtered_metadata
 
     def _maybe_delete_consumed(self, split: str, path: str) -> None:
         if self._mode != "queue":

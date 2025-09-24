@@ -874,6 +874,209 @@ class DiffusionExplorer:
 
         self.wait_for_key()
 
+    def validate_file(self):
+        """Validate the current batch file for correctness"""
+        if self.current_batch is None:
+            print("❌ No batch loaded")
+            self.wait_for_key()
+            return
+
+        self.print_header("File Validation")
+
+        x_tensor = self.current_batch['input']
+        y_tensor = self.current_batch['target']
+        attn_tensor = self.current_batch.get('attention_mask', None)
+
+        batch_size, seq_len = x_tensor.shape
+        ignore_index = -100
+
+        print(f"📊 Validating batch file:")
+        print(f"   • Batch size: {batch_size}")
+        print(f"   • Sequence length: {seq_len}")
+        print()
+
+        # Validation checks
+        validation_passed = True
+
+        # 1) X, targets, and masks have all same length
+        print("1️⃣ Checking tensor dimensions...")
+        if y_tensor.shape != x_tensor.shape:
+            print(f"   ❌ Shape mismatch: X={x_tensor.shape}, Y={y_tensor.shape}")
+            validation_passed = False
+        else:
+            print(f"   ✅ X and Y shapes match: {x_tensor.shape}")
+
+        if attn_tensor is not None:
+            if attn_tensor.shape != x_tensor.shape:
+                print(f"   ❌ Attention mask shape mismatch: X={x_tensor.shape}, attention_mask={attn_tensor.shape}")
+                validation_passed = False
+            else:
+                print(f"   ✅ Attention mask shape matches: {attn_tensor.shape}")
+        else:
+            print(f"   ⚠️  No attention mask found")
+
+        # 2) Length is constant for all samples in a file
+        print("\n2️⃣ Checking sequence length consistency...")
+        # All tensors must have identical shape - this is always required
+        x_shapes_consistent = all(x_tensor[i].shape == x_tensor[0].shape for i in range(batch_size))
+        y_shapes_consistent = all(y_tensor[i].shape == y_tensor[0].shape for i in range(batch_size))
+
+        if not x_shapes_consistent:
+            print(f"   ❌ X tensor shapes are inconsistent across samples")
+            validation_passed = False
+        elif not y_shapes_consistent:
+            print(f"   ❌ Y tensor shapes are inconsistent across samples")
+            validation_passed = False
+        else:
+            print(f"   ✅ All samples have consistent tensor shape: {x_tensor[0].shape}")
+
+        if attn_tensor is not None:
+            attn_shapes_consistent = all(attn_tensor[i].shape == attn_tensor[0].shape for i in range(batch_size))
+            if not attn_shapes_consistent:
+                print(f"   ❌ Attention mask shapes are inconsistent across samples")
+                validation_passed = False
+
+        # 3) Check [SEP] token presence (optional - may not be used in all approaches)
+        print("\n3️⃣ Checking [SEP] token presence...")
+        sep_token_id = getattr(self, 'sep_token_id', None)
+        if sep_token_id is not None:
+            sep_counts = (x_tensor == sep_token_id).sum(dim=1)
+            samples_with_one_sep = (sep_counts == 1).sum().item()
+            samples_with_zero_sep = (sep_counts == 0).sum().item()
+            samples_with_multi_sep = (sep_counts > 1).sum().item()
+
+            print(f"   • Samples with exactly 1 [SEP]: {samples_with_one_sep}/{batch_size}")
+            print(f"   • Samples with 0 [SEP]: {samples_with_zero_sep}/{batch_size}")
+            print(f"   • Samples with >1 [SEP]: {samples_with_multi_sep}/{batch_size}")
+
+            if samples_with_zero_sep == batch_size:
+                print(f"   ✅ No [SEP] tokens used (space-padded approach)")
+            elif samples_with_one_sep == batch_size:
+                print(f"   ✅ All samples have exactly 1 [SEP] token")
+            else:
+                print(f"   ❌ Inconsistent [SEP] token usage")
+                validation_passed = False
+        else:
+            print(f"   ⚠️  [SEP] token ID not found in meta")
+
+        # 4) Target has non-zero number of elements with value not equal to ignore_index
+        print("\n4️⃣ Checking target supervision...")
+        supervised_counts = (y_tensor != ignore_index).sum(dim=1)
+        samples_with_supervision = (supervised_counts > 0).sum().item()
+        min_supervised = supervised_counts.min().item()
+        max_supervised = supervised_counts.max().item()
+
+        print(f"   • Samples with supervision: {samples_with_supervision}/{batch_size}")
+        print(f"   • Supervised tokens per sample: min={min_supervised}, max={max_supervised}")
+
+        if samples_with_supervision != batch_size:
+            print(f"   ❌ Not all samples have supervised targets")
+            validation_passed = False
+        elif min_supervised == 0:
+            print(f"   ❌ Some samples have zero supervised targets")
+            validation_passed = False
+        else:
+            print(f"   ✅ All samples have supervised targets")
+
+        # 5) Check target positions (relative to [SEP] if present, otherwise just validate targets exist)
+        print("\n5️⃣ Checking target positions...")
+        if sep_token_id is not None:
+            # Check if [SEP] tokens are actually used
+            total_sep_count = (x_tensor == sep_token_id).sum().item()
+            if total_sep_count > 0:
+                # [SEP] tokens are used - validate positions relative to [SEP]
+                violations = 0
+                for b in range(batch_size):
+                    # Find [SEP] position
+                    sep_positions = (x_tensor[b] == sep_token_id).nonzero(as_tuple=True)[0]
+                    if len(sep_positions) == 1:
+                        sep_pos = sep_positions[0].item()
+                        # Check if any supervised targets are at or after [SEP]
+                        supervised_positions = (y_tensor[b] != ignore_index).nonzero(as_tuple=True)[0]
+                        invalid_positions = supervised_positions >= sep_pos
+                        if invalid_positions.any():
+                            violations += 1
+
+                print(f"   • Samples with targets at/after [SEP]: {violations}/{batch_size}")
+                if violations > 0:
+                    print(f"   ❌ Some targets are positioned at or after [SEP]")
+                    validation_passed = False
+                else:
+                    print(f"   ✅ All targets are positioned before [SEP]")
+            else:
+                # No [SEP] tokens used - space-padded approach
+                print(f"   ✅ Space-padded approach - targets can be anywhere in sequence")
+        else:
+            print(f"   ✅ No [SEP] token validation needed")
+
+        # 6) Check attention mask structure (if present)
+        print("\n6️⃣ Checking attention mask structure...")
+        if attn_tensor is not None:
+            if sep_token_id is not None:
+                # Check if [SEP] tokens are actually used
+                total_sep_count = (x_tensor == sep_token_id).sum().item()
+                if total_sep_count > 0:
+                    # [SEP] approach - validate mask structure
+                    mask_violations = 0
+                    for b in range(batch_size):
+                        # Find [SEP] position
+                        sep_positions = (x_tensor[b] == sep_token_id).nonzero(as_tuple=True)[0]
+                        if len(sep_positions) == 1:
+                            sep_pos = sep_positions[0].item()
+
+                            # Check mask before [SEP] (should be all 1s)
+                            before_sep_mask = attn_tensor[b, :sep_pos+1]  # Include [SEP] position
+                            if not (before_sep_mask == 1).all():
+                                mask_violations += 1
+                                continue
+
+                            # Check mask after [SEP] (should be all 0s)
+                            if sep_pos + 1 < seq_len:
+                                after_sep_mask = attn_tensor[b, sep_pos+1:]
+                                if not (after_sep_mask == 0).all():
+                                    mask_violations += 1
+
+                    print(f"   • Samples with incorrect attention mask: {mask_violations}/{batch_size}")
+                    if mask_violations > 0:
+                        print(f"   ❌ Some attention masks are incorrectly structured")
+                        validation_passed = False
+                    else:
+                        print(f"   ✅ All attention masks are correctly structured")
+                else:
+                    # Space-padded approach with attention mask - just report presence
+                    print(f"   ✅ Attention mask present (space-padded approach)")
+            else:
+                print(f"   ✅ Attention mask present")
+        else:
+            print(f"   ✅ No attention mask (space-padded approach without attention mask)")
+
+        # 7) Print percentage of targets not equal to ignore_index (min, max, median across all samples)
+        print("\n7️⃣ Target supervision statistics...")
+        supervision_percentages = (supervised_counts.float() / seq_len * 100)
+        sorted_percentages, _ = torch.sort(supervision_percentages)
+
+        min_pct = sorted_percentages[0].item()
+        max_pct = sorted_percentages[-1].item()
+        median_idx = batch_size // 2
+        median_pct = sorted_percentages[median_idx].item()
+        mean_pct = supervision_percentages.mean().item()
+
+        print(f"   • Supervision percentage per sample:")
+        print(f"     - Min: {min_pct:.2f}%")
+        print(f"     - Median: {median_pct:.2f}%")
+        print(f"     - Mean: {mean_pct:.2f}%")
+        print(f"     - Max: {max_pct:.2f}%")
+
+        # Final result
+        print(f"\n{'='*60}")
+        if validation_passed:
+            print(f"✅ VALIDATION PASSED: File structure is correct")
+        else:
+            print(f"❌ VALIDATION FAILED: File has structural issues")
+        print(f"{'='*60}")
+
+        self.wait_for_key()
+
     def main_menu(self):
         """Main application loop"""
         while True:
@@ -901,6 +1104,7 @@ class DiffusionExplorer:
 
                     if self.current_batch is not None:
                         options.append("🔍 Navigate Samples")
+                        options.append("✅ File Validation")
 
             if self.model is not None and self.dataset_name is not None:
                 options.append("🧪 Generate Test Sample")
@@ -921,6 +1125,8 @@ class DiffusionExplorer:
                     continue
             elif "Navigate Samples" in options[choice - 1]:
                 self.navigate_samples()
+            elif "File Validation" in options[choice - 1]:
+                self.validate_file()
             elif "Generate Test Sample" in options[choice - 1]:
                 self.generate_test_sample()
 
