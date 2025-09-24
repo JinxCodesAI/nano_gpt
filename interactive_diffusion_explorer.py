@@ -397,6 +397,12 @@ class DiffusionExplorer:
             print(f"✅ Batch file loaded:")
             print(f"   • Batch size: {batch_size}")
             print(f"   • Sequence length: {seq_len}")
+            # Attention mask stats if present
+            if attn_tensor is not None:
+                total_ones = int(attn_tensor.sum().item())
+                total_elems = int(attn_tensor.numel())
+                total_zeros = total_elems - total_ones
+                print(f" attention_mask: ones={total_ones}, zeros={total_zeros} (visible avg per sample: {total_ones/max(batch_size,1):.1f})")
 
             # Show statistics depending on target shape
             ignore_index = -100
@@ -510,9 +516,15 @@ class DiffusionExplorer:
             attn = self.current_batch.get('attention_mask', None)
             if attn is not None:
                 seq_len_display = int(attn[self.current_sample_idx].sum().item())
+                ones = int(attn[self.current_sample_idx].sum().item())
+                zeros = int(attn.shape[1] - ones)
             else:
                 seq_len_display = x_tensor.shape[1]
+                ones = seq_len_display
+                zeros = 0
             print(f"📊 Current sample: {self.current_sample_idx + 1}/{batch_size} (sequence length: {seq_len_display})")
+            if attn is not None:
+                print(f"   • attention_mask -> ones: {ones}, zeros: {zeros}")
             if is_token_targets:
                 print(f"🔧 Navigation: ← Previous | → Next | U Unmask | G Generate | Q Quit")
             else:
@@ -534,7 +546,9 @@ class DiffusionExplorer:
                 y_tokens = y_tensor[self.current_sample_idx]
                 y_decoded_parts = []
                 masked_positions = []
-                for j, (x_tok, y_tok) in enumerate(zip(x_tokens.tolist(), y_tokens.tolist())):
+                # Limit target iteration to visible region when attention_mask is provided
+                limit = x_tokens.shape[0]
+                for j, (x_tok, y_tok) in enumerate(zip(x_tokens.tolist(), y_tokens.tolist()[:limit])):
                     if y_tok != ignore_index:
                         y_decoded_parts.append(self.itos.get(y_tok, f'[UNK:{y_tok}]'))
                         masked_positions.append(j)
@@ -598,7 +612,12 @@ class DiffusionExplorer:
                 with self.ctx:
                     # Get model predictions - pass dummy targets to get full sequence logits
                     dummy_targets = torch.zeros_like(sample_tokens)
-                    model_output = self.model(sample_tokens, targets=dummy_targets)
+                    # Pass attention_mask if available
+                    attn_full = self.current_batch.get('attention_mask', None)
+                    attn_sample = None
+                    if attn_full is not None:
+                        attn_sample = attn_full[self.current_sample_idx:self.current_sample_idx+1].to(DEVICE)
+                    model_output = self.model(sample_tokens, targets=dummy_targets, attention_mask=attn_sample)
 
                     # Handle different model output formats
                     if isinstance(model_output, tuple):

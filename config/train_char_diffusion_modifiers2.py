@@ -9,7 +9,7 @@ log_interval = 10
 # save checkpoints when validation improves
 always_save_checkpoint = False
 
-wandb_log = True # override via command line if you like
+wandb_log = False # override via command line if you like
 wandb_project = 'char-diffusion'
 wandb_run_name = 'bert-char-no-entropy-modifier'
 

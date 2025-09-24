@@ -95,9 +95,13 @@ class CharDiffusionProvider(DataProviderBase):
         self.unmasking_stages = cfg.get('unmasking_stages', None)
         self.validation_stages = cfg.get('validation_stages', None)
 
+        # Model/training mode
+        self.model_mode = cfg.get('model_mode', None)
+        # Enable stage-based generation only for non-MLM modes
+        self._stages_enabled = bool(self.use_all_stages_for_training) and (self.model_mode is not None and self.model_mode.lower() != 'language_model')
+
         # Line-aligned sequences configuration (default True)
         self.enable_line_aligned_sequences = cfg.get('enable_line_aligned_sequences', True)
-
 
         super().__init__(*args, **kwargs)
 
@@ -204,7 +208,7 @@ class CharDiffusionProvider(DataProviderBase):
 
     def _initialize_stage_distribution(self):
         """Initialize stage distribution for batch generation."""
-        if self.use_all_stages_for_training:
+        if self._stages_enabled:
             # Calculate how many batches of each stage type to generate per file
             self.train_stage_distribution = self._calculate_stage_distribution(self.unmasking_stages)
             self.val_stage_distribution = self._calculate_stage_distribution(self.validation_stages)
@@ -263,7 +267,7 @@ class CharDiffusionProvider(DataProviderBase):
 
     def sample_batch(self, split: str, rng) -> Dict[str, Any]:
         """Sample a batch with stage-aware masking or default BERT-style masking."""
-        if self.use_all_stages_for_training:
+        if self._stages_enabled:
             # For stage-based generation, we need to generate all samples for the file at once
             # This method will be called by the base class for each batch, but we need to
             # coordinate across all batches in the file. We'll handle this differently.
@@ -391,7 +395,7 @@ class CharDiffusionProvider(DataProviderBase):
             # Apply stage-specific masking
             corrupted_x, mask = apply_stage_masking(
                 x_stage, stage_config, self.mask_token_id,
-                self.vocab_size - 1, rng
+                self.base_vocab_size, rng
             )
 
             # Create labels: ignore_index for non-masked positions, original token for masked
@@ -429,7 +433,7 @@ class CharDiffusionProvider(DataProviderBase):
 
     def produce_one_file(self, split: str, seq: int) -> None:
         """Override to handle stage-based generation at file level."""
-        if self.use_all_stages_for_training:
+        if self._stages_enabled:
             self._produce_stage_based_file(split, seq)
         else:
             # Use default file production for non-stage-based generation
@@ -510,7 +514,7 @@ class CharDiffusionProvider(DataProviderBase):
             base_x, attn = self._build_line_aligned(split, count, rng)
             # Apply stage masking
             stage_x, stage_mask = apply_stage_masking(
-                base_x, stage_config, self.mask_token_id, self.vocab_size - 1, rng
+                base_x, stage_config, self.mask_token_id, self.base_vocab_size, rng
             )
             # Restrict masking to valid positions (exclude [SEP] and padding after it)
             allowed_mask = attn.bool() & (base_x != self.sep_token_id)
