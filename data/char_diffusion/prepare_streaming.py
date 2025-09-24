@@ -97,8 +97,8 @@ class CharDiffusionProvider(DataProviderBase):
 
         # Model/training mode
         self.model_mode = cfg.get('model_mode', None)
-        # Enable stage-based generation only for non-MLM modes
-        self._stages_enabled = bool(self.use_all_stages_for_training) and (self.model_mode is not None and self.model_mode.lower() != 'language_model')
+        # Enable stage-based generation when use_all_stages_for_training is True
+        self._stages_enabled = bool(self.use_all_stages_for_training)
 
         # Line-aligned sequences configuration (default True)
         self.enable_line_aligned_sequences = cfg.get('enable_line_aligned_sequences', True)

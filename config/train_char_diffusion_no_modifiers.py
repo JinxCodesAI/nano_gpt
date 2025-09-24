@@ -65,7 +65,6 @@ dtype = 'float16'
 # Model mode for masked language modeling (BERT-style)
 model_mode = 'language_model'
 
-# Diffusion/masking specific config
 mask_token_id = None  # Will be set from dataset meta
 
 # Data streaming config
@@ -81,7 +80,7 @@ ignore_index = -100  # Default PyTorch ignore index
 # batch_size = 4
 # block_size = 128
 
-loss_modifiers_enabled = True
+loss_modifiers_enabled = False
 
 entropy_modifier_enabled = False
 entropy_modifier_weight = 0.3

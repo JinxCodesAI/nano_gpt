@@ -164,6 +164,9 @@ class Trainer:
                     sep_id = int(meta.get('sep_token_id')) if 'sep_token_id' in meta else -1
                     ignore_index = getattr(raw_model.config, 'ignore_index', -100)
 
+                    # SANITY CHECKS - Print warnings for data corruption
+                    sanity_errors = []
+
                     x = batch.get('x', None)
                     y = batch.get('y', None)
                     attn = batch.get('attention_mask', None)
@@ -249,6 +252,28 @@ class Trainer:
                                 y_sub = y[:sub_n]
                                 attn_sub = attn[:sub_n] if attn is not None else None
                                 lm = self.evaluator.loss_modifier_pipeline
+
+                                # DETAILED ATTENTION MASK DIAGNOSTICS
+                                if attn_sub is not None:
+                                    # Check if attention mask is actually doing anything
+                                    valid_positions = (attn_sub != 0).sum().item()
+                                    total_positions = attn_sub.numel()
+                                    masked_positions = total_positions - valid_positions
+                                    step_metrics["diag/attn_valid_pos"] = valid_positions
+                                    step_metrics["diag/attn_masked_pos"] = masked_positions
+                                    step_metrics["diag/attn_mask_ratio"] = masked_positions / total_positions
+
+                                    # Check if supervised tokens are in masked regions
+                                    supervised_in_masked = ((y_sub != ignore_index) & (attn_sub == 0)).sum().item()
+                                    step_metrics["diag/supervised_in_masked"] = supervised_in_masked
+
+                                    # Check actual sequence lengths vs attention mask
+                                    for i in range(min(2, sub_n)):  # Log first 2 samples
+                                        seq_len = (attn_sub[i] != 0).sum().item()
+                                        supervised_count = (y_sub[i] != ignore_index).sum().item()
+                                        step_metrics[f"diag/seq{i}_len"] = seq_len
+                                        step_metrics[f"diag/seq{i}_supervised"] = supervised_count
+
                                 # With current modifiers
                                 _, loss_attn = raw_model(x_sub, y_sub, attention_mask=attn_sub, loss_modifiers=lm)
                                 _, loss_noattn = raw_model(x_sub, y_sub, attention_mask=None, loss_modifiers=lm)
