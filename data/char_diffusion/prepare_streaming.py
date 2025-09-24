@@ -12,7 +12,7 @@ import torch
 
 from data.common.provider_base import DataProviderBase
 from .file_utils import write_file_atomic, ensure_queue_dirs, get_backlog_size, get_max_sequence_number
-from .masking_utils import apply_stage_masking, apply_random_masking_cpu
+from .masking_utils import apply_stage_masking
 
 
 def apply_bert_style_corruption_cpu(x: torch.Tensor, mask: torch.Tensor,
@@ -53,10 +53,11 @@ def apply_bert_style_corruption_cpu(x: torch.Tensor, mask: torch.Tensor,
     return corrupted_x
 
 
-def apply_random_masking_cpu(x: torch.Tensor, mask_probability: float,
-                           mask_token_id: int, base_vocab_size: int, rng=None) -> tuple[torch.Tensor, torch.Tensor]:
+def apply_random_masking_base_vocab_only(x: torch.Tensor, mask_probability: float,
+                                       mask_token_id: int, base_vocab_size: int, rng=None) -> tuple[torch.Tensor, torch.Tensor]:
     """
     Optimized random masking for BERT-style training using tensor operations.
+    Uses only base vocabulary for random token replacement (excludes special tokens).
 
     Args:
         x: Input tokens (batch_size, seq_len)
@@ -72,10 +73,12 @@ def apply_random_masking_cpu(x: torch.Tensor, mask_probability: float,
     mask_tensor = torch.rand(x.shape, generator=rng)
     mask = mask_tensor < mask_probability
 
-    # Apply BERT-style corruption
+    # Apply BERT-style corruption with base vocab only
     corrupted_x = apply_bert_style_corruption_cpu(x, mask, mask_token_id, base_vocab_size, rng)
 
     return corrupted_x, mask
+
+
 
 
 class CharDiffusionProvider(DataProviderBase):
@@ -283,7 +286,7 @@ class CharDiffusionProvider(DataProviderBase):
             x = self._build_line_aligned(split, self.batch_size, rng)
 
             # Apply random masking directly to the full sequences
-            corrupted_x, mask = apply_random_masking_cpu(
+            corrupted_x, mask = apply_random_masking_base_vocab_only(
                 x, self.mask_probability, self.mask_token_id, self.base_vocab_size, rng
             )
 
@@ -302,7 +305,7 @@ class CharDiffusionProvider(DataProviderBase):
             x_list = [ids[i : i + self.block_size] for i in ix]
             x = torch.tensor(x_list, dtype=torch.long)
 
-            corrupted_x, mask = apply_random_masking_cpu(
+            corrupted_x, mask = apply_random_masking_base_vocab_only(
                 x, self.mask_probability, self.mask_token_id, self.base_vocab_size, rng
             )
             labels = torch.where(mask, x, torch.full_like(x, self.ignore_index))
