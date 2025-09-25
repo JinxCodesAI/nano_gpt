@@ -6,6 +6,7 @@ from typing import Dict, Any, List
 import torch
 
 from data.common.provider_base import DataProviderBase
+from data.common.line_aligned_utils import LineAlignedSequenceBuilder, create_line_aligned_builder
 from .mlm_inference import MLMInferenceEngine
 from .synthetic_generation import (
     create_synthetic_text,
@@ -30,6 +31,9 @@ class SequenceScorerProvider(DataProviderBase):
 
         # Simple masking configuration
         self.mask_probability_range = cfg.get('mask_probability_range', (0.1, 0.8))
+
+        # Line-aligned sequences configuration (default True to match CharDiffusionProvider)
+        self.enable_line_aligned_sequences = cfg.get('enable_line_aligned_sequences', True)
 
         super().__init__(*args, **kwargs)
 
@@ -65,6 +69,14 @@ class SequenceScorerProvider(DataProviderBase):
             print(f"  vocab_size: {self.vocab_size}")
             print(f"  mask_token_id: {self.mask_token_id}")
             print(f"  cls_token_id: {self.cls_token_id}")
+            print(f"  enable_line_aligned_sequences: {self.enable_line_aligned_sequences}")
+            if self.enable_line_aligned_sequences:
+                print(f"  newline_token_id: {self.newline_token_id}")
+                if hasattr(self, 'train_builder') and self.train_builder:
+                    print(f"  train_lines: {len(self.train_builder.lines_ids)}")
+                    print(f"  val_lines: {len(self.val_builder.lines_ids)}")
+                    print(f"  train_valid_starts: {self.train_builder.valid_starts.numel()}")
+                    print(f"  val_valid_starts: {self.val_builder.valid_starts.numel()}")
 
     def _validate_stage_config(self):
         if self.use_all_stages_for_training is not None:
@@ -141,10 +153,6 @@ class SequenceScorerProvider(DataProviderBase):
         self.vocab_size = int(self.mlm_engine.vocab_size)
         self.mask_token_id = int(self.mlm_engine.mask_token_id)
 
-        # Tokenize characters using stoi (fallback to 0 if missing)
-        self.train_ids = [self.stoi.get(c, 0) for c in data[: int(len(data) * 0.9)]]
-        self.val_ids = [self.stoi.get(c, 0) for c in data[int(len(data) * 0.9) :]]
-
         # Ensure [CLS] token exists in vocab mapping and extend vocab_size if needed
         if self.cls_token_id not in self.itos:
             self.itos[self.cls_token_id] = '[CLS]'
@@ -152,6 +160,30 @@ class SequenceScorerProvider(DataProviderBase):
             self.stoi['[CLS]'] = self.cls_token_id
         if self.cls_token_id >= self.vocab_size:
             self.vocab_size = int(self.cls_token_id) + 1
+
+        if self.enable_line_aligned_sequences:
+            # Use line-aligned sequence generation
+            self.newline_token_id = self.stoi.get('\n', None)
+            if self.newline_token_id is None:
+                raise ValueError("enable_line_aligned_sequences=True requires '\\n' to be in the vocabulary")
+
+            # Create line-aligned builders for train and validation data
+            self.train_builder, self.val_builder, _ = create_line_aligned_builder(
+                data,
+                newline_token_id=self.newline_token_id,
+                pad_token_id=None  # SequenceScorer doesn't use padding, relies on CLS token
+            )
+
+            # Keep legacy ids for compatibility with non-line-aligned code paths
+            self.train_ids = [self.stoi.get(c, 0) for c in data[: int(len(data) * 0.9)]]
+            self.val_ids = [self.stoi.get(c, 0) for c in data[int(len(data) * 0.9) :]]
+        else:
+            # Legacy approach: tokenize characters using stoi (fallback to 0 if missing)
+            self.train_ids = [self.stoi.get(c, 0) for c in data[: int(len(data) * 0.9)]]
+            self.val_ids = [self.stoi.get(c, 0) for c in data[int(len(data) * 0.9) :]]
+            self.train_builder = None
+            self.val_builder = None
+            self.newline_token_id = None
 
     def sample_batch(self, split: str, rng) -> Dict[str, torch.Tensor]:
         if self.use_all_stages_for_training:
@@ -270,6 +302,59 @@ class SequenceScorerProvider(DataProviderBase):
             print(f"{self._log_prefix()} produced (val augmented) file: {final_path}")
 
     def _sample_default_batch(self, split: str, rng) -> Dict[str, torch.Tensor]:
+        if self.enable_line_aligned_sequences:
+            return self._sample_line_aligned_batch(split, rng)
+        else:
+            return self._sample_legacy_batch(split, rng)
+
+    def _sample_line_aligned_batch(self, split: str, rng) -> Dict[str, torch.Tensor]:
+        """Sample batch using line-aligned variable-length sequences."""
+        builder = self.train_builder if split == "train" else self.val_builder
+
+        # Step 1: Build variable-length line-aligned sequences (without CLS)
+        original_text, content_lengths = builder.build_variable_length_sequences(
+            self.batch_size, self.block_size - 1, rng  # Leave space for CLS
+        )
+
+        # Step 2: Apply masking and synthetic generation to variable-length content
+        min_ratio, max_ratio = self.mask_probability_range
+        mask_ratios = torch.rand(self.batch_size, generator=rng) * (max_ratio - min_ratio) + min_ratio
+
+        # Apply masking only to content portions
+        synthetic_text = original_text.clone()
+        actual_synth_list = []
+
+        for b in range(self.batch_size):
+            content_len = int(content_lengths[b].item())
+            if content_len > 0:
+                # Extract content portion
+                content = original_text[b, :content_len].unsqueeze(0)
+
+                # Apply synthetic generation to content only
+                synth_content, synth_ratio = create_synthetic_text(
+                    content,
+                    mask_ratios[b:b+1],
+                    self.mlm_engine,
+                    self.mask_token_id,
+                    rng,
+                    sampling_temperature=1.0,
+                    top_k=50,
+                )
+
+                # Update synthetic text with generated content
+                synthetic_text[b, :content_len] = synth_content.squeeze(0)
+                actual_synth_list.append(synth_ratio.item())
+            else:
+                actual_synth_list.append(0.0)
+
+        # Step 3: Add CLS token
+        input_ids = add_cls_token(synthetic_text, self.cls_token_id, self.block_size)
+        targets = torch.tensor(actual_synth_list, dtype=torch.float32)
+
+        return {"input_ids": input_ids, "targets": targets}
+
+    def _sample_legacy_batch(self, split: str, rng) -> Dict[str, torch.Tensor]:
+        """Legacy sampling method for backward compatibility."""
         ids = self.train_ids if split == "train" else self.val_ids
         max_start_idx = len(ids) - (self.block_size - 1)  # leave space for [CLS]
         ix = torch.randint(0, max_start_idx, (self.batch_size,), generator=rng).tolist()
@@ -302,8 +387,6 @@ class SequenceScorerProvider(DataProviderBase):
         per_seed = (self.seed * 1000003) ^ (hash(split) & 0xFFFFFFFF) ^ seq
         rng.manual_seed(per_seed)
 
-        ids = self.train_ids if split == "train" else self.val_ids
-        max_start_idx = len(ids) - (self.block_size - 1)
         stage_distribution = self.train_stage_distribution if split == "train" else self.val_stage_distribution
 
         all_inputs: List[torch.Tensor] = []
@@ -318,9 +401,20 @@ class SequenceScorerProvider(DataProviderBase):
             count = stage_info['count']
             if count == 0:
                 continue
-            ix = torch.randint(0, max_start_idx, (count,), generator=rng).tolist()
-            original_sequences = [ids[i : i + (self.block_size - 1)] for i in ix]
-            original_text = torch.tensor(original_sequences, dtype=torch.long)
+
+            if self.enable_line_aligned_sequences:
+                # Use line-aligned sequence generation
+                builder = self.train_builder if split == "train" else self.val_builder
+                original_text, content_lengths = builder.build_variable_length_sequences(
+                    count, self.block_size - 1, rng  # Leave space for CLS
+                )
+            else:
+                # Legacy approach
+                ids = self.train_ids if split == "train" else self.val_ids
+                max_start_idx = len(ids) - (self.block_size - 1)
+                ix = torch.randint(0, max_start_idx, (count,), generator=rng).tolist()
+                original_sequences = [ids[i : i + (self.block_size - 1)] for i in ix]
+                original_text = torch.tensor(original_sequences, dtype=torch.long)
 
             # Measure mask vs unmask separately
             t0 = time.time()
