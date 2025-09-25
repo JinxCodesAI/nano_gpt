@@ -323,30 +323,43 @@ def apply_line_replacement_masking_cpu(x: torch.Tensor, content_lengths: torch.T
         # Randomly select which lines to replace
         line_indices_to_replace = torch.randperm(num_lines, generator=rng)[:num_lines_to_replace].tolist()
 
-        # Replace selected lines
-        for line_idx in line_indices_to_replace:
+        # Build new sequence by replacing selected lines
+        new_sequence = []
+        new_mask = []
+
+        for line_idx in range(num_lines):
             line_start, line_end = line_boundaries[line_idx]
-            original_line_len = line_end - line_start
 
-            # Select a random replacement line
-            replacement_line_idx = torch.randint(0, len(replacement_lines_ids), (1,), generator=rng).item()
-            replacement_line = replacement_lines_ids[replacement_line_idx]
-            replacement_tokens = torch.tensor(replacement_line, dtype=torch.long, device=device)
+            if line_idx in line_indices_to_replace:
+                # Replace this line with a random line
+                replacement_line_idx = torch.randint(0, len(replacement_lines_ids), (1,), generator=rng).item()
+                replacement_line = replacement_lines_ids[replacement_line_idx]
+                replacement_tokens = torch.tensor(replacement_line, dtype=torch.long, device=device)
 
-            # Replace the line in-place, truncating if necessary
-            replacement_len = min(len(replacement_tokens), original_line_len, seq_len - line_start)
+                # Add replacement line tokens
+                new_sequence.extend(replacement_tokens.tolist())
+                new_mask.extend([True] * len(replacement_tokens))
+            else:
+                # Keep original line
+                original_line_tokens = sample_content[line_start:line_end]
+                new_sequence.extend(original_line_tokens.tolist())
+                new_mask.extend([False] * len(original_line_tokens))
 
-            if replacement_len > 0:
-                # Replace the line
-                replaced_x[b, line_start:line_start + replacement_len] = replacement_tokens[:replacement_len]
-                # Mark positions as replaced
-                mask[b, line_start:line_start + replacement_len] = True
+        # Truncate if the new sequence is too long
+        if len(new_sequence) > seq_len:
+            new_sequence = new_sequence[:seq_len]
+            new_mask = new_mask[:seq_len]
 
-                # If replacement is shorter than original, fill remaining positions with zeros
-                if replacement_len < original_line_len:
-                    replaced_x[b, line_start + replacement_len:line_end] = 0
-                    # Update content length to reflect the change
-                    content_lengths[b] = max(0, content_lengths[b] - (original_line_len - replacement_len))
+        # Update the replaced sequence
+        new_content_len = len(new_sequence)
+        replaced_x[b, :new_content_len] = torch.tensor(new_sequence, dtype=torch.long, device=device)
+        mask[b, :new_content_len] = torch.tensor(new_mask, dtype=torch.bool, device=device)
+
+        # Leave remaining positions unchanged (they will be filled with PAD tokens by the caller)
+        # Do NOT set them to 0 here as that would put newline characters in the middle
+
+        # Update content length
+        content_lengths[b] = new_content_len
 
     return replaced_x, mask
 
