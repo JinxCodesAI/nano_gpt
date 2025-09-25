@@ -449,16 +449,10 @@ class CharDiffusionProvider(DataProviderBase):
                     mask.squeeze(0), x[b, :content_len], self.ignore_index
                 )
 
-        # Step 3: Apply padding - use shared builder if available
-        if self.enable_line_aligned_sequences and hasattr(self, 'train_builder'):
-            # We need to determine which builder to use, but we don't have split info here
-            # Use train_builder as default (this method is called from stage-based generation)
-            corrupted_x = self.train_builder.apply_padding(corrupted_x, content_lengths)
-        else:
-            # Original padding approach
-            for b in range(count):
-                if content_lengths[b] < self.block_size:
-                    corrupted_x[b, content_lengths[b]:] = self.pad_token_id
+            # Step 3: Fill remaining positions with [PAD] tokens
+            if content_lengths[b] < self.block_size:
+                corrupted_x[b, content_lengths[b]:] = self.pad_token_id
+                # labels already set to ignore_index for padding positions
 
         return corrupted_x, labels
 
