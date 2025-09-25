@@ -132,6 +132,8 @@ class SequenceScorerProvider(DataProviderBase):
             "training_type": "SEQUENCE_SCORING",
             "vocab_size": self.vocab_size,
             "cls_token_id": self.cls_token_id,
+            "pad_token_id": self.pad_token_id,
+            "mask_token_id": self.mask_token_id,
             "stoi": self.stoi,
             "itos": self.itos,
             "batch_schema": [
@@ -147,16 +149,22 @@ class SequenceScorerProvider(DataProviderBase):
         # Use vocabulary from MLM model meta to ensure compatibility
         self.stoi = dict(self.mlm_engine.stoi)
         self.itos = dict(self.mlm_engine.itos)
-        self.vocab_size = int(self.mlm_engine.vocab_size)
+        self.base_vocab_size = int(self.mlm_engine.vocab_size)
         self.mask_token_id = int(self.mlm_engine.mask_token_id)
+
+        # Add PAD token exactly like CharDiffusion does (after MASK token)
+        self.pad_token_id = self.base_vocab_size + 1
+        self.stoi['[PAD]'] = self.pad_token_id
+        self.itos[self.pad_token_id] = '[PAD]'
 
         # Ensure [CLS] token exists in vocab mapping and extend vocab_size if needed
         if self.cls_token_id not in self.itos:
             self.itos[self.cls_token_id] = '[CLS]'
         if '[CLS]' not in self.stoi:
             self.stoi['[CLS]'] = self.cls_token_id
-        if self.cls_token_id >= self.vocab_size:
-            self.vocab_size = int(self.cls_token_id) + 1
+
+        # Final vocab size includes all tokens
+        self.vocab_size = max(self.pad_token_id + 1, int(self.cls_token_id) + 1)
 
         if self.enable_line_aligned_sequences:
             # Use line-aligned sequence generation
@@ -168,7 +176,7 @@ class SequenceScorerProvider(DataProviderBase):
             self.train_builder, self.val_builder, _ = create_line_aligned_builder(
                 data,
                 newline_token_id=self.newline_token_id,
-                pad_token_id=None  # SequenceScorer doesn't use padding, relies on CLS token
+                pad_token_id=self.pad_token_id  # Use PAD tokens exactly like CharDiffusion
             )
 
             # Keep ids for compatibility with non-line-aligned code paths
@@ -198,6 +206,9 @@ class SequenceScorerProvider(DataProviderBase):
             original_text, content_lengths = builder.build_variable_length_sequences(
                 self.batch_size, self.block_size - 1, rng  # Leave space for CLS
             )
+
+            # Apply padding to replace zeros with PAD tokens
+            original_text = builder.apply_padding(original_text, content_lengths)
 
             # Step 2: Apply masking and synthetic generation to variable-length content
             min_ratio, max_ratio = self.mask_probability_range
@@ -231,7 +242,7 @@ class SequenceScorerProvider(DataProviderBase):
                     actual_synth_list.append(0.0)
 
             # Step 3: Add CLS token
-            input_ids = add_cls_token(synthetic_text, self.cls_token_id, self.block_size)
+            input_ids = add_cls_token(synthetic_text, self.cls_token_id, self.block_size, self.pad_token_id)
             targets = torch.tensor(actual_synth_list, dtype=torch.float32)
 
             return {"input_ids": input_ids, "targets": targets}
@@ -259,7 +270,7 @@ class SequenceScorerProvider(DataProviderBase):
                 sampling_temperature=1.0,
                 top_k=50,
             )
-            input_ids = add_cls_token(synthetic_text, self.cls_token_id, self.block_size)
+            input_ids = add_cls_token(synthetic_text, self.cls_token_id, self.block_size, self.pad_token_id)
             targets = actual_synth.float().cpu()
             return {"input_ids": input_ids, "targets": targets}
 
@@ -322,7 +333,7 @@ class SequenceScorerProvider(DataProviderBase):
                 ix = torch.randint(0, max_start_idx, (extra_count,), generator=rng).tolist()
                 original_sequences = [ids[i : i + (self.block_size - 1)] for i in ix]
                 original_text = torch.tensor(original_sequences, dtype=torch.long)
-                input_ids_extra = add_cls_token(original_text, self.cls_token_id, self.block_size)
+                input_ids_extra = add_cls_token(original_text, self.cls_token_id, self.block_size, self.pad_token_id)
                 targets_extra = torch.zeros(extra_count, dtype=torch.float32)
 
                 # Align extras to base tensor devices before concatenation
@@ -401,6 +412,12 @@ class SequenceScorerProvider(DataProviderBase):
                 original_text, content_lengths = builder.build_variable_length_sequences(
                     count, self.block_size - 1, rng  # Leave space for CLS
                 )
+
+                # Apply padding to replace zeros with PAD tokens
+                original_text = builder.apply_padding(original_text, content_lengths)
+
+                # Apply padding to replace zeros with PAD tokens
+                original_text = builder.apply_padding(original_text, content_lengths)
             else:
                 # Original approach
                 ids = self.train_ids if split == "train" else self.val_ids
@@ -411,13 +428,42 @@ class SequenceScorerProvider(DataProviderBase):
 
             # Measure mask vs unmask separately
             t0 = time.time()
-            masked_input, mask = apply_stage_masking_direct(
-                original_text, stage_config, self.mask_token_id, self.vocab_size - 1, rng
-            )
+
+            if self.enable_line_aligned_sequences:
+                # For line-aligned sequences, we need to be careful about PAD tokens
+                # Only apply masking to content portions, not PAD tokens
+                content_only_text = original_text.clone()
+                # Replace PAD tokens with zeros temporarily for masking
+                pad_mask = (original_text == self.pad_token_id)
+                content_only_text[pad_mask] = 0
+
+                masked_input, mask = apply_stage_masking_direct(
+                    content_only_text, stage_config, self.mask_token_id, self.mlm_engine.vocab_size - 1, rng
+                )
+
+                # Restore PAD tokens in masked input (they should not be masked)
+                masked_input[pad_mask] = self.pad_token_id
+                mask[pad_mask] = False  # Don't predict PAD tokens
+
+                # For MLM prediction, replace PAD tokens with zeros (MLM model doesn't know about PAD)
+                mlm_input = masked_input.clone()
+                mlm_input[pad_mask] = 0
+
+                synthetic_text = self.mlm_engine.predict_masked_tokens(
+                    mlm_input, mask, temperature=1.0, top_k=50
+                )
+
+                # Restore PAD tokens in synthetic text
+                synthetic_text[pad_mask] = self.pad_token_id
+            else:
+                masked_input, mask = apply_stage_masking_direct(
+                    original_text, stage_config, self.mask_token_id, self.mlm_engine.vocab_size - 1, rng
+                )
+                synthetic_text = self.mlm_engine.predict_masked_tokens(
+                    masked_input, mask, temperature=1.0, top_k=50
+                )
+
             t_mask_end = time.time()
-            synthetic_text = self.mlm_engine.predict_masked_tokens(
-                masked_input, mask, temperature=1.0, top_k=50
-            )
             t1 = time.time()
 
             # per-sample syntheticity based on mask
@@ -429,7 +475,7 @@ class SequenceScorerProvider(DataProviderBase):
             total_mask_time += (t_mask_end - t0)
 
             # Append inputs and targets
-            input_with_cls = add_cls_token(synthetic_text, self.cls_token_id, self.block_size)
+            input_with_cls = add_cls_token(synthetic_text, self.cls_token_id, self.block_size, self.pad_token_id)
             all_inputs.append(input_with_cls)
             all_targets.append(actual_synth)
             all_stage_info.extend([stage_config] * count)
@@ -455,7 +501,7 @@ class SequenceScorerProvider(DataProviderBase):
                         ix_extra = torch.randint(0, max_start_idx_extra, (extra_count,), generator=rng).tolist()
                         original_sequences_extra = [val_ids[i : i + (self.block_size - 1)] for i in ix_extra]
                         original_text_extra = torch.tensor(original_sequences_extra, dtype=torch.long)
-                        input_ids_extra = add_cls_token(original_text_extra, self.cls_token_id, self.block_size)
+                        input_ids_extra = add_cls_token(original_text_extra, self.cls_token_id, self.block_size, self.pad_token_id)
                         targets_extra = torch.zeros(extra_count, dtype=torch.float32)
                         # Align devices before concatenation
                         input_ids_extra = input_ids_extra.to(shuffled_inputs.device)

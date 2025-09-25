@@ -147,12 +147,13 @@ def create_stage_synthetic_text(
     return predicted_text, actual_syntheticity
 
 
-def add_cls_token(text: torch.Tensor, cls_token_id: int, block_size: int) -> torch.Tensor:
+def add_cls_token(text: torch.Tensor, cls_token_id: int, block_size: int, pad_token_id: int = 0) -> torch.Tensor:
     """
     Add [CLS] token at the beginning of sequences, right-shifting and truncating as needed.
+    Fill remaining positions with PAD tokens.
     """
     batch_size, seq_len = text.shape
-    result = torch.zeros((batch_size, block_size), dtype=text.dtype, device=text.device)
+    result = torch.full((batch_size, block_size), pad_token_id, dtype=text.dtype, device=text.device)
     result[:, 0] = cls_token_id
     copy_len = min(seq_len, block_size - 1)
     result[:, 1:1+copy_len] = text[:, :copy_len]
