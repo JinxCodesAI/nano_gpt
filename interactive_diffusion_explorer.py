@@ -18,7 +18,7 @@ from model import GPTConfig, GPT
 
 # Import utilities from existing files
 sys.path.append('data/char_diffusion')
-from masking_utils import apply_stage_masking, apply_random_masking_cpu, apply_target_driven_sticky_masking_cpu, apply_span_masking_cpu
+from masking_utils import apply_stage_masking, apply_random_masking_cpu, apply_target_driven_sticky_masking_cpu, apply_span_masking_cpu, apply_line_replacement_masking_cpu
 
 # Terminal control
 try:
@@ -225,8 +225,41 @@ class DiffusionExplorer:
             # Determine special tokens from meta if available
             self.mask_token_id = self.meta.get('mask_token_id', None)
             self.sep_token_id = self.meta.get('sep_token_id', None)
+            self.pad_token_id = self.meta.get('pad_token_id', None)
 
             cls_token_id = self.meta.get('cls_token_id', None)
+
+            # Initialize line replacement data if available
+            self.replacement_lines_ids = None
+            self.newline_token_id = None
+
+            # Try to load line data for line replacement masking
+            if self.stoi and '\n' in self.stoi:
+                self.newline_token_id = self.stoi['\n']
+
+                # Try to load training lines from the dataset
+                try:
+                    input_file_path = os.path.join(DATA_DIR, self.dataset_name, 'input.txt')
+                    if os.path.exists(input_file_path):
+                        with open(input_file_path, 'r') as f:
+                            data = f.read()
+
+                        # Create train split (90% of data)
+                        n = len(data)
+                        train_data = data[:int(n * 0.9)]
+                        train_lines = train_data.splitlines(keepends=True)
+
+                        # Convert lines to token IDs
+                        self.replacement_lines_ids = []
+                        for line in train_lines:
+                            line_tokens = [self.stoi[c] for c in line if c in self.stoi]
+                            if line_tokens:  # Only add non-empty lines
+                                self.replacement_lines_ids.append(line_tokens)
+
+                        print(f"   • Loaded {len(self.replacement_lines_ids)} training lines for line replacement masking")
+                except Exception as e:
+                    print(f"   ⚠️  Could not load training lines for line replacement: {e}")
+                    self.replacement_lines_ids = None
 
             # Model vocab
             model_vocab_size = getattr(self.model.config, 'vocab_size', None)
@@ -729,7 +762,9 @@ class DiffusionExplorer:
         strategies = [
             "Random masking",
             "Sticky masking",
-            "Span masking"
+            "Span masking",
+            "Line replacement masking",
+            "Stage-based masking (from config)"
         ]
 
         strategy_choice = self.get_menu_choice(strategies, "Select masking strategy:")
@@ -768,6 +803,28 @@ class DiffusionExplorer:
 
                 masked_x, mask = apply_span_masking_cpu(
                     base_sample, spans_count, self.mask_token_id, self.vocab_size - 1, rng
+                )
+
+            elif strategy_choice == 4:  # Line replacement masking
+                print("\nLine Replacement Masking Parameters:")
+                min_ratio = float(input("Min replacement ratio (0.0-1.0, default 0.2): ") or "0.2")
+                max_ratio = float(input("Max replacement ratio (0.0-1.0, default 0.4): ") or "0.4")
+
+                # We need to provide replacement lines and other required parameters
+                # For the explorer, we'll use the current dataset's lines if available
+                if not hasattr(self, 'replacement_lines_ids') or not hasattr(self, 'newline_token_id'):
+                    print("❌ Line replacement masking requires dataset with line structure")
+                    print("   This feature needs access to training lines and newline token ID")
+                    self.wait_for_key()
+                    return
+
+                # Calculate content length (assume full sequence is content for simplicity)
+                content_lengths = torch.tensor([base_sample.shape[1]], dtype=torch.long)
+
+                masked_x, mask = apply_line_replacement_masking_cpu(
+                    base_sample, content_lengths, min_ratio, max_ratio,
+                    self.replacement_lines_ids, self.newline_token_id,
+                    self.mask_token_id, self.vocab_size - 1, rng
                 )
 
             # Show results

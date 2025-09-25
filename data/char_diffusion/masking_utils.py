@@ -283,17 +283,32 @@ def apply_line_replacement_masking_cpu(x: torch.Tensor, content_lengths: torch.T
         if newline_positions.numel() == 0:
             continue  # No lines to replace
 
-        # Calculate line boundaries including start and end
-        # Each line includes the newline character at the end
-        line_starts = torch.cat([torch.tensor([0], device=device), newline_positions + 1])
-        line_ends = torch.cat([newline_positions + 1, torch.tensor([content_len], device=device)])
+        # Calculate line boundaries: each line starts after previous newline and ends at next newline (inclusive)
+        # Line 0: [0, newline_positions[0]]
+        # Line 1: [newline_positions[0]+1, newline_positions[1]]
+        # ...
+        # Last line: [newline_positions[-1]+1, content_len-1] (if there's content after last newline)
 
-        # Filter out empty lines (where start >= end)
-        valid_lines = line_starts < line_ends
-        line_starts = line_starts[valid_lines]
-        line_ends = line_ends[valid_lines]
+        line_boundaries = []
 
-        num_lines = line_starts.numel()
+        # First line: from start to first newline (inclusive)
+        if newline_positions.numel() > 0:
+            line_boundaries.append((0, int(newline_positions[0].item()) + 1))
+
+        # Middle lines: from after previous newline to next newline (inclusive)
+        for i in range(1, newline_positions.numel()):
+            start = int(newline_positions[i-1].item()) + 1
+            end = int(newline_positions[i].item()) + 1
+            if start < end:
+                line_boundaries.append((start, end))
+
+        # Last line: from after last newline to end (if there's content)
+        if newline_positions.numel() > 0:
+            last_newline_pos = int(newline_positions[-1].item())
+            if last_newline_pos + 1 < content_len:
+                line_boundaries.append((last_newline_pos + 1, content_len))
+
+        num_lines = len(line_boundaries)
         if num_lines == 0:
             continue
 
@@ -306,56 +321,32 @@ def apply_line_replacement_masking_cpu(x: torch.Tensor, content_lengths: torch.T
             continue
 
         # Randomly select which lines to replace
-        line_indices = torch.randperm(num_lines, generator=rng)[:num_lines_to_replace]
+        line_indices_to_replace = torch.randperm(num_lines, generator=rng)[:num_lines_to_replace].tolist()
 
-        # Process each line to replace
-        new_content = sample_content.clone()
-        new_content_pos = 0
+        # Replace selected lines
+        for line_idx in line_indices_to_replace:
+            line_start, line_end = line_boundaries[line_idx]
+            original_line_len = line_end - line_start
 
-        for line_idx in range(num_lines):
-            line_start = int(line_starts[line_idx].item())
-            line_end = int(line_ends[line_idx].item())
+            # Select a random replacement line
+            replacement_line_idx = torch.randint(0, len(replacement_lines_ids), (1,), generator=rng).item()
+            replacement_line = replacement_lines_ids[replacement_line_idx]
+            replacement_tokens = torch.tensor(replacement_line, dtype=torch.long, device=device)
 
-            if line_idx in line_indices:
-                # Replace this line with a random line
-                replacement_line_idx = torch.randint(0, len(replacement_lines_ids), (1,), generator=rng).item()
-                replacement_line = replacement_lines_ids[replacement_line_idx]
-                replacement_tokens = torch.tensor(replacement_line, dtype=torch.long, device=device)
+            # Replace the line in-place, truncating if necessary
+            replacement_len = min(len(replacement_tokens), original_line_len, seq_len - line_start)
 
-                # Calculate how much space we have left
-                remaining_space = seq_len - new_content_pos
-                replacement_len = min(len(replacement_tokens), remaining_space)
+            if replacement_len > 0:
+                # Replace the line
+                replaced_x[b, line_start:line_start + replacement_len] = replacement_tokens[:replacement_len]
+                # Mark positions as replaced
+                mask[b, line_start:line_start + replacement_len] = True
 
-                if replacement_len > 0:
-                    # Copy replacement line
-                    replaced_x[b, new_content_pos:new_content_pos + replacement_len] = replacement_tokens[:replacement_len]
-                    # Mark as replaced
-                    mask[b, new_content_pos:new_content_pos + replacement_len] = True
-                    new_content_pos += replacement_len
-
-                    # If we truncated the replacement, we're done
-                    if replacement_len < len(replacement_tokens):
-                        break
-            else:
-                # Keep original line
-                original_line_len = line_end - line_start
-                remaining_space = seq_len - new_content_pos
-                copy_len = min(original_line_len, remaining_space)
-
-                if copy_len > 0:
-                    replaced_x[b, new_content_pos:new_content_pos + copy_len] = sample_content[line_start:line_start + copy_len]
-                    new_content_pos += copy_len
-
-                    # If we truncated the original line, we're done
-                    if copy_len < original_line_len:
-                        break
-
-        # Update content length if it changed
-        content_lengths[b] = min(new_content_pos, seq_len)
-
-        # Clear any remaining positions
-        if new_content_pos < seq_len:
-            replaced_x[b, new_content_pos:] = 0  # Will be filled with PAD tokens later
+                # If replacement is shorter than original, fill remaining positions with zeros
+                if replacement_len < original_line_len:
+                    replaced_x[b, line_start + replacement_len:line_end] = 0
+                    # Update content length to reflect the change
+                    content_lengths[b] = max(0, content_lengths[b] - (original_line_len - replacement_len))
 
     return replaced_x, mask
 
