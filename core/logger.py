@@ -90,6 +90,7 @@ class ConsoleLogger(Logger):
         extras_str = (", " + ", ".join(extras)) if extras else ""
         print(f"iter {iter_num}: loss {loss:.4f}, time {dt_ms:.2f}ms, mfu {mfu_pct:.2f}%{extras_str}")
 
+
     def log_eval(self, metrics: Dict[str, Any]) -> None:
         """Log evaluation results to console (every eval_interval)."""
         if not self.master_process:

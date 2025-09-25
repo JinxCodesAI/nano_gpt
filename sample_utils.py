@@ -96,13 +96,14 @@ def apply_repetition_penalty(logits, input_ids, penalty=1.0, window=10):
         recent_tokens = input_ids[batch_idx, start_idx:seq_len]
 
         # Apply penalty to tokens that appeared recently
-        for token in recent_tokens:
-            if 0 <= token < vocab_size:
+        for i in range(recent_tokens.size(0)):
+            token_id = recent_tokens[i].item()  # Convert tensor to scalar
+            if 0 <= token_id < vocab_size:
                 # If logit is positive, divide by penalty; if negative, multiply
-                if last_logits[batch_idx, token] > 0:
-                    last_logits[batch_idx, token] /= penalty
+                if last_logits[batch_idx, token_id] > 0:
+                    last_logits[batch_idx, token_id] /= penalty
                 else:
-                    last_logits[batch_idx, token] *= penalty
+                    last_logits[batch_idx, token_id] *= penalty
 
     # Replace the last position logits
     modified_logits = logits.clone()
@@ -114,7 +115,8 @@ def apply_repetition_penalty(logits, input_ids, penalty=1.0, window=10):
 def predict_and_sample_tokens(model, tokens, mask_token_id, temperature=1.0, top_p=1.0,
                             repetition_penalty=1.0, repetition_window=10, vocab_size=None,
                             device='cuda', debug_logging_fn=None, itos=None, stoi=None,
-                            verbose=False, log_debug=False, return_logits=False):
+                            verbose=False, log_debug=False, return_logits=False,
+                            pad_token_id=None, base_vocab_size=None):
     """
     Predict and sample new tokens for masked positions
 
@@ -167,24 +169,40 @@ def predict_and_sample_tokens(model, tokens, mask_token_id, temperature=1.0, top
         # Extract logits for masked positions
         masked_logits = logits[batch_idx, mask_indices, :]  # (num_masked, vocab_size)
 
-        # Exclude the mask token from sampling by setting its logit to -inf
-        # We want to sample only from actual vocabulary tokens (0 to vocab_size-2)
+        # Exclude special tokens from sampling - only sample from base vocabulary
         if vocab_size is not None:
             # Set mask token logit to -inf so it's never sampled
             masked_logits[:, mask_token_id] = float('-inf')
-            # Also ensure we don't access beyond vocabulary
+
+            # Set pad token logit to -inf if it exists
+            if pad_token_id is not None:
+                masked_logits[:, pad_token_id] = float('-inf')
+
+            # If we have base_vocab_size, only allow sampling from base vocabulary
+            if base_vocab_size is not None:
+                # Set all special tokens (beyond base vocab) to -inf
+                if masked_logits.shape[-1] > base_vocab_size:
+                    masked_logits[:, base_vocab_size:] = float('-inf')
+
+            # Ensure we don't access beyond vocabulary
             if masked_logits.shape[-1] > vocab_size:
                 masked_logits = masked_logits[:, :vocab_size]
 
         # Apply repetition penalty if needed
         if repetition_penalty != 1.0:
-            # Create a dummy sequence for repetition penalty calculation
-            dummy_seq = tokens[batch_idx:batch_idx+1, :].unsqueeze(1).expand(-1, len(mask_indices), -1)
-            dummy_logits = masked_logits.unsqueeze(0)  # (1, num_masked, vocab_size)
-            dummy_logits = apply_repetition_penalty(
-                dummy_logits, dummy_seq, repetition_penalty, repetition_window
-            )
-            masked_logits = dummy_logits.squeeze(0)
+            # For each masked position, apply repetition penalty based on the full sequence
+            for mask_idx in range(len(mask_indices)):
+                # Create dummy logits for this single position
+                single_logits = masked_logits[mask_idx:mask_idx+1, :].unsqueeze(0)  # (1, 1, vocab_size)
+                single_seq = tokens[batch_idx:batch_idx+1, :]  # (1, seq_len)
+
+                # Apply repetition penalty
+                penalized_logits = apply_repetition_penalty(
+                    single_logits, single_seq, repetition_penalty, repetition_window
+                )
+
+                # Update the masked logits
+                masked_logits[mask_idx, :] = penalized_logits.squeeze(0).squeeze(0)
 
         # Sample new tokens
         new_tokens = nucleus_sample(masked_logits, top_p=top_p, temperature=temperature)
@@ -554,5 +572,6 @@ def apply_remasking_step(tokens, prediction_tokens, iteration, iterations, sched
         randomness_strength=randomness_strength,
         base_model=None,
         intelligent_remasking=False,
+        protected_mask=protected_mask,
     )
     return remasked_tokens

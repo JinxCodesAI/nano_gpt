@@ -11,7 +11,7 @@ always_save_checkpoint = False
 
 wandb_log = True # override via command line if you like
 wandb_project = 'char-diffusion'
-wandb_run_name = 'bert-char-with-entropy-modifier'
+wandb_run_name = 'bert-char-no-entropy-modifier'
 
 dataset = 'char_diffusion'
 
@@ -81,9 +81,9 @@ ignore_index = -100  # Default PyTorch ignore index
 # batch_size = 4
 # block_size = 128
 
-loss_modifiers_enabled = True
+loss_modifiers_enabled = False
 
-entropy_modifier_enabled = True
+entropy_modifier_enabled = False
 entropy_modifier_weight = 0.3
 entropy_modifier_threshold = 0.1 
 # loss multiplier in range of [0.3, 3]

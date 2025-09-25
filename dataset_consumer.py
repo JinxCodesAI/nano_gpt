@@ -7,8 +7,7 @@ Features:
 - Deletes fully-consumed files to signal provider (only in queue mode)
 - Exposes meta.pkl and basic stats
 
-Note: For now we maintain the (X, Y) return path when schema has x/y. If a
-schema is present with other fields, get_batch returns a dict[str, Tensor].
+Note: get_batch always returns a dict[str, Tensor] (e.g., x, y, attention_mask).
 """
 from __future__ import annotations
 
@@ -16,7 +15,7 @@ import os
 import time
 import glob
 import pickle
-from typing import Dict, List, Optional, Tuple, Union
+from typing import Dict, List, Optional
 
 import torch
 
@@ -144,7 +143,60 @@ class DatasetConsumer:
                     continue
                 if isinstance(v, torch.Tensor):
                     tensors[k] = v
+
+        # Filter out samples with zero supervised targets
+        tensors, metadata = self._filter_zero_supervision_samples(tensors, metadata)
+
         return tensors, metadata
+
+    def _filter_zero_supervision_samples(self, tensors: Dict[str, torch.Tensor], metadata: Dict) -> tuple[Dict[str, torch.Tensor], Dict]:
+        """Filter out samples that have zero supervised targets (all targets == ignore_index)."""
+        ignore_index = -100
+
+        # Find target tensor - try common names
+        target_tensor = None
+        target_key = None
+        for key in ['y', 'targets']:
+            if key in tensors:
+                target_tensor = tensors[key]
+                target_key = key
+                break
+
+        if target_tensor is None:
+            # No target tensor found, return as-is
+            return tensors, metadata
+
+        # Find samples with at least one supervised target
+        supervised_mask = (target_tensor != ignore_index).any(dim=1)  # (batch_size,)
+        num_supervised = supervised_mask.sum().item()
+        total_samples = target_tensor.shape[0]
+
+        if num_supervised == total_samples:
+            # All samples have supervision, no filtering needed
+            return tensors, metadata
+
+        if num_supervised == 0:
+            # No samples have supervision - this shouldn't happen but handle gracefully
+            print(f"[consumer] WARNING: No samples with supervision found in batch file")
+            return tensors, metadata
+
+        # Filter all tensors to keep only supervised samples
+        filtered_tensors = {}
+        for key, tensor in tensors.items():
+            filtered_tensors[key] = tensor[supervised_mask]
+
+        # Update metadata if it contains stage_info or other per-sample data
+        filtered_metadata = metadata.copy()
+        if 'stage_info' in metadata and isinstance(metadata['stage_info'], list):
+            # Filter stage_info to match filtered samples
+            original_stage_info = metadata['stage_info']
+            if len(original_stage_info) == total_samples:
+                filtered_stage_info = [original_stage_info[i] for i in range(total_samples) if supervised_mask[i]]
+                filtered_metadata['stage_info'] = filtered_stage_info
+
+        print(f"[consumer] Filtered out {total_samples - num_supervised} samples with zero supervision (kept {num_supervised}/{total_samples})")
+
+        return filtered_tensors, filtered_metadata
 
     def _maybe_delete_consumed(self, split: str, path: str) -> None:
         if self._mode != "queue":
@@ -189,10 +241,10 @@ class DatasetConsumer:
             time.sleep(self.wait_sleep_seconds)
 
     # ---- public API ----
-    def get_batch(self, split: str, device) -> Union[Tuple[torch.Tensor, torch.Tensor], Dict[str, torch.Tensor]]:
+    def get_batch(self, split: str, device) -> Dict[str, torch.Tensor]:
         """Fetch next batch for the split. Blocks if needed.
 
-        Returns (X, Y) if keys 'x' and 'y' are available, else a dict[str, Tensor].
+        Always returns a dict[str, Tensor] (e.g., x, y, attention_mask).
         """
         self._ensure_data_available(split)
 
@@ -272,13 +324,7 @@ class DatasetConsumer:
 
         for k in list(batch_tensors.keys()):
             batch_tensors[k] = _to_device(batch_tensors[k])
-
-        # return legacy tuple when possible
-        if "x" in batch_tensors and "y" in batch_tensors:
-            return batch_tensors["x"], batch_tensors["y"]
-        # normalize common schema keys to tuple expected by train/evaluator
-        if "input_ids" in batch_tensors and "targets" in batch_tensors:
-            return batch_tensors["input_ids"], batch_tensors["targets"]
+        
         return batch_tensors
 
     def reset_state(self, split: Optional[str] = None) -> None:

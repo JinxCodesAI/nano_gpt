@@ -57,6 +57,8 @@ class Trainer:
         self.iter_num = int(iter_num)
         self.best_val_loss = float(best_val_loss)
 
+
+
     def train(self) -> None:
         # Initial progress update (parity with train.py)
         self.checkpoint_manager.update_progress(
@@ -64,7 +66,7 @@ class Trainer:
         )
 
         # fetch the very first batch
-        X, Y = self.consumer.get_batch('train', self.device)
+        batch = self.consumer.get_batch('train', self.device)
         t0 = time.time()
         local_iter_num = 0
         raw_model = self.model.module if self.ddp else self.model
@@ -108,12 +110,14 @@ class Trainer:
             if self.iter_num == 0 and self.eval_only:
                 break
 
+
+
             # Dynamic unfreezing support (delegated to TrainingStep)
             self.training_step.maybe_unfreeze(self.iter_num)
 
             # forward/backward/update handled by TrainingStep
-            loss, X, Y = self.training_step.execute_step(
-                X, Y, self.evaluator.loss_modifier_pipeline, self.consumer, self.device
+            loss, batch = self.training_step.execute_step(
+                batch, self.evaluator.loss_modifier_pipeline, self.consumer, self.device
             )
 
             # timing and logging
@@ -134,6 +138,9 @@ class Trainer:
                     "time_ms": dt * 1000,
                     "mfu_pct": running_mfu * 100,
                 }
+
+
+
                 self.logger.log_step(step_metrics)
 
             self.iter_num += 1

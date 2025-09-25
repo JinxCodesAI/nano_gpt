@@ -7,6 +7,7 @@ logic extracted from the original estimate_loss() function in train.py.
 
 import torch
 from model import ModelMode
+from core.batch import Batch, unpack_batch
 
 from typing import Dict
 
@@ -88,12 +89,15 @@ class Evaluator:
                     self.consumer.reset_state('val')
                 except Exception:
                     pass
+
+
             for split in splits:
                 # For non-sequence scorer or for train split: original behavior
                 if (not is_sequence_scorer) or (split != 'val'):
                     losses = torch.zeros(self.eval_iters)
                     for k in range(self.eval_iters):
-                        X, Y = self.consumer.get_batch(split, self.device)
+                        batch = self.consumer.get_batch(split, self.device)
+                        X, Y = unpack_batch(batch)
                         with self.ctx:
                             _, loss = self.model(X, Y, loss_modifiers=self.loss_modifier_pipeline)
                         losses[k] = loss.item()
@@ -106,19 +110,20 @@ class Evaluator:
 
                     # First pass: fixed eval_iters window (for val loss comparability)
                     for k in range(self.eval_iters):
-                        X, Y = self.consumer.get_batch(split, self.device)
+                        batch = self.consumer.get_batch(split, self.device)
+                        X, Y = unpack_batch(batch)
                         mask_nonzero = (Y > 0)
                         mask_zero = (Y == 0)
                         if mask_nonzero.any():
                             Xnz = X[mask_nonzero]
                             Ynz = Y[mask_nonzero]
                             with self.ctx:
-                                _, loss_nz = self.model(Xnz, Ynz, loss_modifiers=self.loss_modifier_pipeline)
+                                _, loss_nz = self.model(Xnz, Ynz, attention_mask=None, loss_modifiers=self.loss_modifier_pipeline)
                             nonzero_losses.append(float(loss_nz.item()))
                         if mask_zero.any():
                             Xz = X[mask_zero]
                             with self.ctx:
-                                logits_z, _ = self.model(Xz, targets=None, loss_modifiers=self.loss_modifier_pipeline)
+                                logits_z, _ = self.model(Xz, targets=None, attention_mask=None, loss_modifiers=self.loss_modifier_pipeline)
                             zero_preds.append(logits_z.detach().float().cpu())
                             zeros_collected += int(mask_zero.sum().item())
 
@@ -127,7 +132,8 @@ class Evaluator:
                         and self.max_extra_batches_for_zero_stats > 0):
                         extra = 0
                         while extra < self.max_extra_batches_for_zero_stats and zeros_collected < self.min_zero_for_stats:
-                            X, Y = self.consumer.get_batch(split, self.device)
+                            batch = self.consumer.get_batch(split, self.device)
+                            X, Y = unpack_batch(batch)
                             mask_zero = (Y == 0)
                             if mask_zero.any():
                                 Xz = X[mask_zero]

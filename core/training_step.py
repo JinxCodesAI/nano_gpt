@@ -7,7 +7,8 @@ without changing functionality or timing semantics (including prefetching
 next batches inside the micro-step loop).
 """
 
-from typing import Tuple, Optional
+from typing import Tuple, Optional, Any
+from core.batch import Batch, unpack_batch
 import torch
 
 
@@ -30,7 +31,7 @@ class TrainingStep:
         scheduler=None,
         unfreeze_at_iteration: Optional[int] = None,
         unfreeze_lr_multiplier: float = 0.1,
-        logger: Optional[any] = None,
+        logger: Optional[Any] = None,
     ) -> None:
         self.model = model
         self.optimizer = optimizer
@@ -90,27 +91,27 @@ class TrainingStep:
 
     def execute_step(
         self,
-        X: torch.Tensor,
-        Y: torch.Tensor,
+        batch: Batch,
         loss_modifiers,
         consumer,
         device: str,
-    ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+    ) -> Tuple[torch.Tensor, Batch]:
         """
         Execute one full optimizer step with gradient accumulation.
 
         Args:
-            X, Y: Current input and targets tensors for the first micro-step
+            batch: Current batch dict. Supports keys x/y[/attention_mask] or input_ids/targets
             loss_modifiers: Loss modifier pipeline to pass to the model
             consumer: DatasetConsumer to prefetch the next batch
             device: Device string for consumer.get_batch
 
         Returns:
-            (loss, X, Y):
+            (loss, next_batch):
                 - loss: the (scaled by 1/grad_accum_steps) loss from the last micro-step
-                - X, Y: next prefetched batch, ready for the next iteration
+                - next_batch: next prefetched batch (dict), ready for the next iteration
         """
         last_loss = None
+
 
         for micro_step in range(self.grad_accum_steps):
             if self.ddp:
@@ -118,17 +119,19 @@ class TrainingStep:
                 self.model.require_backward_grad_sync = (
                     micro_step == self.grad_accum_steps - 1
                 )
+            X, Y = unpack_batch(batch)
             with self.ctx:
                 _, loss = self.model(X, Y, loss_modifiers=loss_modifiers)
                 # Scale the loss to account for gradient accumulation
                 loss = loss / self.grad_accum_steps
 
             # Immediately async prefetch next batch while GPU computes backward
-            X, Y = consumer.get_batch('train', device)
+            next_batch = consumer.get_batch('train', device)
 
             # Backward pass with gradient scaling for fp16
             self.scaler.scale(loss).backward()
             last_loss = loss
+            batch = next_batch
 
         # Gradient clipping (after unscale), identical to original code
         if self.grad_clip != 0.0:
@@ -141,5 +144,5 @@ class TrainingStep:
         # Flush the gradients as soon as we can
         self.optimizer.zero_grad(set_to_none=True)
 
-        return last_loss, X, Y
+        return last_loss, batch
 
