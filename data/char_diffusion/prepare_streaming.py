@@ -467,31 +467,65 @@ class CharDiffusionProvider(DataProviderBase):
     def _apply_stage_masking_and_pad(self, x: torch.Tensor, content_lengths: torch.Tensor,
                                     stage_config: Dict[str, Any], mask_token_id: int, base_vocab_size: int, rng) -> tuple[torch.Tensor, torch.Tensor]:
         """Step 2 & 3: Apply stage masking to variable-length content, then pad with [PAD] tokens."""
-        count = x.shape[0]
-        corrupted_x = x.clone()
-        labels = torch.full_like(x, self.ignore_index)
+        stage_type = stage_config.get('type', 'unknown')
 
-        for b in range(count):
-            content_len = int(content_lengths[b].item())
-            if content_len > 0:
-                # Step 2: Apply stage masking only to the content portion
-                content = x[b, :content_len].unsqueeze(0)  # Add batch dim
-                corrupted_content, mask = apply_stage_masking(
-                    content, stage_config, mask_token_id, base_vocab_size, rng
-                )
+        if stage_type == 'line':
+            # For line replacement, we need to handle the entire batch at once
+            # to maintain line structure and use the same replacement lines source
+            split = 'train'  # Default to train for replacement lines
+            replacement_lines_ids = self.train_lines_ids if split == 'train' else self.val_lines_ids
 
-                # Update corrupted sequence and labels for content only
-                corrupted_x[b, :content_len] = corrupted_content.squeeze(0)
-                labels[b, :content_len] = torch.where(
-                    mask.squeeze(0), x[b, :content_len], self.ignore_index
-                )
+            corrupted_x, mask = apply_stage_masking(
+                x, stage_config, mask_token_id, base_vocab_size, rng,
+                content_lengths=content_lengths,
+                replacement_lines_ids=replacement_lines_ids,
+                newline_token_id=self.newline_token_id
+            )
+
+            # Create labels for line replacement
+            labels = torch.full_like(x, self.ignore_index)
+            for b in range(x.shape[0]):
+                content_len = int(content_lengths[b].item())
+                if content_len > 0:
+                    # For line replacement, we predict the original tokens at replaced positions
+                    labels[b, :content_len] = torch.where(
+                        mask[b, :content_len], x[b, :content_len], self.ignore_index
+                    )
 
             # Step 3: Fill remaining positions with [PAD] tokens
-            if content_lengths[b] < self.block_size:
-                corrupted_x[b, content_lengths[b]:] = self.pad_token_id
-                # labels already set to ignore_index for padding positions
+            for b in range(x.shape[0]):
+                if content_lengths[b] < self.block_size:
+                    corrupted_x[b, content_lengths[b]:] = self.pad_token_id
+                    # labels already set to ignore_index for padding positions
 
-        return corrupted_x, labels
+            return corrupted_x, labels
+        else:
+            # Original logic for other masking types
+            count = x.shape[0]
+            corrupted_x = x.clone()
+            labels = torch.full_like(x, self.ignore_index)
+
+            for b in range(count):
+                content_len = int(content_lengths[b].item())
+                if content_len > 0:
+                    # Step 2: Apply stage masking only to the content portion
+                    content = x[b, :content_len].unsqueeze(0)  # Add batch dim
+                    corrupted_content, mask = apply_stage_masking(
+                        content, stage_config, mask_token_id, base_vocab_size, rng
+                    )
+
+                    # Update corrupted sequence and labels for content only
+                    corrupted_x[b, :content_len] = corrupted_content.squeeze(0)
+                    labels[b, :content_len] = torch.where(
+                        mask.squeeze(0), x[b, :content_len], self.ignore_index
+                    )
+
+                # Step 3: Fill remaining positions with [PAD] tokens
+                if content_lengths[b] < self.block_size:
+                    corrupted_x[b, content_lengths[b]:] = self.pad_token_id
+                    # labels already set to ignore_index for padding positions
+
+            return corrupted_x, labels
 
     def _produce_stage_based_file(self, split: str, seq: int) -> None:
         """Generate an entire file with stage-based sampling using simplified line-aligned approach."""

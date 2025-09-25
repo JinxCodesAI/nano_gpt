@@ -1,8 +1,9 @@
 use_all_stages_for_training = True
 
 unmasking_stages = [
-    {'type': 'span', 'spans_count': 00, 'val_loss_stale_count': 10},
+    {'type': 'span', 'spans_count': 40, 'val_loss_stale_count': 10},
     {'type':'sticky','target_masked_ratio': 0.6, 'p1_probability': 0.2, 'p2_probability': 0.01, 'val_loss_stale_count': 8},
+    {'type': 'line', 'min_ratio': 0.2, 'max_ratio': 0.4, 'val_loss_stale_count': 10}
 ]
 
 validation_stages = [

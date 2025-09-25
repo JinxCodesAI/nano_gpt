@@ -236,34 +236,164 @@ def apply_span_masking_cpu(x: torch.Tensor, spans_count: int,
     return masked_x, mask
 
 
-def apply_stage_masking(x: torch.Tensor, stage_config: Dict[str, Any], 
-                       mask_token_id: int, vocab_size: int, rng) -> tuple[torch.Tensor, torch.Tensor]:
+def apply_line_replacement_masking_cpu(x: torch.Tensor, content_lengths: torch.Tensor,
+                                     min_ratio: float, max_ratio: float,
+                                     replacement_lines_ids: list, newline_token_id: int,
+                                     mask_token_id: int, vocab_size: int, rng) -> tuple[torch.Tensor, torch.Tensor]:
+    """
+    CPU-optimized line replacement masking for unmasking training.
+    Replaces full lines with random lines from the training set.
+
+    Args:
+        x: Input tokens (batch_size, seq_len) - contains line-aligned sequences
+        content_lengths: Actual content lengths for each sample (batch_size,)
+        min_ratio: Minimum ratio of lines to replace (0.0 to 1.0)
+        max_ratio: Maximum ratio of lines to replace (0.0 to 1.0)
+        replacement_lines_ids: List of tokenized lines to use as replacements
+        newline_token_id: Token ID for newline character
+        mask_token_id: Token ID to use for masking (not used in line replacement)
+        vocab_size: Size of original vocabulary (not used in line replacement)
+        rng: Random number generator
+
+    Returns:
+        replaced_x: Input with lines replaced
+        mask: Boolean mask indicating which positions were replaced
+    """
+    batch_size, seq_len = x.shape
+    device = x.device
+
+    if not replacement_lines_ids or newline_token_id is None:
+        # No replacement possible - return original
+        return x.clone(), torch.zeros_like(x, dtype=torch.bool, device=device)
+
+    replaced_x = x.clone()
+    mask = torch.zeros_like(x, dtype=torch.bool, device=device)
+
+    for b in range(batch_size):
+        content_len = int(content_lengths[b].item())
+        if content_len <= 1:
+            continue  # Skip samples with no meaningful content
+
+        # Extract content portion for this sample
+        sample_content = x[b, :content_len]
+
+        # Find line boundaries (positions of newline tokens)
+        newline_positions = torch.where(sample_content == newline_token_id)[0]
+
+        if newline_positions.numel() == 0:
+            continue  # No lines to replace
+
+        # Calculate line boundaries including start and end
+        # Each line includes the newline character at the end
+        line_starts = torch.cat([torch.tensor([0], device=device), newline_positions + 1])
+        line_ends = torch.cat([newline_positions + 1, torch.tensor([content_len], device=device)])
+
+        # Filter out empty lines (where start >= end)
+        valid_lines = line_starts < line_ends
+        line_starts = line_starts[valid_lines]
+        line_ends = line_ends[valid_lines]
+
+        num_lines = line_starts.numel()
+        if num_lines == 0:
+            continue
+
+        # Determine replacement ratio for this sample
+        replacement_ratio = min_ratio + torch.rand(1, generator=rng).item() * (max_ratio - min_ratio)
+        num_lines_to_replace = max(1, int(replacement_ratio * num_lines))
+        num_lines_to_replace = min(num_lines_to_replace, num_lines)
+
+        if num_lines_to_replace == 0:
+            continue
+
+        # Randomly select which lines to replace
+        line_indices = torch.randperm(num_lines, generator=rng)[:num_lines_to_replace]
+
+        # Process each line to replace
+        new_content = sample_content.clone()
+        new_content_pos = 0
+
+        for line_idx in range(num_lines):
+            line_start = int(line_starts[line_idx].item())
+            line_end = int(line_ends[line_idx].item())
+
+            if line_idx in line_indices:
+                # Replace this line with a random line
+                replacement_line_idx = torch.randint(0, len(replacement_lines_ids), (1,), generator=rng).item()
+                replacement_line = replacement_lines_ids[replacement_line_idx]
+                replacement_tokens = torch.tensor(replacement_line, dtype=torch.long, device=device)
+
+                # Calculate how much space we have left
+                remaining_space = seq_len - new_content_pos
+                replacement_len = min(len(replacement_tokens), remaining_space)
+
+                if replacement_len > 0:
+                    # Copy replacement line
+                    replaced_x[b, new_content_pos:new_content_pos + replacement_len] = replacement_tokens[:replacement_len]
+                    # Mark as replaced
+                    mask[b, new_content_pos:new_content_pos + replacement_len] = True
+                    new_content_pos += replacement_len
+
+                    # If we truncated the replacement, we're done
+                    if replacement_len < len(replacement_tokens):
+                        break
+            else:
+                # Keep original line
+                original_line_len = line_end - line_start
+                remaining_space = seq_len - new_content_pos
+                copy_len = min(original_line_len, remaining_space)
+
+                if copy_len > 0:
+                    replaced_x[b, new_content_pos:new_content_pos + copy_len] = sample_content[line_start:line_start + copy_len]
+                    new_content_pos += copy_len
+
+                    # If we truncated the original line, we're done
+                    if copy_len < original_line_len:
+                        break
+
+        # Update content length if it changed
+        content_lengths[b] = min(new_content_pos, seq_len)
+
+        # Clear any remaining positions
+        if new_content_pos < seq_len:
+            replaced_x[b, new_content_pos:] = 0  # Will be filled with PAD tokens later
+
+    return replaced_x, mask
+
+
+def apply_stage_masking(x: torch.Tensor, stage_config: Dict[str, Any],
+                       mask_token_id: int, vocab_size: int, rng,
+                       content_lengths: torch.Tensor = None,
+                       replacement_lines_ids: list = None,
+                       newline_token_id: int = None) -> tuple[torch.Tensor, torch.Tensor]:
     """
     Apply masking based on stage configuration type.
-    
+
     Args:
         x: Input tokens (batch_size, seq_len)
         stage_config: Stage configuration dictionary
         mask_token_id: Token ID to use for masking
         vocab_size: Size of original vocabulary (for random token generation, excluding special tokens)
         rng: Random number generator
-        
+        content_lengths: Actual content lengths for each sample (required for 'line' type)
+        replacement_lines_ids: List of tokenized lines for replacement (required for 'line' type)
+        newline_token_id: Token ID for newline character (required for 'line' type)
+
     Returns:
         masked_x: Input with masked tokens
         mask: Boolean mask indicating which positions were masked
     """
     stage_type = stage_config['type']
-    
+
     if stage_type == 'random':
         max_masked_ratio = stage_config['max_masked_ratio']
         # For random masking, each sample gets a different random ratio up to max
         batch_size = x.shape[0]
         mask_ratios = torch.rand(batch_size, generator=rng) * max_masked_ratio
-        
+
         # Apply masking for each sample with its ratio
         all_corrupted = []
         all_masks = []
-        
+
         for i in range(batch_size):
             sample_x = x[i:i+1]  # Keep batch dimension
             corrupted_x, mask = apply_random_masking_cpu(
@@ -271,22 +401,34 @@ def apply_stage_masking(x: torch.Tensor, stage_config: Dict[str, Any],
             )
             all_corrupted.append(corrupted_x)
             all_masks.append(mask)
-        
+
         return torch.cat(all_corrupted, dim=0), torch.cat(all_masks, dim=0)
-        
+
     elif stage_type == 'sticky':
         target_masked_ratio = stage_config['target_masked_ratio']
-        p1_probability = stage_config['p1_probability'] 
+        p1_probability = stage_config['p1_probability']
         p2_probability = stage_config['p2_probability']
-        
+
         return apply_target_driven_sticky_masking_cpu(
-            x, target_masked_ratio, p1_probability, p2_probability, 
+            x, target_masked_ratio, p1_probability, p2_probability,
             mask_token_id, vocab_size, rng
         )
-        
+
     elif stage_type == 'span':
         spans_count = stage_config['spans_count']
         return apply_span_masking_cpu(x, spans_count, mask_token_id, vocab_size, rng)
-        
+
+    elif stage_type == 'line':
+        if content_lengths is None or replacement_lines_ids is None or newline_token_id is None:
+            raise ValueError("Line replacement masking requires content_lengths, replacement_lines_ids, and newline_token_id")
+
+        min_ratio = stage_config['min_ratio']
+        max_ratio = stage_config['max_ratio']
+
+        return apply_line_replacement_masking_cpu(
+            x, content_lengths, min_ratio, max_ratio,
+            replacement_lines_ids, newline_token_id, mask_token_id, vocab_size, rng
+        )
+
     else:
         raise ValueError(f"Unknown stage type: {stage_type}")
