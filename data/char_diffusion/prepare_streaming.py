@@ -107,16 +107,11 @@ class CharDiffusionProvider(DataProviderBase):
 
         super().__init__(*args, **kwargs)
 
-        # Load Shakespeare data - fail if not present
-        input_file_path = os.path.join(self.data_dir, 'input.txt')
-        with open(input_file_path, 'r') as f:
-            data = f.read()
+        # Load text data using shared method
+        data = self._load_input_text()
 
-        # Create vocabulary (base chars + [MASK] + [SEP])
-        chars = sorted(list(set(data)))
-        self.base_vocab_size = len(chars)  # excludes special tokens
-        self.stoi = {ch: i for i, ch in enumerate(chars)}
-        self.itos = {i: ch for i, ch in enumerate(chars)}
+        # Create base vocabulary using shared method
+        self.base_vocab_size, self.stoi, self.itos = self._create_char_vocab(data)
 
         # Special tokens
         self.mask_token_id = self.base_vocab_size
@@ -128,12 +123,10 @@ class CharDiffusionProvider(DataProviderBase):
         self.vocab_size = self.base_vocab_size + 2
         self.newline_token_id = self.stoi.get('\n', None)
 
-        # Create train/val splits
-        n = len(data)
-        train_data = data[: int(n * 0.9)]
-        val_data = data[int(n * 0.9) :]
-        self.train_ids = [self.stoi[c] for c in train_data]
-        self.val_ids = [self.stoi[c] for c in val_data]
+        # Create train/val splits using shared method
+        train_data, val_data = self._create_train_val_split(data)
+        self.train_ids = self._tokenize_text(train_data, self.stoi)
+        self.val_ids = self._tokenize_text(val_data, self.stoi)
 
         # Create line-aligned sequence builders if enabled
         if self.enable_line_aligned_sequences:
@@ -150,7 +143,7 @@ class CharDiffusionProvider(DataProviderBase):
                 val_lines_ids, self.newline_token_id, self.pad_token_id
             )
 
-            # Keep legacy data structures for backward compatibility
+            # Keep existing data structures for backward compatibility
             self.train_lines = train_lines
             self.val_lines = val_lines
             self.train_lines_ids = train_lines_ids
@@ -166,7 +159,7 @@ class CharDiffusionProvider(DataProviderBase):
             self.train_valid_starts = self.train_builder.valid_starts
             self.val_valid_starts = self.val_builder.valid_starts
         else:
-            # Legacy mode: no line-aligned builders
+            # No line-aligned builders
             self.train_builder = None
             self.val_builder = None
 
@@ -402,8 +395,8 @@ class CharDiffusionProvider(DataProviderBase):
             builder = self.train_builder if split == "train" else self.val_builder
             return builder.build_variable_length_sequences(count, self.block_size, rng)
         else:
-            # Legacy fallback (should not be reached in normal operation)
-            raise NotImplementedError("Legacy non-line-aligned mode not supported in this method")
+            # Fallback (should not be reached in normal operation)
+            raise NotImplementedError("Non-line-aligned mode not supported in this method")
 
     def _apply_masking_and_pad(self, x: torch.Tensor, content_lengths: torch.Tensor,
                               mask_probability: float, mask_token_id: int, base_vocab_size: int, rng) -> tuple[torch.Tensor, torch.Tensor]:
@@ -462,7 +455,7 @@ class CharDiffusionProvider(DataProviderBase):
             # Use train_builder as default (this method is called from stage-based generation)
             corrupted_x = self.train_builder.apply_padding(corrupted_x, content_lengths)
         else:
-            # Legacy padding
+            # Original padding approach
             for b in range(count):
                 if content_lengths[b] < self.block_size:
                     corrupted_x[b, content_lengths[b]:] = self.pad_token_id

@@ -24,19 +24,15 @@ class ShakespeareCharProvider(DataProviderBase):
             data_url = 'https://raw.githubusercontent.com/karpathy/char-rnn/master/data/tinyshakespeare/input.txt'
             with open(input_file_path, 'w') as f:
                 f.write(requests.get(data_url).text)
-        with open(input_file_path, 'r') as f:
-            data = f.read()
-        # vocab
-        chars = sorted(list(set(data)))
-        self.vocab_size = len(chars)
-        self.stoi = {ch: i for i, ch in enumerate(chars)}
-        self.itos = {i: ch for i, ch in enumerate(chars)}
-        # splits
-        n = len(data)
-        train_data = data[: int(n * 0.9)]
-        val_data = data[int(n * 0.9) :]
-        self.train_ids = np.array([self.stoi[c] for c in train_data], dtype=np.int64)
-        self.val_ids = np.array([self.stoi[c] for c in val_data], dtype=np.int64)
+
+        # Use shared methods for data processing
+        data = self._load_input_text()
+        self.vocab_size, self.stoi, self.itos = self._create_char_vocab(data)
+        train_data, val_data = self._create_train_val_split(data)
+        train_ids = self._tokenize_text(train_data, self.stoi)
+        val_ids = self._tokenize_text(val_data, self.stoi)
+        self.train_ids = np.array(train_ids, dtype=np.int64)
+        self.val_ids = np.array(val_ids, dtype=np.int64)
 
     def build_meta(self) -> Dict:
         # LM schema: x[int64, block_size], y[int64, target_size]

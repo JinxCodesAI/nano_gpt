@@ -27,7 +27,7 @@ vocab_size = 67
 #init_from = 'resume'
 
 # Load composition configuration (same as char_diffusion)
-composition_config = 'span_and_lines'  # reuses data/char_diffusion/config/span.py
+composition_config = 'span_and_lines'  # reuses data/char_diffusion/config/span_and_lines.py
 
 # Load globals from composition config if present
 if composition_config is not None:

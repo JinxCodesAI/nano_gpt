@@ -141,11 +141,8 @@ class SequenceScorerProvider(DataProviderBase):
         }
 
     def _load_text_data(self) -> None:
-        input_file_path = os.path.join(self.data_dir, 'input.txt')
-        if not os.path.exists(input_file_path):
-            raise FileNotFoundError(f"Input text file not found: {input_file_path}")
-        with open(input_file_path, 'r') as f:
-            data = f.read()
+        # Load text data using shared method
+        data = self._load_input_text()
 
         # Use vocabulary from MLM model meta to ensure compatibility
         self.stoi = dict(self.mlm_engine.stoi)
@@ -174,13 +171,15 @@ class SequenceScorerProvider(DataProviderBase):
                 pad_token_id=None  # SequenceScorer doesn't use padding, relies on CLS token
             )
 
-            # Keep legacy ids for compatibility with non-line-aligned code paths
-            self.train_ids = [self.stoi.get(c, 0) for c in data[: int(len(data) * 0.9)]]
-            self.val_ids = [self.stoi.get(c, 0) for c in data[int(len(data) * 0.9) :]]
+            # Keep ids for compatibility with non-line-aligned code paths
+            train_data, val_data = self._create_train_val_split(data)
+            self.train_ids = [self.stoi.get(c, 0) for c in train_data]
+            self.val_ids = [self.stoi.get(c, 0) for c in val_data]
         else:
-            # Legacy approach: tokenize characters using stoi (fallback to 0 if missing)
-            self.train_ids = [self.stoi.get(c, 0) for c in data[: int(len(data) * 0.9)]]
-            self.val_ids = [self.stoi.get(c, 0) for c in data[int(len(data) * 0.9) :]]
+            # Original approach: tokenize characters using stoi (fallback to 0 if missing)
+            train_data, val_data = self._create_train_val_split(data)
+            self.train_ids = [self.stoi.get(c, 0) for c in train_data]
+            self.val_ids = [self.stoi.get(c, 0) for c in val_data]
             self.train_builder = None
             self.val_builder = None
             self.newline_token_id = None
@@ -189,6 +188,80 @@ class SequenceScorerProvider(DataProviderBase):
         if self.use_all_stages_for_training:
             raise NotImplementedError("Stage-based sampling requires file-level generation")
         return self._sample_default_batch(split, rng)
+
+    def _sample_default_batch(self, split: str, rng) -> Dict[str, torch.Tensor]:
+        if self.enable_line_aligned_sequences:
+            # Use line-aligned sequence generation
+            builder = self.train_builder if split == "train" else self.val_builder
+
+            # Step 1: Build variable-length line-aligned sequences (without CLS)
+            original_text, content_lengths = builder.build_variable_length_sequences(
+                self.batch_size, self.block_size - 1, rng  # Leave space for CLS
+            )
+
+            # Step 2: Apply masking and synthetic generation to variable-length content
+            min_ratio, max_ratio = self.mask_probability_range
+            mask_ratios = torch.rand(self.batch_size, generator=rng) * (max_ratio - min_ratio) + min_ratio
+
+            # Apply masking only to content portions
+            synthetic_text = original_text.clone()
+            actual_synth_list = []
+
+            for b in range(self.batch_size):
+                content_len = int(content_lengths[b].item())
+                if content_len > 0:
+                    # Extract content portion
+                    content = original_text[b, :content_len].unsqueeze(0)
+
+                    # Apply synthetic generation to content only
+                    synth_content, synth_ratio = create_synthetic_text(
+                        content,
+                        mask_ratios[b:b+1],
+                        self.mlm_engine,
+                        self.mask_token_id,
+                        rng,
+                        sampling_temperature=1.0,
+                        top_k=50,
+                    )
+
+                    # Update synthetic text with generated content
+                    synthetic_text[b, :content_len] = synth_content.squeeze(0)
+                    actual_synth_list.append(synth_ratio.item())
+                else:
+                    actual_synth_list.append(0.0)
+
+            # Step 3: Add CLS token
+            input_ids = add_cls_token(synthetic_text, self.cls_token_id, self.block_size)
+            targets = torch.tensor(actual_synth_list, dtype=torch.float32)
+
+            return {"input_ids": input_ids, "targets": targets}
+        else:
+            # Original implementation
+            ids = self.train_ids if split == "train" else self.val_ids
+            max_start_idx = len(ids) - (self.block_size - 1)  # leave space for [CLS]
+            ix = torch.randint(0, max_start_idx, (self.batch_size,), generator=rng).tolist()
+
+            # Build batch of original sequences (without CLS)
+            original_sequences = [ids[i : i + (self.block_size - 1)] for i in ix]
+            original_text = torch.tensor(original_sequences, dtype=torch.long)
+
+            # Random mask ratio per sample (vectorized synthetic generation)
+            min_ratio, max_ratio = self.mask_probability_range
+            mask_ratios = torch.rand(self.batch_size, generator=rng) * (max_ratio - min_ratio) + min_ratio
+
+            # Call into batched synthetic generation once
+            synthetic_text, actual_synth = create_synthetic_text(
+                original_text,
+                mask_ratios,
+                self.mlm_engine,
+                self.mask_token_id,
+                rng,
+                sampling_temperature=1.0,
+                top_k=50,
+            )
+            input_ids = add_cls_token(synthetic_text, self.cls_token_id, self.block_size)
+            targets = actual_synth.float().cpu()
+            return {"input_ids": input_ids, "targets": targets}
 
     def produce_one_file(self, split: str, seq: int) -> None:
         """Override to handle stage-based generation at file level.
@@ -301,86 +374,6 @@ class SequenceScorerProvider(DataProviderBase):
         if self.verbose:
             print(f"{self._log_prefix()} produced (val augmented) file: {final_path}")
 
-    def _sample_default_batch(self, split: str, rng) -> Dict[str, torch.Tensor]:
-        if self.enable_line_aligned_sequences:
-            return self._sample_line_aligned_batch(split, rng)
-        else:
-            return self._sample_legacy_batch(split, rng)
-
-    def _sample_line_aligned_batch(self, split: str, rng) -> Dict[str, torch.Tensor]:
-        """Sample batch using line-aligned variable-length sequences."""
-        builder = self.train_builder if split == "train" else self.val_builder
-
-        # Step 1: Build variable-length line-aligned sequences (without CLS)
-        original_text, content_lengths = builder.build_variable_length_sequences(
-            self.batch_size, self.block_size - 1, rng  # Leave space for CLS
-        )
-
-        # Step 2: Apply masking and synthetic generation to variable-length content
-        min_ratio, max_ratio = self.mask_probability_range
-        mask_ratios = torch.rand(self.batch_size, generator=rng) * (max_ratio - min_ratio) + min_ratio
-
-        # Apply masking only to content portions
-        synthetic_text = original_text.clone()
-        actual_synth_list = []
-
-        for b in range(self.batch_size):
-            content_len = int(content_lengths[b].item())
-            if content_len > 0:
-                # Extract content portion
-                content = original_text[b, :content_len].unsqueeze(0)
-
-                # Apply synthetic generation to content only
-                synth_content, synth_ratio = create_synthetic_text(
-                    content,
-                    mask_ratios[b:b+1],
-                    self.mlm_engine,
-                    self.mask_token_id,
-                    rng,
-                    sampling_temperature=1.0,
-                    top_k=50,
-                )
-
-                # Update synthetic text with generated content
-                synthetic_text[b, :content_len] = synth_content.squeeze(0)
-                actual_synth_list.append(synth_ratio.item())
-            else:
-                actual_synth_list.append(0.0)
-
-        # Step 3: Add CLS token
-        input_ids = add_cls_token(synthetic_text, self.cls_token_id, self.block_size)
-        targets = torch.tensor(actual_synth_list, dtype=torch.float32)
-
-        return {"input_ids": input_ids, "targets": targets}
-
-    def _sample_legacy_batch(self, split: str, rng) -> Dict[str, torch.Tensor]:
-        """Legacy sampling method for backward compatibility."""
-        ids = self.train_ids if split == "train" else self.val_ids
-        max_start_idx = len(ids) - (self.block_size - 1)  # leave space for [CLS]
-        ix = torch.randint(0, max_start_idx, (self.batch_size,), generator=rng).tolist()
-
-        # Build batch of original sequences (without CLS)
-        original_sequences = [ids[i : i + (self.block_size - 1)] for i in ix]
-        original_text = torch.tensor(original_sequences, dtype=torch.long)
-
-        # Random mask ratio per sample (vectorized synthetic generation)
-        min_ratio, max_ratio = self.mask_probability_range
-        mask_ratios = torch.rand(self.batch_size, generator=rng) * (max_ratio - min_ratio) + min_ratio
-
-        # Call into batched synthetic generation once
-        synthetic_text, actual_synth = create_synthetic_text(
-            original_text,
-            mask_ratios,
-            self.mlm_engine,
-            self.mask_token_id,
-            rng,
-            sampling_temperature=1.0,
-            top_k=50,
-        )
-        input_ids = add_cls_token(synthetic_text, self.cls_token_id, self.block_size)
-        targets = actual_synth.float().cpu()
-        return {"input_ids": input_ids, "targets": targets}
-
     def _produce_stage_based_file(self, split: str, seq: int) -> None:
         import time
         rng = torch.Generator()
@@ -409,7 +402,7 @@ class SequenceScorerProvider(DataProviderBase):
                     count, self.block_size - 1, rng  # Leave space for CLS
                 )
             else:
-                # Legacy approach
+                # Original approach
                 ids = self.train_ids if split == "train" else self.val_ids
                 max_start_idx = len(ids) - (self.block_size - 1)
                 ix = torch.randint(0, max_start_idx, (count,), generator=rng).tolist()

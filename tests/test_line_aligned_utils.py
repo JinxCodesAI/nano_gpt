@@ -221,7 +221,7 @@ class TestProviderConsistency:
             rng = torch.Generator()
             rng.manual_seed(42)
             
-            batch = provider._sample_line_aligned_batch("train", rng)
+            batch = provider._sample_default_batch("train", rng)
             assert "input_ids" in batch
             assert "targets" in batch
             assert batch["input_ids"].shape == (2, 20)
