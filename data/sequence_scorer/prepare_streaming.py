@@ -448,10 +448,12 @@ class SequenceScorerProvider(DataProviderBase):
             if split == "val":
                 extra_count = int(shuffled_inputs.shape[0] * 0.10)
                 if extra_count > 0:
-                    max_start_idx_extra = len(ids) - (self.block_size - 1)
+                    # Get validation ids for extra samples
+                    val_ids = self.val_ids
+                    max_start_idx_extra = len(val_ids) - (self.block_size - 1)
                     if max_start_idx_extra > 0:
                         ix_extra = torch.randint(0, max_start_idx_extra, (extra_count,), generator=rng).tolist()
-                        original_sequences_extra = [ids[i : i + (self.block_size - 1)] for i in ix_extra]
+                        original_sequences_extra = [val_ids[i : i + (self.block_size - 1)] for i in ix_extra]
                         original_text_extra = torch.tensor(original_sequences_extra, dtype=torch.long)
                         input_ids_extra = add_cls_token(original_text_extra, self.cls_token_id, self.block_size)
                         targets_extra = torch.zeros(extra_count, dtype=torch.float32)
