@@ -30,7 +30,7 @@ generation_start_wall_time = None
 # Model loading
 init_from = 'resume'  # 'resume' to load from checkpoint
 out_dir = 'out-char-diffusion'
-checkpoint_name = '8500_1.81_all_LMod_enabled(epoch 2).pt'  # Main model checkpoint
+checkpoint_name = '1.73_no_mods_spaces.pt'  # Main model checkpoint
 
 # Generation parameters
 num_samples = 16  # Number of samples to generate
@@ -58,7 +58,7 @@ seed_placement = SeedPlacement.RANDOM_PLACEMENT
 temperature = 0.8  # Temperature for sampling
 top_p = 1.0  # Nucleus sampling parameter (1.0 = disabled)
 repetition_penalty = 1.0  # Penalty for repeating recent tokens
-repetition_window = 10  # Look back window for repetition penalty
+repetition_window = 0  # Look back window for repetition penalty
 diffusion_iterations = 30  # Number of demasking iterations
 start_ratio = 0.95  # Initial ratio of tokens to remask (95%)
 end_ratio = 0.05   # Final ratio of tokens to remask (5%)
@@ -214,7 +214,7 @@ def load_vocabulary(checkpoint, fallback_dataset='shakespeare_char'):
 
     print(f"Vocabulary loaded from {dataset_name}: {vocab_size} tokens")
 
-    return stoi, itos, vocab_size, dataset_name
+    return stoi, itos, vocab_size, dataset_name, meta
 
 # -----------------------------------------------------------------------------
 # Diffusion generation functions
@@ -309,7 +309,9 @@ def diffusion_generate(model, batch_size, total_length, iterations, mask_token_i
             vocab_size=vocab_size,
             device=device,
             verbose=verbose and use_verbose_logging,
-            return_logits=True
+            return_logits=True,
+            pad_token_id=pad_token_id,
+            base_vocab_size=base_vocab_size
         )
 
         # Step 2: Remask for next iteration (except last iteration)
@@ -362,7 +364,7 @@ main_checkpoint_path = os.path.join(out_dir, checkpoint_name)
 model, checkpoint = load_model_from_checkpoint(main_checkpoint_path, device, compile)
 
 # Load vocabulary
-stoi, itos, meta_vocab_size, dataset_name = load_vocabulary(checkpoint)
+stoi, itos, meta_vocab_size, dataset_name, meta = load_vocabulary(checkpoint)
 
 # Get model's actual vocabulary size from checkpoint
 model_vocab_size = model.config.vocab_size
@@ -372,12 +374,30 @@ print(f"Meta vocab_size from data: {meta_vocab_size}")
 # Use the vocabulary size from the model checkpoint
 vocab_size = model_vocab_size
 
-# According to char_diffusion prepare_streaming.py:
-# mask_token_id = len(chars) and vocab_size = len(chars) + 1
-# So mask_token_id = vocab_size - 1 (last token in vocabulary)
-mask_token_id = vocab_size - 1
+# Load special token IDs from metadata
+mask_token_id = meta.get('mask_token_id', None)
+pad_token_id = meta.get('pad_token_id', None)
+base_vocab_size = meta.get('base_vocab_size', None)
+
+# Fallback to old logic if metadata doesn't have new token info
+if mask_token_id is None:
+    # Old approach: mask_token_id = vocab_size - 1
+    mask_token_id = vocab_size - 1
+    print(f"Warning: Using fallback mask_token_id calculation: {mask_token_id}")
+else:
+    print(f"Loaded mask_token_id from metadata: {mask_token_id}")
+
+if pad_token_id is not None:
+    print(f"Loaded pad_token_id from metadata: {pad_token_id}")
+
+if base_vocab_size is not None:
+    print(f"Loaded base_vocab_size from metadata: {base_vocab_size}")
+
 print(f"Using mask_token_id: {mask_token_id} ('{itos[mask_token_id] if mask_token_id < len(itos) else '[MASK]'}')")
-print(f"Actual vocabulary size for sampling: {vocab_size - 1} (excluding mask token)")
+if pad_token_id is not None and pad_token_id < len(itos):
+    print(f"Using pad_token_id: {pad_token_id} ('{itos[pad_token_id]}')")
+print(f"Total vocab_size: {vocab_size}")
+print(f"Base vocab_size (content tokens): {base_vocab_size if base_vocab_size else vocab_size - 1}")
 # Tokenize seed text to insert and protect from remasking
 seed_ids = [stoi[c] for c in seed_text if c in stoi] if seed_text else []
 if use_verbose_logging and seed_ids:
@@ -386,7 +406,7 @@ if use_verbose_logging and seed_ids:
 
 # Create decode functions
 def decode(token_ids):
-    """Decode tokens to text"""
+    """Decode tokens to text, handling mask and pad tokens"""
     if hasattr(token_ids, 'tolist'):
         token_ids = token_ids.tolist()
 
@@ -394,6 +414,8 @@ def decode(token_ids):
     for token_id in token_ids:
         if token_id == mask_token_id:
             result.append('[MASK]')
+        elif pad_token_id is not None and token_id == pad_token_id:
+            result.append('[PAD]')
         elif token_id < len(itos):
             result.append(itos[token_id])
         else:
@@ -409,6 +431,8 @@ def decode_with_mask_char(token_ids, mask_char='#'):
     for token_id in token_ids:
         if token_id == mask_token_id:
             result.append(mask_char)
+        elif pad_token_id is not None and token_id == pad_token_id:
+            result.append('[PAD]')
         elif token_id < len(itos):
             result.append(itos[token_id])
         else:

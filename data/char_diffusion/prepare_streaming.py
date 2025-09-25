@@ -6,6 +6,7 @@ Uses built-in Python libraries only for CPU-optimized processing.
 from __future__ import annotations
 
 import os
+import time
 from typing import Dict, List, Any
 
 import torch
@@ -548,9 +549,17 @@ class CharDiffusionProvider(DataProviderBase):
                 "stage_info": shuffled_stage_info,
             }
 
-            filename = f"{split}_{seq:06d}_{total_samples}.pt"
-            filepath = os.path.join(self.queue_dir, split, filename)
-            write_file_atomic(filepath, {"tensors": tensors, "metadata": metadata})
+            # Write atomic (following base class pattern)
+            d = self.train_dir if split == "train" else self.val_dir
+            ts = int(time.time() * 1000)
+            tmp_name = f".tmp-{ts}-{seq:06d}.pt"
+            final_name = f"{ts}-{seq:06d}-{total_samples}.pt"
+            tmp_path = os.path.join(d, tmp_name)
+            final_path = os.path.join(d, final_name)
+            torch.save({"tensors": tensors, "metadata": metadata}, tmp_path)
+            os.replace(tmp_path, final_path)
+            if self.verbose:
+                print(f"[provider] produced stage-based file: {final_path}")
 
         if all_x:
             combined_x = torch.cat(all_x, dim=0)
