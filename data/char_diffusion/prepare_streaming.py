@@ -12,6 +12,7 @@ from typing import Dict, List, Any
 import torch
 
 from data.common.provider_base import DataProviderBase
+from data.common.line_aligned_utils import LineAlignedSequenceBuilder
 from .file_utils import write_file_atomic, ensure_queue_dirs, get_backlog_size, get_max_sequence_number
 from .masking_utils import apply_stage_masking
 
@@ -106,16 +107,11 @@ class CharDiffusionProvider(DataProviderBase):
 
         super().__init__(*args, **kwargs)
 
-        # Load Shakespeare data - fail if not present
-        input_file_path = os.path.join(self.data_dir, 'input.txt')
-        with open(input_file_path, 'r') as f:
-            data = f.read()
+        # Load text data using shared method
+        data = self._load_input_text()
 
-        # Create vocabulary (base chars + [MASK] + [SEP])
-        chars = sorted(list(set(data)))
-        self.base_vocab_size = len(chars)  # excludes special tokens
-        self.stoi = {ch: i for i, ch in enumerate(chars)}
-        self.itos = {i: ch for i, ch in enumerate(chars)}
+        # Create base vocabulary using shared method
+        self.base_vocab_size, self.stoi, self.itos = self._create_char_vocab(data)
 
         # Special tokens
         self.mask_token_id = self.base_vocab_size
@@ -127,31 +123,45 @@ class CharDiffusionProvider(DataProviderBase):
         self.vocab_size = self.base_vocab_size + 2
         self.newline_token_id = self.stoi.get('\n', None)
 
-        # Create train/val splits
-        n = len(data)
-        train_data = data[: int(n * 0.9)]
-        val_data = data[int(n * 0.9) :]
-        self.train_ids = [self.stoi[c] for c in train_data]
-        self.val_ids = [self.stoi[c] for c in val_data]
+        # Create train/val splits using shared method
+        train_data, val_data = self._create_train_val_split(data)
+        self.train_ids = self._tokenize_text(train_data, self.stoi)
+        self.val_ids = self._tokenize_text(val_data, self.stoi)
 
-        # Precompute line lists (with newlines kept) and their token ids for line-aligned sampling
-        self.train_lines = train_data.splitlines(keepends=True)
-        self.val_lines = val_data.splitlines(keepends=True)
-        self.train_lines_ids = [[self.stoi[c] for c in line] for line in self.train_lines]
-        self.val_lines_ids = [[self.stoi[c] for c in line] for line in self.val_lines]
+        # Create line-aligned sequence builders if enabled
+        if self.enable_line_aligned_sequences:
+            # Split data into lines and create builders
+            train_lines = train_data.splitlines(keepends=True)
+            val_lines = val_data.splitlines(keepends=True)
+            train_lines_ids = [[self.stoi[c] for c in line] for line in train_lines]
+            val_lines_ids = [[self.stoi[c] for c in line] for line in val_lines]
 
-        # Precompute tensors for efficient line packing
-        self.train_line_lens = torch.tensor([len(x) for x in self.train_lines_ids], dtype=torch.long)
-        self.val_line_lens = torch.tensor([len(x) for x in self.val_lines_ids], dtype=torch.long)
-        self.train_cumsum = self.train_line_lens.cumsum(dim=0)
-        self.val_cumsum = self.val_line_lens.cumsum(dim=0)
-        self.train_line_offsets = torch.cat([torch.tensor([0], dtype=torch.long), self.train_cumsum[:-1]])
-        self.val_line_offsets = torch.cat([torch.tensor([0], dtype=torch.long), self.val_cumsum[:-1]])
-        self.train_tokens_flat = torch.tensor([t for line in self.train_lines_ids for t in line], dtype=torch.long)
-        self.val_tokens_flat = torch.tensor([t for line in self.val_lines_ids for t in line], dtype=torch.long)
-        # Valid start lines: skip blank-only lines (just a single '\n')
-        self.train_valid_starts = torch.tensor([i for i, ids in enumerate(self.train_lines_ids) if len(ids) > 1], dtype=torch.long)
-        self.val_valid_starts = torch.tensor([i for i, ids in enumerate(self.val_lines_ids) if len(ids) > 1], dtype=torch.long)
+            self.train_builder = LineAlignedSequenceBuilder(
+                train_lines_ids, self.newline_token_id, self.pad_token_id
+            )
+            self.val_builder = LineAlignedSequenceBuilder(
+                val_lines_ids, self.newline_token_id, self.pad_token_id
+            )
+
+            # Keep existing data structures for backward compatibility
+            self.train_lines = train_lines
+            self.val_lines = val_lines
+            self.train_lines_ids = train_lines_ids
+            self.val_lines_ids = val_lines_ids
+            self.train_line_lens = self.train_builder.line_lens
+            self.val_line_lens = self.val_builder.line_lens
+            self.train_cumsum = self.train_builder.cumsum
+            self.val_cumsum = self.val_builder.cumsum
+            self.train_line_offsets = self.train_builder.line_offsets
+            self.val_line_offsets = self.val_builder.line_offsets
+            self.train_tokens_flat = self.train_builder.tokens_flat
+            self.val_tokens_flat = self.val_builder.tokens_flat
+            self.train_valid_starts = self.train_builder.valid_starts
+            self.val_valid_starts = self.val_builder.valid_starts
+        else:
+            # No line-aligned builders
+            self.train_builder = None
+            self.val_builder = None
 
 
         if self.enable_line_aligned_sequences and self.newline_token_id is None:
@@ -380,60 +390,13 @@ class CharDiffusionProvider(DataProviderBase):
         """Step 1: Build variable-length line-aligned sequences (shared by all masking approaches).
         Returns (x, content_lengths) where x contains content and content_lengths tracks actual lengths.
         """
-        lines_ids = self.train_lines_ids if split == "train" else self.val_lines_ids
-        if len(lines_ids) == 0:
-            raise ValueError(f"No lines available for split {split}")
-
-        # Start with zeros (will be filled with actual content)
-        x = torch.zeros((count, self.block_size), dtype=torch.long)
-        content_lengths = torch.zeros(count, dtype=torch.long)
-
-        valid_starts = self.train_valid_starts if split == "train" else self.val_valid_starts
-        if valid_starts.numel() == 0:
-            raise ValueError(f"No valid (non-blank) start lines for split {split}")
-        starts = valid_starts[torch.randint(0, valid_starts.numel(), (count,), generator=rng)]
-
-        line_lens = self.train_line_lens if split == "train" else self.val_line_lens
-        cumsum = self.train_cumsum if split == "train" else self.val_cumsum
-        line_offsets = self.train_line_offsets if split == "train" else self.val_line_offsets
-        tokens_flat = self.train_tokens_flat if split == "train" else self.val_tokens_flat
-
-        # Use full block_size for content
-        B = self.block_size
-        s_prev = torch.where(starts > 0, cumsum[starts - 1], torch.zeros_like(starts, dtype=torch.long))
-        thresholds = s_prev + B
-        last_idx = torch.searchsorted(cumsum, thresholds, right=True) - 1
-
-        for b in range(count):
-            s = int(starts[b].item())
-            e = int(last_idx[b].item())
-            if e >= s:
-                sum_full = int((cumsum[e] - (cumsum[s - 1] if s > 0 else 0)).item())
-                start_ptr = int(line_offsets[s].item())
-                end_ptr_full = int((line_offsets[e] + line_lens[e]).item())
-                if sum_full > 0:
-                    # Fill with actual content
-                    content_len = min(sum_full, self.block_size)
-                    x[b, :content_len] = tokens_flat[start_ptr:start_ptr + content_len]
-                    content_lengths[b] = content_len
-            else:
-                # Single line case
-                budget = B
-                take = max(0, int(budget) - 1)
-                if take > 0:
-                    p0 = int(line_offsets[s].item())
-                    content_len = min(take, self.block_size)
-                    x[b, :content_len] = tokens_flat[p0:p0 + content_len]
-                    content_lengths[b] = content_len
-                else:
-                    content_lengths[b] = 0
-
-                # Add newline if there's space and we have a newline token
-                if self.newline_token_id is not None and content_lengths[b] < self.block_size:
-                    x[b, content_lengths[b]] = self.newline_token_id
-                    content_lengths[b] += 1
-
-        return x, content_lengths
+        if self.enable_line_aligned_sequences:
+            # Use shared builder
+            builder = self.train_builder if split == "train" else self.val_builder
+            return builder.build_variable_length_sequences(count, self.block_size, rng)
+        else:
+            # Fallback (should not be reached in normal operation)
+            raise NotImplementedError("Non-line-aligned mode not supported in this method")
 
     def _apply_masking_and_pad(self, x: torch.Tensor, content_lengths: torch.Tensor,
                               mask_probability: float, mask_token_id: int, base_vocab_size: int, rng) -> tuple[torch.Tensor, torch.Tensor]:

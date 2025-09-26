@@ -26,7 +26,7 @@ def apply_bert_style_corruption_cpu(x: torch.Tensor, mask: torch.Tensor,
     corrupted_x = x.clone()
     
     # Generate random values for all masked positions at once
-    rand_vals = torch.rand(mask.shape, generator=rng)
+    rand_vals = torch.rand(mask.shape, generator=rng).to(mask.device)
     
     # Create masks for the three corruption types
     mask_positions = mask & (rand_vals < 0.8)  # 80%: [MASK] token
@@ -39,7 +39,7 @@ def apply_bert_style_corruption_cpu(x: torch.Tensor, mask: torch.Tensor,
     # Apply random tokens
     if random_positions.any():
         num_random = random_positions.sum().item()
-        random_tokens = torch.randint(0, vocab_size, (num_random,), generator=rng)
+        random_tokens = torch.randint(0, vocab_size, (num_random,), generator=rng).to(corrupted_x.device)
         corrupted_x[random_positions] = random_tokens
     
     return corrupted_x
@@ -62,7 +62,7 @@ def apply_random_masking_cpu(x: torch.Tensor, mask_probability: float,
         mask: Boolean mask indicating which positions were selected for prediction
     """
     # Generate random mask using provided RNG
-    mask_tensor = torch.rand(x.shape, generator=rng)
+    mask_tensor = torch.rand(x.shape, generator=rng).to(x.device)
     mask = mask_tensor < mask_probability
     
     # Apply BERT-style corruption
@@ -130,7 +130,7 @@ def apply_target_driven_sticky_masking_cpu(x: torch.Tensor, target_masked_ratio:
         neighbor_masked[:, :-1] |= current_mask[:, 1:]  # Right neighbor
         
         # Generate random values for masking decision
-        rand_vals = torch.rand(x.shape, dtype=torch.float, generator=rng, device=x.device)
+        rand_vals = torch.rand(x.shape, dtype=torch.float, generator=rng).to(x.device)
         
         # Apply different probabilities based on neighbor status (vectorized)
         mask_probs = torch.where(neighbor_masked, p2_probability, p1_probability)
@@ -200,7 +200,7 @@ def apply_span_masking_cpu(x: torch.Tensor, spans_count: int,
         return x.clone(), torch.zeros_like(x, dtype=torch.bool, device=device)
     
     # Generate all random positions at once: (batch_size, 2*spans_count)
-    random_positions = torch.rand(batch_size, 2 * spans_count, device=device, generator=rng)
+    random_positions = torch.rand(batch_size, 2 * spans_count, generator=rng).to(device)
     
     # Scale by sequence length and round down
     scaled_positions = (random_positions * seq_len).long()
@@ -258,7 +258,7 @@ def apply_stage_masking(x: torch.Tensor, stage_config: Dict[str, Any],
         max_masked_ratio = stage_config['max_masked_ratio']
         # For random masking, each sample gets a different random ratio up to max
         batch_size = x.shape[0]
-        mask_ratios = torch.rand(batch_size, generator=rng) * max_masked_ratio
+        mask_ratios = torch.rand(batch_size, generator=rng).to(x.device) * max_masked_ratio
         
         # Apply masking for each sample with its ratio
         all_corrupted = []

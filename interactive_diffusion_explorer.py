@@ -225,8 +225,35 @@ class DiffusionExplorer:
             # Determine special tokens from meta if available
             self.mask_token_id = self.meta.get('mask_token_id', None)
             self.sep_token_id = self.meta.get('sep_token_id', None)
+            self.cls_token_id = self.meta.get('cls_token_id', None)
+            self.pad_token_id = self.meta.get('pad_token_id', None)
 
-            cls_token_id = self.meta.get('cls_token_id', None)
+            # Assert that all token IDs are unique
+            token_ids = []
+            token_names = []
+            if self.mask_token_id is not None:
+                token_ids.append(self.mask_token_id)
+                token_names.append('mask_token_id')
+            if self.cls_token_id is not None:
+                token_ids.append(self.cls_token_id)
+                token_names.append('cls_token_id')
+            if self.pad_token_id is not None:
+                token_ids.append(self.pad_token_id)
+                token_names.append('pad_token_id')
+            if self.sep_token_id is not None:
+                token_ids.append(self.sep_token_id)
+                token_names.append('sep_token_id')
+
+            # Check for duplicates
+            if len(token_ids) != len(set(token_ids)):
+                duplicates = []
+                for i, token_id in enumerate(token_ids):
+                    for j, other_id in enumerate(token_ids):
+                        if i != j and token_id == other_id:
+                            duplicates.append(f"{token_names[i]}={token_id} == {token_names[j]}={other_id}")
+                raise ValueError(f"Duplicate token IDs found: {duplicates}")
+
+            cls_token_id = self.cls_token_id
 
             # Model vocab
             model_vocab_size = getattr(self.model.config, 'vocab_size', None)
@@ -241,8 +268,10 @@ class DiffusionExplorer:
             print(f"   • Model vocab size: {model_vocab_size}")
             if self.mask_token_id is not None:
                 print(f"   • mask_token_id (from meta): {self.mask_token_id}")
-            if cls_token_id is not None:
-                print(f"   • cls_token_id (from meta): {cls_token_id}")
+            if self.cls_token_id is not None:
+                print(f"   • cls_token_id (from meta): {self.cls_token_id}")
+            if self.pad_token_id is not None:
+                print(f"   • pad_token_id (from meta): {self.pad_token_id}")
 
             # If mask_token_id not in meta, assume last id in model vocab for display/decoding purposes
             if self.mask_token_id is None:
@@ -451,8 +480,12 @@ class DiffusionExplorer:
 
         result = []
         for token_id in tokens:
-            if token_id == self.mask_token_id:
+            if self.mask_token_id is not None and token_id == self.mask_token_id:
                 result.append('[MASK]')
+            elif getattr(self, 'cls_token_id', None) is not None and token_id == self.cls_token_id:
+                result.append('[CLS]')
+            elif getattr(self, 'pad_token_id', None) is not None and token_id == self.pad_token_id:
+                result.append('[PAD]')
             elif getattr(self, 'sep_token_id', None) is not None and token_id == self.sep_token_id:
                 result.append('[SEP]')
             elif token_id < len(self.itos):

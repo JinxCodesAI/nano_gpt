@@ -4,7 +4,8 @@
 
 """Advanced configuration for sequence scoring dataset with stage-based generation"""
 wandb_log = True
-wandb_run_name = 'sequence_scorer_span_epoch_1'
+wandb_project = 'char-diffusion'
+wandb_run_name = 'sequence_scorer_complex_epoch_1'
 
 # Dataset configuration
 dataset = 'sequence_scorer'
@@ -16,8 +17,8 @@ eval_iters = 10
 log_interval = 10
 
 # MLM model for synthetic text generation
-mlm_checkpoint_path = 'out-char-diffusion/6000_1.78_all_LMod_enabled.pt'  # adjust to your MLM checkpoint
-init_from_checkpoint = 'out-char-diffusion/6000_1.78_all_LMod_enabled.pt
+mlm_checkpoint_path = 'out-char-diffusion/7250_1.77_pad_no_entropy.pt'  # adjust to your MLM checkpoint
+init_from_checkpoint = 'out-char-diffusion/7250_1.77_pad_no_entropy.pt'
 freeze_transformer = True
 unfreeze_at_iteration = 500
 cls_token_id = 66
@@ -27,7 +28,7 @@ vocab_size = 67
 #init_from = 'resume'
 
 # Load composition configuration (same as char_diffusion)
-composition_config = 'span'  # reuses data/char_diffusion/config/span.py
+composition_config = 'span_and_lines'  # reuses data/char_diffusion/config/complex.py
 
 # Load globals from composition config if present
 if composition_config is not None:

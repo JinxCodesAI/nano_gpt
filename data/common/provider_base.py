@@ -14,7 +14,7 @@ from __future__ import annotations
 import os
 import time
 import pickle
-from typing import Dict, Iterable, Optional
+from typing import Dict, Iterable, Optional, Tuple, List
 
 import torch
 
@@ -57,6 +57,35 @@ class DataProviderBase:
     def sample_batch(self, split: str, rng: torch.Generator) -> Dict[str, torch.Tensor]:
         """Return a dict of tensors for one batch, each shaped [batch_size, ...]."""
         raise NotImplementedError
+
+    # ---- shared data loading helpers ----
+    def _load_input_text(self, filename: str = 'input.txt') -> str:
+        """Load text data from input file in data_dir."""
+        input_file_path = os.path.join(self.data_dir, filename)
+        if not os.path.exists(input_file_path):
+            raise FileNotFoundError(f"Input text file not found: {input_file_path}")
+        with open(input_file_path, 'r') as f:
+            return f.read()
+
+    def _create_char_vocab(self, data: str) -> Tuple[int, Dict[str, int], Dict[int, str]]:
+        """Create character-level vocabulary from text data."""
+        chars = sorted(list(set(data)))
+        vocab_size = len(chars)
+        stoi = {ch: i for i, ch in enumerate(chars)}
+        itos = {i: ch for i, ch in enumerate(chars)}
+        return vocab_size, stoi, itos
+
+    def _create_train_val_split(self, data: str, train_ratio: float = 0.9) -> Tuple[str, str]:
+        """Split text data into train and validation sets."""
+        n = len(data)
+        split_idx = int(n * train_ratio)
+        train_data = data[:split_idx]
+        val_data = data[split_idx:]
+        return train_data, val_data
+
+    def _tokenize_text(self, text: str, stoi: Dict[str, int]) -> List[int]:
+        """Convert text to list of token IDs using character vocabulary."""
+        return [stoi[c] for c in text]
 
     # ---- base helpers ----
     def ensure_dirs(self) -> None:

@@ -4,6 +4,7 @@
 
 """Advanced configuration for sequence scoring dataset with stage-based generation"""
 wandb_log = True
+wandb_project = 'char-diffusion'
 wandb_run_name = 'sequence_scorer_complex_epoch_1'
 
 # Dataset configuration
@@ -16,8 +17,8 @@ eval_iters = 10
 log_interval = 10
 
 # MLM model for synthetic text generation
-mlm_checkpoint_path = 'out-char-diffusion/7750_1.78_all_LMod_enabled(epoch 1).pt'  # adjust to your MLM checkpoint
-init_from_checkpoint = 'out-char-diffusion/7750_1.78_all_LMod_enabled(epoch 1).pt'
+mlm_checkpoint_path = 'out-char-diffusion/7250_1.77_pad_no_entropy.pt'  # adjust to your MLM checkpoint
+init_from_checkpoint = 'out-char-diffusion/7250_1.77_pad_no_entropy.pt'
 freeze_transformer = True
 unfreeze_at_iteration = 500
 cls_token_id = 66

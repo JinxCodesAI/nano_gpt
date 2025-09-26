@@ -1,6 +1,6 @@
 import random
 import torch
-from typing import Tuple, Dict, Any, Optional
+from typing import Tuple, Dict, Any, Optional, List
 
 from data.char_diffusion.masking_utils import (
     apply_span_masking_cpu,
@@ -28,9 +28,9 @@ def apply_stage_masking_direct(
         max_masked_ratio = stage_config['max_masked_ratio']
         batch_size = x.shape[0]
         # Different mask ratio per sample (vectorized)
-        mask_ratios = torch.rand(batch_size, generator=rng, device=x.device) * max_masked_ratio
+        mask_ratios = torch.rand(batch_size, generator=rng).to(x.device) * max_masked_ratio
         # Generate mask probabilities for all positions once
-        mask_probs = torch.rand(x.shape, generator=rng, device=x.device)
+        mask_probs = torch.rand(x.shape, generator=rng).to(x.device)
         # Broadcast per-sample ratios across sequence length
         thresholds = mask_ratios.view(-1, 1)
         mask = mask_probs < thresholds
@@ -60,6 +60,8 @@ def apply_stage_masking_direct(
         masked_x = x.clone()
         masked_x[mask] = mask_token_id
         return masked_x, mask
+
+
 
     else:
         raise ValueError(f"Unknown stage type: {stage_type}")
@@ -147,12 +149,122 @@ def create_stage_synthetic_text(
     return predicted_text, actual_syntheticity
 
 
-def add_cls_token(text: torch.Tensor, cls_token_id: int, block_size: int) -> torch.Tensor:
+def apply_line_masking_direct(
+    x: torch.Tensor,
+    stage_config: Dict[str, Any],
+    split_lines: List[List[int]],
+    newline_token_id: int,
+    rng: torch.Generator,
+) -> Tuple[torch.Tensor, torch.Tensor]:
+    """
+    Apply line replacement masking: replace random FULL LINES with other FULL LINES from the split.
+
+    Args:
+        x: Input tensor [batch_size, seq_len]
+        stage_config: Configuration with 'min_ratio', 'max_ratio'
+        split_lines: All lines from the current split to sample replacements from
+        newline_token_id: Token ID for newline character
+        rng: Random number generator
+
+    Returns:
+        replaced_x: Input with replaced lines
+        mask: Boolean mask indicating which positions were replaced
+    """
+    batch_size, seq_len = x.shape
+    device = x.device
+
+    # Get configuration parameters
+    min_ratio = stage_config['min_ratio']
+    max_ratio = stage_config['max_ratio']
+
+    if not split_lines:
+        # No replacement lines available, return original
+        return x.clone(), torch.zeros_like(x, dtype=torch.bool, device=device)
+
+    replaced_x = x.clone()
+    mask = torch.zeros_like(x, dtype=torch.bool, device=device)
+
+    # Process each sample in the batch
+    for b in range(batch_size):
+        sample = x[b]  # [seq_len]
+
+        # Find newline positions to identify line boundaries
+        newline_positions = torch.where(sample == newline_token_id)[0]
+
+        if len(newline_positions) == 0:
+            # No newlines found, treat entire sequence as one line
+            line_starts = [0]
+            line_ends = [seq_len]
+        else:
+            # Lines are separated by newlines
+            line_starts = [0] + (newline_positions + 1).tolist()
+            line_ends = newline_positions.tolist() + [seq_len]
+
+            # Remove empty lines (where start >= end)
+            valid_lines = [(s, e) for s, e in zip(line_starts, line_ends) if s < e]
+            if not valid_lines:
+                continue
+            line_starts, line_ends = zip(*valid_lines)
+            line_starts, line_ends = list(line_starts), list(line_ends)
+
+        num_lines = len(line_starts)
+        if num_lines == 0:
+            continue
+
+        # Calculate how many lines to replace based on ratio
+        replacement_ratio = torch.rand(1, generator=rng).item()
+        replacement_ratio = min_ratio + replacement_ratio * (max_ratio - min_ratio)
+        num_lines_to_replace = max(1, int(replacement_ratio * num_lines))
+        num_lines_to_replace = min(num_lines_to_replace, num_lines)  # Don't exceed available lines
+
+        # Select which lines to replace
+        line_indices = torch.randperm(num_lines, generator=rng)[:num_lines_to_replace].tolist()
+
+        # Build new sequence by replacing selected lines
+        new_sequence = []
+        total_length = 0
+
+        for line_idx in range(num_lines):
+            if line_idx in line_indices:
+                # Replace this line with a random line from split
+                replacement_line = split_lines[torch.randint(0, len(split_lines), (1,), generator=rng).item()]
+                new_sequence.extend(replacement_line)
+                total_length += len(replacement_line)
+            else:
+                # Keep original line
+                start_pos = line_starts[line_idx]
+                end_pos = line_ends[line_idx]
+                original_line = sample[start_pos:end_pos].tolist()
+                new_sequence.extend(original_line)
+                total_length += len(original_line)
+
+            # Check if we exceed seq_len - if so, drop lines from the end
+            if total_length > seq_len:
+                # Truncate the sequence to fit
+                new_sequence = new_sequence[:seq_len]
+                break
+
+        # Pad if necessary
+        while len(new_sequence) < seq_len:
+            new_sequence.append(0)  # Pad with zeros
+
+        # Convert to tensor and create mask
+        new_tensor = torch.tensor(new_sequence[:seq_len], dtype=torch.long, device=device)
+        replaced_x[b] = new_tensor
+
+        # Create mask by comparing original vs replaced
+        mask[b] = (sample != new_tensor)
+
+    return replaced_x, mask
+
+
+def add_cls_token(text: torch.Tensor, cls_token_id: int, block_size: int, pad_token_id: int = 0) -> torch.Tensor:
     """
     Add [CLS] token at the beginning of sequences, right-shifting and truncating as needed.
+    Fill remaining positions with PAD tokens.
     """
     batch_size, seq_len = text.shape
-    result = torch.zeros((batch_size, block_size), dtype=text.dtype, device=text.device)
+    result = torch.full((batch_size, block_size), pad_token_id, dtype=text.dtype, device=text.device)
     result[:, 0] = cls_token_id
     copy_len = min(seq_len, block_size - 1)
     result[:, 1:1+copy_len] = text[:, :copy_len]
