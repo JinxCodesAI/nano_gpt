@@ -13,6 +13,7 @@ from .synthetic_generation import (
     create_stage_synthetic_text,
     add_cls_token,
     apply_stage_masking_direct,
+    apply_line_masking_direct,
 )
 
 
@@ -77,6 +78,21 @@ class SequenceScorerProvider(DataProviderBase):
                     print(f"  val_lines: {len(self.val_builder.lines_ids)}")
                     print(f"  train_valid_starts: {self.train_builder.valid_starts.numel()}")
                     print(f"  val_valid_starts: {self.val_builder.valid_starts.numel()}")
+
+    def _transform_ratio_to_target(self, ratio: torch.Tensor) -> torch.Tensor:
+        """
+        Transform syntheticity ratio using non-linear formula: y = -x^4 + 2x^3 - 2x + 1
+        where x is the ratio and y is the target value.
+
+        Args:
+            ratio: Tensor of syntheticity ratios in [0, 1]
+
+        Returns:
+            Transformed target values
+        """
+        x = ratio
+        y = -x**4 + 2 * x**3 - 2 * x + 1
+        return y
 
     def _validate_stage_config(self):
         if self.use_all_stages_for_training is not None:
@@ -243,7 +259,9 @@ class SequenceScorerProvider(DataProviderBase):
 
             # Step 3: Add CLS token
             input_ids = add_cls_token(synthetic_text, self.cls_token_id, self.block_size, self.pad_token_id)
-            targets = torch.tensor(actual_synth_list, dtype=torch.float32)
+            # Apply non-linear transformation to targets
+            raw_targets = torch.tensor(actual_synth_list, dtype=torch.float32)
+            targets = self._transform_ratio_to_target(raw_targets)
 
             return {"input_ids": input_ids, "targets": targets}
         else:
@@ -271,7 +289,9 @@ class SequenceScorerProvider(DataProviderBase):
                 top_k=50,
             )
             input_ids = add_cls_token(synthetic_text, self.cls_token_id, self.block_size, self.pad_token_id)
-            targets = actual_synth.float().cpu()
+            # Apply non-linear transformation to targets
+            raw_targets = actual_synth.float().cpu()
+            targets = self._transform_ratio_to_target(raw_targets)
             return {"input_ids": input_ids, "targets": targets}
 
     def produce_one_file(self, split: str, seq: int) -> None:
@@ -334,7 +354,9 @@ class SequenceScorerProvider(DataProviderBase):
                 original_sequences = [ids[i : i + (self.block_size - 1)] for i in ix]
                 original_text = torch.tensor(original_sequences, dtype=torch.long)
                 input_ids_extra = add_cls_token(original_text, self.cls_token_id, self.block_size, self.pad_token_id)
-                targets_extra = torch.zeros(extra_count, dtype=torch.float32)
+                # Apply transformation to zero ratios (unmodified sequences)
+                raw_targets_extra = torch.zeros(extra_count, dtype=torch.float32)
+                targets_extra = self._transform_ratio_to_target(raw_targets_extra)
 
                 # Align extras to base tensor devices before concatenation
                 if 'input_ids' in tensors and 'targets' in tensors:
@@ -429,46 +451,82 @@ class SequenceScorerProvider(DataProviderBase):
             # Measure mask vs unmask separately
             t0 = time.time()
 
-            if self.enable_line_aligned_sequences:
-                # For line-aligned sequences, we need to be careful about PAD tokens
-                # Only apply masking to content portions, not PAD tokens
-                content_only_text = original_text.clone()
-                # Replace PAD tokens with zeros temporarily for masking
-                pad_mask = (original_text == self.pad_token_id)
-                content_only_text[pad_mask] = 0
+            # No config pollution - pass data directly to masking function
 
-                masked_input, mask = apply_stage_masking_direct(
-                    content_only_text, stage_config, self.mask_token_id, self.mlm_engine.vocab_size - 1, rng
-                )
+            # Handle line replacement differently - no MLM prediction needed
+            if stage_config.get('type') == 'line':
+                if self.enable_line_aligned_sequences:
+                    # For line-aligned sequences with line replacement
+                    content_only_text = original_text.clone()
+                    pad_mask = (original_text == self.pad_token_id)
+                    content_only_text[pad_mask] = 0
 
-                # Restore PAD tokens in masked input (they should not be masked)
-                masked_input[pad_mask] = self.pad_token_id
-                mask[pad_mask] = False  # Don't predict PAD tokens
+                    # Pass split data directly to masking function
+                    builder = self.train_builder if split == "train" else self.val_builder
+                    synthetic_text, mask = apply_line_masking_direct(
+                        content_only_text, stage_config, builder.lines_ids, self.newline_token_id, rng
+                    )
 
-                # For MLM prediction, replace PAD tokens with zeros (MLM model doesn't know about PAD)
-                mlm_input = masked_input.clone()
-                mlm_input[pad_mask] = 0
-
-                synthetic_text = self.mlm_engine.predict_masked_tokens(
-                    mlm_input, mask, temperature=1.0, top_k=50
-                )
-
-                # Restore PAD tokens in synthetic text
-                synthetic_text[pad_mask] = self.pad_token_id
+                    # Restore PAD tokens in synthetic text
+                    synthetic_text[pad_mask] = self.pad_token_id
+                    mask[pad_mask] = False  # Don't count PAD tokens as replaced
+                else:
+                    # Line replacement requires line-aligned sequences
+                    raise ValueError("Line masking requires enable_line_aligned_sequences=True")
             else:
-                masked_input, mask = apply_stage_masking_direct(
-                    original_text, stage_config, self.mask_token_id, self.mlm_engine.vocab_size - 1, rng
-                )
-                synthetic_text = self.mlm_engine.predict_masked_tokens(
-                    masked_input, mask, temperature=1.0, top_k=50
-                )
+                # Standard masking with MLM prediction
+                if self.enable_line_aligned_sequences:
+                    # For line-aligned sequences, we need to be careful about PAD tokens
+                    # Only apply masking to content portions, not PAD tokens
+                    content_only_text = original_text.clone()
+                    # Replace PAD tokens with zeros temporarily for masking
+                    pad_mask = (original_text == self.pad_token_id)
+                    content_only_text[pad_mask] = 0
+
+                    masked_input, mask = apply_stage_masking_direct(
+                        content_only_text, stage_config, self.mask_token_id, self.mlm_engine.vocab_size - 1, rng
+                    )
+
+                    # Restore PAD tokens in masked input (they should not be masked)
+                    masked_input[pad_mask] = self.pad_token_id
+                    mask[pad_mask] = False  # Don't predict PAD tokens
+
+                    # For MLM prediction, replace PAD tokens with zeros (MLM model doesn't know about PAD)
+                    mlm_input = masked_input.clone()
+                    mlm_input[pad_mask] = 0
+
+                    synthetic_text = self.mlm_engine.predict_masked_tokens(
+                        mlm_input, mask, temperature=1.0, top_k=50
+                    )
+
+                    # Restore PAD tokens in synthetic text
+                    synthetic_text[pad_mask] = self.pad_token_id
+                else:
+                    masked_input, mask = apply_stage_masking_direct(
+                        original_text, stage_config, self.mask_token_id, self.mlm_engine.vocab_size - 1, rng
+                    )
+                    synthetic_text = self.mlm_engine.predict_masked_tokens(
+                        masked_input, mask, temperature=1.0, top_k=50
+                    )
 
             t_mask_end = time.time()
             t1 = time.time()
 
             # per-sample syntheticity based on mask
             masked_counts = mask.sum(dim=1).to(torch.float32)
-            actual_synth = (masked_counts / max(mask.shape[1], 1)).cpu()
+
+            if self.enable_line_aligned_sequences:
+                # For line-aligned sequences, calculate syntheticity based on content length (excluding PAD tokens)
+                pad_mask = (original_text == self.pad_token_id)
+                content_mask = ~pad_mask  # True for non-PAD positions
+                content_lengths = content_mask.sum(dim=1).to(torch.float32)  # Count of actual content tokens
+                raw_synth = (masked_counts / torch.clamp(content_lengths, min=1)).cpu()
+            else:
+                # For non-line-aligned sequences, use total sequence length
+                raw_synth = (masked_counts / max(mask.shape[1], 1)).cpu()
+
+            # Apply non-linear transformation to targets
+            actual_synth = self._transform_ratio_to_target(raw_synth)
 
             # Accumulate timings
             total_stage_time += (t1 - t0)
@@ -502,7 +560,9 @@ class SequenceScorerProvider(DataProviderBase):
                         original_sequences_extra = [val_ids[i : i + (self.block_size - 1)] for i in ix_extra]
                         original_text_extra = torch.tensor(original_sequences_extra, dtype=torch.long)
                         input_ids_extra = add_cls_token(original_text_extra, self.cls_token_id, self.block_size, self.pad_token_id)
-                        targets_extra = torch.zeros(extra_count, dtype=torch.float32)
+                        # Apply transformation to zero ratios (unmodified sequences)
+                        raw_targets_extra = torch.zeros(extra_count, dtype=torch.float32)
+                        targets_extra = self._transform_ratio_to_target(raw_targets_extra)
                         # Align devices before concatenation
                         input_ids_extra = input_ids_extra.to(shuffled_inputs.device)
                         targets_extra = targets_extra.to(shuffled_targets.device)

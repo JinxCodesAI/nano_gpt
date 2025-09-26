@@ -167,7 +167,13 @@ class DatasetConsumer:
             return tensors, metadata
 
         # Find samples with at least one supervised target
-        supervised_mask = (target_tensor != ignore_index).any(dim=1)  # (batch_size,)
+        # Handle both 1D targets (sequence_scorer) and 2D targets (MLM)
+        if target_tensor.dim() == 1:
+            # 1D targets: each sample has a single target value
+            supervised_mask = (target_tensor != ignore_index)  # (batch_size,)
+        else:
+            # 2D targets: each sample has multiple target values
+            supervised_mask = (target_tensor != ignore_index).any(dim=1)  # (batch_size,)
         num_supervised = supervised_mask.sum().item()
         total_samples = target_tensor.shape[0]
 
