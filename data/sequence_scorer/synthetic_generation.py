@@ -28,9 +28,9 @@ def apply_stage_masking_direct(
         max_masked_ratio = stage_config['max_masked_ratio']
         batch_size = x.shape[0]
         # Different mask ratio per sample (vectorized)
-        mask_ratios = torch.rand(batch_size, generator=rng, device=x.device) * max_masked_ratio
+        mask_ratios = torch.rand(batch_size, generator=rng).to(x.device) * max_masked_ratio
         # Generate mask probabilities for all positions once
-        mask_probs = torch.rand(x.shape, generator=rng, device=x.device)
+        mask_probs = torch.rand(x.shape, generator=rng).to(x.device)
         # Broadcast per-sample ratios across sequence length
         thresholds = mask_ratios.view(-1, 1)
         mask = mask_probs < thresholds

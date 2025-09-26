@@ -438,15 +438,18 @@ class SequenceScorerProvider(DataProviderBase):
                 # Apply padding to replace zeros with PAD tokens
                 original_text = builder.apply_padding(original_text, content_lengths)
 
-                # Apply padding to replace zeros with PAD tokens
-                original_text = builder.apply_padding(original_text, content_lengths)
+                # Ensure tensor is on CUDA if available (consistent with MLM engine device)
+                device = 'cuda' if torch.cuda.is_available() else 'cpu'
+                original_text = original_text.to(device)
             else:
                 # Original approach
                 ids = self.train_ids if split == "train" else self.val_ids
                 max_start_idx = len(ids) - (self.block_size - 1)
                 ix = torch.randint(0, max_start_idx, (count,), generator=rng).tolist()
                 original_sequences = [ids[i : i + (self.block_size - 1)] for i in ix]
-                original_text = torch.tensor(original_sequences, dtype=torch.long)
+                # Ensure tensor is on CUDA if available (consistent with MLM engine device)
+                device = 'cuda' if torch.cuda.is_available() else 'cpu'
+                original_text = torch.tensor(original_sequences, dtype=torch.long, device=device)
 
             # Measure mask vs unmask separately
             t0 = time.time()
