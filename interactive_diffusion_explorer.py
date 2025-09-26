@@ -368,15 +368,15 @@ class DiffusionExplorer:
                 metadata = batch_data['metadata']
                 print(f"📋 Batch metadata found:")
                 for key, value in metadata.items():
-                    if key not in ['tensors', 'stage_info']:  # Skip tensor data and verbose stage info
+                    if key not in ['tensors', 'stage_info', 'masking_info']:  # Skip tensor data and verbose info
                         print(f"     {key}: {value}")
                 # Show stage info summary if present
-                if 'stage_info' in metadata:
-                    stage_info = metadata['stage_info']
-                    if isinstance(stage_info, list):
-                        print(f"     stage_info: {len(stage_info)} samples with stage configurations")
+                masking_info = metadata.get('masking_info') or metadata.get('stage_info')
+                if masking_info:
+                    if isinstance(masking_info, list):
+                        print(f"     masking_info: {len(masking_info)} samples with masking configurations")
                     else:
-                        print(f"     stage_info: {stage_info}")
+                        print(f"     masking_info: {masking_info}")
 
             # Check for generation info
             if 'generation_info' in batch_data:
@@ -419,6 +419,14 @@ class DiffusionExplorer:
             batch_dict = {'input': x_tensor, 'target': y_tensor, 'input_name': input_name, 'target_name': target_name}
             if attn_tensor is not None:
                 batch_dict['attention_mask'] = attn_tensor
+
+            # Store masking info if available
+            if 'metadata' in batch_data:
+                metadata = batch_data['metadata']
+                masking_info = metadata.get('masking_info') or metadata.get('stage_info')
+                if masking_info:
+                    batch_dict['masking_info'] = masking_info
+
             self.current_batch = batch_dict
             self.current_sample_idx = 0
 
@@ -592,6 +600,19 @@ class DiffusionExplorer:
             else:
                 target_val = y_tensor[self.current_sample_idx].item() if y_tensor.dim() == 1 else y_tensor[self.current_sample_idx].squeeze().item()
                 print(f"🎯 Target ({self.current_batch['target_name']}): {target_val:.4f}")
+
+            # Show masking strategy if available
+            if 'masking_info' in self.current_batch:
+                masking_info = self.current_batch['masking_info']
+                if self.current_sample_idx < len(masking_info):
+                    info = masking_info[self.current_sample_idx]
+                    # Format the display of the masking strategy
+                    strategy_type = info.get('type', 'unknown')
+                    params = ', '.join([f"{k}={v}" for k, v in info.items() if k != 'type'])
+                    display_text = f"🎭 Masking Strategy: {strategy_type}"
+                    if params:
+                        display_text += f" ({params})"
+                    print(display_text)
 
             print(f"\nCommands:")
             print(f"  ← / A - Previous sample")

@@ -263,7 +263,9 @@ class SequenceScorerProvider(DataProviderBase):
             raw_targets = torch.tensor(actual_synth_list, dtype=torch.float32)
             targets = self._transform_ratio_to_target(raw_targets)
 
-            return {"input_ids": input_ids, "targets": targets}
+            # Add masking info for each sample
+            masking_info = [{'type': 'random'}] * self.batch_size
+            return {"input_ids": input_ids, "targets": targets, "masking_info": masking_info}
         else:
             # Original implementation
             ids = self.train_ids if split == "train" else self.val_ids
@@ -292,7 +294,9 @@ class SequenceScorerProvider(DataProviderBase):
             # Apply non-linear transformation to targets
             raw_targets = actual_synth.float().cpu()
             targets = self._transform_ratio_to_target(raw_targets)
-            return {"input_ids": input_ids, "targets": targets}
+            # Add masking info for each sample
+            masking_info = [{'type': 'random'}] * self.batch_size
+            return {"input_ids": input_ids, "targets": targets, "masking_info": masking_info}
 
     def produce_one_file(self, split: str, seq: int) -> None:
         """Override to handle stage-based generation at file level.
@@ -375,6 +379,9 @@ class SequenceScorerProvider(DataProviderBase):
                     tensors['x'] = torch.cat([tensors['x'], input_ids_extra], dim=0)
                     tensors['y'] = torch.cat([tensors['y'].to(torch.float32), targets_extra], dim=0)
 
+                if 'masking_info' in batch_metadata:
+                    batch_metadata['masking_info'].extend([{'type': 'original'}] * extra_count)
+
         # If we augmented validation, reshuffle combined tensors to interleave extras
         if split == "val":
             key_inputs = 'input_ids' if 'input_ids' in tensors else 'x'
@@ -385,6 +392,10 @@ class SequenceScorerProvider(DataProviderBase):
             perm_targets = perm_cpu.to(tensors[key_targets].device)
             tensors[key_inputs] = tensors[key_inputs][perm_inputs]
             tensors[key_targets] = tensors[key_targets][perm_targets]
+
+            if 'masking_info' in batch_metadata:
+                shuffled_masking_info = [batch_metadata['masking_info'][i] for i in perm_cpu.tolist()]
+                batch_metadata['masking_info'] = shuffled_masking_info
 
         # Assemble metadata and write file atomically (parity with base)
         metadata = {
@@ -417,7 +428,7 @@ class SequenceScorerProvider(DataProviderBase):
 
         all_inputs: List[torch.Tensor] = []
         all_targets: List[float] = []
-        all_stage_info: List[Dict[str, Any]] = []
+        all_masking_info: List[Dict[str, Any]] = []
 
         import time
         total_stage_time = 0.0
@@ -539,7 +550,7 @@ class SequenceScorerProvider(DataProviderBase):
             input_with_cls = add_cls_token(synthetic_text, self.cls_token_id, self.block_size, self.pad_token_id)
             all_inputs.append(input_with_cls)
             all_targets.append(actual_synth)
-            all_stage_info.extend([stage_config] * count)
+            all_masking_info.extend([stage_config] * count)
 
         if all_inputs:
             combined_inputs = torch.cat(all_inputs, dim=0)
@@ -549,7 +560,7 @@ class SequenceScorerProvider(DataProviderBase):
             shuffle_indices = torch.randperm(total_samples, generator=rng)
             shuffled_inputs = combined_inputs[shuffle_indices]
             shuffled_targets = combined_targets[shuffle_indices]
-            shuffled_stage_info = [all_stage_info[i] for i in shuffle_indices.tolist()]
+            shuffled_masking_info = [all_masking_info[i] for i in shuffle_indices.tolist()]
 
             # Validation split augmentation: append ~10% extra original (zero-target) samples on top
             if split == "val":
@@ -572,7 +583,7 @@ class SequenceScorerProvider(DataProviderBase):
                         # Append to tensors
                         shuffled_inputs = torch.cat([shuffled_inputs, input_ids_extra], dim=0)
                         shuffled_targets = torch.cat([shuffled_targets, targets_extra], dim=0)
-                        shuffled_stage_info.extend([{"extra_zero": True}] * extra_count)
+                        shuffled_masking_info.extend([{'type': 'original'}] * extra_count)
 
             # After augmentation, reshuffle to interleave extras with base samples
             if split == "val":
@@ -582,8 +593,8 @@ class SequenceScorerProvider(DataProviderBase):
                 perm_targets = perm_cpu.to(shuffled_targets.device)
                 shuffled_inputs = shuffled_inputs[perm_inputs]
                 shuffled_targets = shuffled_targets[perm_targets]
-                # stage_info is Python list; use CPU indices directly
-                shuffled_stage_info = [shuffled_stage_info[i] for i in perm_cpu.tolist()]
+                # masking_info is Python list; use CPU indices directly
+                shuffled_masking_info = [shuffled_masking_info[i] for i in perm_cpu.tolist()]
 
             tensors = {"input_ids": shuffled_inputs, "targets": shuffled_targets}
 
@@ -594,7 +605,7 @@ class SequenceScorerProvider(DataProviderBase):
                 "file_idx": seq,
                 "split": split,
                 "produced_at": int(time.time() * 1000),
-                "stage_info": shuffled_stage_info,
+                "masking_info": shuffled_masking_info,
                 "stage_distribution": stage_distribution,
             }
 
