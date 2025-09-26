@@ -212,13 +212,13 @@ def apply_line_masking_direct(
             continue
 
         # Calculate how many lines to replace based on ratio
-        replacement_ratio = torch.rand(1, generator=rng, device=device).item()
+        replacement_ratio = torch.rand(1, generator=rng).item()
         replacement_ratio = min_ratio + replacement_ratio * (max_ratio - min_ratio)
         num_lines_to_replace = max(1, int(replacement_ratio * num_lines))
         num_lines_to_replace = min(num_lines_to_replace, num_lines)  # Don't exceed available lines
 
         # Select which lines to replace
-        line_indices = torch.randperm(num_lines, generator=rng, device=device)[:num_lines_to_replace].tolist()
+        line_indices = torch.randperm(num_lines, generator=rng)[:num_lines_to_replace].tolist()
 
         # Build new sequence by replacing selected lines
         new_sequence = []
