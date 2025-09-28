@@ -154,21 +154,27 @@ def apply_line_masking_direct(
     stage_config: Dict[str, Any],
     split_lines: List[List[int]],
     newline_token_id: int,
+    pad_token_id: int,
     rng: torch.Generator,
 ) -> Tuple[torch.Tensor, torch.Tensor]:
     """
     Apply line replacement masking: replace random FULL LINES with other FULL LINES from the split.
 
+    This implementation constructs the replaced sequence and an explicit per-position
+    mask indicating positions that belong to replaced lines, avoiding over-counting
+    due to length mismatches.
+
     Args:
         x: Input tensor [batch_size, seq_len]
         stage_config: Configuration with 'min_ratio', 'max_ratio'
-        split_lines: All lines from the current split to sample replacements from
+        split_lines: All lines (tokenized with the same stoi) from the current split
         newline_token_id: Token ID for newline character
+        pad_token_id: Token ID for padding
         rng: Random number generator
 
     Returns:
         replaced_x: Input with replaced lines
-        mask: Boolean mask indicating which positions were replaced
+        mask: Boolean mask indicating which positions were replaced (True=replaced)
     """
     batch_size, seq_len = x.shape
     device = x.device
@@ -181,7 +187,7 @@ def apply_line_masking_direct(
         # No replacement lines available, return original
         return x.clone(), torch.zeros_like(x, dtype=torch.bool, device=device)
 
-    replaced_x = x.clone()
+    replaced_x = torch.empty_like(x)
     mask = torch.zeros_like(x, dtype=torch.bool, device=device)
 
     # Process each sample in the batch
@@ -196,64 +202,80 @@ def apply_line_masking_direct(
             line_starts = [0]
             line_ends = [seq_len]
         else:
-            # Lines are separated by newlines
-            line_starts = [0] + (newline_positions + 1).tolist()
-            line_ends = newline_positions.tolist() + [seq_len]
-
+            # Lines are separated by newline tokens; include newline in each line span
+            ends_inclusive = (newline_positions + 1).tolist()  # end indices AFTER newline
+            line_starts = [0] + ends_inclusive[:-1]
+            line_ends = ends_inclusive.copy()
+            # If there is trailing content after the last newline, treat it as a final line (no newline)
+            if ends_inclusive[-1] < seq_len:
+                line_starts.append(ends_inclusive[-1])
+                line_ends.append(seq_len)
             # Remove empty lines (where start >= end)
-            valid_lines = [(s, e) for s, e in zip(line_starts, line_ends) if s < e]
-            if not valid_lines:
+            valid = [(s, e) for s, e in zip(line_starts, line_ends) if s < e]
+            if not valid:
+                replaced_x[b] = sample
+                mask[b] = False
                 continue
-            line_starts, line_ends = zip(*valid_lines)
+            line_starts, line_ends = zip(*valid)
             line_starts, line_ends = list(line_starts), list(line_ends)
 
         num_lines = len(line_starts)
         if num_lines == 0:
+            replaced_x[b] = sample
+            mask[b] = False
             continue
 
         # Calculate how many lines to replace based on ratio
         replacement_ratio = torch.rand(1, generator=rng).item()
         replacement_ratio = min_ratio + replacement_ratio * (max_ratio - min_ratio)
         num_lines_to_replace = max(1, int(replacement_ratio * num_lines))
-        num_lines_to_replace = min(num_lines_to_replace, num_lines)  # Don't exceed available lines
+        num_lines_to_replace = min(num_lines_to_replace, num_lines)
 
         # Select which lines to replace
-        line_indices = torch.randperm(num_lines, generator=rng)[:num_lines_to_replace].tolist()
+        line_indices = set(torch.randperm(num_lines, generator=rng)[:num_lines_to_replace].tolist())
 
-        # Build new sequence by replacing selected lines
-        new_sequence = []
+        # Build new sequence and mask
+        new_tokens: List[int] = []
+        new_mask: List[bool] = []
         total_length = 0
 
         for line_idx in range(num_lines):
+            start_pos = line_starts[line_idx]
+            end_pos = line_ends[line_idx]
             if line_idx in line_indices:
-                # Replace this line with a random line from split
+                # Replace with a random line from split
                 replacement_line = split_lines[torch.randint(0, len(split_lines), (1,), generator=rng).item()]
-                new_sequence.extend(replacement_line)
-                total_length += len(replacement_line)
+                chunk = replacement_line
+                replaced = True
             else:
                 # Keep original line
-                start_pos = line_starts[line_idx]
-                end_pos = line_ends[line_idx]
-                original_line = sample[start_pos:end_pos].tolist()
-                new_sequence.extend(original_line)
-                total_length += len(original_line)
+                chunk = sample[start_pos:end_pos].tolist()
+                replaced = False
 
-            # Check if we exceed seq_len - if so, drop lines from the end
-            if total_length > seq_len:
-                # Truncate the sequence to fit
-                new_sequence = new_sequence[:seq_len]
+            # Append chunk
+            add_len = min(len(chunk), max(0, seq_len - total_length))
+            if add_len > 0:
+                new_tokens.extend(chunk[:add_len])
+                new_mask.extend([replaced] * add_len)
+                total_length += add_len
+
+            if total_length >= seq_len:
                 break
 
-        # Pad if necessary
-        while len(new_sequence) < seq_len:
-            new_sequence.append(0)  # Pad with zeros
+        # Truncate if necessary (already ensured)
+        if len(new_tokens) > seq_len:
+            new_tokens = new_tokens[:seq_len]
+            new_mask = new_mask[:seq_len]
 
-        # Convert to tensor and create mask
-        new_tensor = torch.tensor(new_sequence[:seq_len], dtype=torch.long, device=device)
-        replaced_x[b] = new_tensor
+        # Pad to seq_len with PAD token and False mask
+        if len(new_tokens) < seq_len:
+            pad_len = seq_len - len(new_tokens)
+            new_tokens.extend([pad_token_id] * pad_len)
+            new_mask.extend([False] * pad_len)
 
-        # Create mask by comparing original vs replaced
-        mask[b] = (sample != new_tensor)
+        # Write result
+        replaced_x[b] = torch.tensor(new_tokens, dtype=torch.long, device=device)
+        mask[b] = torch.tensor(new_mask, dtype=torch.bool, device=device)
 
     return replaced_x, mask
 

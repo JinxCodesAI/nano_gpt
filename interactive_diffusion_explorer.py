@@ -56,6 +56,7 @@ class DiffusionExplorer:
         self.schema = None
         self.input_field = None
         self.target_field = None
+        self.file_metadata = None
         self.ptdtype = {'float32': torch.float32, 'bfloat16': torch.bfloat16, 'float16': torch.float16}[DTYPE]
         self.ctx = nullcontext() if DEVICE == 'cpu' else torch.amp.autocast(device_type=DEVICE, dtype=self.ptdtype)
 
@@ -366,9 +367,10 @@ class DiffusionExplorer:
             # Log additional batch information if available
             if 'metadata' in batch_data:
                 metadata = batch_data['metadata']
+                self.file_metadata = metadata
                 print(f"📋 Batch metadata found:")
                 for key, value in metadata.items():
-                    if key not in ['tensors', 'stage_info']:  # Skip tensor data and verbose stage info
+                    if key not in ['tensors', 'stage_info', 'masking_strategy', 'masking_ratio']:  # Skip tensor data and verbose/long lists
                         print(f"     {key}: {value}")
                 # Show stage info summary if present
                 if 'stage_info' in metadata:
@@ -377,6 +379,12 @@ class DiffusionExplorer:
                         print(f"     stage_info: {len(stage_info)} samples with stage configurations")
                     else:
                         print(f"     stage_info: {stage_info}")
+                # Show masking strategy summary if present
+                if 'masking_strategy' in metadata and isinstance(metadata['masking_strategy'], list):
+                    print(f"     masking_strategy: {len(metadata['masking_strategy'])} per-sample labels")
+                # Show masking ratio summary if present
+                if 'masking_ratio' in metadata and isinstance(metadata['masking_ratio'], list):
+                    print(f"     masking_ratio: {len(metadata['masking_ratio'])} per-sample floats")
 
             # Check for generation info
             if 'generation_info' in batch_data:
@@ -556,6 +564,14 @@ class DiffusionExplorer:
                 ones = seq_len_display
                 zeros = 0
             print(f"📊 Current sample: {self.current_sample_idx + 1}/{batch_size} (sequence length: {seq_len_display})")
+            # Display masking strategy per sample, if present in metadata
+            try:
+                if isinstance(self.file_metadata, dict) and 'masking_strategy' in self.file_metadata:
+                    ms = self.file_metadata['masking_strategy']
+                    if isinstance(ms, list) and len(ms) > self.current_sample_idx:
+                        print(f"   • Masking: {ms[self.current_sample_idx]}")
+            except Exception:
+                pass
             if attn is not None:
                 print(f"   • attention_mask -> ones: {ones}, zeros: {zeros}")
             if is_token_targets:
@@ -591,7 +607,15 @@ class DiffusionExplorer:
                 print(f"🎭 Masked positions: {len(masked_positions)} positions")
             else:
                 target_val = y_tensor[self.current_sample_idx].item() if y_tensor.dim() == 1 else y_tensor[self.current_sample_idx].squeeze().item()
-                print(f"🎯 Target ({self.current_batch['target_name']}): {target_val:.4f}")
+                ratio_txt = ""
+                try:
+                    if isinstance(self.file_metadata, dict) and 'masking_ratio' in self.file_metadata:
+                        mr = self.file_metadata['masking_ratio']
+                        if isinstance(mr, list) and len(mr) > self.current_sample_idx:
+                            ratio_txt = f" Masking ratio {float(mr[self.current_sample_idx]):.2f}"
+                except Exception:
+                    pass
+                print(f"🎯 Target ({self.current_batch['target_name']}): {target_val:.4f}{ratio_txt}")
 
             print(f"\nCommands:")
             print(f"  ← / A - Previous sample")
