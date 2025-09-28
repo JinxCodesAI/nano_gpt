@@ -23,7 +23,8 @@ class FakeProvider(DataProviderBase):
         y = torch.zeros((self.batch_size, self.block_size), dtype=torch.long)
         # Return per-sample metadata list
         masking_strategy = ["random"] * self.batch_size
-        return {"x": x, "y": y, "masking_strategy": masking_strategy}
+        masking_ratio = [0.0] * self.batch_size
+        return {"x": x, "y": y, "masking_strategy": masking_strategy, "masking_ratio": masking_ratio}
 
 
 class TestMaskingMetadataAggregation(unittest.TestCase):
@@ -51,11 +52,16 @@ class TestMaskingMetadataAggregation(unittest.TestCase):
             data = torch.load(path, map_location="cpu")
             self.assertIn("metadata", data)
             meta = data["metadata"]
+            # Strategies
             self.assertIn("masking_strategy", meta)
             strategies = meta["masking_strategy"]
-            # Expect batches_per_file * batch_size entries
             self.assertEqual(len(strategies), 3 * 4)
             self.assertTrue(all(s == "random" for s in strategies))
+            # Ratios
+            self.assertIn("masking_ratio", meta)
+            ratios = meta["masking_ratio"]
+            self.assertEqual(len(ratios), 3 * 4)
+            self.assertTrue(all(float(r) == 0.0 for r in ratios))
 
 
 if __name__ == "__main__":

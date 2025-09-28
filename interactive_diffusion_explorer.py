@@ -370,7 +370,7 @@ class DiffusionExplorer:
                 self.file_metadata = metadata
                 print(f"📋 Batch metadata found:")
                 for key, value in metadata.items():
-                    if key not in ['tensors', 'stage_info', 'masking_strategy']:  # Skip tensor data and verbose/long lists
+                    if key not in ['tensors', 'stage_info', 'masking_strategy', 'masking_ratio']:  # Skip tensor data and verbose/long lists
                         print(f"     {key}: {value}")
                 # Show stage info summary if present
                 if 'stage_info' in metadata:
@@ -382,6 +382,9 @@ class DiffusionExplorer:
                 # Show masking strategy summary if present
                 if 'masking_strategy' in metadata and isinstance(metadata['masking_strategy'], list):
                     print(f"     masking_strategy: {len(metadata['masking_strategy'])} per-sample labels")
+                # Show masking ratio summary if present
+                if 'masking_ratio' in metadata and isinstance(metadata['masking_ratio'], list):
+                    print(f"     masking_ratio: {len(metadata['masking_ratio'])} per-sample floats")
 
             # Check for generation info
             if 'generation_info' in batch_data:
@@ -604,7 +607,15 @@ class DiffusionExplorer:
                 print(f"🎭 Masked positions: {len(masked_positions)} positions")
             else:
                 target_val = y_tensor[self.current_sample_idx].item() if y_tensor.dim() == 1 else y_tensor[self.current_sample_idx].squeeze().item()
-                print(f"🎯 Target ({self.current_batch['target_name']}): {target_val:.4f}")
+                ratio_txt = ""
+                try:
+                    if isinstance(self.file_metadata, dict) and 'masking_ratio' in self.file_metadata:
+                        mr = self.file_metadata['masking_ratio']
+                        if isinstance(mr, list) and len(mr) > self.current_sample_idx:
+                            ratio_txt = f" Masking ratio {float(mr[self.current_sample_idx]):.2f}"
+                except Exception:
+                    pass
+                print(f"🎯 Target ({self.current_batch['target_name']}): {target_val:.4f}{ratio_txt}")
 
             print(f"\nCommands:")
             print(f"  ← / A - Previous sample")

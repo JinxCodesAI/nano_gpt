@@ -263,7 +263,7 @@ class SequenceScorerProvider(DataProviderBase):
             raw_targets = torch.tensor(actual_synth_list, dtype=torch.float32)
             targets = self._transform_ratio_to_target(raw_targets)
 
-            return {"input_ids": input_ids, "targets": targets, "masking_strategy": ["random"] * self.batch_size}
+            return {"input_ids": input_ids, "targets": targets, "masking_strategy": ["random"] * self.batch_size, "masking_ratio": [float(x) for x in raw_targets.tolist()]}
         else:
             # Original implementation
             ids = self.train_ids if split == "train" else self.val_ids
@@ -292,7 +292,7 @@ class SequenceScorerProvider(DataProviderBase):
             # Apply non-linear transformation to targets
             raw_targets = actual_synth.float().cpu()
             targets = self._transform_ratio_to_target(raw_targets)
-            return {"input_ids": input_ids, "targets": targets, "masking_strategy": ["random"] * self.batch_size}
+            return {"input_ids": input_ids, "targets": targets, "masking_strategy": ["random"] * self.batch_size, "masking_ratio": [float(x) for x in raw_targets.tolist()]}
 
     def produce_one_file(self, split: str, seq: int) -> None:
         """Override to handle stage-based generation at file level.
@@ -345,8 +345,9 @@ class SequenceScorerProvider(DataProviderBase):
         base_total = int(tensors[first_key].shape[0])
         extra_count = int(base_total * 0.10)
 
-        # Start with base masking_strategy if present, else empty
+        # Start with base masking_strategy and masking_ratio if present, else empty
         masking_strategy_list = list(batch_metadata.get('masking_strategy', []))
+        masking_ratio_list = list(batch_metadata.get('masking_ratio', []))
 
         if extra_count > 0:
             # Build extra ORIGINAL (unmasked, uncorrupted) sequences from validation ids
@@ -378,8 +379,9 @@ class SequenceScorerProvider(DataProviderBase):
                     tensors['x'] = torch.cat([tensors['x'], input_ids_extra], dim=0)
                     tensors['y'] = torch.cat([tensors['y'].to(torch.float32), targets_extra], dim=0)
 
-                # Extend masking strategy with 'original' for the extras
+                # Extend masking strategy and ratio for the extras
                 masking_strategy_list.extend(['original'] * extra_count)
+                masking_ratio_list.extend([0.0] * extra_count)
 
         # If we augmented validation, reshuffle combined tensors to interleave extras
         if split == "val":
@@ -391,9 +393,11 @@ class SequenceScorerProvider(DataProviderBase):
             perm_targets = perm_cpu.to(tensors[key_targets].device)
             tensors[key_inputs] = tensors[key_inputs][perm_inputs]
             tensors[key_targets] = tensors[key_targets][perm_targets]
-            # Apply same permutation to masking strategy if available and lengths match
+            # Apply same permutation to masking strategy/ratio if available and lengths match
             if len(masking_strategy_list) == total:
                 masking_strategy_list = [masking_strategy_list[i] for i in perm_cpu.tolist()]
+            if len(masking_ratio_list) == total:
+                masking_ratio_list = [float(masking_ratio_list[i]) for i in perm_cpu.tolist()]
 
         # Assemble metadata and write file atomically (parity with base)
         metadata = {
@@ -407,6 +411,8 @@ class SequenceScorerProvider(DataProviderBase):
         metadata.update(batch_metadata)
         if masking_strategy_list:
             metadata['masking_strategy'] = masking_strategy_list
+        if masking_ratio_list:
+            metadata['masking_ratio'] = masking_ratio_list
 
         d = self.train_dir if split == "train" else self.val_dir
         ts = metadata["produced_at"]
@@ -430,6 +436,7 @@ class SequenceScorerProvider(DataProviderBase):
         all_inputs: List[torch.Tensor] = []
         all_targets: List[float] = []
         all_stage_info: List[Dict[str, Any]] = []
+        all_masking_ratio: List[float] = []
 
         import time
         total_stage_time = 0.0
@@ -551,6 +558,8 @@ class SequenceScorerProvider(DataProviderBase):
             input_with_cls = add_cls_token(synthetic_text, self.cls_token_id, self.block_size, self.pad_token_id)
             all_inputs.append(input_with_cls)
             all_targets.append(actual_synth)
+            # Masking ratio before target transform
+            all_masking_ratio.extend([float(x) for x in raw_synth.tolist()])
             all_stage_info.extend([stage_config] * count)
 
         if all_inputs:
@@ -562,6 +571,9 @@ class SequenceScorerProvider(DataProviderBase):
             shuffled_inputs = combined_inputs[shuffle_indices]
             shuffled_targets = combined_targets[shuffle_indices]
             shuffled_stage_info = [all_stage_info[i] for i in shuffle_indices.tolist()]
+            # Masking ratio follows the same shuffle
+            combined_masking_ratio = all_masking_ratio
+            shuffled_masking_ratio = [float(combined_masking_ratio[i]) for i in shuffle_indices.tolist()]
 
             # Validation split augmentation: append ~10% extra original (zero-target) samples on top
             if split == "val":
@@ -585,6 +597,8 @@ class SequenceScorerProvider(DataProviderBase):
                         shuffled_inputs = torch.cat([shuffled_inputs, input_ids_extra], dim=0)
                         shuffled_targets = torch.cat([shuffled_targets, targets_extra], dim=0)
                         shuffled_stage_info.extend([{"extra_zero": True}] * extra_count)
+                        # Append masking_ratio zeros for extras
+                        shuffled_masking_ratio.extend([0.0] * extra_count)
 
             # After augmentation, reshuffle to interleave extras with base samples
             if split == "val":
@@ -596,6 +610,8 @@ class SequenceScorerProvider(DataProviderBase):
                 shuffled_targets = shuffled_targets[perm_targets]
                 # stage_info is Python list; use CPU indices directly
                 shuffled_stage_info = [shuffled_stage_info[i] for i in perm_cpu.tolist()]
+                # masking_ratio follows same reshuffle
+                shuffled_masking_ratio = [float(shuffled_masking_ratio[i]) for i in perm_cpu.tolist()]
 
             tensors = {"input_ids": shuffled_inputs, "targets": shuffled_targets}
 
@@ -624,6 +640,7 @@ class SequenceScorerProvider(DataProviderBase):
                 "stage_info": shuffled_stage_info,
                 "stage_distribution": stage_distribution,
                 "masking_strategy": masking_strategy,
+                "masking_ratio": shuffled_masking_ratio,
             }
 
             d = self.train_dir if split == "train" else self.val_dir
