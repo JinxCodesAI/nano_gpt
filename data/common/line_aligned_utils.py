@@ -128,27 +128,25 @@ class LineAlignedSequenceBuilder:
         return x
 
 
-def prepare_line_data(data: str, stoi: Dict[str, int] | None = None) -> Tuple[List[str], List[List[int]], Dict[str, int]]:
+def prepare_line_data(data: str, stoi: Dict[str, int]) -> Tuple[List[str], List[List[int]], Dict[str, int]]:
     """
     Prepare line data from raw text for line-aligned sequence generation.
 
     Args:
         data: Raw text data
-        stoi: Optional external string-to-index mapping to use for tokenization
+        stoi: External string-to-index mapping to use for tokenization. Must be provided.
 
     Returns:
         lines: List of lines (with newlines kept)
         lines_ids: List of lines converted to token IDs
         stoi: String to index mapping
     """
-    # Use provided stoi (preferred) or build one from data
     if stoi is None:
-        chars = sorted(list(set(data)))
-        stoi = {ch: i for i, ch in enumerate(chars)}
+        raise ValueError("stoi must be provided; do not auto-build from data")
 
     # Split into lines (keeping newlines)
     lines = data.splitlines(keepends=True)
-    lines_ids = [[stoi.get(c, 0) for c in line] for line in lines]
+    lines_ids = [[stoi[c] for c in line] for line in lines]
 
     return lines, lines_ids, stoi
 
@@ -156,7 +154,7 @@ def prepare_line_data(data: str, stoi: Dict[str, int] | None = None) -> Tuple[Li
 def create_line_aligned_builder(data: str,
                               newline_token_id: int = None,
                               pad_token_id: int = None,
-                              stoi: Dict[str, int] | None = None) -> Tuple[LineAlignedSequenceBuilder, LineAlignedSequenceBuilder, Dict[str, int]]:
+                              stoi: Dict[str, int] = None) -> Tuple[LineAlignedSequenceBuilder, LineAlignedSequenceBuilder, Dict[str, int]]:
     """
     Create train and validation line-aligned sequence builders from text data.
 
@@ -164,13 +162,15 @@ def create_line_aligned_builder(data: str,
         data: Raw text data
         newline_token_id: Token ID for newline character
         pad_token_id: Token ID for padding
-        stoi: Optional external string-to-index mapping (preferred)
+        stoi: External string-to-index mapping (required)
 
     Returns:
         train_builder: Builder for training data
         val_builder: Builder for validation data
         stoi: String to index mapping
     """
+    if stoi is None:
+        raise ValueError("stoi must be provided; do not auto-build from data")
     lines, lines_ids, stoi = prepare_line_data(data, stoi=stoi)
 
     # Create train/val splits (90/10)

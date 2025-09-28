@@ -538,15 +538,10 @@ class SequenceScorerProvider(DataProviderBase):
             # per-sample syntheticity based on mask
             masked_counts = mask.sum(dim=1).to(torch.float32)
 
-            if self.enable_line_aligned_sequences:
-                # For line-aligned sequences, calculate syntheticity based on content length (excluding PAD tokens)
-                pad_mask = (original_text == self.pad_token_id)
-                content_mask = ~pad_mask  # True for non-PAD positions
-                content_lengths = content_mask.sum(dim=1).to(torch.float32)  # Count of actual content tokens
-                raw_synth = (masked_counts / torch.clamp(content_lengths, min=1)).cpu()
-            else:
-                # For non-line-aligned sequences, use total sequence length
-                raw_synth = (masked_counts / max(mask.shape[1], 1)).cpu()
+            # Compute per-sample masking ratio as (total length of replaced tokens) / seq_len
+            # Note: PAD positions are already excluded from mask by setting mask[pad_mask] = False
+            seq_len = mask.shape[1]
+            raw_synth = (masked_counts / max(seq_len, 1)).cpu()
 
             # Apply non-linear transformation to targets
             actual_synth = self._transform_ratio_to_target(raw_synth)
