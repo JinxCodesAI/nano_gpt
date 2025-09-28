@@ -202,9 +202,14 @@ def apply_line_masking_direct(
             line_starts = [0]
             line_ends = [seq_len]
         else:
-            # Lines are separated by newlines
-            line_starts = [0] + (newline_positions + 1).tolist()
-            line_ends = newline_positions.tolist() + [seq_len]
+            # Lines are separated by newline tokens; include newline in each line span
+            ends_inclusive = (newline_positions + 1).tolist()  # end indices AFTER newline
+            line_starts = [0] + ends_inclusive[:-1]
+            line_ends = ends_inclusive.copy()
+            # If there is trailing content after the last newline, treat it as a final line (no newline)
+            if ends_inclusive[-1] < seq_len:
+                line_starts.append(ends_inclusive[-1])
+                line_ends.append(seq_len)
             # Remove empty lines (where start >= end)
             valid = [(s, e) for s, e in zip(line_starts, line_ends) if s < e]
             if not valid:
