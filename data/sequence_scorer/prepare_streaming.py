@@ -81,18 +81,16 @@ class SequenceScorerProvider(DataProviderBase):
 
     def _transform_ratio_to_target(self, ratio: torch.Tensor) -> torch.Tensor:
         """
-        Transform syntheticity ratio using non-linear formula: y = -x^4 + 2x^3 - 2x + 1
+        Transform syntheticity ratio using linear inversion: y = 1 - x
         where x is the ratio and y is the target value.
 
         Args:
             ratio: Tensor of syntheticity ratios in [0, 1]
 
         Returns:
-            Transformed target values
+            Transformed target values in [0, 1]
         """
-        x = ratio
-        y = -x**4 + 2 * x**3 - 2 * x + 1
-        return y
+        return 1.0 - ratio
 
     def _validate_stage_config(self):
         if self.use_all_stages_for_training is not None:
