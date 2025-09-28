@@ -37,6 +37,8 @@ class TestMaskingMetadataAggregation(unittest.TestCase):
                 max_backlog_files=1,
                 verbose=False,
             )
+            # Ensure output directories exist
+            provider.ensure_dirs()
             # Produce a single train file
             provider.produce_one_file("train", seq=0)
 
