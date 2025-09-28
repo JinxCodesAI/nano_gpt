@@ -81,16 +81,18 @@ class SequenceScorerProvider(DataProviderBase):
 
     def _transform_ratio_to_target(self, ratio: torch.Tensor) -> torch.Tensor:
         """
-        Transform syntheticity ratio using linear inversion: y = 1 - x
+        Transform syntheticity ratio using non-linear formula: y = -x^4 + 2x^3 - 2x + 1
         where x is the ratio and y is the target value.
 
         Args:
             ratio: Tensor of syntheticity ratios in [0, 1]
 
         Returns:
-            Transformed target values in [0, 1]
+            Transformed target values
         """
-        return 1.0 - ratio
+        x = ratio
+        y = 1-(-x**4 + 2 * x**3 - 2 * x + 1)
+        return y
 
     def _validate_stage_config(self):
         if self.use_all_stages_for_training is not None:
@@ -190,7 +192,8 @@ class SequenceScorerProvider(DataProviderBase):
             self.train_builder, self.val_builder, _ = create_line_aligned_builder(
                 data,
                 newline_token_id=self.newline_token_id,
-                pad_token_id=self.pad_token_id  # Use PAD tokens exactly like CharDiffusion
+                pad_token_id=self.pad_token_id,  # Use PAD tokens exactly like CharDiffusion
+                stoi=self.stoi,
             )
 
             # Keep ids for compatibility with non-line-aligned code paths
@@ -484,7 +487,7 @@ class SequenceScorerProvider(DataProviderBase):
                     # Pass split data directly to masking function
                     builder = self.train_builder if split == "train" else self.val_builder
                     synthetic_text, mask = apply_line_masking_direct(
-                        content_only_text, stage_config, builder.lines_ids, self.newline_token_id, rng
+                        content_only_text, stage_config, builder.lines_ids, self.newline_token_id, self.pad_token_id, rng
                     )
 
                     # Restore PAD tokens in synthetic text
