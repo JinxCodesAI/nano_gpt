@@ -287,6 +287,8 @@ def diffusion_generate(model, batch_size, total_length, iterations, mask_token_i
         print(f"  - Temperature: {temperature}")
         if remasking_model is not None:
             print(f"  - Using remasking model")
+        elif getattr(getattr(model, 'config', object()), 'add_critic_head', False):
+            print(f"  - Using critic-guided remasking")
         elif intelligent_remasking:
             print(f"  - Using intelligent self-remasking")
         else:
@@ -330,7 +332,7 @@ def diffusion_generate(model, batch_size, total_length, iterations, mask_token_i
                 mask_token_id=mask_token_id,
                 device=device,
                 base_model=model,
-                intelligent_remasking=intelligent_remasking,
+                intelligent_remasking=(False if (remasking_model is None and getattr(getattr(model, 'config', object()), 'add_critic_head', False)) else intelligent_remasking),
                 verbose=verbose and use_verbose_logging,
                 logits_from_predict=logits,
                 protected_mask=protected_mask
