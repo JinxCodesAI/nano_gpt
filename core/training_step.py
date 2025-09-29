@@ -146,8 +146,9 @@ class TrainingStep:
                     else:
                         alpha_eff = max(0.0, min(base, base * float(it - start) / max(1.0, float(end - start))))
 
-                    # 1) Forward LM to get logits only (ignore returned loss)
-                    logits_gen, _ = self.model(X, None, loss_modifiers=None)
+                    # 1) Forward LM to get full-sequence logits without triggering internal loss/critic
+                    x_enc = raw_model._encode_tokens(X)
+                    logits_gen = raw_model.lm_head(x_enc)
 
                     # 2) Compute LM base loss (per-position then aggregate) and apply loss_modifiers if any
                     flat_logits = logits_gen.view(-1, logits_gen.size(-1))
