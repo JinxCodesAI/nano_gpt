@@ -273,7 +273,7 @@ class MLP(nn.Module):
         x = self.c_proj(x)
         x = self.dropout(x)
         return x
-        
+
 class ScaledSigmoidHead(nn.Module):
     """
     Linear head with a learnable affine transformation before the sigmoid
@@ -341,6 +341,14 @@ class GPTConfig:
     init_from_checkpoint: str = None
     unfreeze_at_iteration: int = None
     unfreeze_lr_multiplier: float = 0.1
+
+
+    # Optional critic head configuration (LANGUAGE_MODEL multi-task)
+    add_critic_head: bool = False
+    critic_alpha: float = 0.5
+    critic_target_scope: str = 'all'
+    mask_token_id: int = None
+    pad_token_id: int = None
 
     # Backward compatibility
     binary_classification: bool = False  # Legacy support
@@ -410,6 +418,11 @@ class GPT(nn.Module):
             self._log_info("Sequence scorer head: ScaledSigmoidHead (0-1)")
         else:
             raise ValueError(f"Unknown model mode: {self.config.mode}")
+
+        # Optional critic head for LANGUAGE_MODEL multi-tasking
+        if getattr(self.config, 'add_critic_head', False) and self.config.mode == ModelMode.LANGUAGE_MODEL:
+            self.critic_head = nn.Linear(self.config.n_embd, 1, bias=False)
+            self._log_info(f"Critic head enabled (alpha={self.config.critic_alpha})")
 
         # init all weights
         self.apply(self._init_weights)
@@ -503,10 +516,15 @@ class GPT(nn.Module):
         if hasattr(self, 'sequence_head'):
             for param in self.sequence_head.parameters():
                 param.requires_grad = True
+        if hasattr(self, 'critic_head'):
+            for param in self.critic_head.parameters():
+                param.requires_grad = True
+
 
     def unfreeze_transformer_weights(self):
         """Unfreeze transformer for full fine-tuning"""
         self._log_info("Unfreezing transformer weights for fine-tuning")
+
         for param in self.transformer.parameters():
             param.requires_grad = True
 
@@ -620,7 +638,7 @@ class GPT(nn.Module):
         elif self.config.mode == ModelMode.TOKEN_CLASSIFIER:
             return self._forward_token_classifier(x, targets, loss_modifiers)
         else:  # LANGUAGE_MODEL
-            return self._forward_language_model(x, targets, loss_modifiers)
+            return self._forward_language_model(x, targets, loss_modifiers, idx=idx)
 
     def _forward_sequence_scorer(self, x, targets, loss_modifiers):
         """Sequence scoring forward pass"""
@@ -669,8 +687,8 @@ class GPT(nn.Module):
 
         return logits, loss
 
-    def _forward_language_model(self, x, targets, loss_modifiers):
-        """Language modeling forward pass (existing logic)"""
+    def _forward_language_model(self, x, targets, loss_modifiers, idx=None):
+        """Language modeling forward pass with optional critic head"""
         if targets is not None:
             logits = self.lm_head(x)
             if loss_modifiers is not None and not loss_modifiers.is_empty():
@@ -693,12 +711,72 @@ class GPT(nn.Module):
                 )
             else:
                 loss = F.cross_entropy(logits.view(-1, logits.size(-1)), targets.view(-1), ignore_index=self.config.ignore_index)
+
+            # Optional critic loss (multi-task) when enabled
+            if getattr(self.config, 'add_critic_head', False) and hasattr(self, 'critic_head'):
+                # Determine positions to treat as masked/fillable
+                if getattr(self.config, 'mask_token_id', None) is not None and idx is not None:
+                    masked_positions = (idx == int(self.config.mask_token_id))
+                else:
+                    masked_positions = (targets != self.config.ignore_index)
+                # Sample predictions (argmax for stability)
+                pred_tokens = torch.argmax(logits.detach(), dim=-1)
+                # Build critic input by filling masked positions
+                if idx is not None:
+                    critic_input = idx.clone()
+                    critic_input[masked_positions] = pred_tokens[masked_positions]
+                else:
+                    critic_input = pred_tokens
+                # Encode critic input through the transformer trunk
+                tok_emb2 = self.transformer.wte(critic_input)
+                if hasattr(self.transformer, 'wpe'):
+                    b, t = critic_input.size()
+                    pos = torch.arange(0, t, dtype=torch.long, device=critic_input.device)
+                    pos_emb2 = self.transformer.wpe(pos)
+                    h2 = self.transformer.drop(tok_emb2 + pos_emb2)
+                else:
+                    h2 = self.transformer.drop(tok_emb2)
+                for block in self.transformer.h:
+                    h2 = block(h2)
+                h2 = self.transformer.ln_f(h2)
+                critic_logits = self.critic_head(h2).squeeze(-1)
+                # Build critic targets: 1 if filled token != ground truth, else 0
+                valid_mask = (targets != self.config.ignore_index)
+                if getattr(self.config, 'pad_token_id', None) is not None and idx is not None:
+                    valid_mask = valid_mask & (idx != int(self.config.pad_token_id))
+                critic_target = (critic_input != targets).float()
+                critic_loss_per_pos = F.binary_cross_entropy_with_logits(critic_logits, critic_target, reduction='none')
+                critic_loss = (critic_loss_per_pos * valid_mask.float()).sum() / (valid_mask.float().sum() + 1e-8)
+                loss = loss + float(self.config.critic_alpha) * critic_loss
         else:
             # Inference optimization
             logits = self.lm_head(x[:, [-1], :])
             loss = None
 
         return logits, loss
+
+    @torch.no_grad()
+    def critic_scores(self, idx, attention_mask=None):
+        """Return per-token critic logits (B, T). Requires add_critic_head=True and LANGUAGE_MODEL mode."""
+        if not getattr(self.config, 'add_critic_head', False) or not hasattr(self, 'critic_head'):
+            raise RuntimeError("critic_head not enabled in config")
+        if self.config.mode != ModelMode.LANGUAGE_MODEL:
+            raise RuntimeError("critic_scores is only available in LANGUAGE_MODEL mode")
+        device = idx.device
+        b, t = idx.size()
+        assert t <= self.config.block_size
+        tok_emb = self.transformer.wte(idx)
+        if hasattr(self.transformer, 'wpe'):
+            pos = torch.arange(0, t, dtype=torch.long, device=device)
+            pos_emb = self.transformer.wpe(pos)
+            x = self.transformer.drop(tok_emb + pos_emb)
+        else:
+            x = self.transformer.drop(tok_emb)
+        for block in self.transformer.h:
+            x = block(x, attention_mask=attention_mask)
+        x = self.transformer.ln_f(x)
+        logits = self.critic_head(x).squeeze(-1)
+        return logits
 
     def _compute_weighted_classification_loss(self, logits, targets, num_classes):
         """Compute classification loss with dynamic class weighting for imbalanced datasets"""
