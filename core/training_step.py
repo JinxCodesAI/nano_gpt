@@ -197,10 +197,10 @@ class TrainingStep:
                         critic_loss = (critic_per_pos * critic_valid.float()).sum() / (critic_valid.float().sum() + 1e-8)
 
                         # 6) Combine losses with effective alpha
-                        loss = lm_loss + float(alpha_eff) * critic_loss
-                        # Track loss components before grad-accum scaling
+                        loss = ( lm_loss + float(alpha_eff) * critic_loss ) / (1.0 + alpha_eff)
+                        # Track loss components before grad-accum scaling (raw, unscaled)
                         self.last_loss_main = float(lm_loss.detach().item())
-                        self.last_loss_critic = float(alpha_eff) * float(critic_loss.detach().item())
+                        self.last_loss_critic = float(critic_loss.detach().item())
                     else:
                         # No critic contribution during warmup pre-start
                         loss = lm_loss
