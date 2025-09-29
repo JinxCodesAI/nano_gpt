@@ -2,10 +2,6 @@
 
 Add an optional, non-breaking Critic head to the existing GPT model that learns to predict token-level error likelihoods and can guide re-masking during diffusion-style generation. This is an extension (default-off) that must not change existing behavior unless explicitly enabled via configuration.
 
-Out of scope for this iteration:
-- No changes to training loop structure in train.py or core/training_step.py beyond using the existing call paths
-- No pushing branches or implementing a separate standalone “remasking model”
-
 ## Backward Compatibility Requirements
 - New config flag add_critic_head: default False
 - All current training modes must keep working unchanged when add_critic_head is False: LANGUAGE_MODEL, TOKEN_CLASSIFIER, SEQUENCE_SCORER
@@ -45,14 +41,14 @@ These are the only places we need to touch or reference for the critic extension
 
 ## High-Level Design
 - Multi-task extension of LANGUAGE_MODEL only. The Critic head shares the transformer trunk and predicts a single logit per token representing “error likelihood”.
-- Training (when enabled): LM loss is computed as today. Additionally, a second forward pass runs on a “filled” sequence (masked positions replaced by sampled/argmax tokens from the LM output) to compute a critic loss (BCEWithLogits). Final loss = LM loss (with existing loss modifiers applied) + alpha * critic_loss.
+- Training (when enabled): LM loss is computed as today. Additionally, a second forward pass runs on a “filled” sequence (masked positions replaced by sampled tokens (multinomial sampling) drawn from the LM output) to compute a critic loss (BCEWithLogits). Final loss = LM loss (with existing loss modifiers applied) + alpha * critic_loss.
 - Inference: When enabled and no external remasking model is provided, re-masking selection can use critic scores instead of 1 - confidence. Randomness blending and protection masks remain as they are today.
 
 ## Model Changes (model.py)
 1) GPTConfig additions
 - add_critic_head: bool = False (default)
 - critic_alpha: float = 0.5 (weight for critic loss in training)
-- critic_target_scope: str = 'masked_only' (compute critic targets/loss only on positions that were masked this iteration; future options: 'all')
+- critic_target_scope: str =  'all' (compute critic targets/loss on all positions masked or unmasked in this iteration; targets should be 0 for all unmasked positions and correct predictions and 1 for incorrect predictions)
 
 These config fields are saved in checkpoints via existing model_args flow and default to safe values for older checkpoints.
 
@@ -75,8 +71,8 @@ These config fields are saved in checkpoints via existing model_args flow and de
     - Sampling policy: start with argmax for stability; later we can add multinomial sampling under a flag
     - Use the same ignore_index mask; identify masked positions as those where targets != ignore_index AND current input had mask token (requires access to the original idx). To avoid changing forward signature externally, compute mask_positions inside forward from idx vs. mask_token_id if available in consumer meta via config; if not available, default to "positions where targets != ignore_index" (documented behavior). See Risks below.
   - Forward pass 2 (with grad): logits_critic = critic_head(ENCODE(critic_input))
-  - Build critic_target: float tensor shape (B,T,1) where 1.0 for error and 0.0 otherwise; scope controlled by critic_target_scope
-    - masked_only: only consider positions that were masked in this iteration; ignore others
+  - Build critic_target: float tensor shape (B,T,1) where 1.0 for error and 0.0 otherwise; scope controlled by critic_target_scope='all'
+    - all: evaluate all positions (excluding padding/ignored); target=1 if critic_input token != ground truth Y else 0
 ## Configuration wiring and persistence
 
 - New GPTConfig fields (model.py): add_critic_head, critic_alpha, critic_target_scope (defaults safe)
@@ -92,7 +88,7 @@ These config fields are saved in checkpoints via existing model_args flow and de
    - In the block where model_args is constructed, include:
      - add_critic_head=globals().get('add_critic_head', False)
      - critic_alpha=globals().get('critic_alpha', 0.5)
-     - critic_target_scope=globals().get('critic_target_scope', 'masked_only')
+     - critic_target_scope=globals().get('critic_target_scope', 'all')
    - This keeps behavior identical by default and allows enabling via command-line/config overrides.
 
 ### Inference-time enabling
@@ -124,7 +120,7 @@ Training from scratch with critic (if option 2 wiring is added):
 - In your training config (e.g., config/my_training/with_critic.py), set:
   - add_critic_head = True
   - critic_alpha = 0.5  # tune 0.1–1.0
-  - critic_target_scope = 'masked_only'
+  - critic_target_scope = 'all'
 - Run:
   - python train.py config/my_training/with_critic.py
 
@@ -188,7 +184,7 @@ Notes:
 - Mask identification: prefer using (tokens == mask_token_id) captured before filling to identify positions originally masked in the iteration
 - Targets: 1.0 when the filled token differs from ground truth Y; 0.0 otherwise
 - Valid positions: exclude padding/ignored tokens; if meta supplies pad_token_id, mask those out
-- Scope: start with masked_only to avoid trivial negatives on unmasked positions
+- Scope: all positions (excluding padding/ignored); target is 1 when prediction != ground truth, else 0
 
 ## Logging
 - At model init: log that critic head is enabled and critic_alpha
