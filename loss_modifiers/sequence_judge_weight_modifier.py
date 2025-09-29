@@ -44,6 +44,15 @@ class SequenceScoringJudgeWeightModifier(BaseLossModifier):
         self.min_factor: float = float(config.get('judge_weight_min_factor', 0.1))
         self.max_factor: float = float(config.get('judge_weight_max_factor', 10.0))
         self.eps: float = float(config.get('judge_weight_eps', 1e-6))
+        # Scheduling (required when enabled)
+        self.judge_start_iter = config.get('judge_start_iter', None)
+        self.judge_max_iter = config.get('judge_max_iter', None)
+        if self.judge_start_iter is None or self.judge_max_iter is None:
+            raise ValueError("judge_start_iter and judge_max_iter must be provided when judge_weight_modifier_enabled=True")
+        self.judge_start_iter = int(self.judge_start_iter)
+        self.judge_max_iter = int(self.judge_max_iter)
+        if self.judge_max_iter < self.judge_start_iter:
+            raise ValueError(f"judge_max_iter ({self.judge_max_iter}) must be >= judge_start_iter ({self.judge_start_iter})")
 
         # Device/dtype from main training config
         self.device: str = str(config.get('device', 'cuda' if torch.cuda.is_available() else 'cpu'))
@@ -162,6 +171,8 @@ class SequenceScoringJudgeWeightModifier(BaseLossModifier):
             raise RuntimeError("Judge model not loaded")
 
         device = logits.device
+        # Reset per-pass metrics; will populate conditionally below
+        self._metrics = {}
         # Sampling from LM logits to get completion sequences
         with torch.no_grad():
             sampled_ids = self._sample_sequences_from_logits(logits)
@@ -185,28 +196,42 @@ class SequenceScoringJudgeWeightModifier(BaseLossModifier):
         y = sequence_scorer_target_transform(ratio)
         y = torch.clamp(y, min=self.eps, max=1.0)
         factor = wrong / y
+        # Compute scheduled exponent based on current iteration
+        iter_num = int(kwargs.get('iter_num', 0) or 0)
+        if iter_num <= self.judge_start_iter:
+            effective_exponent = 0.0
+        elif iter_num >= self.judge_max_iter:
+            effective_exponent = float(self.exponent)
+        else:
+            span = max(self.judge_max_iter - self.judge_start_iter, 1)
+            frac = float(iter_num - self.judge_start_iter) / float(span)
+            effective_exponent = float(self.exponent) * max(min(frac, 1.0), 0.0)
         # Per-sample factor
-        multiplier = torch.clamp((factor) ** self.exponent, min=self.min_factor, max=self.max_factor)
+        multiplier = torch.clamp((factor) ** effective_exponent, min=self.min_factor, max=self.max_factor)
 
-        # Metrics: only multiplayer_median and multiplayer_std_ema (EMA factor 0.99)
-        with torch.no_grad():
-            med = torch.median(multiplier.detach().float())
-            cur_std = multiplier.detach().float().std(unbiased=False)
-            cur_std_val = float(cur_std.cpu().item())
-            if self._mul_med_ema is None:
-                self._mul_med_ema = med
-            else:
-                alpha = 0.99
-                self._mul_med_ema = float(alpha * self._mul_med_ema + (1.0 - alpha) * med)
-            if self._mul_std_ema is None:
-                self._mul_std_ema = cur_std_val
-            else:
-                alpha = 0.99
-                self._mul_std_ema = float(alpha * self._mul_std_ema + (1.0 - alpha) * cur_std_val)
-            self._metrics = {
-                'multiplayer_median': self._mul_med_ema,
-                'multiplayer_std_ema': self._mul_std_ema,
-            }
+        # Metrics: only when schedule is active (effective_exponent > 0)
+        if effective_exponent > 0.0:
+            with torch.no_grad():
+                med = torch.median(multiplier.detach().float())
+                cur_std = multiplier.detach().float().std(unbiased=False)
+                cur_std_val = float(cur_std.cpu().item())
+                if self._mul_med_ema is None:
+                    self._mul_med_ema = med
+                else:
+                    alpha = 0.99
+                    self._mul_med_ema = float(alpha * self._mul_med_ema + (1.0 - alpha) * med)
+                if self._mul_std_ema is None:
+                    self._mul_std_ema = cur_std_val
+                else:
+                    alpha = 0.99
+                    self._mul_std_ema = float(alpha * self._mul_std_ema + (1.0 - alpha) * cur_std_val)
+                self._metrics = {
+                    'multiplayer_median': self._mul_med_ema,
+                    'multiplayer_std_ema': self._mul_std_ema,
+                }
+        else:
+            # Ensure nothing is logged when the schedule is off
+            self._metrics = {}
 
         # Prefer scaling per-position loss if provided to avoid pipeline overwrite
         per_position_loss: Optional[torch.Tensor] = kwargs.get('per_position_loss', None)

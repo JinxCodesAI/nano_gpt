@@ -120,6 +120,8 @@ def create_loss_modifier_pipeline(config):
             'enabled': True,
             'judge_weight_checkpoint': get_config_value('judge_weight_checkpoint', None),
             'judge_weight_exponent': get_config_value('judge_weight_exponent', 1.0),
+            'judge_start_iter': get_config_value('judge_start_iter', None),
+            'judge_max_iter': get_config_value('judge_max_iter', None),
             'judge_weight_min_factor': get_config_value('judge_weight_min_factor', 0.1),
             'judge_weight_max_factor': get_config_value('judge_weight_max_factor', 10.0),
             'judge_weight_eps': get_config_value('judge_weight_eps', 1e-6),

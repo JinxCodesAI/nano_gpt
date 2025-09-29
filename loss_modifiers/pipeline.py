@@ -24,15 +24,16 @@ class LossModifierPipeline:
     def __init__(self, modifiers: Optional[List[BaseLossModifier]] = None):
         """
         Initialize the pipeline with optional list of modifiers.
-        
+
         Args:
             modifiers: List of loss modifiers to include in the pipeline
         """
         self.modifiers = modifiers or []
         self._enabled_modifiers = []
         self._temporarily_disabled = False
+        self.current_iter: int = 0
         self._update_enabled_modifiers()
-    
+
     def add_modifier(self, modifier: BaseLossModifier) -> None:
         """
         Add a new modifier to the pipeline.
@@ -87,6 +88,9 @@ class LossModifierPipeline:
         # Whether any modifier in this pipeline produced/replaced per_position_loss
         per_position_loss_owned = False
         extra_kwargs = dict(kwargs)
+        # Always pass current iteration to modifiers if available
+        if 'iter_num' not in extra_kwargs:
+            extra_kwargs['iter_num'] = self.current_iter
 
         modified_loss = loss
         for modifier in compatible_modifiers:
