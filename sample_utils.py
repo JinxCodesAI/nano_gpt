@@ -533,6 +533,25 @@ def apply_remasking_step(tokens, prediction_tokens, iteration, iterations, sched
             return remasked_tokens
         return prediction_tokens
 
+    # Critic-guided remasking path: precedence after remasking_model and before intelligent_remasking
+    if base_model is not None and getattr(getattr(base_model, 'config', object()), 'add_critic_head', False) and not intelligent_remasking:
+        with torch.no_grad():
+            critic_logits = base_model.critic_scores(prediction_tokens)
+        # Higher critic logit => higher error likelihood
+        scores = critic_logits.clone()
+        scores = scores.masked_fill(~unmaskable, -1e9)
+        if randomness_strength > 0:
+            scores = (1 - randomness_strength) * scores + randomness_strength * torch.rand_like(scores)
+        if k > 0:
+            topk_idx = scores.topk(k, dim=1, largest=True).indices
+            select = torch.zeros_like(scores, dtype=torch.bool)
+            select.scatter_(1, topk_idx, True)
+            select &= unmaskable
+            remasked_tokens = prediction_tokens.clone()
+            remasked_tokens[select] = mask_token_id
+            return remasked_tokens
+        return prediction_tokens
+
     if intelligent_remasking:
         if logits_from_predict is None:
             # Fallback: per-sample (slower) path using base_model

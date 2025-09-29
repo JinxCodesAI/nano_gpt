@@ -469,6 +469,10 @@ if sampling_method == 'diffusion':
 else:
     print(f"Max new tokens: {max_new_tokens}")
     print(f"Temperature: {std_temperature}, Top-k: {top_k}")
+    # Informational: Critic-guided remasking will be used if available (no external remasking model)
+    if sampling_method == 'diffusion' and remasking_model is None and getattr(getattr(model, 'config', object()), 'add_critic_head', False):
+        print("Critic-guided remasking: enabled (using model's critic head)")
+
     print(f"Start text: '{start_text}'")
 
 print(f"{'='*60}")
