@@ -116,6 +116,11 @@ class Trainer:
             self.training_step.maybe_unfreeze(self.iter_num)
 
             # forward/backward/update handled by TrainingStep
+            # Expose current iteration to loss modifiers
+            try:
+                self.evaluator.loss_modifier_pipeline.current_iter = self.iter_num
+            except Exception:
+                pass
             loss, batch = self.training_step.execute_step(
                 batch, self.evaluator.loss_modifier_pipeline, self.consumer, self.device
             )
