@@ -199,7 +199,7 @@ class SequenceScoringJudgeWeightModifier(BaseLossModifier):
         y = sequence_scorer_target_transform(ratio)
         y = torch.clamp(y, min=self.eps, max=1.0)
         factor = wrong / y
-        factor = 1 / factor # Fliped for no reason
+        # factor = 1 / factor # Fliped for no reason
         # Compute scheduled exponent based on current iteration
         iter_num = int(kwargs.get('iter_num', 0) or 0)
         if iter_num <= self.judge_start_iter:

@@ -273,21 +273,24 @@ class MLP(nn.Module):
         x = self.c_proj(x)
         x = self.dropout(x)
         return x
+        
 class ScaledSigmoidHead(nn.Module):
-    """Linear head with a learnable temperature scaled sigmoid to control squashing."""
+    """
+    Linear head with a learnable affine transformation before the sigmoid
+    to control the output distribution.
+    """
     def __init__(self, input_dim):
         super().__init__()
         self.base_predictor = nn.Linear(input_dim, 1, bias=False)
-        # Initialize temperature > 1 to start more squashed; model can adjust
-        self.temperature = nn.Parameter(torch.ones(1) * 2.0)
-        self.A = nn.Parameter(torch.ones(1) * 1.0)
-        self.B = nn.Parameter(torch.ones(1) * 0.0)
+        # Learnable scale (acts like temperature) and shift for the sigmoid input
+        self.scale = nn.Parameter(torch.ones(1))
+        self.shift = nn.Parameter(torch.zeros(1))
 
     def forward(self, x):
-        linear_output = self.base_predictor(x)
-        # ensure non-negative temperature via ReLU; apply affine transform A*sigmoid + B
-        y = torch.sigmoid(linear_output * self.A + self.B)
-        return y
+        logits = self.base_predictor(x)
+        # Apply learnable scale and shift to the logits before the sigmoid
+        scaled_logits = logits * self.scale + self.shift
+        return torch.sigmoid(scaled_logits)
 
 
 class Block(nn.Module):
