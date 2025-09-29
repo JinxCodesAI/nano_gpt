@@ -209,11 +209,15 @@ class SequenceScoringJudgeWeightModifier(BaseLossModifier):
         # Per-sample factor
         multiplier = torch.clamp((factor) ** effective_exponent, min=self.min_factor, max=self.max_factor)
 
+        # Baseline multiplier for metrics (uses configured exponent, independent of schedule)
+        baseline_multiplier = torch.clamp((factor) ** float(self.exponent), min=self.min_factor, max=self.max_factor)
+
+
         # Metrics: only when schedule is active (effective_exponent > 0)
         if effective_exponent > 0.0:
             with torch.no_grad():
-                med = torch.median(multiplier.detach().float())
-                cur_std = multiplier.detach().float().std(unbiased=False)
+                med = torch.median(baseline_multiplier.detach().float())
+                cur_std = baseline_multiplier.detach().float().std(unbiased=False)
                 cur_std_val = float(cur_std.cpu().item())
                 if self._mul_med_ema is None:
                     self._mul_med_ema = med
