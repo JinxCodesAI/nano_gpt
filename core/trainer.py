@@ -154,8 +154,16 @@ class Trainer:
                     "time_ms": dt * 1000,
                     "mfu_pct": running_mfu * 100,
                 }
-
-
+                # If TrainingStep captured component losses, include them (scaled like total)
+                try:
+                    main_part = getattr(self.training_step, 'last_loss_main', None)
+                    critic_part = getattr(self.training_step, 'last_loss_critic', None)
+                    if isinstance(main_part, (int, float)):
+                        step_metrics['loss_main'] = float(main_part) * self.grad_accum_steps
+                    if isinstance(critic_part, (int, float)):
+                        step_metrics['loss_critic'] = float(critic_part) * self.grad_accum_steps
+                except Exception:
+                    pass
 
                 self.logger.log_step(step_metrics)
 

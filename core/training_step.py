@@ -47,6 +47,9 @@ class TrainingStep:
         self.unfreeze_at_iteration = unfreeze_at_iteration
         self.unfreeze_lr_multiplier = float(unfreeze_lr_multiplier)
         self.logger = logger
+        # Track last loss components (unscaled, sum equals total loss before grad_accum scaling)
+        self.last_loss_main: float = 0.0
+        self.last_loss_critic: float = 0.0
 
     def set_learning_rate(self, iter_num: int) -> float:
         """
@@ -194,12 +197,23 @@ class TrainingStep:
 
                         # 6) Combine losses with effective alpha
                         loss = lm_loss + float(alpha_eff) * critic_loss
+                        # Track loss components before grad-accum scaling
+                        self.last_loss_main = float(lm_loss.detach().item())
+                        self.last_loss_critic = float(alpha_eff) * float(critic_loss.detach().item())
                     else:
                         # No critic contribution during warmup pre-start
                         loss = lm_loss
+                        self.last_loss_main = float(lm_loss.detach().item())
+                        self.last_loss_critic = 0.0
                 else:
                     # Fallback: defer to model's standard loss path
                     _, loss = self.model(X, Y, loss_modifiers=loss_modifiers)
+                    # Track only main loss component in fallback path
+                    try:
+                        self.last_loss_main = float(loss.detach().item())
+                    except Exception:
+                        self.last_loss_main = 0.0
+                    self.last_loss_critic = 0.0
 
                 # Scale the loss to account for gradient accumulation
                 loss = loss / self.grad_accum_steps
