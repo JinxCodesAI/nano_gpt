@@ -64,20 +64,29 @@ class SequenceScorerCorrelationModifier(BaseLossModifier):
         # Scale the base scalar loss
         scaled_loss = loss * factor
 
-        # Metrics for logging
+        # Metrics for logging (keep tensors; convert in get_metrics)
         self._metrics = {
             'alpha': self.alpha,
-            'A': float(self.A),
-            'B': float(self.B),
-            'C': float(self.C),
-            'correlation': float(corr.detach().cpu().item()),
-            'multiplier': float(factor.detach().cpu().item()),
-            'original_loss': float(loss.detach().cpu().item()),
-            'final_loss': float(scaled_loss.detach().cpu().item()),
-            'loss_ratio': float((scaled_loss / (loss + self.eps)).detach().cpu().item()),
+            'A': self.A,
+            'B': self.B,
+            'C': self.C,
+            'correlation': corr.detach(),
+            'multiplier': factor.detach(),
+            'original_loss': loss.detach(),
+            'final_loss': scaled_loss.detach(),
+            'loss_ratio': (scaled_loss / (loss + self.eps)).detach(),
         }
         return scaled_loss
 
     def get_metrics(self):
-        return self._metrics.copy()
+        out = {}
+        for k, v in self._metrics.items():
+            if hasattr(v, 'detach') and torch.is_tensor(v):
+                try:
+                    out[k] = float(v.detach().to('cpu').item())
+                except Exception:
+                    out[k] = v.detach().to('cpu').float().mean().item()
+            else:
+                out[k] = float(v) if isinstance(v, (int, float)) else v
+        return out
 

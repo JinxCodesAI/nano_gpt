@@ -4,6 +4,8 @@ import os
 from typing import Dict, Any, List
 
 import torch
+from core.common.utils import sequence_scorer_target_transform
+
 
 from data.common.provider_base import DataProviderBase
 from data.common.line_aligned_utils import LineAlignedSequenceBuilder, create_line_aligned_builder
@@ -79,20 +81,6 @@ class SequenceScorerProvider(DataProviderBase):
                     print(f"  train_valid_starts: {self.train_builder.valid_starts.numel()}")
                     print(f"  val_valid_starts: {self.val_builder.valid_starts.numel()}")
 
-    def _transform_ratio_to_target(self, ratio: torch.Tensor) -> torch.Tensor:
-        """
-        Transform syntheticity ratio using non-linear formula: y = -x^4 + 2x^3 - 2x + 1
-        where x is the ratio and y is the target value.
-
-        Args:
-            ratio: Tensor of syntheticity ratios in [0, 1]
-
-        Returns:
-            Transformed target values
-        """
-        x = ratio
-        y = 1-(-x**4 + 2 * x**3 - 2 * x + 1)
-        return y
 
     def _validate_stage_config(self):
         if self.use_all_stages_for_training is not None:
@@ -262,7 +250,7 @@ class SequenceScorerProvider(DataProviderBase):
             input_ids = add_cls_token(synthetic_text, self.cls_token_id, self.block_size, self.pad_token_id)
             # Apply non-linear transformation to targets
             raw_targets = torch.tensor(actual_synth_list, dtype=torch.float32)
-            targets = self._transform_ratio_to_target(raw_targets)
+            targets = sequence_scorer_target_transform(raw_targets)
 
             return {"input_ids": input_ids, "targets": targets, "masking_strategy": ["random"] * self.batch_size, "masking_ratio": [float(x) for x in raw_targets.tolist()]}
         else:
@@ -292,7 +280,7 @@ class SequenceScorerProvider(DataProviderBase):
             input_ids = add_cls_token(synthetic_text, self.cls_token_id, self.block_size, self.pad_token_id)
             # Apply non-linear transformation to targets
             raw_targets = actual_synth.float().cpu()
-            targets = self._transform_ratio_to_target(raw_targets)
+            targets = sequence_scorer_target_transform(raw_targets)
             return {"input_ids": input_ids, "targets": targets, "masking_strategy": ["random"] * self.batch_size, "masking_ratio": [float(x) for x in raw_targets.tolist()]}
 
     def produce_one_file(self, split: str, seq: int) -> None:
@@ -361,7 +349,7 @@ class SequenceScorerProvider(DataProviderBase):
                 input_ids_extra = add_cls_token(original_text, self.cls_token_id, self.block_size, self.pad_token_id)
                 # Apply transformation to zero ratios (unmodified sequences)
                 raw_targets_extra = torch.zeros(extra_count, dtype=torch.float32)
-                targets_extra = self._transform_ratio_to_target(raw_targets_extra)
+                targets_extra = sequence_scorer_target_transform(raw_targets_extra)
 
                 # Align extras to base tensor devices before concatenation
                 if 'input_ids' in tensors and 'targets' in tensors:
@@ -544,7 +532,7 @@ class SequenceScorerProvider(DataProviderBase):
             raw_synth = (masked_counts / max(seq_len, 1)).cpu()
 
             # Apply non-linear transformation to targets
-            actual_synth = self._transform_ratio_to_target(raw_synth)
+            actual_synth = sequence_scorer_target_transform(raw_synth)
 
             # Accumulate timings
             total_stage_time += (t1 - t0)

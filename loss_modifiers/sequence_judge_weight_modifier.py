@@ -19,6 +19,8 @@ from typing import Dict, Any, Optional
 
 import torch
 import torch.nn.functional as F
+from core.common.utils import sequence_scorer_target_transform
+
 
 from .base import BaseLossModifier
 from model import ModelMode, GPTConfig, GPT
@@ -179,7 +181,10 @@ class SequenceScoringJudgeWeightModifier(BaseLossModifier):
         ratio = torch.clamp(ratio, min=self.eps)
 
 
-        factor = wrong / ratio
+        # Apply shared non-linear transform to masking ratio: y = 1 - (-x^4 + 2x^3 - 2x + 1)
+        y = sequence_scorer_target_transform(ratio)
+        y = torch.clamp(y, min=self.eps, max=1.0)
+        factor = wrong / y
         # Per-sample factor
         multiplier = torch.clamp((factor) ** self.exponent, min=self.min_factor, max=self.max_factor)
 

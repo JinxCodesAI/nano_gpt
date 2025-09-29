@@ -58,21 +58,32 @@ class SequenceScorerVarianceModifier(BaseLossModifier):
 
         scaled_loss = loss * factor
 
-        # metrics for logging
+        # metrics for logging (keep as tensors to avoid graph breaks; convert on get_metrics)
         self._metrics = {
-            'variance_pred': float(var_pred.detach().cpu().item()),
-            'variance_target': float(var_targ.detach().cpu().item()),
-            'ratio_y_over_x': float(r.detach().cpu().item()),
-            'factor_applied': float(factor.detach().cpu().item()),
-            'alpha': self.alpha,
-            'scale_cap': self.scale,
-            'original_loss': float(loss.detach().cpu().item()),
-            'final_loss': float(scaled_loss.detach().cpu().item()),
-            'loss_ratio': float((scaled_loss / (loss + self.eps)).detach().cpu().item()),
+            'variance_pred': var_pred.detach(),
+            'variance_target': var_targ.detach(),
+            'ratio_y_over_x': r.detach(),
+            'factor_applied': factor.detach(),
+            'alpha': self.alpha,  # constant float OK
+            'scale_cap': self.scale,  # constant float OK
+            'original_loss': loss.detach(),
+            'final_loss': scaled_loss.detach(),
+            'loss_ratio': (scaled_loss / (loss + self.eps)).detach(),
         }
 
         return scaled_loss
 
     def get_metrics(self):
-        return self._metrics.copy()
+        # Convert any tensor scalars to Python floats at collection time (outside compiled graph)
+        out = {}
+        for k, v in self._metrics.items():
+            if hasattr(v, 'detach') and torch.is_tensor(v):
+                try:
+                    out[k] = float(v.detach().to('cpu').item())
+                except Exception:
+                    # Fallback: best-effort conversion
+                    out[k] = v.detach().to('cpu').float().mean().item()
+            else:
+                out[k] = v
+        return out
 
