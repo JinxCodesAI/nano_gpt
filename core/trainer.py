@@ -164,6 +164,17 @@ class Trainer:
                         step_metrics['loss_critic'] = float(critic_part) * self.grad_accum_steps
                 except Exception:
                     pass
+                # CUDA memory metrics (optional)
+                try:
+                    if torch.cuda.is_available():
+                        alloc = torch.cuda.memory_allocated() / (1024**2)
+                        reserved = torch.cuda.memory_reserved() / (1024**2)
+                        max_alloc = torch.cuda.max_memory_allocated() / (1024**2)
+                        step_metrics['mem_alloc_mb'] = float(alloc)
+                        step_metrics['mem_reserved_mb'] = float(reserved)
+                        step_metrics['mem_max_alloc_mb'] = float(max_alloc)
+                except Exception:
+                    pass
 
                 self.logger.log_step(step_metrics)
 

@@ -243,6 +243,8 @@ model_args = dict(n_layer=n_layer, n_head=n_head, n_embd=n_embd, block_size=bloc
                   add_critic_head=add_critic_head,
                   critic_alpha=critic_alpha,
                   critic_target_scope=critic_target_scope,
+                  start_critic_iteration=start_critic_iteration,
+                  end_critic_iteration=end_critic_iteration,
                   mask_token_id=meta_mask_token_id,
                   pad_token_id=meta_pad_token_id) # start with model_args from command line
 if init_from == 'scratch':

@@ -99,6 +99,15 @@ class ConsoleLogger(Logger):
             extras.append(f"seqvar {seqvar:.4f}")
         if seqcorr is not None:
             extras.append(f"seqcorr {seqcorr:.4f}")
+        # Optional CUDA memory metrics
+        mem_alloc = metrics.get('mem_alloc_mb', None)
+        mem_reserved = metrics.get('mem_reserved_mb', None)
+        mem_max = metrics.get('mem_max_alloc_mb', None)
+        if mem_alloc is not None and mem_reserved is not None:
+            if mem_max is not None:
+                extras.append(f"mem {mem_alloc:.0f}/{mem_reserved:.0f}MB (max {mem_max:.0f}MB)")
+            else:
+                extras.append(f"mem {mem_alloc:.0f}/{mem_reserved:.0f}MB")
         extras_str = (", " + ", ".join(extras)) if extras else ""
         print(
             f"iter {iter_num}: loss {loss_total:.4f} (main {loss_main:.4f}, critic {loss_critic:.4f}), "
