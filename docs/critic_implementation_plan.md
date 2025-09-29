@@ -49,6 +49,9 @@ These are the only places we need to touch or reference for the critic extension
 - add_critic_head: bool = False (default)
 - critic_alpha: float = 0.5 (weight for critic loss in training)
 - critic_target_scope: str =  'all' (compute critic targets/loss on all positions masked or unmasked in this iteration; targets should be 0 for all unmasked positions and correct predictions and 1 for incorrect predictions)
+- mask_token_id: Optional[int] = None  # set from consumer.meta in train.py (option 2 wiring)
+- pad_token_id: Optional[int] = None   # set from consumer.meta in train.py (option 2 wiring)
+
 
 These config fields are saved in checkpoints via existing model_args flow and default to safe values for older checkpoints.
 
@@ -69,7 +72,7 @@ These config fields are saved in checkpoints via existing model_args flow and de
 - If add_critic_head and targets is not None:
   - Build critic_input by filling masked positions in the current batch with predicted tokens from the LM logits
     - Sampling policy: start with argmax for stability; later we can add multinomial sampling under a flag
-    - Use the same ignore_index mask; identify masked positions as those where targets != ignore_index AND current input had mask token (requires access to the original idx). To avoid changing forward signature externally, compute mask_positions inside forward from idx vs. mask_token_id if available in consumer meta via config; if not available, default to "positions where targets != ignore_index" (documented behavior). See Risks below.
+    - Use the same ignore_index mask; identify masked positions using (idx == mask_token_id) from the unfilled input. mask_token_id is available via consumer.meta; preferred: pass consumer.meta['mask_token_id'] into model.config (option 2 wiring) so forward can reconstruct mask_positions exactly. If mask_token_id is not wired into the model, fall back to positions where targets != ignore_index.
   - Forward pass 2 (with grad): logits_critic = critic_head(ENCODE(critic_input))
   - Build critic_target: float tensor shape (B,T,1) where 1.0 for error and 0.0 otherwise; scope controlled by critic_target_scope='all'
     - all: evaluate all positions (excluding padding/ignored); target=1 if critic_input token != ground truth Y else 0
@@ -86,6 +89,9 @@ These config fields are saved in checkpoints via existing model_args flow and de
 
 2) Small, explicit train.py wiring (optional, convenience):
    - In the block where model_args is constructed, include:
+     - mask_token_id=consumer.meta.get('mask_token_id', None)
+     - pad_token_id=consumer.meta.get('pad_token_id', None)
+
      - add_critic_head=globals().get('add_critic_head', False)
      - critic_alpha=globals().get('critic_alpha', 0.5)
      - critic_target_scope=globals().get('critic_target_scope', 'all')
@@ -195,14 +201,6 @@ Notes:
 - No changes required to CheckpointManager; new fields flow through model_args as today
 
 ## Risks and Mitigations
-- Mask identification inside model.forward requires the original mask positions; if not available, we will infer masked positions using (targets != ignore_index) as an approximation. Plan to refactor later to explicitly pass mask information through the batch (preferred) or provide mask_token_id in config/meta to reconstruct.
-- Training cost increases ~2x for transformer passes; mitigate by enabling only where beneficial or lowering iterations
-- If critic overwhelms LM gradients, tune critic_alpha down
+- Mask identification: mask_token_id exists in consumer.meta and is used by sampling. For training, wire mask_token_id into model.config (option 2) so forward can compute mask positions exactly from (idx == mask_token_id); if not wired, temporarily approximate masked positions with (targets != ignore_index).
 - Numerical stability: use BCEWithLogitsLoss with reduction by valid count; clamp valid count to avoid divide-by-zero
-
-## Future Extensions (Not in this iteration)
-- Add multinomial sampling for critic_input under a flag
-- Train a standalone dedicated remasking model and unify the interface
-- Make critic usable for TOKEN_CLASSIFIER mode as auxiliary supervision if desired
-- Richer critic targets (e.g., soft targets based on LM uncertainty)
 
