@@ -12,6 +12,37 @@ Out of scope for this iteration:
 - Checkpoint load/resume must work for older checkpoints without this flag
 - Sampling code should continue to work without critic unless explicitly enabled
 
+## Audience and quick background
+
+This document targets a Python-proficient developer who is not deeply familiar with ML or this codebase. It explains what to change, where, and why.
+
+- Language modeling (LM): the model predicts tokens; training minimizes cross-entropy between predictions and ground-truth tokens.
+- Diffusion-style demasking (in this repo): we iteratively fill masked tokens, then re-mask a subset and repeat. Today, the subset is chosen by heuristics (confidence or randomness).
+- Critic head (this proposal): an auxiliary per-token classifier producing a logit that estimates “this token is likely wrong.” During training it learns from differences between the model’s own predictions and the ground truth. During inference it can guide which tokens to re-mask.
+
+## Where things live in this repo (key references)
+
+- model.py
+  - GPTConfig (dataclass): holds model hyperparameters and mode (ModelMode)
+  - GPT: transformer body plus heads
+    - forward() dispatches to _forward_language_model/_forward_token_classifier/_forward_sequence_scorer
+    - _forward_language_model(): current LM loss implementation
+    - freeze_transformer_weights()/unfreeze_transformer_weights(): transfer learning support
+- sample_utils.py
+  - predict_and_sample_tokens(): fills masked positions using LM logits
+  - apply_remasking_step(): decides what to re-mask next; supports external remasking_model, “intelligent_remasking” (self-confidence), or random
+- sample.py
+  - diffusion_generate(): generation loop calling predict_and_sample_tokens() then apply_remasking_step()
+  - Loads mask_token_id/pad_token_id from dataset meta.pkl
+- train.py
+  - Assembles config, constructs GPTConfig and GPT, training orchestrated by Trainer
+  - Uses DatasetConsumer (data/common) and CheckpointManager
+  - validator: config/validator.py validates training configs
+- core/training_step.py
+  - TrainingStep.execute_step(): calls model(X, Y, loss_modifiers=...) inside AMP, handles grad scaling/accumulation/clip/step
+
+These are the only places we need to touch or reference for the critic extension.
+
 ## High-Level Design
 - Multi-task extension of LANGUAGE_MODEL only. The Critic head shares the transformer trunk and predicts a single logit per token representing “error likelihood”.
 - Training (when enabled): LM loss is computed as today. Additionally, a second forward pass runs on a “filled” sequence (masked positions replaced by sampled/argmax tokens from the LM output) to compute a critic loss (BCEWithLogits). Final loss = LM loss (with existing loss modifiers applied) + alpha * critic_loss.
@@ -46,10 +77,69 @@ These config fields are saved in checkpoints via existing model_args flow and de
   - Forward pass 2 (with grad): logits_critic = critic_head(ENCODE(critic_input))
   - Build critic_target: float tensor shape (B,T,1) where 1.0 for error and 0.0 otherwise; scope controlled by critic_target_scope
     - masked_only: only consider positions that were masked in this iteration; ignore others
-    - Pad/ignore positions must be masked out of the loss
-  - Compute loss_critic = BCEWithLogitsLoss(reduction='sum') over valid positions divided by count of valid positions (numerically stable)
-  - Final loss = loss_modded_lm + critic_alpha * loss_critic
-- Return logits (LM) and final combined loss as today, so the training loop is unchanged
+## Configuration wiring and persistence
+
+- New GPTConfig fields (model.py): add_critic_head, critic_alpha, critic_target_scope (defaults safe)
+- Persistence: these flow through train.py via model_args into checkpoints (CheckpointManager). Older checkpoints load as-is (defaults take effect).
+- Validator: update config/validator.py to allow these keys if present. Keep defaults disabled to preserve existing behavior.
+
+### Enabling the critic during training (two options)
+
+1) Preferred minimal-change approach consistent with repo policy (avoid changing train.py):
+   - Train a baseline LM checkpoint without critic (as today), then create a new config that sets init_from_checkpoint to that checkpoint and toggles add_critic_head=True when resuming; implement model-side logic that respects add_critic_head during resume. Note: because train.py constructs model_args from a fixed dict, enabling critic on a fresh-from-scratch run will require adding the keys to model_args (see option 2).
+
+2) Small, explicit train.py wiring (optional, convenience):
+   - In the block where model_args is constructed, include:
+     - add_critic_head=globals().get('add_critic_head', False)
+     - critic_alpha=globals().get('critic_alpha', 0.5)
+     - critic_target_scope=globals().get('critic_target_scope', 'masked_only')
+   - This keeps behavior identical by default and allows enabling via command-line/config overrides.
+
+### Inference-time enabling
+
+- No changes required to sample.py CLI: if model.config.add_critic_head is True and no external remasking_model is provided, apply_remasking_step can automatically use the critic path.
+
+## Code references for each change
+
+- model.py
+  - class GPTConfig: add fields add_critic_head, critic_alpha, critic_target_scope
+  - class GPT.__init__: if config.add_critic_head: self.critic_head = nn.Linear(n_embd, 1, bias=False)
+  - GPT.freeze_transformer_weights(): ensure critic_head remains trainable (like lm_head)
+  - GPT.critic_scores(idx, attention_mask=None): new helper that returns per-token logits (B,T)
+  - GPT._forward_language_model(...): compute LM loss (with loss_modifiers), then, if add_critic_head and targets present, compute critic loss on filled sequences and add to total
+
+- sample_utils.py
+  - apply_remasking_step(...): add critic branch between remasking_model and intelligent_remasking
+
+- sample.py
+  - diffusion_generate(...): unchanged logic; rely on apply_remasking_step precedence
+
+- config/validator.py
+  - Allow/validate the three new config keys (no default enabling)
+
+## How to enable & run (examples)
+
+Training from scratch with critic (if option 2 wiring is added):
+
+- In your training config (e.g., config/my_training/with_critic.py), set:
+  - add_critic_head = True
+  - critic_alpha = 0.5  # tune 0.1–1.0
+  - critic_target_scope = 'masked_only'
+- Run:
+  - python train.py config/my_training/with_critic.py
+
+Training by resuming from a baseline LM checkpoint (option 1):
+
+- Keep train.py unchanged; use an LM checkpoint produced previously
+- In your resume config:
+  - init_from = 'resume'; init_from_checkpoint points to that checkpoint
+  - add_critic_head = True (picked up via checkpoint model_args if present; else requires option 2 wiring)
+
+Sampling with critic guidance:
+
+- sample.py will detect critic availability via model.config.add_critic_head
+- Ensure no external remasking_model is passed to favor the critic branch
+
 
 Notes:
 - We do not modify the signature of forward nor loss_modifiers interfaces
@@ -103,28 +193,6 @@ Notes:
 ## Logging
 - At model init: log that critic head is enabled and critic_alpha
 - Optionally (future): expose per-iteration scalar for critic loss via logger; for now, keep the training loop untouched
-
-## Performance Considerations
-- Adds one extra forward pass of the transformer per training micro-step (for critic_input)
-- Mitigations (future): compute critic only every N steps; sub-sample masked positions; cached features if we constrain critic_input==current tokens (not recommended yet)
-
-## Testing Plan
-Add new tests; do not modify existing ones.
-- Config/BC
-  - Load/save round-trip with add_critic_head False/True
-  - Load older checkpoints without add_critic_head and verify training/inference still work
-- Model Unit Tests
-  - Forward shape and loss equality when add_critic_head=False compared to baseline
-  - With add_critic_head=True: ensure combined loss computes; verify critic_head params receive gradients (non-zero grad norm after backward)
-  - Critic target masking: verify loss only over masked positions (masked_only)
-- Sampling Utilities
-  - apply_remasking_step selects positions consistent with critic score ordering and respects protected_mask
-  - Precedence order honored: external remasking model > critic > intelligent > random
-- Smoke Training
-  - Tiny run (1-2 iterations) with synthetic data to ensure no runtime errors with AMP/DDP off
-- Eval
-  - Ensure Evaluator still operates (it calls model(X, Y, ...); critic branch only augments loss)
-
 ## Migration / Config Integration
 - Add config flag add_critic_head and critic_alpha to training configs; default False/0.5
 - Update config.validator to allow/validate the new keys (no enabling by default)
