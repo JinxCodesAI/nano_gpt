@@ -11,7 +11,7 @@ always_save_checkpoint = False
 
 wandb_log = True # override via command line if you like
 wandb_project = 'char-diffusion'
-wandb_run_name = 'bert-char-no-entropy-critic'
+wandb_run_name = 'bert-char-no-entropy-modifier+critic'
 
 dataset = 'char_diffusion'
 
@@ -41,8 +41,8 @@ else:
     unmasking_stages = None
     validation_stages = None
 
-gradient_accumulation_steps = 4
-batch_size = 8  # Slightly larger batch size for BERT training
+gradient_accumulation_steps = 1
+batch_size = 32  # Slightly larger batch size for BERT training
 block_size = 1024 # Context size for masking
 
 # BERT training typically uses lower learning rates
@@ -85,6 +85,8 @@ add_critic_head = True
 start_critic_iteration = 1000
 end_critic_iteration = 3000
 loss_modifiers_enabled = True
+
+loss_modifiers_enabled = False
 
 entropy_modifier_enabled = False
 entropy_modifier_weight = 0.3
