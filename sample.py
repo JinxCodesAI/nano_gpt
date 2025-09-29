@@ -30,7 +30,7 @@ generation_start_wall_time = None
 # Model loading
 init_from = 'resume'  # 'resume' to load from checkpoint
 out_dir = 'out-char-diffusion'
-checkpoint_name = '1.73_no_mods_spaces.pt'  # Main model checkpoint
+checkpoint_name = 'MLM_judge_flipped_from_start_7750.pt'  # Main model checkpoint
 
 # Generation parameters
 num_samples = 16  # Number of samples to generate
@@ -65,7 +65,7 @@ end_ratio = 0.05   # Final ratio of tokens to remask (5%)
 
 # Remasking parameters
 randomness_strength = 0.4  # Balance between random (1.0) and model-guided (0.0) remasking
-intelligent_remasking = True  # Enable self-confidence based remasking when no remasking model
+intelligent_remasking = False  # Enable self-confidence based remasking when no remasking model
 
 # Quality metric configuration
 class QualityMetric(Enum):
@@ -75,7 +75,7 @@ class QualityMetric(Enum):
 
 quality_metric = QualityMetric.JUDGE
 # Judge (sequence scorer) checkpoint name (relative to out_dir); required if quality_metric == QualityMetric.JUDGE
-judge_checkpoint_name = 'scoring_p90_0.0096_epoch_3.pt'
+judge_checkpoint_name = 'padded_judge_0.0155.pt'# 'scoring_p90_0.0096_epoch_3.pt'
 
 # Schedule parameters
 schedule_type = 'linear'  # 'linear' or 'custom'

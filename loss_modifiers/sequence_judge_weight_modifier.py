@@ -24,6 +24,8 @@ from core.common.utils import sequence_scorer_target_transform
 
 from .base import BaseLossModifier
 from model import ModelMode, GPTConfig, GPT
+from sample_utils import calculate_judge_scores
+
 
 
 class SequenceScoringJudgeWeightModifier(BaseLossModifier):
@@ -176,10 +178,11 @@ class SequenceScoringJudgeWeightModifier(BaseLossModifier):
         # Sampling from LM logits to get completion sequences
         with torch.no_grad():
             sampled_ids = self._sample_sequences_from_logits(logits)
-            judge_input = self._build_judge_input(sampled_ids).to(device)
-            wrong_logits, _ = self._judge(judge_input, targets=None, loss_modifiers=None)
-            wrong = wrong_logits.view(-1).detach()
-            wrong = torch.clamp(wrong, min=0.0, max=1.0)
+            # Use shared utility to compute judge scores; it returns 1 - evaluation.
+            scores = calculate_judge_scores(self._judge, sampled_ids.to(device))
+            # Preserve existing semantics: 'wrong' corresponds to the judge evaluation (lower is better),
+            # so invert back here.
+            wrong = (1.0 - scores).detach().clamp(0.0, 1.0)
 
         # Masking ratio from targets mask (prefer provided mask; else infer via ignore_index)
         mask: Optional[torch.Tensor] = kwargs.get('mask', None)
@@ -196,6 +199,7 @@ class SequenceScoringJudgeWeightModifier(BaseLossModifier):
         y = sequence_scorer_target_transform(ratio)
         y = torch.clamp(y, min=self.eps, max=1.0)
         factor = wrong / y
+        # factor = 1 / factor # Fliped for no reason
         # Compute scheduled exponent based on current iteration
         iter_num = int(kwargs.get('iter_num', 0) or 0)
         if iter_num <= self.judge_start_iter:
