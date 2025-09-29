@@ -146,6 +146,10 @@ class SequenceScorerProvider(DataProviderBase):
             ],
         }
 
+    def _transform_ratio_to_target(self, x: torch.Tensor) -> torch.Tensor:
+        """Map syntheticity ratio in [0,1] to target using shared non-linear transform."""
+        return sequence_scorer_target_transform(x)
+
     def _load_text_data(self) -> None:
         # Load text data using shared method
         data = self._load_input_text()
