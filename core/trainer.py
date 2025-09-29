@@ -78,6 +78,12 @@ class Trainer:
 
             # evaluate the loss on train/val sets and write checkpoints
             if self.iter_num % self.eval_interval == 0 and self.master_process:
+                # expose current iteration to the model for critic alpha warmup during eval
+                raw_model = self.model.module if self.ddp else self.model
+                try:
+                    setattr(raw_model, '_current_iter', self.iter_num)
+                except Exception:
+                    pass
                 losses = self.evaluator.evaluate()
                 # Reset timer after validation to exclude validation time from MFU calculation
                 t0 = time.time()
@@ -119,6 +125,11 @@ class Trainer:
             # Expose current iteration to loss modifiers
             try:
                 self.evaluator.loss_modifier_pipeline.current_iter = self.iter_num
+            except Exception:
+                pass
+            # Also expose current iter to model for critic alpha warmup during training
+            try:
+                setattr(raw_model, '_current_iter', self.iter_num)
             except Exception:
                 pass
             loss, batch = self.training_step.execute_step(

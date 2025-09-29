@@ -350,6 +350,10 @@ class GPTConfig:
     critic_target_scope: str = 'all'
     mask_token_id: int = None
     pad_token_id: int = None
+    # Critic alpha warmup
+    start_critic_iteration: int = 0
+    end_critic_iteration: int = 0
+
 
     # Backward compatibility
     binary_classification: bool = False  # Legacy support
@@ -614,6 +618,7 @@ class GPT(nn.Module):
         tok_emb = self.transformer.wte(idx)
 
         # If dedicated CLS embedding is enabled, swap it in where token == cls_token_id
+
         if hasattr(self, 'cls_embedding') and self.config.cls_token_id is not None:
             cls_id = int(self.config.cls_token_id)
             with torch.no_grad():
@@ -722,7 +727,8 @@ class GPT(nn.Module):
                 loss = F.cross_entropy(logits.view(-1, logits.size(-1)), targets.view(-1), ignore_index=self.config.ignore_index)
 
             # Optional critic loss (multi-task) when enabled
-            if getattr(self.config, 'add_critic_head', False) and hasattr(self, 'critic_head'):
+            alpha_eff = self._effective_critic_alpha()
+            if getattr(self.config, 'add_critic_head', False) and hasattr(self, 'critic_head') and alpha_eff > 0.0:
                 # Determine positions to treat as masked/fillable
                 if getattr(self.config, 'mask_token_id', None) is not None and idx is not None:
                     masked_positions = (idx == int(self.config.mask_token_id))
@@ -750,7 +756,7 @@ class GPT(nn.Module):
                 critic_target = (critic_input != targets).float()
                 critic_loss_per_pos = F.binary_cross_entropy_with_logits(critic_logits, critic_target, reduction='none')
                 critic_loss = (critic_loss_per_pos * valid_mask.float()).sum() / (valid_mask.float().sum() + 1e-8)
-                loss = loss + float(self.config.critic_alpha) * critic_loss
+                loss = loss + float(alpha_eff) * critic_loss
         else:
             # Inference optimization
             logits = self.lm_head(x[:, [-1], :])
@@ -776,6 +782,7 @@ class GPT(nn.Module):
         else:
             x = self.transformer.drop(tok_emb)
         for block in self.transformer.h:
+
             x = block(x, attention_mask=attention_mask)
         x = self.transformer.ln_f(x)
         logits = self.critic_head(x).squeeze(-1)
@@ -796,12 +803,35 @@ class GPT(nn.Module):
                 if cls < num_classes:  # Ensure class index is valid
                     class_weights[cls] = n_samples / (num_classes * count)
 
-            loss = F.cross_entropy(logits.view(-1, num_classes), flattened_targets,
-                                 weight=class_weights, ignore_index=-1)
+            loss = F.cross_entropy(
+                logits.view(-1, num_classes), flattened_targets,
+                weight=class_weights, ignore_index=-1
+            )
         else:
-            loss = F.cross_entropy(logits.view(-1, num_classes), flattened_targets, ignore_index=-1)
+            loss = F.cross_entropy(
+                logits.view(-1, num_classes), flattened_targets, ignore_index=-1
+            )
 
         return loss
+
+    def _effective_critic_alpha(self) -> float:
+        """Compute iteration-based effective critic alpha with linear warmup.
+        Trainer should set self._current_iter each iteration (including eval).
+        Schedule: 0 until start; linear to base alpha by end; clamp [0, base].
+        If end <= start or no iteration provided, return base (no warmup).
+        """
+        base = float(getattr(self.config, 'critic_alpha', 0.0) or 0.0)
+        start = int(getattr(self.config, 'start_critic_iteration', 0) or 0)
+        end = int(getattr(self.config, 'end_critic_iteration', 0) or 0)
+        it = getattr(self, '_current_iter', None)
+        if it is None or end <= start:
+            return base
+        if it < start:
+            return 0.0
+        if it >= end:
+            return base
+        frac = (float(it - start) / max(1.0, float(end - start)))
+        return max(0.0, min(base, base * frac))
 
     def crop_block_size(self, block_size):
         # model surgery to decrease the block size if necessary

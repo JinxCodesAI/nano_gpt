@@ -129,6 +129,20 @@ class TrainingStep:
                 if getattr(getattr(raw_model, 'config', object()), 'mode', None) == ModelMode.LANGUAGE_MODEL \
                    and getattr(getattr(raw_model, 'config', object()), 'add_critic_head', False) \
                    and hasattr(raw_model, 'critic_head'):
+                    # 0) Compute effective critic alpha with linear warmup from config and current iter
+                    base = float(getattr(raw_model.config, 'critic_alpha', 0.0) or 0.0)
+                    start = int(getattr(raw_model.config, 'start_critic_iteration', 0) or 0)
+                    end = int(getattr(raw_model.config, 'end_critic_iteration', 0) or 0)
+                    it = int(getattr(loss_modifiers, 'current_iter', 0) if loss_modifiers is not None else 0)
+                    if end <= start:
+                        alpha_eff = base
+                    elif it < start:
+                        alpha_eff = 0.0
+                    elif it >= end:
+                        alpha_eff = base
+                    else:
+                        alpha_eff = max(0.0, min(base, base * float(it - start) / max(1.0, float(end - start))))
+
                     # 1) Forward LM to get logits only (ignore returned loss)
                     logits_gen, _ = self.model(X, Y, loss_modifiers=None)
 
@@ -153,32 +167,36 @@ class TrainingStep:
                     else:
                         lm_loss = base_lm_loss
 
-                    # 3) Sample predictions using multinomial to reflect inference-time stochasticity
-                    with torch.no_grad():
-                        probs = torch.softmax(logits_gen.detach(), dim=-1)
-                        sampled = torch.multinomial(probs.view(-1, probs.size(-1)), num_samples=1).view_as(Y)
-                        pred_tokens = sampled
+                    if alpha_eff > 0.0:
+                        # 3) Sample predictions using multinomial to reflect inference-time stochasticity
+                        with torch.no_grad():
+                            probs = torch.softmax(logits_gen.detach(), dim=-1)
+                            sampled = torch.multinomial(probs.view(-1, probs.size(-1)), num_samples=1).view_as(Y)
+                            pred_tokens = sampled
 
-                    # 4) Build critic input by filling masked positions
-                    if getattr(raw_model.config, 'mask_token_id', None) is not None:
-                        masked_positions = (X == int(raw_model.config.mask_token_id))
+                        # 4) Build critic input by filling masked positions
+                        if getattr(raw_model.config, 'mask_token_id', None) is not None:
+                            masked_positions = (X == int(raw_model.config.mask_token_id))
+                        else:
+                            masked_positions = valid_mask
+                        critic_input = X.clone()
+                        critic_input[masked_positions] = pred_tokens[masked_positions]
+
+                        # 5) Critic forward and loss
+                        critic_logits = raw_model.critic_scores(critic_input)
+                        critic_target = (critic_input != Y).float()
+                        if getattr(raw_model.config, 'pad_token_id', None) is not None:
+                            critic_valid = valid_mask & (X != int(raw_model.config.pad_token_id))
+                        else:
+                            critic_valid = valid_mask
+                        critic_per_pos = F.binary_cross_entropy_with_logits(critic_logits, critic_target, reduction='none')
+                        critic_loss = (critic_per_pos * critic_valid.float()).sum() / (critic_valid.float().sum() + 1e-8)
+
+                        # 6) Combine losses with effective alpha
+                        loss = lm_loss + float(alpha_eff) * critic_loss
                     else:
-                        masked_positions = valid_mask
-                    critic_input = X.clone()
-                    critic_input[masked_positions] = pred_tokens[masked_positions]
-
-                    # 5) Critic forward and loss
-                    critic_logits = raw_model.critic_scores(critic_input)
-                    critic_target = (critic_input != Y).float()
-                    if getattr(raw_model.config, 'pad_token_id', None) is not None:
-                        critic_valid = valid_mask & (X != int(raw_model.config.pad_token_id))
-                    else:
-                        critic_valid = valid_mask
-                    critic_per_pos = F.binary_cross_entropy_with_logits(critic_logits, critic_target, reduction='none')
-                    critic_loss = (critic_per_pos * critic_valid.float()).sum() / (critic_valid.float().sum() + 1e-8)
-
-                    # 6) Combine losses
-                    loss = lm_loss + float(raw_model.config.critic_alpha) * critic_loss
+                        # No critic contribution during warmup pre-start
+                        loss = lm_loss
                 else:
                     # Fallback: defer to model's standard loss path
                     _, loss = self.model(X, Y, loss_modifiers=loss_modifiers)
