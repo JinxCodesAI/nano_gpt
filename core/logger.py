@@ -76,7 +76,19 @@ class ConsoleLogger(Logger):
             return
 
         iter_num = metrics.get('iter', 0)
-        loss = metrics.get('loss', 0.0)
+        loss_total = metrics.get('loss', 0.0)
+        # Accept multiple possible keys for components; default critic to 0 if missing
+        loss_critic = metrics.get('loss_critic', metrics.get('critic_loss', None))
+        if loss_critic is None:
+            loss_critic = 0.0
+        loss_main = metrics.get('loss_main', None)
+        if loss_main is None:
+            # If we have total and critic, derive main; else fall back to total
+            try:
+                loss_main = float(loss_total) - float(loss_critic)
+            except Exception:
+                loss_main = float(loss_total)
+
         dt_ms = metrics.get('time_ms', 0.0)
         mfu_pct = metrics.get('mfu_pct', 0.0)
         seqvar = metrics.get('seqvar_loss_ratio', None)
@@ -88,7 +100,10 @@ class ConsoleLogger(Logger):
         if seqcorr is not None:
             extras.append(f"seqcorr {seqcorr:.4f}")
         extras_str = (", " + ", ".join(extras)) if extras else ""
-        print(f"iter {iter_num}: loss {loss:.4f}, time {dt_ms:.2f}ms, mfu {mfu_pct:.2f}%{extras_str}")
+        print(
+            f"iter {iter_num}: loss {loss_total:.4f} (main {loss_main:.4f}, critic {loss_critic:.4f}), "
+            f"time {dt_ms:.2f}ms, mfu {mfu_pct:.2f}%{extras_str}"
+        )
 
 
     def log_eval(self, metrics: Dict[str, Any]) -> None:
