@@ -10,6 +10,8 @@ next batches inside the micro-step loop).
 from typing import Tuple, Optional, Any
 from core.batch import Batch, unpack_batch
 import torch
+from torch.nn import functional as F
+from model import ModelMode
 
 
 class TrainingStep:
@@ -120,8 +122,67 @@ class TrainingStep:
                     micro_step == self.grad_accum_steps - 1
                 )
             X, Y = unpack_batch(batch)
+            raw_model = self.model.module if self.ddp else self.model
+
             with self.ctx:
-                _, loss = self.model(X, Y, loss_modifiers=loss_modifiers)
+                # If critic head is enabled for LANGUAGE_MODEL, compute LM loss explicitly and add critic loss here
+                if getattr(getattr(raw_model, 'config', object()), 'mode', None) == ModelMode.LANGUAGE_MODEL \
+                   and getattr(getattr(raw_model, 'config', object()), 'add_critic_head', False) \
+                   and hasattr(raw_model, 'critic_head'):
+                    # 1) Forward LM to get logits only (ignore returned loss)
+                    logits_gen, _ = self.model(X, Y, loss_modifiers=None)
+
+                    # 2) Compute LM base loss (per-position then aggregate) and apply loss_modifiers if any
+                    flat_logits = logits_gen.view(-1, logits_gen.size(-1))
+                    flat_targets = Y.view(-1)
+                    per_pos = F.cross_entropy(
+                        flat_logits, flat_targets,
+                        ignore_index=raw_model.config.ignore_index,
+                        reduction='none'
+                    ).view_as(Y)
+                    valid_mask = (Y != raw_model.config.ignore_index)
+                    base_lm_loss = (per_pos * valid_mask.float()).sum() / (valid_mask.float().sum() + 1e-8)
+                    if loss_modifiers is not None and not loss_modifiers.is_empty():
+                        lm_loss = loss_modifiers.modify_loss(
+                            logits_gen, Y, base_lm_loss,
+                            mask=valid_mask,
+                            per_position_loss=per_pos,
+                            ignore_index=raw_model.config.ignore_index,
+                            model_mode=raw_model.config.mode
+                        )
+                    else:
+                        lm_loss = base_lm_loss
+
+                    # 3) Sample predictions using multinomial to reflect inference-time stochasticity
+                    with torch.no_grad():
+                        probs = torch.softmax(logits_gen.detach(), dim=-1)
+                        sampled = torch.multinomial(probs.view(-1, probs.size(-1)), num_samples=1).view_as(Y)
+                        pred_tokens = sampled
+
+                    # 4) Build critic input by filling masked positions
+                    if getattr(raw_model.config, 'mask_token_id', None) is not None:
+                        masked_positions = (X == int(raw_model.config.mask_token_id))
+                    else:
+                        masked_positions = valid_mask
+                    critic_input = X.clone()
+                    critic_input[masked_positions] = pred_tokens[masked_positions]
+
+                    # 5) Critic forward and loss
+                    critic_logits = raw_model.critic_scores(critic_input)
+                    critic_target = (critic_input != Y).float()
+                    if getattr(raw_model.config, 'pad_token_id', None) is not None:
+                        critic_valid = valid_mask & (X != int(raw_model.config.pad_token_id))
+                    else:
+                        critic_valid = valid_mask
+                    critic_per_pos = F.binary_cross_entropy_with_logits(critic_logits, critic_target, reduction='none')
+                    critic_loss = (critic_per_pos * critic_valid.float()).sum() / (critic_valid.float().sum() + 1e-8)
+
+                    # 6) Combine losses
+                    loss = lm_loss + float(raw_model.config.critic_alpha) * critic_loss
+                else:
+                    # Fallback: defer to model's standard loss path
+                    _, loss = self.model(X, Y, loss_modifiers=loss_modifiers)
+
                 # Scale the loss to account for gradient accumulation
                 loss = loss / self.grad_accum_steps
 
