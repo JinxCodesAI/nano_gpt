@@ -283,13 +283,14 @@ class ScaledSigmoidHead(nn.Module):
         super().__init__()
         self.base_predictor = nn.Linear(input_dim, 1, bias=False)
         # Learnable scale (acts like temperature) and shift for the sigmoid input
-        self.scale = nn.Parameter(torch.ones(1))
-        self.shift = nn.Parameter(torch.zeros(1))
+        self.A = nn.Parameter(torch.ones(1))
+        self.B = nn.Parameter(torch.zeros(1))
+        self.temperature = nn.Parameter(torch.zeros(1))
 
     def forward(self, x):
         logits = self.base_predictor(x)
         # Apply learnable scale and shift to the logits before the sigmoid
-        scaled_logits = logits * self.scale + self.shift
+        scaled_logits = logits * self.A + self.B
         return torch.sigmoid(scaled_logits)
 
 
@@ -602,35 +603,43 @@ class GPT(nn.Module):
         elif isinstance(module, nn.Embedding):
             torch.nn.init.normal_(module.weight, mean=0.0, std=0.02)
 
-    def forward(self, idx, targets=None, attention_mask=None, loss_modifiers=None):
+    def _encode_tokens(self, idx, attention_mask=None):
+        """Encode input token ids through the transformer trunk up to ln_f.
+        Returns hidden states of shape (B, T, n_embd).
+        """
         device = idx.device
         b, t = idx.size()
         assert t <= self.config.block_size, f"Cannot forward sequence of length {t}, block size is only {self.config.block_size}"
 
-        # forward the GPT model itself
-        tok_emb = self.transformer.wte(idx) # token embeddings of shape (b, t, n_embd)
+        tok_emb = self.transformer.wte(idx)
 
         # If dedicated CLS embedding is enabled, swap it in where token == cls_token_id
         if hasattr(self, 'cls_embedding') and self.config.cls_token_id is not None:
             cls_id = int(self.config.cls_token_id)
             with torch.no_grad():
-                # build a mask of CLS positions
                 cls_mask = (idx == cls_id).unsqueeze(-1)  # (b, t, 1)
-            # add the CLS embedding where mask is true; keep grads flowing into cls_embedding only
             tok_emb = torch.where(cls_mask, self.cls_embedding.view(1, 1, -1).expand_as(tok_emb), tok_emb)
 
         # Add positional embeddings only if not using RoPE
         if hasattr(self.transformer, 'wpe'):
-            pos = torch.arange(0, t, dtype=torch.long, device=device) # shape (t)
-            pos_emb = self.transformer.wpe(pos) # position embeddings of shape (t, n_embd)
+            pos = torch.arange(0, t, dtype=torch.long, device=device)  # (t)
+            pos_emb = self.transformer.wpe(pos)
             x = self.transformer.drop(tok_emb + pos_emb)
         else:
-            # When using RoPE, no absolute position embeddings are needed
             x = self.transformer.drop(tok_emb)
 
         for block in self.transformer.h:
             x = block(x, attention_mask=attention_mask)
         x = self.transformer.ln_f(x)
+        return x
+
+    def forward(self, idx, targets=None, attention_mask=None, loss_modifiers=None):
+        device = idx.device
+        b, t = idx.size()
+        assert t <= self.config.block_size, f"Cannot forward sequence of length {t}, block size is only {self.config.block_size}"
+
+        # Encode through transformer trunk
+        x = self._encode_tokens(idx, attention_mask=attention_mask)
 
         # Mode-specific output and loss computation
         if self.config.mode == ModelMode.SEQUENCE_SCORER:
@@ -719,8 +728,12 @@ class GPT(nn.Module):
                     masked_positions = (idx == int(self.config.mask_token_id))
                 else:
                     masked_positions = (targets != self.config.ignore_index)
-                # Sample predictions (argmax for stability)
-                pred_tokens = torch.argmax(logits.detach(), dim=-1)
+                # Sample predictions using multinomial to reflect inference-time stochasticity
+                with torch.no_grad():
+                    probs = F.softmax(logits.detach(), dim=-1)
+                    flat_probs = probs.view(-1, probs.size(-1))
+                    sampled = torch.multinomial(flat_probs, num_samples=1).view(probs.size(0), probs.size(1))
+                    pred_tokens = sampled
                 # Build critic input by filling masked positions
                 if idx is not None:
                     critic_input = idx.clone()
@@ -728,17 +741,7 @@ class GPT(nn.Module):
                 else:
                     critic_input = pred_tokens
                 # Encode critic input through the transformer trunk
-                tok_emb2 = self.transformer.wte(critic_input)
-                if hasattr(self.transformer, 'wpe'):
-                    b, t = critic_input.size()
-                    pos = torch.arange(0, t, dtype=torch.long, device=critic_input.device)
-                    pos_emb2 = self.transformer.wpe(pos)
-                    h2 = self.transformer.drop(tok_emb2 + pos_emb2)
-                else:
-                    h2 = self.transformer.drop(tok_emb2)
-                for block in self.transformer.h:
-                    h2 = block(h2)
-                h2 = self.transformer.ln_f(h2)
+                h2 = self._encode_tokens(critic_input)
                 critic_logits = self.critic_head(h2).squeeze(-1)
                 # Build critic targets: 1 if filled token != ground truth, else 0
                 valid_mask = (targets != self.config.ignore_index)
