@@ -41,8 +41,8 @@ else:
     unmasking_stages = None
     validation_stages = None
 
-gradient_accumulation_steps = 1
-batch_size = 32  # Slightly larger batch size for BERT training
+gradient_accumulation_steps = 4
+batch_size = 64  # Slightly larger batch size for BERT training
 block_size = 1024 # Context size for masking
 
 # BERT training typically uses lower learning rates
@@ -82,11 +82,10 @@ ignore_index = -100  # Default PyTorch ignore index
 # block_size = 128
 
 add_critic_head = True
-start_critic_iteration = 1000
-end_critic_iteration = 3000
+start_critic_iteration = 10
+end_critic_iteration = 20
+critic_alpha = 5.0
 loss_modifiers_enabled = True
-
-loss_modifiers_enabled = False
 
 entropy_modifier_enabled = False
 entropy_modifier_weight = 0.3
