@@ -801,11 +801,15 @@ class DiffusionExplorer:
             critic_valid = artifacts['critic_valid']
             pred_tokens = artifacts['pred_tokens']
 
-            # Display decoded sequences
+            # Display decoded sequences (no repr; allow real newlines)
             original_text = self.decode_tokens(sample_tokens[0])
             critic_text = self.decode_tokens(critic_input[0])
-            print(f"📝 Input:  {repr(original_text)}")
-            print(f"🧪 Critic input (filled masks with LM samples): {repr(critic_text)}")
+            print("📝 Input:")
+            print(original_text)
+            print()
+            print("🧪 Critic input (filled masks with LM samples):")
+            print(critic_text)
+            print()
 
             # Summaries
             masked_positions = (sample_tokens[0] == mask_token_id)
@@ -850,11 +854,26 @@ class DiffusionExplorer:
                 else:
                     print("🟠 Critic probs for target1: n/a")
 
-            # Show a compact line of targets/valid for quick visual check (first 120 chars)
-            vt = critic_valid[0].to(torch.int)
-            tt = critic_target[0].to(torch.int)
-            bar = ''.join(['-' if vt[i] == 0 else ('0' if tt[i] == 0 else '1') for i in range(vt.numel())])
-            print(f"🎯 Critic target row ( - = invalid, 0 = correct, 1 = error ):\n    {bar[:120]}{'...' if len(bar)>120 else ''}")
+            # Grid views (no truncation)
+            seq_len = critic_target.shape[1]
+            cols = 64  # reasonable width for console
+            print()
+            print("🎯 Critic target grid ( - = invalid, 0 = correct, 1 = error ):")
+            vt_bool = critic_valid[0].bool()
+            tt_int = critic_target[0].to(torch.int)
+            for start in range(0, seq_len, cols):
+                end = min(start + cols, seq_len)
+                row = ''.join('-' if not vt_bool[i] else ('0' if tt_int[i] == 0 else '1') for i in range(start, end))
+                print(f"[{start:04d}-{end-1:04d}] {row}")
+
+            # Also show masked positions as a grid (M = masked, . = not masked)
+            print()
+            print("🎭 Masked positions (M = masked, . = not masked):")
+            mp_bool = masked_positions.bool()
+            for start in range(0, seq_len, cols):
+                end = min(start + cols, seq_len)
+                row = ''.join('M' if mp_bool[i] else '.' for i in range(start, end))
+                print(f"[{start:04d}-{end-1:04d}] {row}")
 
         except Exception as e:
             print(f"❌ Error during critic view: {e}")
