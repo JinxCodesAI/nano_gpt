@@ -808,7 +808,34 @@ class DiffusionExplorer:
             print(original_text)
             print()
             print("🧪 Critic input (filled masks with LM samples):")
-            print(critic_text)
+            # Color by critic target/valid: green=0(correct), red=1(error), yellow=invalid
+            cls_id = getattr(self, 'cls_token_id', None)
+            sep_id = getattr(self, 'sep_token_id', None)
+            def _tok_str(tid: int) -> str:
+                if mask_token_id is not None and tid == mask_token_id:
+                    return '[MASK]'
+                if cls_id is not None and tid == cls_id:
+                    return '[CLS]'
+                if pad_token_id is not None and tid == pad_token_id:
+                    return '[PAD]'
+                if sep_id is not None and tid == sep_id:
+                    return '[SEP]'
+                return self.itos[tid] if tid < len(self.itos) else f'[UNK:{tid}]'
+            row_inp = critic_input[0]
+            row_tgt = critic_target[0]
+            row_val = critic_valid[0]
+            parts = []
+            for i in range(row_inp.shape[0]):
+                tid = int(row_inp[i].item())
+                s = _tok_str(tid)
+                if not bool(row_val[i].item()):
+                    parts.append(f"\033[33m{s}\033[0m")  # yellow = invalid
+                elif int(row_tgt[i].item()) == 0:
+                    parts.append(f"\033[32m{s}\033[0m")  # green = correct
+                else:
+                    parts.append(f"\033[31m{s}\033[0m")  # red = error
+            print(''.join(parts))
+            print("    \033[32m🟢 correct\033[0m  \033[31m🔴 error\033[0m  \033[33m🟡 invalid\033[0m")
             print()
 
             # Summaries
