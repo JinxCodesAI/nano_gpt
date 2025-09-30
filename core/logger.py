@@ -146,6 +146,10 @@ class ConsoleLogger(Logger):
         vct1 = metrics.get('val/critic_target_ones', None)
         vpm0 = metrics.get('val/critic_pred_mean_for_target0', None)
         vpm1 = metrics.get('val/critic_pred_mean_for_target1', None)
+        vp10t0 = metrics.get('val/critic_pred_p10_for_target0', None)
+        vp90t0 = metrics.get('val/critic_pred_p90_for_target0', None)
+        vp10t1 = metrics.get('val/critic_pred_p10_for_target1', None)
+        vp90t1 = metrics.get('val/critic_pred_p90_for_target1', None)
         if isinstance(vt, int):
             parts.append(f"val/tokens_total {vt}")
         if isinstance(vm, int):
@@ -160,6 +164,14 @@ class ConsoleLogger(Logger):
             parts.append(f"val/critic_pred_mean_for_target0 {vpm0:.4f}")
         if isinstance(vpm1, (int, float)):
             parts.append(f"val/critic_pred_mean_for_target1 {vpm1:.4f}")
+        if isinstance(vp10t0, (int, float)):
+            parts.append(f"val/critic_pred_p10_for_target0 {vp10t0:.4f}")
+        if isinstance(vp90t0, (int, float)):
+            parts.append(f"val/critic_pred_p90_for_target0 {vp90t0:.4f}")
+        if isinstance(vp10t1, (int, float)):
+            parts.append(f"val/critic_pred_p10_for_target1 {vp10t1:.4f}")
+        if isinstance(vp90t1, (int, float)):
+            parts.append(f"val/critic_pred_p90_for_target1 {vp90t1:.4f}")
         print(", ".join(parts))
 
     def log_info(self, message: str) -> None:

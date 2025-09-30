@@ -103,6 +103,9 @@ class Evaluator:
                     critic_sum_pred_t1 = 0.0
                     critic_cnt_t0 = 0
                     critic_cnt_t1 = 0
+                    # For percentiles (store samples; memory OK at eval scale)
+                    critic_pred_t0_list = []
+                    critic_pred_t1_list = []
 
                     for k in range(self.eval_iters):
                         batch = self.consumer.get_batch(split, self.device)
@@ -171,11 +174,15 @@ class Evaluator:
                                 t0_mask = critic_valid & (critic_target == 0)
                                 t1_mask = critic_valid & (critic_target == 1)
                                 if t0_mask.any():
-                                    critic_sum_pred_t0 += float(critic_prob[t0_mask].sum().item())
+                                    vals0 = critic_prob[t0_mask]
+                                    critic_sum_pred_t0 += float(vals0.sum().item())
                                     critic_cnt_t0 += int(t0_mask.sum().item())
+                                    critic_pred_t0_list.append(vals0.detach().float().cpu())
                                 if t1_mask.any():
-                                    critic_sum_pred_t1 += float(critic_prob[t1_mask].sum().item())
+                                    vals1 = critic_prob[t1_mask]
+                                    critic_sum_pred_t1 += float(vals1.sum().item())
                                     critic_cnt_t1 += int(t1_mask.sum().item())
+                                    critic_pred_t1_list.append(vals1.detach().float().cpu())
 
                     out[split] = float(losses.mean().item())
 
@@ -189,8 +196,42 @@ class Evaluator:
                             out['val/critic_target_ones'] = int(critic_cnt_t1)
                             if critic_cnt_t0 > 0:
                                 out['val/critic_pred_mean_for_target0'] = float(critic_sum_pred_t0 / max(critic_cnt_t0, 1))
+                                # percentiles for target 0
+                                try:
+                                    import torch as _t
+                                    preds0 = _t.cat(critic_pred_t0_list, dim=0).view(-1)
+                                    out['val/critic_pred_p10_for_target0'] = float(_t.quantile(preds0, _t.tensor(0.1)).item())
+                                    out['val/critic_pred_p90_for_target0'] = float(_t.quantile(preds0, _t.tensor(0.9)).item())
+                                except Exception:
+                                    try:
+                                        preds0 = _t.cat(critic_pred_t0_list, dim=0).view(-1)
+                                        sorted0, _ = _t.sort(preds0)
+                                        n0 = sorted0.numel()
+                                        i10 = max(int(0.1 * (n0 - 1)), 0)
+                                        i90 = max(int(0.9 * (n0 - 1)), 0)
+                                        out['val/critic_pred_p10_for_target0'] = float(sorted0[i10].item())
+                                        out['val/critic_pred_p90_for_target0'] = float(sorted0[i90].item())
+                                    except Exception:
+                                        pass
                             if critic_cnt_t1 > 0:
                                 out['val/critic_pred_mean_for_target1'] = float(critic_sum_pred_t1 / max(critic_cnt_t1, 1))
+                                # percentiles for target 1
+                                try:
+                                    import torch as _t
+                                    preds1 = _t.cat(critic_pred_t1_list, dim=0).view(-1)
+                                    out['val/critic_pred_p10_for_target1'] = float(_t.quantile(preds1, _t.tensor(0.1)).item())
+                                    out['val/critic_pred_p90_for_target1'] = float(_t.quantile(preds1, _t.tensor(0.9)).item())
+                                except Exception:
+                                    try:
+                                        preds1 = _t.cat(critic_pred_t1_list, dim=0).view(-1)
+                                        sorted1, _ = _t.sort(preds1)
+                                        n1 = sorted1.numel()
+                                        j10 = max(int(0.1 * (n1 - 1)), 0)
+                                        j90 = max(int(0.9 * (n1 - 1)), 0)
+                                        out['val/critic_pred_p10_for_target1'] = float(sorted1[j10].item())
+                                        out['val/critic_pred_p90_for_target1'] = float(sorted1[j90].item())
+                                    except Exception:
+                                        pass
                 else:
                     # Sequence scorer, validation split: two-stage evaluation
                     nonzero_losses = []
