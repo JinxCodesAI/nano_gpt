@@ -224,8 +224,8 @@ class WandBLogger(Logger):
     def log_step(self, metrics: Dict[str, Any]) -> None:
         """
         Log training step metrics to WandB (every log_interval).
-        Includes: iter, train/loss, time_ms, mfu, avg_abs_rel_err (if present),
-        and any flattened loss_modifiers/* metrics present in the metrics dict.
+        Includes: iter, train/loss, train/loss_main, train/loss_critic, time_ms, mfu,
+        avg_abs_rel_err (if present), and any flattened loss_modifiers/* metrics present.
         """
         if not (self.enabled and self.master_process and self.wandb):
             return
@@ -236,6 +236,11 @@ class WandBLogger(Logger):
             log_dict['iter'] = metrics['iter']
         if 'loss' in metrics:
             log_dict['train/loss'] = metrics['loss']
+        # Include decomposed losses when available
+        if 'loss_main' in metrics:
+            log_dict['train/loss_main'] = metrics['loss_main']
+        if 'loss_critic' in metrics:
+            log_dict['train/loss_critic'] = metrics['loss_critic']
         if 'time_ms' in metrics:
             log_dict['time_ms'] = metrics['time_ms']
         if 'mfu_pct' in metrics:
