@@ -128,92 +128,26 @@ class TrainingStep:
             raw_model = self.model.module if self.ddp else self.model
 
             with self.ctx:
-                # If critic head is enabled for LANGUAGE_MODEL, compute LM loss explicitly and add critic loss here
-                if getattr(getattr(raw_model, 'config', object()), 'mode', None) == ModelMode.LANGUAGE_MODEL \
-                   and getattr(getattr(raw_model, 'config', object()), 'add_critic_head', False) \
-                   and hasattr(raw_model, 'critic_head'):
-                    # 0) Compute effective critic alpha with linear warmup from config and current iter
-                    base = float(getattr(raw_model.config, 'critic_alpha', 0.0) or 0.0)
-                    start = int(getattr(raw_model.config, 'start_critic_iteration', 0) or 0)
-                    end = int(getattr(raw_model.config, 'end_critic_iteration', 0) or 0)
-                    it = int(getattr(loss_modifiers, 'current_iter', 0) if loss_modifiers is not None else 0)
-                    if end <= start:
-                        alpha_eff = base
-                    elif it < start:
-                        alpha_eff = 0.0
-                    elif it >= end:
-                        alpha_eff = base
-                    else:
-                        alpha_eff = max(0.0, min(base, base * float(it - start) / max(1.0, float(end - start))))
+                # Delegate to model forward; model handles critic internally when enabled
+                # Provide current iteration to model for effective critic alpha schedule
+                try:
+                    setattr(raw_model, "_current_iter", int(getattr(loss_modifiers, "current_iter", 0) if loss_modifiers is not None else 0))
+                except Exception:
+                    pass
 
-                    # 1) Forward LM to get full-sequence logits without triggering internal loss/critic
-                    x_enc = raw_model._encode_tokens(X)
-                    logits_gen = raw_model.lm_head(x_enc)
+                _logits, loss = self.model(X, Y, loss_modifiers=loss_modifiers)
 
-                    # 2) Compute LM base loss (per-position then aggregate) and apply loss_modifiers if any
-                    flat_logits = logits_gen.view(-1, logits_gen.size(-1))
-                    flat_targets = Y.view(-1)
-                    per_pos = F.cross_entropy(
-                        flat_logits, flat_targets,
-                        ignore_index=raw_model.config.ignore_index,
-                        reduction='none'
-                    ).view_as(Y)
-                    valid_mask = (Y != raw_model.config.ignore_index)
-                    base_lm_loss = (per_pos * valid_mask.float()).sum() / (valid_mask.float().sum() + 1e-8)
-                    if loss_modifiers is not None and not loss_modifiers.is_empty():
-                        lm_loss = loss_modifiers.modify_loss(
-                            logits_gen, Y, base_lm_loss,
-                            mask=valid_mask,
-                            per_position_loss=per_pos,
-                            ignore_index=raw_model.config.ignore_index,
-                            model_mode=raw_model.config.mode
-                        )
-                    else:
-                        lm_loss = base_lm_loss
-
-                    if alpha_eff > 0.0:
-                        # 3) Sample predictions using multinomial to reflect inference-time stochasticity
-                        with torch.no_grad():
-                            probs = torch.softmax(logits_gen.detach(), dim=-1)
-                            sampled = torch.multinomial(probs.view(-1, probs.size(-1)), num_samples=1).view_as(Y)
-                            pred_tokens = sampled
-
-                        # 4) Build critic input by filling masked positions
-                        if getattr(raw_model.config, 'mask_token_id', None) is not None:
-                            masked_positions = (X == int(raw_model.config.mask_token_id))
-                        else:
-                            masked_positions = valid_mask
-                        critic_input = X.clone()
-                        critic_input[masked_positions] = pred_tokens[masked_positions]
-
-                        # 5) Critic forward and loss
-                        critic_logits = raw_model.critic_scores(critic_input)
-                        critic_target = (critic_input != Y).float()
-                        if getattr(raw_model.config, 'pad_token_id', None) is not None:
-                            critic_valid = valid_mask & (X != int(raw_model.config.pad_token_id))
-                        else:
-                            critic_valid = valid_mask
-                        critic_per_pos = F.binary_cross_entropy_with_logits(critic_logits, critic_target, reduction='none')
-                        critic_loss = (critic_per_pos * critic_valid.float()).sum() / (critic_valid.float().sum() + 1e-8)
-
-                        # 6) Combine losses with effective alpha
-                        loss = ( lm_loss + float(alpha_eff) * critic_loss ) / (1.0 + alpha_eff)
-                        # Track loss components before grad-accum scaling (raw, unscaled)
-                        self.last_loss_main = float(lm_loss.detach().item())
-                        self.last_loss_critic = float(critic_loss.detach().item())
-                    else:
-                        # No critic contribution during warmup pre-start
-                        loss = lm_loss
-                        self.last_loss_main = float(lm_loss.detach().item())
-                        self.last_loss_critic = 0.0
-                else:
-                    # Fallback: defer to model's standard loss path
-                    _, loss = self.model(X, Y, loss_modifiers=loss_modifiers)
-                    # Track only main loss component in fallback path
+                # Read loss components exposed by model (if available)
+                try:
+                    self.last_loss_main = float(getattr(raw_model, "_last_lm_loss"))
+                except Exception:
                     try:
                         self.last_loss_main = float(loss.detach().item())
                     except Exception:
                         self.last_loss_main = 0.0
+                try:
+                    self.last_loss_critic = float(getattr(raw_model, "_last_critic_loss"))
+                except Exception:
                     self.last_loss_critic = 0.0
 
                 # Scale the loss to account for gradient accumulation
