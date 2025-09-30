@@ -48,7 +48,10 @@ These are the only places we need to touch or reference for the critic extension
 1) GPTConfig additions
 - add_critic_head: bool = False (default)
 - critic_alpha: float = 0.5 (weight for critic loss in training)
-- critic_target_scope: str =  'all' (compute critic targets/loss on all positions masked or unmasked in this iteration; targets should be 0 for all unmasked positions and correct predictions and 1 for incorrect predictions)
+- critic_target_scope: str = 'all_supervised' | 'masked_and_ignore' | 'masked_only' (default 'all_supervised')
+  - all_supervised (current behavior; default for backward compatibility): compute critic targets/loss on all supervised positions where targets != ignore_index (PAD excluded); target = 0 when critic_input token equals ground truth Y, else 1.
+  - masked_and_ignore (desired alternate): compute critic on positions that were MASKED in the input (idx == mask_token_id) plus positions with targets == ignore_index (excluding PAD). For ignore positions, target is always 0. For masked positions, target = 0 when prediction equals Y, else 1.
+  - masked_only: compute critic only on positions MASKED in the input (idx == mask_token_id); target = 0 when prediction equals Y, else 1.
 - mask_token_id: Optional[int] = None  # set from consumer.meta in train.py (option 2 wiring)
 - pad_token_id: Optional[int] = None   # set from consumer.meta in train.py (option 2 wiring)
 
@@ -187,10 +190,53 @@ Notes:
 6) In sample.py, do a minimal detection of model.config.add_critic_head and let apply_remasking_step use the critic automatically when enabled
 
 ## Data/Targets for Critic
-- Mask identification: prefer using (tokens == mask_token_id) captured before filling to identify positions originally masked in the iteration
-- Targets: 1.0 when the filled token differs from ground truth Y; 0.0 otherwise
-- Valid positions: exclude padding/ignored tokens; if meta supplies pad_token_id, mask those out
-- Scope: all positions (excluding padding/ignored); target is 1 when prediction != ground truth, else 0
+- Mask identification: prefer using (idx == mask_token_id) captured before filling to identify positions originally masked in the iteration.
+- Targets are defined per critic_target_scope:
+  - all_supervised (default, current code):
+    - Valid positions: targets != ignore_index (exclude PAD if provided via pad_token_id).
+    - Target per position: 0 if critic_input token equals ground truth Y, else 1.
+  - masked_and_ignore (desired alt):
+    - Valid positions: (idx == mask_token_id) OR (targets == ignore_index), excluding PAD.
+    - For masked positions: target 0 if prediction equals Y, else 1.
+    - For ignore_index positions: target 0 (always).
+  - masked_only:
+    - Valid positions: (idx == mask_token_id), excluding PAD.
+    - Target 0 if prediction equals Y, else 1.
+
+### Example (spaces omitted for clarity)
+Original text:
+  brown,fox,jumped,over,tall,fence
+Input (BERT-style corruption in positions 1 and 3; position 4 replaced by random token "ball"):
+  [MASK],fox,[MASK],ball,tall,fence
+Ground truth targets Y (ignore = no supervision for LM head):
+  brown,ignore,jumped,over,ignore,ignore
+Sampled prediction from LM:
+  brown,fox,run,in,tall,fence
+Critic target per scope:
+- all_supervised (current):
+  Valid = positions where Y != ignore_index => {0,2,3}
+  critic_input after filling masked positions with predictions:
+    brown,fox,run,in,tall,fence
+  Targets (0 correct, 1 wrong) vs Y:
+    pos0: brown==brown -> 0
+    pos2: run!=jumped -> 1
+    pos3: in!=over -> 1
+  Result: [0, -, 1, 1, -, -]
+- masked_and_ignore (desired):
+  Valid = masked positions {0,2} union ignore positions {1,4,5} (PAD excluded)
+  Targets:
+    pos0: masked, brown==brown -> 0
+    pos1: ignore -> 0
+    pos2: masked, run!=jumped -> 1
+    pos4: ignore -> 0
+    pos5: ignore -> 0
+  Result: [0, 0, 1, -, 0, 0]
+- masked_only:
+  Valid = masked positions {0,2}
+  Targets:
+    pos0: 0
+    pos2: 1
+  Result: [0, -, 1, -, -, -]
 
 ## Logging
 - At model init: log that critic head is enabled and critic_alpha
