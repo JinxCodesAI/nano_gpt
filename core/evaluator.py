@@ -100,8 +100,19 @@ class Evaluator:
                         X, Y = unpack_batch(batch)
                         with self.ctx:
                             _, loss = self.model(X, Y, loss_modifiers=self.loss_modifier_pipeline)
-                        losses[k] = loss.item()
-                    out[split] = losses.mean().item()
+                        # Apply blended critic scheme for LANGUAGE_MODEL with critic enabled
+                        alpha_eff = 0.0
+                        try:
+                            if getattr(raw_model.config, 'mode', None) == ModelMode.LANGUAGE_MODEL \
+                               and getattr(raw_model.config, 'add_critic_head', False):
+                                alpha_eff = float(raw_model._effective_critic_alpha())
+                        except Exception:
+                            alpha_eff = 0.0
+                        val = float(loss.item())
+                        if alpha_eff > 0.0:
+                            val = val / (1.0 + alpha_eff)
+                        losses[k] = val
+                    out[split] = float(losses.mean().item())
                 else:
                     # Sequence scorer, validation split: two-stage evaluation
                     nonzero_losses = []
