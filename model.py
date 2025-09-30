@@ -347,7 +347,7 @@ class GPTConfig:
     # Optional critic head configuration (LANGUAGE_MODEL multi-task)
     add_critic_head: bool = False
     critic_alpha: float = 0.5
-    critic_target_scope: str = 'all'
+    critic_target_scope: str = 'masked_and_ignore'
     mask_token_id: int = None
     pad_token_id: int = None
     # Critic alpha warmup
@@ -729,11 +729,11 @@ class GPT(nn.Module):
             # Optional critic loss (multi-task) when enabled
             alpha_eff = self._effective_critic_alpha()
             if getattr(self.config, 'add_critic_head', False) and hasattr(self, 'critic_head') and alpha_eff > 0.0:
-                # Determine positions to treat as masked/fillable
-                if getattr(self.config, 'mask_token_id', None) is not None and idx is not None:
-                    masked_positions = (idx == int(self.config.mask_token_id))
-                else:
-                    masked_positions = (targets != self.config.ignore_index)
+                # Determine masked positions strictly from input tokens
+                if idx is None or getattr(self.config, 'mask_token_id', None) is None:
+                    raise RuntimeError("critic_target_scope requires idx and mask_token_id; misconfiguration detected")
+                masked_positions = (idx == int(self.config.mask_token_id))
+
                 # Sample predictions using multinomial to reflect inference-time stochasticity
                 with torch.no_grad():
                     probs = F.softmax(logits.detach(), dim=-1)
@@ -741,21 +741,35 @@ class GPT(nn.Module):
                     sampled = torch.multinomial(flat_probs, num_samples=1).view(probs.size(0), probs.size(1))
                     pred_tokens = sampled
                 # Build critic input by filling masked positions
-                if idx is not None:
-                    critic_input = idx.clone()
-                    critic_input[masked_positions] = pred_tokens[masked_positions]
-                else:
-                    critic_input = pred_tokens
+                critic_input = idx.clone()
+                critic_input[masked_positions] = pred_tokens[masked_positions]
+
                 # Encode critic input through the transformer trunk
                 h2 = self._encode_tokens(critic_input)
                 critic_logits = self.critic_head(h2).squeeze(-1)
-                # Build critic targets: 1 if filled token != ground truth, else 0
-                valid_mask = (targets != self.config.ignore_index)
-                if getattr(self.config, 'pad_token_id', None) is not None and idx is not None:
-                    valid_mask = valid_mask & (idx != int(self.config.pad_token_id))
+
+                # Build critic targets and validity per scope
+                scope = getattr(self.config, 'critic_target_scope', 'masked_and_ignore')
+                ignore_index = int(self.config.ignore_index)
+                pad_token_id = getattr(self.config, 'pad_token_id', None)
+
+                # Base target: 1 when critic_input token != ground truth Y, else 0
                 critic_target = (critic_input != targets).float()
+                # Valid mask and ignore handling per scope
+                if scope == 'masked_and_ignore':
+                    critic_valid = masked_positions | (targets == ignore_index)
+                    # For ignore_index positions, target is always 0
+                    critic_target = torch.where((targets == ignore_index), torch.zeros_like(critic_target), critic_target)
+                elif scope == 'masked_only':
+                    critic_valid = masked_positions
+                else:
+                    raise RuntimeError(f"Unsupported critic_target_scope: {scope}. Use 'masked_and_ignore' or 'masked_only'.")
+                if pad_token_id is not None:
+                    critic_valid = critic_valid & (idx != int(pad_token_id))
+
                 critic_loss_per_pos = F.binary_cross_entropy_with_logits(critic_logits, critic_target, reduction='none')
-                critic_loss = (critic_loss_per_pos * valid_mask.float()).sum() / (valid_mask.float().sum() + 1e-8)
+                denom = (critic_valid.float().sum() + 1e-8)
+                critic_loss = (critic_loss_per_pos * critic_valid.float()).sum() / denom
                 loss = loss + float(alpha_eff) * critic_loss
         else:
             # Inference optimization

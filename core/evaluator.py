@@ -127,9 +127,10 @@ class Evaluator:
                         # Collect validation-only stats (do not log for train split)
                         if split == 'val':
                             val_tokens_total += int(Y.numel())
-                            ignore_index = getattr(raw_model.config, 'ignore_index', -100)
-                            valid_mask = (Y != int(ignore_index))
-                            val_masked_total += int(valid_mask.sum().item())
+                            ignore_index = int(getattr(raw_model.config, 'ignore_index', -100))
+                            # For display, keep "masked_total" as supervised positions (Y != ignore_index)
+                            supervised_mask = (Y != ignore_index)
+                            val_masked_total += int(supervised_mask.sum().item())
 
                             if has_critic:
                                 # Sample predictions from LM logits
@@ -137,22 +138,34 @@ class Evaluator:
                                     probs = torch.softmax(logits.detach(), dim=-1)
                                     sampled = torch.multinomial(probs.view(-1, probs.size(-1)), num_samples=1).view_as(Y)
                                     pred_tokens = sampled
-                                # Define masked positions consistent with training
-                                if getattr(raw_model.config, 'mask_token_id', None) is not None:
-                                    masked_positions = (X == int(raw_model.config.mask_token_id))
-                                else:
-                                    masked_positions = valid_mask
+                                # Determine masked positions (require mask_token_id)
+                                if getattr(raw_model.config, 'mask_token_id', None) is None:
+                                    raise RuntimeError("Evaluator: mask_token_id is required for critic stats")
+                                masked_positions = (X == int(raw_model.config.mask_token_id))
+
                                 # Correct predictions among masked positions
                                 critic_correct_total += int((pred_tokens[masked_positions] == Y[masked_positions]).sum().item())
+
                                 # Build critic input and compute critic logits
                                 critic_input = X.clone()
                                 critic_input[masked_positions] = pred_tokens[masked_positions]
                                 critic_logits = raw_model.critic_scores(critic_input)
-                                # Critic targets and validity
+
+                                # Critic targets and validity by scope
+                                scope = getattr(raw_model.config, 'critic_target_scope', 'masked_and_ignore')
+                                pad_token_id = getattr(raw_model.config, 'pad_token_id', None)
                                 critic_target = (critic_input != Y).float()
-                                critic_valid = valid_mask
-                                if getattr(raw_model.config, 'pad_token_id', None) is not None:
-                                    critic_valid = critic_valid & (X != int(raw_model.config.pad_token_id))
+                                if scope == 'masked_and_ignore':
+                                    critic_valid = masked_positions | (Y == ignore_index)
+                                    # For ignore_index positions, target is always 0
+                                    critic_target = torch.where((Y == ignore_index), torch.zeros_like(critic_target), critic_target)
+                                elif scope == 'masked_only':
+                                    critic_valid = masked_positions
+                                else:
+                                    raise RuntimeError(f"Evaluator: unsupported critic_target_scope {scope}")
+                                if pad_token_id is not None:
+                                    critic_valid = critic_valid & (X != int(pad_token_id))
+
                                 # Sigmoid probabilities
                                 critic_prob = torch.sigmoid(critic_logits)
                                 t0_mask = critic_valid & (critic_target == 0)

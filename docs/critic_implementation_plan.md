@@ -48,9 +48,8 @@ These are the only places we need to touch or reference for the critic extension
 1) GPTConfig additions
 - add_critic_head: bool = False (default)
 - critic_alpha: float = 0.5 (weight for critic loss in training)
-- critic_target_scope: str = 'all_supervised' | 'masked_and_ignore' | 'masked_only' (default 'all_supervised')
-  - all_supervised (current behavior; default for backward compatibility): compute critic targets/loss on all supervised positions where targets != ignore_index (PAD excluded); target = 0 when critic_input token equals ground truth Y, else 1.
-  - masked_and_ignore (desired alternate): compute critic on positions that were MASKED in the input (idx == mask_token_id) plus positions with targets == ignore_index (excluding PAD). For ignore positions, target is always 0. For masked positions, target = 0 when prediction equals Y, else 1.
+- critic_target_scope: str = 'masked_and_ignore' | 'masked_only' (default 'masked_and_ignore')
+  - masked_and_ignore (default): compute critic on positions that were MASKED in the input (idx == mask_token_id) plus positions with targets == ignore_index (excluding PAD). For ignore positions, target is always 0. For masked positions, target = 0 when prediction equals Y, else 1.
   - masked_only: compute critic only on positions MASKED in the input (idx == mask_token_id); target = 0 when prediction equals Y, else 1.
 - mask_token_id: Optional[int] = None  # set from consumer.meta in train.py (option 2 wiring)
 - pad_token_id: Optional[int] = None   # set from consumer.meta in train.py (option 2 wiring)
@@ -97,7 +96,7 @@ These config fields are saved in checkpoints via existing model_args flow and de
 
      - add_critic_head=globals().get('add_critic_head', False)
      - critic_alpha=globals().get('critic_alpha', 0.5)
-     - critic_target_scope=globals().get('critic_target_scope', 'all')
+     - critic_target_scope=globals().get('critic_target_scope', 'masked_and_ignore')
    - This keeps behavior identical by default and allows enabling via command-line/config overrides.
 
 ### Inference-time enabling
@@ -192,10 +191,7 @@ Notes:
 ## Data/Targets for Critic
 - Mask identification: prefer using (idx == mask_token_id) captured before filling to identify positions originally masked in the iteration.
 - Targets are defined per critic_target_scope:
-  - all_supervised (default, current code):
-    - Valid positions: targets != ignore_index (exclude PAD if provided via pad_token_id).
-    - Target per position: 0 if critic_input token equals ground truth Y, else 1.
-  - masked_and_ignore (desired alt):
+  - masked_and_ignore (default):
     - Valid positions: (idx == mask_token_id) OR (targets == ignore_index), excluding PAD.
     - For masked positions: target 0 if prediction equals Y, else 1.
     - For ignore_index positions: target 0 (always).
@@ -213,16 +209,7 @@ Ground truth targets Y (ignore = no supervision for LM head):
 Sampled prediction from LM:
   brown,fox,run,in,tall,fence
 Critic target per scope:
-- all_supervised (current):
-  Valid = positions where Y != ignore_index => {0,2,3}
-  critic_input after filling masked positions with predictions:
-    brown,fox,run,in,tall,fence
-  Targets (0 correct, 1 wrong) vs Y:
-    pos0: brown==brown -> 0
-    pos2: run!=jumped -> 1
-    pos3: in!=over -> 1
-  Result: [0, -, 1, 1, -, -]
-- masked_and_ignore (desired):
+- masked_and_ignore (default):
   Valid = masked positions {0,2} union ignore positions {1,4,5} (PAD excluded)
   Targets:
     pos0: masked, brown==brown -> 0

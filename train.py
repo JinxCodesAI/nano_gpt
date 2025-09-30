@@ -115,8 +115,10 @@ unfreeze_lr_multiplier = 0.1  # LR multiplier when unfreezing
 seq_scorer_log_abs_rel_err = True  # running average abs(target - pred)/max(|target|, eps)
 # critic head (optional, default disabled)
 add_critic_head = False
+start_critic_iteration = 0
+end_critic_iteration = 0
 critic_alpha = 0.5
-critic_target_scope = 'all'
+critic_target_scope = 'masked_and_ignore'
 
 # -----------------------------------------------------------------------------
 exec(open('configurator.py').read()) # overrides from command line or config file
