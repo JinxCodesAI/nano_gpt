@@ -19,6 +19,8 @@ from model import GPTConfig, GPT
 # Import utilities from existing files
 sys.path.append('data/char_diffusion')
 from masking_utils import apply_stage_masking, apply_random_masking_cpu, apply_target_driven_sticky_masking_cpu, apply_span_masking_cpu
+from sample_utils import build_critic_artifacts_from_logits
+
 
 # Terminal control
 try:
@@ -34,7 +36,7 @@ except ImportError:
         HAS_KEYBOARD = False
 
 # Configuration
-MODEL_PATH = 'out-char-diffusion/1.73_no_mods_spaces.pt'  # Hardcoded model path - change this as needed
+MODEL_PATH = 'out-char-diffusion/ckpt_MLM_3750.pt'  # Hardcoded model path - change this as needed
 DATA_DIR = 'data'
 DEVICE = 'cuda' if torch.cuda.is_available() else 'cpu'
 DTYPE = 'float16' if DEVICE == 'cuda' else 'float32'
@@ -622,6 +624,7 @@ class DiffusionExplorer:
             print(f"  → / D - Next sample")
             if is_token_targets:
                 print(f"  U - Run model unmasking on this sample")
+                print(f"  C - Critic view for this sample")
                 print(f"  G - Generate test sample")
             print(f"  Q - Quit to main menu")
 
@@ -635,6 +638,8 @@ class DiffusionExplorer:
                 self.current_sample_idx = (self.current_sample_idx + 1) % batch_size
             elif key in ['u'] and is_token_targets:
                 self.run_model_unmasking()
+            elif key in ['c'] and is_token_targets:
+                self.run_critic_view()
             elif key in ['g'] and is_token_targets:
                 self.generate_test_sample()
 
@@ -744,6 +749,185 @@ class DiffusionExplorer:
 
         self.wait_for_key()
 
+
+    def run_critic_view(self):
+        """Inspect critic inputs/targets/predictions for current sample using shared builder."""
+        if self.current_batch is None or self.model is None:
+            print("❌ No batch/model loaded")
+            self.wait_for_key()
+            return
+
+        self.print_header("Critic View (per-sample)")
+
+        x_tensor = self.current_batch['input']
+        y_tensor = self.current_batch['target']
+        # Only MLM-style supported (token targets)
+        if not (y_tensor.dim() == 2 and y_tensor.shape[1] == x_tensor.shape[1]):
+            print("Critic view is only available for MLM-style datasets with per-token targets.")
+            self.wait_for_key()
+            return
+
+        sample_tokens = x_tensor[self.current_sample_idx:self.current_sample_idx+1].to(DEVICE)
+        targets = y_tensor[self.current_sample_idx:self.current_sample_idx+1].to(DEVICE)
+
+        # Resolve IDs from model config with fallbacks to dataset meta for display
+        cfg = getattr(self.model, 'config', object())
+        mask_token_id = getattr(cfg, 'mask_token_id', None)
+        if mask_token_id is None:
+            mask_token_id = self.mask_token_id
+        pad_token_id = getattr(cfg, 'pad_token_id', getattr(self, 'pad_token_id', None))
+        ignore_index = int(getattr(cfg, 'ignore_index', -100))
+        scope = getattr(cfg, 'critic_target_scope', 'masked_and_ignore')
+
+        try:
+            with torch.no_grad():
+                with self.ctx:
+                    dummy_targets = torch.zeros_like(sample_tokens)
+                    model_output = self.model(sample_tokens, targets=dummy_targets)
+                    logits = model_output[0] if isinstance(model_output, tuple) else model_output
+
+            # Build artifacts via shared helper
+            artifacts = build_critic_artifacts_from_logits(
+                idx=sample_tokens,
+                logits=logits,
+                targets=targets,
+                mask_token_id=int(mask_token_id),
+                ignore_index=ignore_index,
+                pad_token_id=pad_token_id,
+                scope=scope,
+            )
+            critic_input = artifacts['critic_input']
+            critic_target = artifacts['critic_target']
+            critic_valid = artifacts['critic_valid']
+            pred_tokens = artifacts['pred_tokens']
+
+            # Prepare critic predictions if critic head is available
+            has_critic = getattr(cfg, 'add_critic_head', False) and hasattr(self.model, 'critic_head')
+            probs = None
+            if has_critic:
+                critic_logits = self.model.critic_scores(critic_input)
+                probs = torch.sigmoid(critic_logits)
+
+            # Display decoded sequences (no repr; allow real newlines)
+            original_text = self.decode_tokens(sample_tokens[0])
+            critic_text = self.decode_tokens(critic_input[0])
+            print("📝 Input:")
+            print(original_text)
+            print()
+            print("🧪 Critic input (filled masks with LM samples):")
+            # Color strictly by critic target: green=0, red=1, yellow=invalid
+            cls_id = getattr(self, 'cls_token_id', None)
+            sep_id = getattr(self, 'sep_token_id', None)
+            def _tok_str(tid: int) -> str:
+                if mask_token_id is not None and tid == mask_token_id:
+                    return '[MASK]'
+                if cls_id is not None and tid == cls_id:
+                    return '[CLS]'
+                if pad_token_id is not None and tid == pad_token_id:
+                    return '[PAD]'
+                if sep_id is not None and tid == sep_id:
+                    return '[SEP]'
+                return self.itos[tid] if tid < len(self.itos) else f'[UNK:{tid}]'
+            row_inp = critic_input[0]
+            row_tgt = critic_target[0]
+            row_val = critic_valid[0]
+            parts = []
+            for i in range(row_inp.shape[0]):
+                tid = int(row_inp[i].item())
+                s = _tok_str(tid)
+                if not bool(row_val[i].item()):
+                    parts.append(f"\033[33m{s}\033[0m")  # yellow = invalid
+                elif int(row_tgt[i].item()) == 0:
+                    parts.append(f"\033[32m{s}\033[0m")  # green = target 0
+                else:
+                    parts.append(f"\033[31m{s}\033[0m")  # red = target 1
+            print(''.join(parts))
+            print("    \033[32m🟢 target=0\033[0m  \033[31m🔴 target=1\033[0m  \033[33m🟡 invalid\033[0m")
+            print()
+
+            # Summaries
+            masked_positions = (sample_tokens[0] == mask_token_id)
+            masked_cnt = int(masked_positions.sum().item())
+            ignore_cnt = int((targets[0] == ignore_index).sum().item())
+            valid_cnt = int(critic_valid[0].sum().item())
+            zeros_cnt = int((critic_valid[0] & (critic_target[0] == 0)).sum().item())
+            ones_cnt = int((critic_valid[0] & (critic_target[0] == 1)).sum().item())
+            print(f"📊 Counts: masked={masked_cnt}, ignore={ignore_cnt}, valid={valid_cnt}, target0={zeros_cnt}, target1={ones_cnt}")
+
+            # If critic head available, compute probabilities and basic stats
+            has_critic = getattr(cfg, 'add_critic_head', False) and hasattr(self.model, 'critic_head')
+            if has_critic:
+                # probs computed earlier
+                t0_mask = critic_valid & (critic_target == 0)
+                t1_mask = critic_valid & (critic_target == 1)
+                def _percentiles(vals: torch.Tensor):
+                    vals = vals.view(-1)
+                    if vals.numel() == 0:
+                        return float('nan'), float('nan'), float('nan')
+                    mean = float(vals.mean().item())
+                    try:
+                        p10 = float(torch.quantile(vals, torch.tensor(0.1)).item())
+                        p90 = float(torch.quantile(vals, torch.tensor(0.9)).item())
+                    except Exception:
+                        sorted_vals, _ = torch.sort(vals)
+                        n = sorted_vals.numel()
+                        i10 = max(int(0.1 * (n - 1)), 0)
+                        i90 = max(int(0.9 * (n - 1)), 0)
+                        p10 = float(sorted_vals[i10].item())
+                        p90 = float(sorted_vals[i90].item())
+                    return mean, p10, p90
+                if t0_mask.any():
+                    m0, p10_0, p90_0 = _percentiles(probs[t0_mask])
+                    print(f"🔵 Critic probs for target0: mean={m0:.4f}, p10={p10_0:.4f}, p90={p90_0:.4f}")
+                else:
+                    print("🔵 Critic probs for target0: n/a")
+                if t1_mask.any():
+                    m1, p10_1, p90_1 = _percentiles(probs[t1_mask])
+                    print(f"🟠 Critic probs for target1: mean={m1:.4f}, p10={p10_1:.4f}, p90={p90_1:.4f}")
+                else:
+                    print("🟠 Critic probs for target1: n/a")
+
+            # Grid views (no truncation)
+            seq_len = critic_target.shape[1]
+            cols = 64  # reasonable width for console
+            print()
+            print("🎯 Critic target grid ( - = invalid; color indicates match vs prediction when critic is present ):")
+            vt_bool = critic_valid[0].bool()
+            tt_int = critic_target[0].to(torch.int)
+            use_preds = (probs is not None)
+            pred_bin = (probs[0] > 0.5).to(torch.int) if use_preds else None
+            for start in range(0, seq_len, cols):
+                end = min(start + cols, seq_len)
+                row_parts = []
+                for i in range(start, end):
+                    if not vt_bool[i]:
+                        row_parts.append("\033[33m-\033[0m")  # yellow invalid
+                    else:
+                        ch = '0' if tt_int[i] == 0 else '1'
+                        if use_preds:
+                            ok = (int(pred_bin[i].item()) == int(tt_int[i].item()))
+                            row_parts.append(f"\033[32m{ch}\033[0m" if ok else f"\033[31m{ch}\033[0m")
+                        else:
+                            # fallback: class color if no critic
+                            row_parts.append("\033[32m0\033[0m" if tt_int[i] == 0 else "\033[31m1\033[0m")
+                row = ''.join(row_parts)
+                print(f"[{start:04d}-{end-1:04d}] {row}")
+
+            # Also show masked positions as a grid (M = masked, . = not masked)
+            print()
+            print("🎭 Masked positions (M = masked, . = not masked):")
+            mp_bool = masked_positions.bool()
+            for start in range(0, seq_len, cols):
+                end = min(start + cols, seq_len)
+                row = ''.join('M' if mp_bool[i] else '.' for i in range(start, end))
+                print(f"[{start:04d}-{end-1:04d}] {row}")
+
+        except Exception as e:
+            print(f"❌ Error during critic view: {e}")
+
+        self.wait_for_key()
+
+
     def reconstruct_original_text(self, x_tokens: torch.Tensor, y_tokens: torch.Tensor) -> torch.Tensor:
         """Reconstruct original text from masked input (x) and targets (y)"""
         original_tokens = x_tokens.clone()
@@ -800,12 +984,28 @@ class DiffusionExplorer:
             rng = torch.Generator()
             rng.manual_seed(42)  # Fixed seed for reproducible results
 
+            # Determine content (non-PAD) length; only mask within content
+            pad_token_id = getattr(self, 'pad_token_id', None)
+            seq_len = int(base_sample.shape[1])
+            if pad_token_id is not None:
+                pad_pos = (base_sample[0] == pad_token_id).nonzero(as_tuple=True)[0]
+                content_len = int(pad_pos[0].item()) if pad_pos.numel() > 0 else seq_len
+            else:
+                content_len = seq_len
+            if content_len <= 0:
+                print("No content tokens before [PAD]; nothing to mask.")
+                self.wait_for_key()
+                return
+
+            content_only = base_sample[:, :content_len]
+
+            # Apply masking to content portion only
             if strategy_choice == 1:  # Random masking
                 print("\nRandom Masking Parameters:")
                 mask_prob = float(input("Mask probability (0.0-1.0, default 0.3): ") or "0.3")
 
-                masked_x, mask = apply_random_masking_cpu(
-                    base_sample, mask_prob, self.mask_token_id, self.vocab_size - 1, rng
+                masked_content, mask_content = apply_random_masking_cpu(
+                    content_only, mask_prob, self.mask_token_id, self.vocab_size - 1, rng
                 )
 
             elif strategy_choice == 2:  # Sticky masking
@@ -814,8 +1014,8 @@ class DiffusionExplorer:
                 p1_prob = float(input("P1 probability (default 0.1): ") or "0.1")
                 p2_prob = float(input("P2 probability (default 0.7): ") or "0.7")
 
-                masked_x, mask = apply_target_driven_sticky_masking_cpu(
-                    base_sample, target_ratio, p1_prob, p2_prob,
+                masked_content, mask_content = apply_target_driven_sticky_masking_cpu(
+                    content_only, target_ratio, p1_prob, p2_prob,
                     self.mask_token_id, self.vocab_size - 1, rng
                 )
 
@@ -823,17 +1023,23 @@ class DiffusionExplorer:
                 print("\nSpan Masking Parameters:")
                 spans_count = int(input("Number of spans (default 3): ") or "3")
 
-                masked_x, mask = apply_span_masking_cpu(
-                    base_sample, spans_count, self.mask_token_id, self.vocab_size - 1, rng
+                masked_content, mask_content = apply_span_masking_cpu(
+                    content_only, spans_count, self.mask_token_id, self.vocab_size - 1, rng
                 )
+
+            # Reconstruct full-length outputs with PAD preserved and mask limited to content
+            masked_x_full = base_sample.clone()
+            masked_x_full[:, :content_len] = masked_content
+            mask_full = torch.zeros_like(base_sample, dtype=torch.bool)
+            mask_full[:, :content_len] = mask_content
 
             # Show results
             self.print_header("Generated Test Sample")
 
-            masked_text = self.decode_tokens(masked_x[0])
-            mask_count = mask.sum().item()
-            total_tokens = mask.numel()
-            mask_percentage = (mask_count / total_tokens) * 100
+            masked_text = self.decode_tokens(masked_x_full[0])
+            mask_count = int(mask_full.sum().item())
+            total_tokens = int(content_len)
+            mask_percentage = (mask_count / max(total_tokens, 1)) * 100.0
 
             print(f"📊 Masking Statistics:")
             print(f"   • Strategy: {strategies[strategy_choice - 1]}")
@@ -842,8 +1048,8 @@ class DiffusionExplorer:
             print(f"\n📝 Original: {repr(original_text)}")
             print(f"🎭 Masked:   {repr(masked_text)}")
 
-            # Show masked positions
-            masked_positions = mask[0].nonzero(as_tuple=True)[0].tolist()
+            # Show masked positions (global indices)
+            masked_positions = mask_full[0].nonzero(as_tuple=True)[0].tolist()
             print(f"\n🎯 Masked positions: {masked_positions}")
 
             # Option to unmask with model
@@ -852,6 +1058,10 @@ class DiffusionExplorer:
             print(f"  Any other key - Return to navigation")
 
             key = self.wait_for_key("Enter choice: ").lower()
+
+            if key == 'u':
+                self.unmask_generated_sample(masked_x_full, mask_full, original_sample_tokens)
+                return
 
             if key == 'u':
                 self.unmask_generated_sample(masked_x, mask, original_sample_tokens)
