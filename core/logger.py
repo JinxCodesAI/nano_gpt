@@ -138,6 +138,28 @@ class ConsoleLogger(Logger):
             parts.append(f"val/zero_mean {zero_mean:.4f}")
         if isinstance(zero_p90, (int, float)):
             parts.append(f"val/zero_p90 {zero_p90:.4f}")
+        # Validation-only console stats (not sent to WandB)
+        vt = metrics.get('val/tokens_total', None)
+        vm = metrics.get('val/masked_total', None)
+        vcc = metrics.get('val/critic_correct_total', None)
+        vct0 = metrics.get('val/critic_target_zeros', None)
+        vct1 = metrics.get('val/critic_target_ones', None)
+        vpm0 = metrics.get('val/critic_pred_mean_for_target0', None)
+        vpm1 = metrics.get('val/critic_pred_mean_for_target1', None)
+        if isinstance(vt, int):
+            parts.append(f"val/tokens_total {vt}")
+        if isinstance(vm, int):
+            parts.append(f"val/masked_total {vm}")
+        if isinstance(vcc, int):
+            parts.append(f"val/critic_correct_total {vcc}")
+        if isinstance(vct0, int):
+            parts.append(f"val/critic_target_zeros {vct0}")
+        if isinstance(vct1, int):
+            parts.append(f"val/critic_target_ones {vct1}")
+        if isinstance(vpm0, (int, float)):
+            parts.append(f"val/critic_pred_mean_for_target0 {vpm0:.4f}")
+        if isinstance(vpm1, (int, float)):
+            parts.append(f"val/critic_pred_mean_for_target1 {vpm1:.4f}")
         print(", ".join(parts))
 
     def log_info(self, message: str) -> None:

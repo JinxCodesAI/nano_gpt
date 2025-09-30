@@ -95,16 +95,27 @@ class Evaluator:
                 # For non-sequence scorer or for train split: original behavior
                 if (not is_sequence_scorer) or (split != 'val'):
                     losses = torch.zeros(self.eval_iters)
+                    # Validation-only accumulators for extra console stats
+                    val_tokens_total = 0
+                    val_masked_total = 0
+                    critic_correct_total = 0
+                    critic_sum_pred_t0 = 0.0
+                    critic_sum_pred_t1 = 0.0
+                    critic_cnt_t0 = 0
+                    critic_cnt_t1 = 0
+
                     for k in range(self.eval_iters):
                         batch = self.consumer.get_batch(split, self.device)
                         X, Y = unpack_batch(batch)
                         with self.ctx:
-                            _, loss = self.model(X, Y, loss_modifiers=self.loss_modifier_pipeline)
+                            logits, loss = self.model(X, Y, loss_modifiers=self.loss_modifier_pipeline)
                         # Apply blended critic scheme for LANGUAGE_MODEL with critic enabled
                         alpha_eff = 0.0
+                        has_critic = False
                         try:
                             if getattr(raw_model.config, 'mode', None) == ModelMode.LANGUAGE_MODEL \
                                and getattr(raw_model.config, 'add_critic_head', False):
+                                has_critic = True
                                 alpha_eff = float(raw_model._effective_critic_alpha())
                         except Exception:
                             alpha_eff = 0.0
@@ -112,7 +123,61 @@ class Evaluator:
                         if alpha_eff > 0.0:
                             val = val / (1.0 + alpha_eff)
                         losses[k] = val
+
+                        # Collect validation-only stats (do not log for train split)
+                        if split == 'val':
+                            val_tokens_total += int(Y.numel())
+                            ignore_index = getattr(raw_model.config, 'ignore_index', -100)
+                            valid_mask = (Y != int(ignore_index))
+                            val_masked_total += int(valid_mask.sum().item())
+
+                            if has_critic:
+                                # Sample predictions from LM logits
+                                with torch.no_grad():
+                                    probs = torch.softmax(logits.detach(), dim=-1)
+                                    sampled = torch.multinomial(probs.view(-1, probs.size(-1)), num_samples=1).view_as(Y)
+                                    pred_tokens = sampled
+                                # Define masked positions consistent with training
+                                if getattr(raw_model.config, 'mask_token_id', None) is not None:
+                                    masked_positions = (X == int(raw_model.config.mask_token_id))
+                                else:
+                                    masked_positions = valid_mask
+                                # Correct predictions among masked positions
+                                critic_correct_total += int((pred_tokens[masked_positions] == Y[masked_positions]).sum().item())
+                                # Build critic input and compute critic logits
+                                critic_input = X.clone()
+                                critic_input[masked_positions] = pred_tokens[masked_positions]
+                                critic_logits = raw_model.critic_scores(critic_input)
+                                # Critic targets and validity
+                                critic_target = (critic_input != Y).float()
+                                critic_valid = valid_mask
+                                if getattr(raw_model.config, 'pad_token_id', None) is not None:
+                                    critic_valid = critic_valid & (X != int(raw_model.config.pad_token_id))
+                                # Sigmoid probabilities
+                                critic_prob = torch.sigmoid(critic_logits)
+                                t0_mask = critic_valid & (critic_target == 0)
+                                t1_mask = critic_valid & (critic_target == 1)
+                                if t0_mask.any():
+                                    critic_sum_pred_t0 += float(critic_prob[t0_mask].sum().item())
+                                    critic_cnt_t0 += int(t0_mask.sum().item())
+                                if t1_mask.any():
+                                    critic_sum_pred_t1 += float(critic_prob[t1_mask].sum().item())
+                                    critic_cnt_t1 += int(t1_mask.sum().item())
+
                     out[split] = float(losses.mean().item())
+
+                    # Attach validation-only console stats
+                    if split == 'val':
+                        out['val/tokens_total'] = int(val_tokens_total)
+                        out['val/masked_total'] = int(val_masked_total)
+                        if has_critic:
+                            out['val/critic_correct_total'] = int(critic_correct_total)
+                            out['val/critic_target_zeros'] = int(critic_cnt_t0)
+                            out['val/critic_target_ones'] = int(critic_cnt_t1)
+                            if critic_cnt_t0 > 0:
+                                out['val/critic_pred_mean_for_target0'] = float(critic_sum_pred_t0 / max(critic_cnt_t0, 1))
+                            if critic_cnt_t1 > 0:
+                                out['val/critic_pred_mean_for_target1'] = float(critic_sum_pred_t1 / max(critic_cnt_t1, 1))
                 else:
                     # Sequence scorer, validation split: two-stage evaluation
                     nonzero_losses = []

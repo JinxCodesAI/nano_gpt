@@ -101,6 +101,10 @@ class Trainer:
                     eval_metrics['val/zero_mean'] = losses['val/zero_mean']
                 if 'val/zero_p90' in losses:
                     eval_metrics['val/zero_p90'] = losses['val/zero_p90']
+                # Include any additional scalar validation-only stats for console printing
+                for k, v in losses.items():
+                    if k not in ('train', 'val') and isinstance(v, (int, float)):
+                        eval_metrics[k] = v
                 # Log evaluation results
                 self.logger.log_eval(eval_metrics)
 
