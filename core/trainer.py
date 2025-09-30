@@ -78,6 +78,12 @@ class Trainer:
 
             # evaluate the loss on train/val sets and write checkpoints
             if self.iter_num % self.eval_interval == 0 and self.master_process:
+                # expose current iteration to the model for critic alpha warmup during eval
+                raw_model = self.model.module if self.ddp else self.model
+                try:
+                    setattr(raw_model, '_current_iter', self.iter_num)
+                except Exception:
+                    pass
                 losses = self.evaluator.evaluate()
                 # Reset timer after validation to exclude validation time from MFU calculation
                 t0 = time.time()
@@ -95,6 +101,10 @@ class Trainer:
                     eval_metrics['val/zero_mean'] = losses['val/zero_mean']
                 if 'val/zero_p90' in losses:
                     eval_metrics['val/zero_p90'] = losses['val/zero_p90']
+                # Include any additional scalar validation-only stats for console printing
+                for k, v in losses.items():
+                    if k not in ('train', 'val') and isinstance(v, (int, float)):
+                        eval_metrics[k] = v
                 # Log evaluation results
                 self.logger.log_eval(eval_metrics)
 
@@ -121,6 +131,11 @@ class Trainer:
                 self.evaluator.loss_modifier_pipeline.current_iter = self.iter_num
             except Exception:
                 pass
+            # Also expose current iter to model for critic alpha warmup during training
+            try:
+                setattr(raw_model, '_current_iter', self.iter_num)
+            except Exception:
+                pass
             loss, batch = self.training_step.execute_step(
                 batch, self.evaluator.loss_modifier_pipeline, self.consumer, self.device
             )
@@ -143,8 +158,27 @@ class Trainer:
                     "time_ms": dt * 1000,
                     "mfu_pct": running_mfu * 100,
                 }
-
-
+                # If TrainingStep captured component losses, include them (already unscaled like lossf)
+                try:
+                    main_part = getattr(self.training_step, 'last_loss_main', None)
+                    critic_part = getattr(self.training_step, 'last_loss_critic', None)
+                    if isinstance(main_part, (int, float)):
+                        step_metrics['loss_main'] = float(main_part)
+                    if isinstance(critic_part, (int, float)):
+                        step_metrics['loss_critic'] = float(critic_part)
+                except Exception:
+                    pass
+                # CUDA memory metrics (optional)
+                try:
+                    if torch.cuda.is_available():
+                        alloc = torch.cuda.memory_allocated() / (1024**2)
+                        reserved = torch.cuda.memory_reserved() / (1024**2)
+                        max_alloc = torch.cuda.max_memory_allocated() / (1024**2)
+                        step_metrics['mem_alloc_mb'] = float(alloc)
+                        step_metrics['mem_reserved_mb'] = float(reserved)
+                        step_metrics['mem_max_alloc_mb'] = float(max_alloc)
+                except Exception:
+                    pass
 
                 self.logger.log_step(step_metrics)
 

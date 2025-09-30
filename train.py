@@ -113,6 +113,13 @@ init_from_checkpoint = None  # Path to pretrained model
 unfreeze_at_iteration = None  # Dynamic unfreezing
 unfreeze_lr_multiplier = 0.1  # LR multiplier when unfreezing
 seq_scorer_log_abs_rel_err = True  # running average abs(target - pred)/max(|target|, eps)
+# critic head (optional, default disabled)
+add_critic_head = False
+start_critic_iteration = 0
+end_critic_iteration = 0
+critic_alpha = 0.5
+critic_target_scope = 'masked_and_ignore'
+
 # -----------------------------------------------------------------------------
 exec(open('configurator.py').read()) # overrides from command line or config file
 from config.validator import validate_config
@@ -214,6 +221,10 @@ logger.log_info(f"found vocab_size = {meta_vocab_size} (from consumer.meta); eff
 # attach dataset meta to config to inform checkpoint naming (contains training_type)
 config['meta'] = meta
 
+# Critic-related token ids from dataset meta (if provided)
+meta_mask_token_id = meta.get('mask_token_id', None)
+meta_pad_token_id = meta.get('pad_token_id', None)
+
 # provide config to checkpoint manager early so it can resolve training_type-based paths
 checkpoint_manager.set_metadata(model_args={}, config=config)
 
@@ -229,7 +240,15 @@ model_args = dict(n_layer=n_layer, n_head=n_head, n_embd=n_embd, block_size=bloc
                   freeze_transformer=freeze_transformer,
                   init_from_checkpoint=init_from_checkpoint,
                   unfreeze_at_iteration=unfreeze_at_iteration,
-                  unfreeze_lr_multiplier=unfreeze_lr_multiplier) # start with model_args from command line
+                  unfreeze_lr_multiplier=unfreeze_lr_multiplier,
+                  # critic head parameters
+                  add_critic_head=add_critic_head,
+                  critic_alpha=critic_alpha,
+                  critic_target_scope=critic_target_scope,
+                  start_critic_iteration=start_critic_iteration,
+                  end_critic_iteration=end_critic_iteration,
+                  mask_token_id=meta_mask_token_id,
+                  pad_token_id=meta_pad_token_id) # start with model_args from command line
 if init_from == 'scratch':
     # init a new model from scratch
     logger.log_info("Initializing a new model from scratch")

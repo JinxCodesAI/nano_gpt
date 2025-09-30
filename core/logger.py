@@ -76,7 +76,19 @@ class ConsoleLogger(Logger):
             return
 
         iter_num = metrics.get('iter', 0)
-        loss = metrics.get('loss', 0.0)
+        loss_total = metrics.get('loss', 0.0)
+        # Accept multiple possible keys for components; default critic to 0 if missing
+        loss_critic = metrics.get('loss_critic', metrics.get('critic_loss', None))
+        if loss_critic is None:
+            loss_critic = 0.0
+        loss_main = metrics.get('loss_main', None)
+        if loss_main is None:
+            # If we have total and critic, derive main; else fall back to total
+            try:
+                loss_main = float(loss_total) - float(loss_critic)
+            except Exception:
+                loss_main = float(loss_total)
+
         dt_ms = metrics.get('time_ms', 0.0)
         mfu_pct = metrics.get('mfu_pct', 0.0)
         seqvar = metrics.get('seqvar_loss_ratio', None)
@@ -87,8 +99,20 @@ class ConsoleLogger(Logger):
             extras.append(f"seqvar {seqvar:.4f}")
         if seqcorr is not None:
             extras.append(f"seqcorr {seqcorr:.4f}")
+        # Optional CUDA memory metrics
+        mem_alloc = metrics.get('mem_alloc_mb', None)
+        mem_reserved = metrics.get('mem_reserved_mb', None)
+        mem_max = metrics.get('mem_max_alloc_mb', None)
+        if mem_alloc is not None and mem_reserved is not None:
+            if mem_max is not None:
+                extras.append(f"mem {mem_alloc:.0f}/{mem_reserved:.0f}MB (max {mem_max:.0f}MB)")
+            else:
+                extras.append(f"mem {mem_alloc:.0f}/{mem_reserved:.0f}MB")
         extras_str = (", " + ", ".join(extras)) if extras else ""
-        print(f"iter {iter_num}: loss {loss:.4f}, time {dt_ms:.2f}ms, mfu {mfu_pct:.2f}%{extras_str}")
+        print(
+            f"iter {iter_num}: loss {loss_total:.4f} (main {loss_main:.4f}, critic {loss_critic:.4f}), "
+            f"time {dt_ms:.2f}ms, mfu {mfu_pct:.2f}%{extras_str}"
+        )
 
 
     def log_eval(self, metrics: Dict[str, Any]) -> None:
@@ -114,6 +138,40 @@ class ConsoleLogger(Logger):
             parts.append(f"val/zero_mean {zero_mean:.4f}")
         if isinstance(zero_p90, (int, float)):
             parts.append(f"val/zero_p90 {zero_p90:.4f}")
+        # Validation-only console stats (not sent to WandB)
+        vt = metrics.get('val/tokens_total', None)
+        vm = metrics.get('val/masked_total', None)
+        vcc = metrics.get('val/critic_correct_total', None)
+        vct0 = metrics.get('val/critic_target_zeros', None)
+        vct1 = metrics.get('val/critic_target_ones', None)
+        vpm0 = metrics.get('val/critic_pred_mean_for_target0', None)
+        vpm1 = metrics.get('val/critic_pred_mean_for_target1', None)
+        vp10t0 = metrics.get('val/critic_pred_p10_for_target0', None)
+        vp90t0 = metrics.get('val/critic_pred_p90_for_target0', None)
+        vp10t1 = metrics.get('val/critic_pred_p10_for_target1', None)
+        vp90t1 = metrics.get('val/critic_pred_p90_for_target1', None)
+        if isinstance(vt, int):
+            parts.append(f"val/tokens_total {vt}")
+        if isinstance(vm, int):
+            parts.append(f"val/masked_total {vm}")
+        if isinstance(vcc, int):
+            parts.append(f"val/critic_correct_total {vcc}")
+        if isinstance(vct0, int):
+            parts.append(f"val/critic_target_zeros {vct0}")
+        if isinstance(vct1, int):
+            parts.append(f"val/critic_target_ones {vct1}")
+        if isinstance(vpm0, (int, float)):
+            parts.append(f"val/critic_pred_mean_for_target0 {vpm0:.4f}")
+        if isinstance(vpm1, (int, float)):
+            parts.append(f"val/critic_pred_mean_for_target1 {vpm1:.4f}")
+        if isinstance(vp10t0, (int, float)):
+            parts.append(f"val/critic_pred_p10_for_target0 {vp10t0:.4f}")
+        if isinstance(vp90t0, (int, float)):
+            parts.append(f"val/critic_pred_p90_for_target0 {vp90t0:.4f}")
+        if isinstance(vp10t1, (int, float)):
+            parts.append(f"val/critic_pred_p10_for_target1 {vp10t1:.4f}")
+        if isinstance(vp90t1, (int, float)):
+            parts.append(f"val/critic_pred_p90_for_target1 {vp90t1:.4f}")
         print(", ".join(parts))
 
     def log_info(self, message: str) -> None:
@@ -166,8 +224,8 @@ class WandBLogger(Logger):
     def log_step(self, metrics: Dict[str, Any]) -> None:
         """
         Log training step metrics to WandB (every log_interval).
-        Includes: iter, train/loss, time_ms, mfu, avg_abs_rel_err (if present),
-        and any flattened loss_modifiers/* metrics present in the metrics dict.
+        Includes: iter, train/loss, train/loss_main, train/loss_critic, time_ms, mfu,
+        avg_abs_rel_err (if present), and any flattened loss_modifiers/* metrics present.
         """
         if not (self.enabled and self.master_process and self.wandb):
             return
@@ -178,6 +236,11 @@ class WandBLogger(Logger):
             log_dict['iter'] = metrics['iter']
         if 'loss' in metrics:
             log_dict['train/loss'] = metrics['loss']
+        # Include decomposed losses when available
+        if 'loss_main' in metrics:
+            log_dict['train/loss_main'] = metrics['loss_main']
+        if 'loss_critic' in metrics:
+            log_dict['train/loss_critic'] = metrics['loss_critic']
         if 'time_ms' in metrics:
             log_dict['time_ms'] = metrics['time_ms']
         if 'mfu_pct' in metrics:
