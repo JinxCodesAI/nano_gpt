@@ -913,7 +913,15 @@ class DiffusionExplorer:
             tt_int = critic_target[0].to(torch.int)
             for start in range(0, seq_len, cols):
                 end = min(start + cols, seq_len)
-                row = ''.join('-' if not vt_bool[i] else ('0' if tt_int[i] == 0 else '1') for i in range(start, end))
+                row_parts = []
+                for i in range(start, end):
+                    if not vt_bool[i]:
+                        row_parts.append("\033[33m-\033[0m")  # yellow invalid
+                    elif tt_int[i] == 0:
+                        row_parts.append("\033[32m0\033[0m")  # green correct target
+                    else:
+                        row_parts.append("\033[31m1\033[0m")  # red error target
+                row = ''.join(row_parts)
                 print(f"[{start:04d}-{end-1:04d}] {row}")
 
             # Also show masked positions as a grid (M = masked, . = not masked)
