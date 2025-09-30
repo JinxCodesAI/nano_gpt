@@ -728,6 +728,15 @@ class GPT(nn.Module):
             else:
                 loss = F.cross_entropy(logits.view(-1, logits.size(-1)), targets.view(-1), ignore_index=self.config.ignore_index)
 
+            # Expose LM loss component for external logging (detach to avoid graph retention)
+            try:
+                self._last_lm_loss = float(loss.detach().item())
+            except Exception:
+                self._last_lm_loss = 0.0
+            # Default critic component to 0.0; may be overwritten below when enabled
+            self._last_critic_loss = 0.0
+
+
             # Optional critic loss (multi-task) when enabled
             alpha_eff = self._effective_critic_alpha()
             if getattr(self.config, 'add_critic_head', False) and hasattr(self, 'critic_head') and alpha_eff > 0.0:
@@ -755,13 +764,19 @@ class GPT(nn.Module):
                 denom = (critic_valid.float().sum() + 1e-8)
                 critic_loss = (critic_loss_per_pos * critic_valid.float()).sum() / denom
                 loss = loss + float(alpha_eff) * critic_loss
+
+                # Expose critic loss component for external logging (after computing critic_loss)
+                try:
+                    self._last_critic_loss = float(critic_loss.detach().item())
+                except Exception:
+                    self._last_critic_loss = 0.0
+
         else:
             # Inference optimization
             logits = self.lm_head(x[:, [-1], :])
             loss = None
 
         return logits, loss
-
     @torch.no_grad()
     def critic_scores(self, idx, attention_mask=None):
         """Return per-token critic logits (B, T). Requires add_critic_head=True and LANGUAGE_MODEL mode."""
