@@ -918,12 +918,28 @@ class DiffusionExplorer:
             rng = torch.Generator()
             rng.manual_seed(42)  # Fixed seed for reproducible results
 
+            # Determine content (non-PAD) length; only mask within content
+            pad_token_id = getattr(self, 'pad_token_id', None)
+            seq_len = int(base_sample.shape[1])
+            if pad_token_id is not None:
+                pad_pos = (base_sample[0] == pad_token_id).nonzero(as_tuple=True)[0]
+                content_len = int(pad_pos[0].item()) if pad_pos.numel() > 0 else seq_len
+            else:
+                content_len = seq_len
+            if content_len <= 0:
+                print("No content tokens before [PAD]; nothing to mask.")
+                self.wait_for_key()
+                return
+
+            content_only = base_sample[:, :content_len]
+
+            # Apply masking to content portion only
             if strategy_choice == 1:  # Random masking
                 print("\nRandom Masking Parameters:")
                 mask_prob = float(input("Mask probability (0.0-1.0, default 0.3): ") or "0.3")
 
-                masked_x, mask = apply_random_masking_cpu(
-                    base_sample, mask_prob, self.mask_token_id, self.vocab_size - 1, rng
+                masked_content, mask_content = apply_random_masking_cpu(
+                    content_only, mask_prob, self.mask_token_id, self.vocab_size - 1, rng
                 )
 
             elif strategy_choice == 2:  # Sticky masking
@@ -932,8 +948,8 @@ class DiffusionExplorer:
                 p1_prob = float(input("P1 probability (default 0.1): ") or "0.1")
                 p2_prob = float(input("P2 probability (default 0.7): ") or "0.7")
 
-                masked_x, mask = apply_target_driven_sticky_masking_cpu(
-                    base_sample, target_ratio, p1_prob, p2_prob,
+                masked_content, mask_content = apply_target_driven_sticky_masking_cpu(
+                    content_only, target_ratio, p1_prob, p2_prob,
                     self.mask_token_id, self.vocab_size - 1, rng
                 )
 
@@ -941,17 +957,23 @@ class DiffusionExplorer:
                 print("\nSpan Masking Parameters:")
                 spans_count = int(input("Number of spans (default 3): ") or "3")
 
-                masked_x, mask = apply_span_masking_cpu(
-                    base_sample, spans_count, self.mask_token_id, self.vocab_size - 1, rng
+                masked_content, mask_content = apply_span_masking_cpu(
+                    content_only, spans_count, self.mask_token_id, self.vocab_size - 1, rng
                 )
+
+            # Reconstruct full-length outputs with PAD preserved and mask limited to content
+            masked_x_full = base_sample.clone()
+            masked_x_full[:, :content_len] = masked_content
+            mask_full = torch.zeros_like(base_sample, dtype=torch.bool)
+            mask_full[:, :content_len] = mask_content
 
             # Show results
             self.print_header("Generated Test Sample")
 
-            masked_text = self.decode_tokens(masked_x[0])
-            mask_count = mask.sum().item()
-            total_tokens = mask.numel()
-            mask_percentage = (mask_count / total_tokens) * 100
+            masked_text = self.decode_tokens(masked_x_full[0])
+            mask_count = int(mask_full.sum().item())
+            total_tokens = int(content_len)
+            mask_percentage = (mask_count / max(total_tokens, 1)) * 100.0
 
             print(f"📊 Masking Statistics:")
             print(f"   • Strategy: {strategies[strategy_choice - 1]}")
@@ -960,8 +982,8 @@ class DiffusionExplorer:
             print(f"\n📝 Original: {repr(original_text)}")
             print(f"🎭 Masked:   {repr(masked_text)}")
 
-            # Show masked positions
-            masked_positions = mask[0].nonzero(as_tuple=True)[0].tolist()
+            # Show masked positions (global indices)
+            masked_positions = mask_full[0].nonzero(as_tuple=True)[0].tolist()
             print(f"\n🎯 Masked positions: {masked_positions}")
 
             # Option to unmask with model
@@ -970,6 +992,10 @@ class DiffusionExplorer:
             print(f"  Any other key - Return to navigation")
 
             key = self.wait_for_key("Enter choice: ").lower()
+
+            if key == 'u':
+                self.unmask_generated_sample(masked_x_full, mask_full, original_sample_tokens)
+                return
 
             if key == 'u':
                 self.unmask_generated_sample(masked_x, mask, original_sample_tokens)
