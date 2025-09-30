@@ -815,8 +815,7 @@ class DiffusionExplorer:
             print(original_text)
             print()
             print("🧪 Critic input (filled masks with LM samples):")
-            # Color by prediction-vs-target when critic head is available:
-            # green = match (pred==target), red = mismatch, yellow = invalid
+            # Color strictly by critic target: green=0, red=1, yellow=invalid
             cls_id = getattr(self, 'cls_token_id', None)
             sep_id = getattr(self, 'sep_token_id', None)
             def _tok_str(tid: int) -> str:
@@ -833,33 +832,17 @@ class DiffusionExplorer:
             row_tgt = critic_target[0]
             row_val = critic_valid[0]
             parts = []
-            if has_critic and probs is not None:
-                pred_bin = (probs[0] > 0.5).to(torch.int)
-                for i in range(row_inp.shape[0]):
-                    tid = int(row_inp[i].item())
-                    s = _tok_str(tid)
-                    if not bool(row_val[i].item()):
-                        parts.append(f"\033[33m{s}\033[0m")  # yellow = invalid
-                    else:
-                        tgt = int(row_tgt[i].item())
-                        prd = int(pred_bin[i].item())
-                        if prd == tgt:
-                            parts.append(f"\033[32m{s}\033[0m")  # green match
-                        else:
-                            parts.append(f"\033[31m{s}\033[0m")  # red mismatch
-            else:
-                # Fallback: color by target (0=green,1=red), invalid=yellow
-                for i in range(row_inp.shape[0]):
-                    tid = int(row_inp[i].item())
-                    s = _tok_str(tid)
-                    if not bool(row_val[i].item()):
-                        parts.append(f"\033[33m{s}\033[0m")
-                    elif int(row_tgt[i].item()) == 0:
-                        parts.append(f"\033[32m{s}\033[0m")
-                    else:
-                        parts.append(f"\033[31m{s}\033[0m")
+            for i in range(row_inp.shape[0]):
+                tid = int(row_inp[i].item())
+                s = _tok_str(tid)
+                if not bool(row_val[i].item()):
+                    parts.append(f"\033[33m{s}\033[0m")  # yellow = invalid
+                elif int(row_tgt[i].item()) == 0:
+                    parts.append(f"\033[32m{s}\033[0m")  # green = target 0
+                else:
+                    parts.append(f"\033[31m{s}\033[0m")  # red = target 1
             print(''.join(parts))
-            print("    \033[32m🟢 match\033[0m  \033[31m🔴 mismatch\033[0m  \033[33m🟡 invalid\033[0m")
+            print("    \033[32m🟢 target=0\033[0m  \033[31m🔴 target=1\033[0m  \033[33m🟡 invalid\033[0m")
             print()
 
             # Summaries
@@ -908,19 +891,25 @@ class DiffusionExplorer:
             seq_len = critic_target.shape[1]
             cols = 64  # reasonable width for console
             print()
-            print("🎯 Critic target grid ( - = invalid, 0 = correct, 1 = error ):")
+            print("🎯 Critic target grid ( - = invalid; color indicates match vs prediction when critic is present ):")
             vt_bool = critic_valid[0].bool()
             tt_int = critic_target[0].to(torch.int)
+            use_preds = (probs is not None)
+            pred_bin = (probs[0] > 0.5).to(torch.int) if use_preds else None
             for start in range(0, seq_len, cols):
                 end = min(start + cols, seq_len)
                 row_parts = []
                 for i in range(start, end):
                     if not vt_bool[i]:
                         row_parts.append("\033[33m-\033[0m")  # yellow invalid
-                    elif tt_int[i] == 0:
-                        row_parts.append("\033[32m0\033[0m")  # green correct target
                     else:
-                        row_parts.append("\033[31m1\033[0m")  # red error target
+                        ch = '0' if tt_int[i] == 0 else '1'
+                        if use_preds:
+                            ok = (int(pred_bin[i].item()) == int(tt_int[i].item()))
+                            row_parts.append(f"\033[32m{ch}\033[0m" if ok else f"\033[31m{ch}\033[0m")
+                        else:
+                            # fallback: class color if no critic
+                            row_parts.append("\033[32m0\033[0m" if tt_int[i] == 0 else "\033[31m1\033[0m")
                 row = ''.join(row_parts)
                 print(f"[{start:04d}-{end-1:04d}] {row}")
 
