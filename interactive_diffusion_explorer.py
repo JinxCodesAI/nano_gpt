@@ -36,7 +36,7 @@ except ImportError:
         HAS_KEYBOARD = False
 
 # Configuration
-MODEL_PATH = 'out-char-diffusion/MLM_no_judge_9250.pt'  # Hardcoded model path - change this as needed
+MODEL_PATH = 'out-char-diffusion/ckpt_MLM_3750.pt'  # Hardcoded model path - change this as needed
 DATA_DIR = 'data'
 DEVICE = 'cuda' if torch.cuda.is_available() else 'cpu'
 DTYPE = 'float16' if DEVICE == 'cuda' else 'float32'
@@ -801,6 +801,13 @@ class DiffusionExplorer:
             critic_valid = artifacts['critic_valid']
             pred_tokens = artifacts['pred_tokens']
 
+            # Prepare critic predictions if critic head is available
+            has_critic = getattr(cfg, 'add_critic_head', False) and hasattr(self.model, 'critic_head')
+            probs = None
+            if has_critic:
+                critic_logits = self.model.critic_scores(critic_input)
+                probs = torch.sigmoid(critic_logits)
+
             # Display decoded sequences (no repr; allow real newlines)
             original_text = self.decode_tokens(sample_tokens[0])
             critic_text = self.decode_tokens(critic_input[0])
@@ -808,7 +815,8 @@ class DiffusionExplorer:
             print(original_text)
             print()
             print("🧪 Critic input (filled masks with LM samples):")
-            # Color by critic target/valid: green=0(correct), red=1(error), yellow=invalid
+            # Color by prediction-vs-target when critic head is available:
+            # green = match (pred==target), red = mismatch, yellow = invalid
             cls_id = getattr(self, 'cls_token_id', None)
             sep_id = getattr(self, 'sep_token_id', None)
             def _tok_str(tid: int) -> str:
@@ -825,17 +833,33 @@ class DiffusionExplorer:
             row_tgt = critic_target[0]
             row_val = critic_valid[0]
             parts = []
-            for i in range(row_inp.shape[0]):
-                tid = int(row_inp[i].item())
-                s = _tok_str(tid)
-                if not bool(row_val[i].item()):
-                    parts.append(f"\033[33m{s}\033[0m")  # yellow = invalid
-                elif int(row_tgt[i].item()) == 0:
-                    parts.append(f"\033[32m{s}\033[0m")  # green = correct
-                else:
-                    parts.append(f"\033[31m{s}\033[0m")  # red = error
+            if has_critic and probs is not None:
+                pred_bin = (probs[0] > 0.5).to(torch.int)
+                for i in range(row_inp.shape[0]):
+                    tid = int(row_inp[i].item())
+                    s = _tok_str(tid)
+                    if not bool(row_val[i].item()):
+                        parts.append(f"\033[33m{s}\033[0m")  # yellow = invalid
+                    else:
+                        tgt = int(row_tgt[i].item())
+                        prd = int(pred_bin[i].item())
+                        if prd == tgt:
+                            parts.append(f"\033[32m{s}\033[0m")  # green match
+                        else:
+                            parts.append(f"\033[31m{s}\033[0m")  # red mismatch
+            else:
+                # Fallback: color by target (0=green,1=red), invalid=yellow
+                for i in range(row_inp.shape[0]):
+                    tid = int(row_inp[i].item())
+                    s = _tok_str(tid)
+                    if not bool(row_val[i].item()):
+                        parts.append(f"\033[33m{s}\033[0m")
+                    elif int(row_tgt[i].item()) == 0:
+                        parts.append(f"\033[32m{s}\033[0m")
+                    else:
+                        parts.append(f"\033[31m{s}\033[0m")
             print(''.join(parts))
-            print("    \033[32m🟢 correct\033[0m  \033[31m🔴 error\033[0m  \033[33m🟡 invalid\033[0m")
+            print("    \033[32m🟢 match\033[0m  \033[31m🔴 mismatch\033[0m  \033[33m🟡 invalid\033[0m")
             print()
 
             # Summaries
@@ -850,8 +874,7 @@ class DiffusionExplorer:
             # If critic head available, compute probabilities and basic stats
             has_critic = getattr(cfg, 'add_critic_head', False) and hasattr(self.model, 'critic_head')
             if has_critic:
-                critic_logits = self.model.critic_scores(critic_input)
-                probs = torch.sigmoid(critic_logits)
+                # probs computed earlier
                 t0_mask = critic_valid & (critic_target == 0)
                 t1_mask = critic_valid & (critic_target == 1)
                 def _percentiles(vals: torch.Tensor):
