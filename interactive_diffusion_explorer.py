@@ -36,7 +36,7 @@ except ImportError:
         HAS_KEYBOARD = False
 
 # Configuration
-MODEL_PATH = 'out-char-diffusion/1.73_no_mods_spaces.pt'  # Hardcoded model path - change this as needed
+MODEL_PATH = 'out-char-diffusion/MLM_no_judge_9250.pt'  # Hardcoded model path - change this as needed
 DATA_DIR = 'data'
 DEVICE = 'cuda' if torch.cuda.is_available() else 'cpu'
 DTYPE = 'float16' if DEVICE == 'cuda' else 'float32'
@@ -743,6 +743,11 @@ class DiffusionExplorer:
                     print(f"    Total tokens: {total_tokens}")
                     print()
                     print(f"    \033[32m🟢 = Correct prediction\033[0m  \033[31m🔴 = Incorrect prediction\033[0m  ⚪ = Original text")
+
+        except Exception as e:
+            print(f"❌ Error during unmasking: {e}")
+
+        self.wait_for_key()
 
 
     def run_critic_view(self):
