@@ -520,7 +520,7 @@ def apply_remasking_step(tokens, prediction_tokens, iteration, iterations, sched
             confidence = logits_r.squeeze(-1)
         # Lower confidence => more likely to mask: score = -confidence
         scores = -confidence
-        scores = scores.masked_fill(~unmaskable, -1e9)
+        scores = scores.masked_fill(~unmaskable, torch.finfo(scores.dtype).min)
         if randomness_strength > 0:
             scores = (1 - randomness_strength) * scores + randomness_strength * torch.rand_like(scores)
         if k > 0:
@@ -539,7 +539,7 @@ def apply_remasking_step(tokens, prediction_tokens, iteration, iterations, sched
             critic_logits = base_model.critic_scores(prediction_tokens)
         # Higher critic logit => higher error likelihood
         scores = critic_logits.clone()
-        scores = scores.masked_fill(~unmaskable, -1e9)
+        scores = scores.masked_fill(~unmaskable, torch.finfo(scores.dtype).min)
         if randomness_strength > 0:
             scores = (1 - randomness_strength) * scores + randomness_strength * torch.rand_like(scores)
         if k > 0:
@@ -569,7 +569,7 @@ def apply_remasking_step(tokens, prediction_tokens, iteration, iterations, sched
         probs = F.softmax(logits_from_predict, dim=-1)
         p_taken = probs.gather(-1, prediction_tokens.unsqueeze(-1)).squeeze(-1)
         scores = 1.0 - p_taken  # uncertainty
-        scores = scores.masked_fill(~unmaskable, -1e9)
+        scores = scores.masked_fill(~unmaskable, torch.finfo(scores.dtype).min)
         if randomness_strength > 0:
             scores = (1 - randomness_strength) * scores + randomness_strength * torch.rand_like(scores)
         if k > 0:
