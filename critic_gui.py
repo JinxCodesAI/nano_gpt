@@ -371,9 +371,6 @@ class CriticGUI:
             return
 
         try:
-            self.status_var.set("Remasking...")
-            self.root.update()
-
             threshold_pct = self.threshold_var.get()
 
             print(f"DEBUG: Remasking with threshold {threshold_pct}%")
@@ -394,28 +391,34 @@ class CriticGUI:
             print(f"DEBUG: worst_indices: {worst_indices}")
             print(f"DEBUG: Number of [MASK] tokens in result: {(remasked_tokens == self.metadata['mask_token_id']).sum().item()}")
 
+            # Update workflow state FIRST to prevent preview from running
+            self.workflow_state = 'unmask'
+
             # Store remasked tokens
             self.current_tokens = remasked_tokens
             self.current_scores = None
 
-            # Update text widget
+            # Update text widget - CRITICAL: do this after workflow state change
             remasked_text = self.tokens_to_text(remasked_tokens)
             print(f"DEBUG: remasked_text length: {len(remasked_text)}")
             print(f"DEBUG: [MASK] count in text: {remasked_text.count('[MASK]')}")
 
-            self.text_widget.delete("1.0", tk.END)
-            self.text_widget.insert("1.0", remasked_text)
-
-            # Clear coloring
+            # Clear ALL tags first
             for tag in self.text_widget.tag_names():
                 if tag.startswith("char_") or tag.startswith("mask_preview_"):
                     self.text_widget.tag_delete(tag)
 
-            # Update workflow state
-            self.workflow_state = 'unmask'
+            # Enable editing before updating text
+            self.text_widget.config(state=tk.NORMAL)
+
+            # Update text
+            self.text_widget.delete("1.0", tk.END)
+            self.text_widget.insert("1.0", remasked_text)
+
+            # Update button states
             self.remask_btn.config(state=tk.DISABLED)
             self.unmask_btn.config(state=tk.NORMAL)
-            self.text_widget.config(state=tk.NORMAL)
+            self.score_btn.config(state=tk.DISABLED)
 
             num_remasked = len(worst_indices)
             self.status_var.set(f"Remasked {num_remasked} tokens. Edit text or click Unmask to continue.")
@@ -430,9 +433,12 @@ class CriticGUI:
         """Handle threshold slider change - update display and preview"""
         self.update_wrongness_display()
 
-        # If in remask state, preview which tokens will be masked
+        # ONLY preview if in remask state - do NOT preview in other states
         if self.workflow_state == 'remask' and self.current_scores is not None:
             self.preview_remask()
+        else:
+            # In other states, just update the wrongness display
+            pass
 
     def preview_remask(self):
         """Preview which tokens will be masked at current threshold"""
