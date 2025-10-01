@@ -164,8 +164,8 @@ def diffusion_generate(
     # Track min_wrongness from previous iteration for display
     prev_min_wrongness = None
 
-    # Track iteration data for saving
-    iteration_data = [] if save_iterations else None
+    # Track iteration data for saving - organize by sample
+    samples_data = [[] for _ in range(batch_size)] if save_iterations else None
 
     for iteration in range(iterations):
         if verbose or show_progress:
@@ -196,13 +196,6 @@ def diffusion_generate(
                 preview = sample_text[:100] + ('...' if len(sample_text) > 100 else '')
                 print(f"  Sample: {preview}")
 
-        # Save initial masked input if tracking iterations
-        if save_iterations:
-            iter_data = {
-                'iteration': iteration + 1,
-                'input_masked': tokens.cpu().tolist(),
-            }
-
         # Step 1: Predict and sample tokens for masked positions
         pred_tokens, _, logits = predict_and_sample_tokens(
             model=model,
@@ -219,10 +212,6 @@ def diffusion_generate(
             pad_token_id=pad_token_id,
             base_vocab_size=base_vocab_size,
         )
-
-        # Save unmasked output if tracking iterations
-        if save_iterations:
-            iter_data['output_unmasked'] = pred_tokens.cpu().tolist()
 
         # Step 2: Remask for next iteration (except last iteration)
         if iteration < iterations - 1:
@@ -252,26 +241,53 @@ def diffusion_generate(
                 if verbose or show_progress:
                     print(f"  Early termination: no tokens exceed threshold")
                 if save_iterations:
-                    iter_data['remasked_indices'] = []
-                    iteration_data.append(iter_data)
+                    # Save final iteration data for all samples
+                    tokens_cpu = tokens.cpu().tolist()
+                    pred_tokens_cpu = pred_tokens.cpu().tolist()
+                    for sample_idx in range(batch_size):
+                        samples_data[sample_idx].append({
+                            'iteration': iteration + 1,
+                            'input_masked': tokens_cpu[sample_idx],
+                            'output_unmasked': pred_tokens_cpu[sample_idx],
+                            'remasked_indices': []
+                        })
                 tokens = pred_tokens
                 break
 
             if save_iterations:
-                iter_data['remasked_indices'] = remasked_indices
-                iteration_data.append(iter_data)
+                # Organize remasked_indices by sample
+                tokens_cpu = tokens.cpu().tolist()
+                pred_tokens_cpu = pred_tokens.cpu().tolist()
+                remasked_by_sample = [[] for _ in range(batch_size)]
+                for batch_idx, pos in remasked_indices:
+                    remasked_by_sample[batch_idx].append(pos)
+
+                for sample_idx in range(batch_size):
+                    samples_data[sample_idx].append({
+                        'iteration': iteration + 1,
+                        'input_masked': tokens_cpu[sample_idx],
+                        'output_unmasked': pred_tokens_cpu[sample_idx],
+                        'remasked_indices': remasked_by_sample[sample_idx]
+                    })
 
             tokens = remasked
             prev_min_wrongness = min_wrongness
         else:
             # Last iteration: no remasking
             if save_iterations:
-                iter_data['remasked_indices'] = []
-                iteration_data.append(iter_data)
+                tokens_cpu = tokens.cpu().tolist()
+                pred_tokens_cpu = pred_tokens.cpu().tolist()
+                for sample_idx in range(batch_size):
+                    samples_data[sample_idx].append({
+                        'iteration': iteration + 1,
+                        'input_masked': tokens_cpu[sample_idx],
+                        'output_unmasked': pred_tokens_cpu[sample_idx],
+                        'remasked_indices': []
+                    })
             tokens = pred_tokens
 
     if save_iterations:
-        return tokens, iteration_data
+        return tokens, samples_data
     return tokens
 
 
@@ -447,11 +463,11 @@ def main():
         output_data = {
             'generator': main_ckpt,
             'meta': meta_path,
-            'iterations': iteration_data
+            'samples': iteration_data
         }
         with open(args.save, 'w') as f:
             json.dump(output_data, f, indent=2)
-        print(f"Saved {len(iteration_data)} iterations")
+        print(f"Saved {len(iteration_data)} samples with {len(iteration_data[0]) if iteration_data else 0} iterations each")
 
     # Quality metrics
     judge_scores = None
