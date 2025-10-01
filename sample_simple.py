@@ -351,6 +351,7 @@ def main():
 
     # Load vocabulary/meta
     stoi, itos, meta_vocab_size, dataset_name, meta = load_vocabulary(checkpoint)
+    meta_path = os.path.join('data', dataset_name, 'meta.pkl')
     vocab_size = int(model.config.vocab_size)
     mask_token_id = meta.get('mask_token_id', vocab_size - 1)
     pad_token_id = meta.get('pad_token_id', None)
@@ -443,8 +444,13 @@ def main():
     # Save iteration data if requested
     if args.save is not None:
         print(f"\nSaving iteration data to {args.save}...")
+        output_data = {
+            'generator': main_ckpt,
+            'meta': meta_path,
+            'iterations': iteration_data
+        }
         with open(args.save, 'w') as f:
-            json.dump(iteration_data, f, indent=2)
+            json.dump(output_data, f, indent=2)
         print(f"Saved {len(iteration_data)} iterations")
 
     # Quality metrics
