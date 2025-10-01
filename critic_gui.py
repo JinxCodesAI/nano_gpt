@@ -66,6 +66,9 @@ class CriticGUI:
         ttk.Button(top_frame, text="Load Model", command=self.load_model).pack(side=tk.LEFT, padx=5)
         ttk.Button(top_frame, text="Load JSON Save", command=self.load_json_save).pack(side=tk.LEFT, padx=5)
 
+        self.close_json_btn = ttk.Button(top_frame, text="Close JSON Save", command=self.close_json_save)
+        # Don't pack yet - will be shown only in JSON mode
+
         # Navigation frame (hidden by default, shown in JSON mode)
         self.nav_frame = ttk.Frame(self.root, padding="10")
 
@@ -130,27 +133,27 @@ class CriticGUI:
         self.remask_btn = ttk.Button(button_frame, text="Remask", command=self.remask, state=tk.DISABLED)
         self.remask_btn.pack(side=tk.LEFT, padx=5)
         
-        # Threshold controls
-        threshold_frame = ttk.Frame(bottom_frame)
-        threshold_frame.pack(fill=tk.X, pady=5)
-        
-        ttk.Label(threshold_frame, text="Remask Threshold (%):").pack(side=tk.LEFT, padx=5)
-        
+        # Threshold controls (hidden in JSON mode)
+        self.threshold_frame = ttk.Frame(bottom_frame)
+        self.threshold_frame.pack(fill=tk.X, pady=5)
+
+        ttk.Label(self.threshold_frame, text="Remask Threshold (%):").pack(side=tk.LEFT, padx=5)
+
         self.threshold_var = tk.DoubleVar(value=30.0)
-        self.threshold_slider = ttk.Scale(threshold_frame, from_=0, to=100,
+        self.threshold_slider = ttk.Scale(self.threshold_frame, from_=0, to=100,
                                          variable=self.threshold_var, orient=tk.HORIZONTAL,
                                          length=300, command=self.on_threshold_change)
         self.threshold_slider.pack(side=tk.LEFT, padx=5)
-        
-        self.threshold_label = ttk.Label(threshold_frame, text="30.0%")
+
+        self.threshold_label = ttk.Label(self.threshold_frame, text="30.0%")
         self.threshold_label.pack(side=tk.LEFT, padx=5)
-        
-        ttk.Label(threshold_frame, text="Wrongness cutoff:").pack(side=tk.LEFT, padx=5)
-        self.wrongness_label = ttk.Label(threshold_frame, text="N/A", foreground="blue")
+
+        ttk.Label(self.threshold_frame, text="Wrongness cutoff:").pack(side=tk.LEFT, padx=5)
+        self.wrongness_label = ttk.Label(self.threshold_frame, text="N/A", foreground="blue")
         self.wrongness_label.pack(side=tk.LEFT, padx=5)
 
-        ttk.Label(threshold_frame, text="Tokens to remask:").pack(side=tk.LEFT, padx=5)
-        self.tokens_count_label = ttk.Label(threshold_frame, text="N/A", foreground="blue")
+        ttk.Label(self.threshold_frame, text="Tokens to remask:").pack(side=tk.LEFT, padx=5)
+        self.tokens_count_label = ttk.Label(self.threshold_frame, text="N/A", foreground="blue")
         self.tokens_count_label.pack(side=tk.LEFT, padx=5)
         
         # Status bar
@@ -293,8 +296,10 @@ class CriticGUI:
             model_name = Path(generator_path).name
             self.model_label.config(text=f"{model_name} (JSON) ✓", foreground="green")
 
-            # Show navigation frame
+            # Show navigation frame and close button, hide threshold frame
             self.nav_frame.pack(fill=tk.X, after=self.root.winfo_children()[0])
+            self.close_json_btn.pack(side=tk.LEFT, padx=5)
+            self.threshold_frame.pack_forget()
 
             # Update navigation labels
             num_samples = len(self.json_data['samples'])
@@ -312,6 +317,49 @@ class CriticGUI:
             traceback.print_exc()
             messagebox.showerror("Error Loading JSON", str(e))
             self.status_var.set("Error loading JSON")
+
+    def close_json_save(self):
+        """Close JSON save mode and return to normal operation"""
+        if not self.json_mode:
+            return
+
+        # Reset JSON mode state
+        self.json_mode = False
+        self.json_data = None
+        self.current_sample_idx = 0
+        self.current_iteration_idx = 0
+
+        # Hide navigation frame and close button
+        self.nav_frame.pack_forget()
+        self.close_json_btn.pack_forget()
+
+        # Show threshold frame
+        self.threshold_frame.pack(fill=tk.X, pady=5)
+
+        # Reset UI state
+        self.current_tokens = None
+        self.current_scores = None
+        self.workflow_state = 'unmask'
+
+        # Clear text widget
+        self.text_widget.config(state=tk.NORMAL)
+        self.text_widget.delete("1.0", tk.END)
+
+        # Clear all tags
+        for tag in self.text_widget.tag_names():
+            if tag.startswith("char_") or tag.startswith("mask_preview_"):
+                self.text_widget.tag_delete(tag)
+
+        # Insert sample text with masks
+        sample_text = "The [MASK][MASK][MASK][MASK][MASK] brown fox [MASK][MASK][MASK][MASK][MASK] over the lazy dog."
+        self.text_widget.insert("1.0", sample_text)
+
+        # Update button states
+        self.unmask_btn.config(state=tk.NORMAL)
+        self.score_btn.config(state=tk.DISABLED)
+        self.remask_btn.config(state=tk.DISABLED)
+
+        self.status_var.set("JSON save closed. Ready for normal operation.")
 
     def load_iteration_from_json(self):
         """Load and display the current sample/iteration from JSON data"""
