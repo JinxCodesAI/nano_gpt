@@ -1318,6 +1318,9 @@ class DiffusionExplorer:
                 print(f"🎯 Accuracy for this unmask step: {correct}/{num_masked} ({accuracy:.1f}%)")
                 print()
 
+                # Wait for user to observe unmasked result
+                self.wait_for_key("Press any key to continue to remasking step...")
+
                 # Remask step
                 self.print_header(f"Iteration {iteration}: Remasking Step")
 
