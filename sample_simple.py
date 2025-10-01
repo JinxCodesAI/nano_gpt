@@ -460,14 +460,22 @@ def main():
     # Save iteration data if requested
     if args.save is not None:
         print(f"\nSaving iteration data to {args.save}...")
+        # Convert samples_data (list of lists) to proper structure
+        samples_output = []
+        for sample_idx, sample_iterations in enumerate(iteration_data):
+            samples_output.append({
+                'sample_id': sample_idx,
+                'iterations': sample_iterations
+            })
+
         output_data = {
             'generator': main_ckpt,
             'meta': meta_path,
-            'samples': iteration_data
+            'samples': samples_output
         }
         with open(args.save, 'w') as f:
             json.dump(output_data, f, indent=2)
-        print(f"Saved {len(iteration_data)} samples with {len(iteration_data[0]) if iteration_data else 0} iterations each")
+        print(f"Saved {len(samples_output)} samples with {len(samples_output[0]['iterations']) if samples_output else 0} iterations each")
 
     # Quality metrics
     judge_scores = None
