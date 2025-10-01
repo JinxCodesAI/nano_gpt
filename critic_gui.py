@@ -143,19 +143,54 @@ class CriticGUI:
                 messagebox.showwarning("No Critic Head", 
                                       "This model does not have a critic head. Scoring will not be available.")
             
-            # Load vocabulary from same directory
+            # Load vocabulary - try multiple locations
             checkpoint_dir = Path(checkpoint_path).parent
-            meta_path = checkpoint_dir / 'meta.pkl'
-            
-            if not meta_path.exists():
-                # Try data directory
-                meta_path = Path('data') / 'meta.pkl'
-            
-            if meta_path.exists():
-                self.itos, self.stoi, _ = load_vocabulary(str(meta_path))
-            else:
-                messagebox.showerror("Error", f"Could not find meta.pkl in {checkpoint_dir} or data/")
-                return
+            meta_path = None
+
+            # Try 1: Same directory as checkpoint
+            candidate = checkpoint_dir / 'meta.pkl'
+            if candidate.exists():
+                meta_path = candidate
+
+            # Try 2: data/ subdirectory relative to checkpoint
+            if meta_path is None:
+                candidate = checkpoint_dir / 'data' / 'meta.pkl'
+                if candidate.exists():
+                    meta_path = candidate
+
+            # Try 3: data/ directory relative to script
+            if meta_path is None:
+                candidate = Path('data') / 'meta.pkl'
+                if candidate.exists():
+                    meta_path = candidate
+
+            # Try 4: Ask user to locate it
+            if meta_path is None:
+                response = messagebox.askyesno(
+                    "meta.pkl not found",
+                    f"Could not find meta.pkl automatically.\n\n"
+                    f"Searched:\n"
+                    f"  - {checkpoint_dir / 'meta.pkl'}\n"
+                    f"  - {checkpoint_dir / 'data' / 'meta.pkl'}\n"
+                    f"  - {Path('data') / 'meta.pkl'}\n\n"
+                    f"Would you like to select meta.pkl manually?"
+                )
+
+                if response:
+                    meta_file = filedialog.askopenfilename(
+                        title="Select meta.pkl",
+                        filetypes=[("Pickle files", "*.pkl"), ("All Files", "*.*")],
+                        initialdir=checkpoint_dir
+                    )
+                    if meta_file:
+                        meta_path = Path(meta_file)
+                    else:
+                        return
+                else:
+                    return
+
+            # Load vocabulary
+            self.itos, self.stoi, _ = load_vocabulary(str(meta_path))
             
             # Update UI
             model_name = Path(checkpoint_path).name
