@@ -199,3 +199,132 @@
 - Schedule customization supported via masking_ratios per-iteration values
 - Critic-guided remasking depends only on model configuration and artifacts provided by model.py
 
+
+
+### 17) Mode configuration: exact switches and knobs
+- Standard autoregressive mode (single forward per new token)
+  - Required: sampling_method='standard'
+  - Effective settings:
+    - Generation: max_new_tokens, std_temperature, top_k
+    - Prompt: start_text (string). If empty, each sample starts with a random single token.
+    - Batch: num_samples (same prompt replicated across batch)
+    - Unused/ignored in this mode: sequence_length, diffusion_iterations, start_ratio, end_ratio, randomness_strength, intelligent_remasking, remasking_model, temperature, top_p, repetition_penalty, repetition_window, schedule_type, masking_ratios.
+  - Implementation path: standard_generate() -> model.generate(...)
+
+- Diffusion iterative demasking mode (masked infill across fixed length)
+  - Required: sampling_method='diffusion'
+  - Required constraints: sequence_length <= model.config.block_size
+  - Core knobs:
+    - Iterations/schedule: diffusion_iterations, schedule_type ('linear'|'custom'), start_ratio, end_ratio, masking_ratios (when schedule_type='custom')
+    - Token sampling: temperature, top_p; repetition_penalty, repetition_window (applies to masked-position sampling only)
+    - Remasking control: randomness_strength (0..1), intelligent_remasking (bool), remasking_model (optional model)
+    - Seeding: seed_text, seed_placement in {PREFIX, RANDOM_PLACEMENT}
+  - Implementation path: diffusion_generate() -> predict_and_sample_tokens() -> apply_remasking_step() per iteration
+
+### 18) Low-level dataflow and tensor shapes (diffusion)
+- Initial state
+  - tokens: LongTensor (B=num_samples, T=sequence_length) filled with mask_token_id
+  - protected_mask: BoolTensor (B, T) all False; seed injection sets a contiguous True region
+- Iteration i = 0..N-1
+  1) Predict-and-sample masked positions
+     - dummy_targets = zeros_like(tokens); logits, _ = model(tokens, targets=dummy_targets)
+     - mask_positions = (tokens == mask_token_id)
+     - For each batch b:
+       - mask_indices = nonzero(mask_positions[b])
+       - masked_logits = logits[b, mask_indices, :]
+       - masked_logits adjustments:
+         - masked_logits[:, mask_token_id] = -inf
+         - if pad_token_id is not None: masked_logits[:, pad_token_id] = -inf
+         - if base_vocab_size is not None and vocab_size > base_vocab_size: masked_logits[:, base_vocab_size:] = -inf
+         - if masked_logits.shape[-1] > vocab_size: slice to [:, :vocab_size]
+       - repetition penalty (if repetition_penalty != 1.0): for each mask position, call apply_repetition_penalty(single_logits[1,1,V], tokens[b:b+1, :], penalty, window) and write back
+       - new_tokens = nucleus_sample(masked_logits, top_p=top_p, temperature=temperature)
+       - prediction_tokens[b, mask_indices] = new_tokens
+     - Return value used by caller: tokens := prediction_tokens; logits returned for remasking heuristics
+  2) Remasking for next iteration (skip after last)
+     - Compute mask_ratio for next iteration:
+       - If schedule_type == 'custom' and masking_ratios provided: mask_ratio = masking_ratios[i+1] or end_ratio if OOB
+       - Else linear_remasking_schedule(i+1, iterations, start_ratio, end_ratio)
+     - k = int(T * mask_ratio) tokens per sample will be masked for next iteration
+     - Build unmaskable = (prediction_tokens != mask_token_id) & ~protected_mask
+     - Strategy precedence in apply_remasking_step():
+       a) External remasking_model:
+          - logits_r, _ = remasking_model(prediction_tokens)
+          - confidence = logits_r[:,:,1] if last dim > 1 else logits_r.squeeze(-1)
+          - scores = -confidence; mask non-unmaskable to -1e9; blend with randomness via scores = (1-randStrength)*scores + randStrength*rand()
+          - top-k scores per row -> select mask positions; set to mask_token_id
+       b) Critic-guided remasking (requires model.config.add_critic_head True):
+          - critic_logits = model.critic_scores(prediction_tokens)  # shape (B,T)
+          - scores = critic_logits; same masking/blending/top-k as above
+       c) Intelligent remasking (requires intelligent_remasking True):
+          - If logits_from_predict available: probs = softmax(logits_from_predict, -1); p_taken = probs.gather(-1, prediction_tokens.unsqueeze(-1)).squeeze(-1); scores = 1 - p_taken
+          - Else fallback per-sample using base_model forward to compute uncertainty 1 - p(token)
+          - Same masking/blending/top-k
+       d) Random remasking: uniformly sample among unmaskable positions for k per row
+
+### 19) Seeding behavior
+- Tokenization: seed_ids = [stoi[c] for c in seed_text if c in stoi]
+- Placement:
+  - PREFIX: start_idx=0
+  - RANDOM_PLACEMENT: start_idx ~ Uniform{0..(T - len(seed_ids))}, clipped to 0 if seed longer than T (then truncated)
+- Protection: protected_mask[:, start_idx:start_idx+seed_len] = True to prevent remasking of seed span for all iterations
+
+### 20) Quality metrics configuration and mechanics
+- QualityMetric.NONE: skip evaluation
+- QualityMetric.SELF:
+  - calculate_selfconfidence_ratio(model, tokens, mask_token_id, device, ctx)
+  - Internals: logits over full sequence via dummy targets; probs=softmax; for each sample, compute avg log prob of non-mask tokens (exclude [MASK])
+- QualityMetric.JUDGE:
+  - judge_checkpoint_name must be provided; loaded via load_model_from_checkpoint(judge_path, device)
+  - Validation: judge_model.config.mode must equal ModelMode.SEQUENCE_SCORER
+  - Scoring: calculate_judge_scores(judge_model, tokens, device, ctx)
+    - If judge_model.config.cls_token_id is set, prepend CLS and truncate to judge block_size
+    - judge output is in [0,1]; score = 1 - evaluation
+  - Throughput accounting: judge_tokens_per_sample = min(sequence_len (+1 if CLS), judge_model.config.block_size)
+
+### 21) Inter-module dependencies (must be preserved)
+- sample.py -> model.py
+  - Expects GPTConfig, GPT, ModelMode
+  - Optional critic path requires GPT(config.add_critic_head=True) and GPT.critic_scores(idx) returning (B,T) logits
+  - load_model_from_checkpoint builds GPTConfig from checkpoint['model_args'] and loads state dict after stripping '_orig_mod.'
+- sample.py -> sample_utils.py
+  - Uses linear_remasking_schedule, nucleus_sample, predict_and_sample_tokens, apply_remasking_step, calculate_selfconfidence_ratio, calculate_judge_scores
+- sample_utils.py -> model contract
+  - model(tokens, targets=dummy) must return (logits, loss) where logits shape is (B,T,V)
+  - remasking_model(tokens) must return logits shaped (B,T,2) or (B,T,1)
+
+### 22) Error conditions and invariants to keep during refactor
+- If sampling_method not in {'diffusion','standard'}: raise ValueError
+- If judge metric selected but judge_checkpoint_name missing or judge file not found: raise
+- If judge model mode != SEQUENCE_SCORER: raise
+- If sequence_length > model.config.block_size: assert/raise in model forward; doc requires caller to set appropriately
+- If checkpoint missing or lacks 'model_args': raise
+- During critic-guided remasking inference: do not require pad/mask ids; critic_scores works solely from idx
+- In apply_remasking_step: never remask protected positions; never remask positions already equal to mask_token_id
+- In predict_and_sample_tokens: never sample [MASK] or [PAD] or special tokens beyond base_vocab_size
+- Scheduling: next-iteration mask ratio computed from iteration+1 (first remask happens after first prediction)
+
+### 23) Configuration checklists per mode
+- Standard
+  - sampling_method='standard'
+  - max_new_tokens set
+  - Optional: start_text, std_temperature, top_k
+  - Irrelevant: remasking config, diffusion-specific params
+- Diffusion
+  - sampling_method='diffusion'
+  - sequence_length <= model.config.block_size
+  - diffusion_iterations >= 1
+  - schedule_type in {'linear','custom'}; if 'custom', masking_ratios length must be diffusion_iterations
+  - temperature/top_p set; repetition_penalty/window as needed
+  - Choose ONE remasking strategy (external remasking_model takes precedence, then critic, then intelligent, else random)
+  - If using Judge metric: judge_checkpoint_name provided and judge model is SEQUENCE_SCORER
+
+### 24) End-to-end algorithm summaries
+- Standard: for step in 1..max_new_tokens: idx_cond = crop(idx); logits = model(idx_cond); sample next token with temperature/top_k; append; repeat.
+- Diffusion: initialize all [MASK] (+ seed); for i in 0..N-1: fill masked tokens via predict_and_sample_tokens; if i<N-1, compute next mask set via apply_remasking_step; after final iteration decode.
+
+### 25) Notes for maintainers
+- Do not change priority order of remasking strategies; it is relied upon by current behavior.
+- Maintain the protected seed mask semantics across refactors.
+- Keep predict_and_sample_tokens behavior of restricting sampling to base vocab and excluding [MASK]/[PAD].
+- Keep judge score definition as 1 - evaluation and batch everything.
