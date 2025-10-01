@@ -164,7 +164,23 @@ def diffusion_generate(
             masked_count = (tokens == mask_token_id).sum().item()
             total_tokens = tokens.numel()
             masked_ratio = masked_count / total_tokens
-            print(f"Iteration {iteration+1}/{iterations}: {masked_count}/{total_tokens} masked ({masked_ratio:.1%})")
+
+            # Calculate current ratio/threshold for display
+            if masking_ratios is not None and iteration < len(masking_ratios):
+                current_ratio = masking_ratios[iteration]
+            else:
+                from sample_utils import linear_remasking_schedule
+                current_ratio = linear_remasking_schedule(iteration, iterations, start_ratio, end_ratio)
+
+            # Display with threshold information for both modes
+            if schedule_mode == 'threshold':
+                # Threshold is inverted: ratio=0.95 means threshold=0.05
+                current_threshold = 1.0 - current_ratio
+                print(f"Iteration {iteration+1}/{iterations}: {masked_count}/{total_tokens} masked ({masked_ratio:.1%}), threshold={current_threshold:.3f}")
+            else:
+                # Ratio mode: show the ratio that will be used for next remasking
+                print(f"Iteration {iteration+1}/{iterations}: {masked_count}/{total_tokens} masked ({masked_ratio:.1%}), ratio={current_ratio:.3f}")
+
             if iteration in (0, iterations - 1):
                 sample_text = decode_fn(tokens[0])
                 preview = sample_text[:100] + ('...' if len(sample_text) > 100 else '')
