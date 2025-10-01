@@ -7,7 +7,7 @@ eval_iters = 50
 log_interval = 10
 
 # save checkpoints when validation improves
-always_save_checkpoint = False
+always_save_checkpoint = True
 
 wandb_log = True # override via command line if you like
 wandb_project = 'char-diffusion'
@@ -42,16 +42,15 @@ else:
     validation_stages = None
 
 gradient_accumulation_steps = 4
-batch_size = 128  # Slightly larger batch size for BERT training
+batch_size = 128  
 block_size = 1024 # Context size for masking
 
-# BERT training typically uses lower learning rates
 learning_rate = 5e-4
-max_iters = 10000
-lr_decay_iters = 10000
+max_iters = 6000
+lr_decay_iters = 6000
 min_lr = 5e-5
 beta2 = 0.99
-warmup_iters = 500  # More warmup for BERT
+warmup_iters = 500  
 
 # Model architecture - bidirectional for BERT
 n_layer = 6

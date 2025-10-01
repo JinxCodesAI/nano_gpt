@@ -36,7 +36,7 @@ except ImportError:
         HAS_KEYBOARD = False
 
 # Configuration
-MODEL_PATH = 'out-char-diffusion/ckpt_MLM_3750.pt'  # Hardcoded model path - change this as needed
+MODEL_PATH = 'out-char-diffusion/a40_3750_01_10.pt'  # Hardcoded model path - change this as needed
 DATA_DIR = 'data'
 DEVICE = 'cuda' if torch.cuda.is_available() else 'cpu'
 DTYPE = 'float16' if DEVICE == 'cuda' else 'float32'

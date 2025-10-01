@@ -9,7 +9,7 @@ wandb_run_name = 'sequence_scorer_lines_epoch_1'
 
 # Dataset configuration
 dataset = 'sequence_scorer'
-batch_size = 64
+batch_size = 8
 gradient_accumulation_steps = 2
 block_size = 1024
 eval_interval = 250
@@ -17,8 +17,8 @@ eval_iters = 10
 log_interval = 10
 
 # MLM model for synthetic text generation
-mlm_checkpoint_path = 'out-char-diffusion/7250_1.77_pad_no_entropy.pt'  # adjust to your MLM checkpoint
-init_from_checkpoint = 'out-char-diffusion/7250_1.77_pad_no_entropy.pt'
+mlm_checkpoint_path = 'out-char-diffusion/a40_3750_01_10.pt'  # adjust to your MLM checkpoint
+init_from_checkpoint = 'out-char-diffusion/a40_3750_01_10.pt'
 freeze_transformer = False
 unfreeze_at_iteration = 0
 cls_token_id = 66

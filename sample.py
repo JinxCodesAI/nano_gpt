@@ -30,7 +30,7 @@ generation_start_wall_time = None
 # Model loading
 init_from = 'resume'  # 'resume' to load from checkpoint
 out_dir = 'out-char-diffusion'
-checkpoint_name = 'a40_3750_01_10.pt'  # Main model checkpoint
+checkpoint_name = '7250_1.77_pad_no_entropy.pt'  # Main model checkpoint
 
 # Generation parameters
 num_samples = 16  # Number of samples to generate
