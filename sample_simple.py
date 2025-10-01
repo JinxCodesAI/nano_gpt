@@ -2,7 +2,9 @@
 Simplified diffusion sampling script with critic-guided remasking and linear schedule.
 - Supports LANGUAGE_MODEL checkpoints with critic head enabled (add_critic_head=True)
 - Supports Judge and Node Quality metrics
-- Uses linear schedule to decide how many tokens to re-mask; critic provides ordering
+- Supports two schedule modes:
+  * 'ratio' (default): Uses linear schedule to decide how many tokens to re-mask; critic provides ordering
+  * 'threshold': Masks all tokens with wrongness above threshold; finishes early if no tokens exceed threshold
 - Supports seed_text placement as prefix or random
 - Supports top-p sampling; no repetition penalty
 - Supports batch generation and special tokens [MASK] and [PAD]
@@ -125,6 +127,7 @@ def diffusion_generate(
     verbose: bool = False,
     show_progress: bool = True,
     ctx=None,
+    schedule_mode: str = 'ratio',
 ):
     device = next(model.parameters()).device
 
@@ -152,7 +155,8 @@ def diffusion_generate(
         print(f"  - Length: {total_length}")
         print(f"  - Iterations: {iterations}")
         print(f"  - Temperature: {temperature}, Top-p: {top_p}")
-        print("  - Using critic-guided remasking (linear schedule)")
+        schedule_desc = "threshold-based" if schedule_mode == 'threshold' else "ratio-based"
+        print(f"  - Using critic-guided remasking ({schedule_desc} schedule)")
         print("=" * 60)
 
     for iteration in range(iterations):
@@ -185,7 +189,7 @@ def diffusion_generate(
 
         # Step 2: Remask for next iteration (except last iteration)
         if iteration < iterations - 1:
-            tokens = apply_remasking_step(
+            remasked = apply_remasking_step(
                 tokens=tokens,
                 prediction_tokens=pred_tokens,
                 iteration=iteration,
@@ -203,7 +207,17 @@ def diffusion_generate(
                 verbose=verbose,
                 logits_from_predict=logits,
                 protected_mask=protected_mask,
+                schedule_mode=schedule_mode,
             )
+
+            # Check for early termination in threshold mode
+            if remasked is None:
+                if verbose or show_progress:
+                    print(f"  Early termination: no tokens exceed threshold")
+                tokens = pred_tokens
+                break
+
+            tokens = remasked
         else:
             tokens = pred_tokens
 
@@ -241,9 +255,11 @@ def main():
     parser.add_argument('--iterations', type=int, default=15, help='Number of diffusion iterations')
     parser.add_argument('--temperature', type=float, default=0.8, help='Sampling temperature')
     parser.add_argument('--top-p', type=float, default=1.0, help='Nucleus top-p (1.0 to disable)')
-    parser.add_argument('--start-ratio', type=float, default=0.95, help='Initial mask ratio for linear schedule')
-    parser.add_argument('--end-ratio', type=float, default=0.05, help='Final mask ratio for linear schedule')
-    parser.add_argument('--masking-ratios', type=str, default=None, help='Comma-separated custom ratios (overrides linear schedule)')
+    parser.add_argument('--schedule-mode', type=str, choices=['ratio', 'threshold'], default='ratio',
+                        help='Schedule mode: ratio (mask fixed percentage, default) or threshold (mask all above threshold)')
+    parser.add_argument('--start-ratio', type=float, default=0.95, help='Initial mask ratio/threshold for linear schedule')
+    parser.add_argument('--end-ratio', type=float, default=0.05, help='Final mask ratio/threshold for linear schedule')
+    parser.add_argument('--masking-ratios', type=str, default=None, help='Comma-separated custom ratios/thresholds (overrides linear schedule)')
     parser.add_argument('--randomness-strength', type=float, default=0.0, help='Blend randomization into critic ordering [0-1]')
 
     # Seed text and placement
@@ -331,7 +347,8 @@ def main():
     print(f"Seed: {seed}")
     print(f"Sequence length: {args.sequence_length}")
     print(f"Iterations: {iterations}")
-    print(f"Schedule: {'custom' if masking_ratios is not None else 'linear'} ({args.start_ratio:.1%} -> {args.end_ratio:.1%})")
+    schedule_type_str = 'custom' if masking_ratios is not None else 'linear'
+    print(f"Schedule: {schedule_type_str} {args.schedule_mode} ({args.start_ratio:.1%} -> {args.end_ratio:.1%})")
     print(f"Temperature: {args.temperature}, Top-p: {args.top_p}")
     print(f"Quality metric: {metric.value}")
     print("="*60)
@@ -360,6 +377,7 @@ def main():
                 verbose=args.verbose,
                 show_progress=not args.no_progress,
                 ctx=ctx,
+                schedule_mode=args.schedule_mode,
             )
 
     generation_time = time.time() - start_time
