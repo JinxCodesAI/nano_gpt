@@ -376,14 +376,23 @@ class CriticGUI:
 
             threshold_pct = self.threshold_var.get()
 
+            print(f"DEBUG: Remasking with threshold {threshold_pct}%")
+            print(f"DEBUG: current_tokens shape: {self.current_tokens.shape}")
+            print(f"DEBUG: current_scores shape: {self.current_scores.shape}")
+            print(f"DEBUG: mask_token_id: {self.metadata['mask_token_id']}")
+
             # Remask worst tokens
             remasked_tokens, worst_indices = remask_worst_tokens(
                 self.current_tokens,
                 self.current_scores,
                 self.metadata['mask_token_id'],
                 threshold_pct,
-                content_len=len(self.current_tokens)
+                content_len=len(self.current_tokens) if self.current_tokens.dim() == 1 else self.current_tokens.shape[1]
             )
+
+            print(f"DEBUG: remasked_tokens shape: {remasked_tokens.shape}")
+            print(f"DEBUG: worst_indices: {worst_indices}")
+            print(f"DEBUG: Number of [MASK] tokens in result: {(remasked_tokens == self.metadata['mask_token_id']).sum().item()}")
 
             # Store remasked tokens
             self.current_tokens = remasked_tokens
@@ -391,12 +400,15 @@ class CriticGUI:
 
             # Update text widget
             remasked_text = self.tokens_to_text(remasked_tokens)
+            print(f"DEBUG: remasked_text length: {len(remasked_text)}")
+            print(f"DEBUG: [MASK] count in text: {remasked_text.count('[MASK]')}")
+
             self.text_widget.delete("1.0", tk.END)
             self.text_widget.insert("1.0", remasked_text)
 
             # Clear coloring
             for tag in self.text_widget.tag_names():
-                if tag.startswith("char_"):
+                if tag.startswith("char_") or tag.startswith("mask_preview_"):
                     self.text_widget.tag_delete(tag)
 
             # Update workflow state
@@ -409,6 +421,8 @@ class CriticGUI:
             self.status_var.set(f"Remasked {num_remasked} tokens. Edit text or click Unmask to continue.")
 
         except Exception as e:
+            import traceback
+            traceback.print_exc()
             messagebox.showerror("Error", f"Remasking failed: {e}")
             self.status_var.set("Remasking failed")
     
