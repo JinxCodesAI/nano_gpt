@@ -5,11 +5,11 @@
 """Advanced configuration for sequence scoring dataset with stage-based generation"""
 wandb_log = True
 wandb_project = 'char-diffusion'
-wandb_run_name = 'sequence_scorer_lines_epoch_1'
+wandb_run_name = 'sequence_scorer_lines_critic'
 
 # Dataset configuration
 dataset = 'sequence_scorer'
-batch_size = 8
+batch_size = 64
 gradient_accumulation_steps = 2
 block_size = 1024
 eval_interval = 250
