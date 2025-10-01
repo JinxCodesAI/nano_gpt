@@ -1302,11 +1302,30 @@ class DiffusionExplorer:
                         # Clear mask for these positions
                         current_mask[0, masked_positions] = False
 
-                # Show unmasked result
+                # Show unmasked result with color coding
                 print(f"✅ Unmasking complete!")
-                unmasked_text = self.decode_tokens(current_tokens[0])
-                print(f"📄 Unmasked state:")
-                print(f"    {repr(unmasked_text)}")
+                print(f"📄 Unmasked state (🟢=correct 🔴=incorrect ⚪=original):")
+                print()
+
+                # Build colored output respecting newlines
+                colored_parts = []
+                was_masked_set = set(masked_positions.tolist())
+                for i in range(content_len):
+                    token_id = int(current_tokens[0, i].item())
+                    original_id = int(original_tokens_device[i].item())
+                    char = self.itos.get(token_id, f'[UNK:{token_id}]') if token_id < len(self.itos) else f'[UNK:{token_id}]'
+
+                    if i in was_masked_set:
+                        # This was masked and just predicted
+                        if token_id == original_id:
+                            colored_parts.append(f'\033[32m{char}\033[0m')  # Green = correct
+                        else:
+                            colored_parts.append(f'\033[31m{char}\033[0m')  # Red = incorrect
+                    else:
+                        # Original token (not masked)
+                        colored_parts.append(char)
+
+                print(''.join(colored_parts))
                 print()
 
                 # Calculate accuracy against original
@@ -1321,8 +1340,12 @@ class DiffusionExplorer:
                 # Wait for user to observe unmasked result
                 self.wait_for_key("Press any key to continue to remasking step...")
 
-                # Remask step
-                self.print_header(f"Iteration {iteration}: Remasking Step")
+                # Remask step - don't clear screen, just add separator
+                print()
+                print("=" * 80)
+                print(f" Iteration {iteration}: Remasking Step ".center(80))
+                print("=" * 80)
+                print()
 
                 print("Enter remasking threshold (% of tokens to remask, 0-100):")
                 print("  0 = Exit iterative loop")
@@ -1356,8 +1379,9 @@ class DiffusionExplorer:
                 content_probs = critic_probs[0, :content_len]
                 _, worst_indices = torch.topk(content_probs, k=num_to_remask, largest=True)
 
-                # Show which tokens will be remasked (color them red)
+                # Show which tokens will be remasked (color them red) - respect newlines
                 print(f"🔴 Tokens selected for remasking (highest critic scores):")
+                print()
                 remask_set = set(worst_indices.tolist())
                 colored_parts = []
                 for i in range(content_len):
