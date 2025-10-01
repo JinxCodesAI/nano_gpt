@@ -479,7 +479,8 @@ def apply_remasking_step(tokens, prediction_tokens, iteration, iterations, sched
         schedule_mode: 'ratio' (default, mask fixed percentage) or 'threshold' (mask all above threshold)
 
     Returns:
-        Remasked tokens (or None if threshold mode and no tokens to mask)
+        tuple: (remasked_tokens, min_wrongness) where min_wrongness is the minimum wrongness of masked tokens
+               Returns (None, None) if threshold mode and no tokens to mask
     """
     # Determine mask ratio/threshold for next iteration
     if schedule_type == 'custom' and masking_ratios is not None:
@@ -511,7 +512,7 @@ def apply_remasking_step(tokens, prediction_tokens, iteration, iterations, sched
     if schedule_mode == 'ratio':
         k = int(seq_len * mask_ratio)
         if k <= 0:
-            return prediction_tokens
+            return prediction_tokens, None
     else:
         # For threshold mode, k will be determined dynamically
         k = None
@@ -537,14 +538,16 @@ def apply_remasking_step(tokens, prediction_tokens, iteration, iterations, sched
             select = (wrongness_masked > threshold) & unmaskable
 
             if not select.any():
-                return None  # Signal early termination
+                return None, None  # Signal early termination
 
             remasked_tokens = prediction_tokens.clone()
             remasked_tokens[select] = mask_token_id
-            return remasked_tokens
+            min_wrongness = wrongness[select].min().item() if select.any() else None
+            return remasked_tokens, min_wrongness
         else:
             # Ratio mode: mask top-k tokens
             # Lower confidence => more likely to mask: score = -confidence
+            wrongness = 1.0 - torch.sigmoid(confidence)
             scores = -confidence
             scores = scores.masked_fill(~unmaskable, torch.finfo(scores.dtype).min)
             if randomness_strength > 0:
@@ -557,8 +560,9 @@ def apply_remasking_step(tokens, prediction_tokens, iteration, iterations, sched
                 select &= unmaskable
                 remasked_tokens = prediction_tokens.clone()
                 remasked_tokens[select] = mask_token_id
-                return remasked_tokens
-            return prediction_tokens
+                min_wrongness = wrongness[select].min().item() if select.any() else None
+                return remasked_tokens, min_wrongness
+            return prediction_tokens, None
 
     # Critic-guided remasking path: precedence after remasking_model and before intelligent_remasking
     if base_model is not None and getattr(getattr(base_model, 'config', object()), 'add_critic_head', False) and not intelligent_remasking:
@@ -579,11 +583,12 @@ def apply_remasking_step(tokens, prediction_tokens, iteration, iterations, sched
 
             # Check if any tokens need masking
             if not select.any():
-                return None  # Signal early termination
+                return None, None  # Signal early termination
 
             remasked_tokens = prediction_tokens.clone()
             remasked_tokens[select] = mask_token_id
-            return remasked_tokens
+            min_wrongness = wrongness_probs[select].min().item() if select.any() else None
+            return remasked_tokens, min_wrongness
         else:
             # Ratio mode: mask top-k tokens based on critic scores (logits)
             scores = critic_logits.clone()
@@ -598,8 +603,9 @@ def apply_remasking_step(tokens, prediction_tokens, iteration, iterations, sched
                 select &= unmaskable
                 remasked_tokens = prediction_tokens.clone()
                 remasked_tokens[select] = mask_token_id
-                return remasked_tokens
-            return prediction_tokens
+                min_wrongness = wrongness_probs[select].min().item() if select.any() else None
+                return remasked_tokens, min_wrongness
+            return prediction_tokens, None
 
     if intelligent_remasking:
         if logits_from_predict is None:
@@ -628,11 +634,12 @@ def apply_remasking_step(tokens, prediction_tokens, iteration, iterations, sched
             select = (uncertainty_masked > threshold) & unmaskable
 
             if not select.any():
-                return None  # Signal early termination
+                return None, None  # Signal early termination
 
             remasked_tokens = prediction_tokens.clone()
             remasked_tokens[select] = mask_token_id
-            return remasked_tokens
+            min_wrongness = uncertainty[select].min().item() if select.any() else None
+            return remasked_tokens, min_wrongness
         else:
             # Ratio mode: mask top-k tokens
             scores = uncertainty.masked_fill(~unmaskable, torch.finfo(uncertainty.dtype).min)
@@ -646,15 +653,16 @@ def apply_remasking_step(tokens, prediction_tokens, iteration, iterations, sched
                 select &= unmaskable
                 remasked_tokens = prediction_tokens.clone()
                 remasked_tokens[select] = mask_token_id
-                return remasked_tokens
-            return prediction_tokens
+                min_wrongness = uncertainty[select].min().item() if select.any() else None
+                return remasked_tokens, min_wrongness
+            return prediction_tokens, None
 
     # Random remasking fallback (threshold mode not supported here)
     if schedule_mode == 'threshold':
         # For threshold mode without critic/intelligent remasking, fall back to ratio mode
         k = int(seq_len * mask_ratio)
         if k <= 0:
-            return prediction_tokens
+            return prediction_tokens, None
 
     remasked_tokens = apply_remasking(
         tokens=prediction_tokens,
@@ -666,7 +674,7 @@ def apply_remasking_step(tokens, prediction_tokens, iteration, iterations, sched
         intelligent_remasking=False,
         protected_mask=protected_mask,
     )
-    return remasked_tokens
+    return remasked_tokens, None
 
 
 def build_critic_artifacts_from_logits(idx: torch.Tensor,

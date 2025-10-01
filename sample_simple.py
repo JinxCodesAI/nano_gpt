@@ -159,6 +159,9 @@ def diffusion_generate(
         print(f"  - Using critic-guided remasking ({schedule_desc} schedule)")
         print("=" * 60)
 
+    # Track min_wrongness from previous iteration for display
+    prev_min_wrongness = None
+
     for iteration in range(iterations):
         if verbose or show_progress:
             masked_count = (tokens == mask_token_id).sum().item()
@@ -172,14 +175,16 @@ def diffusion_generate(
                 from sample_utils import linear_remasking_schedule
                 current_ratio = linear_remasking_schedule(iteration, iterations, start_ratio, end_ratio)
 
-            # Display with threshold information for both modes
             if schedule_mode == 'threshold':
                 # Threshold is inverted: ratio=0.95 means threshold=0.05
                 current_threshold = 1.0 - current_ratio
                 print(f"Iteration {iteration+1}/{iterations}: {masked_count}/{total_tokens} masked ({masked_ratio:.1%}), threshold={current_threshold:.3f}")
             else:
-                # Ratio mode: show the ratio that will be used for next remasking
-                print(f"Iteration {iteration+1}/{iterations}: {masked_count}/{total_tokens} masked ({masked_ratio:.1%}), ratio={current_ratio:.3f}")
+                # Ratio mode: show actual wrongness threshold from previous remasking
+                if prev_min_wrongness is not None:
+                    print(f"Iteration {iteration+1}/{iterations}: {masked_count}/{total_tokens} masked ({masked_ratio:.1%}), threshold={prev_min_wrongness:.3f}")
+                else:
+                    print(f"Iteration {iteration+1}/{iterations}: {masked_count}/{total_tokens} masked ({masked_ratio:.1%})")
 
             if iteration in (0, iterations - 1):
                 sample_text = decode_fn(tokens[0])
@@ -205,7 +210,7 @@ def diffusion_generate(
 
         # Step 2: Remask for next iteration (except last iteration)
         if iteration < iterations - 1:
-            remasked = apply_remasking_step(
+            remasked, min_wrongness = apply_remasking_step(
                 tokens=tokens,
                 prediction_tokens=pred_tokens,
                 iteration=iteration,
@@ -234,6 +239,7 @@ def diffusion_generate(
                 break
 
             tokens = remasked
+            prev_min_wrongness = min_wrongness
         else:
             tokens = pred_tokens
 
