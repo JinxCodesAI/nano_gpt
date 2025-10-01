@@ -59,7 +59,7 @@ temperature = 0.8  # Temperature for sampling
 top_p = 1.0  # Nucleus sampling parameter (1.0 = disabled)
 repetition_penalty = 1.0  # Penalty for repeating recent tokens
 repetition_window = 0  # Look back window for repetition penalty
-diffusion_iterations = 30  # Number of demasking iterations
+diffusion_iterations = 15  # Number of demasking iterations
 start_ratio = 0.95  # Initial ratio of tokens to remask (95%)
 end_ratio = 0.05   # Final ratio of tokens to remask (5%)
 
@@ -577,7 +577,9 @@ if sampling_method == 'diffusion' and getattr(getattr(model, 'config', object())
         if _s.numel() == 0:
             _per_list.append(torch.tensor([float('nan'), float('nan'), float('nan')], device='cpu'))
         else:
-            _per_list.append(torch.quantile(_s.float(), _q).cpu())
+            # Convert logits to probabilities before percentile computation
+            _prob = torch.sigmoid(_s.float())
+            _per_list.append(torch.quantile(_prob, _q).cpu())
     critic_percentiles = torch.stack(_per_list, dim=0)
 
 # Display results
@@ -602,7 +604,7 @@ for i in range(num_samples):
         # Critic token score percentiles (if computed)
         if 'critic_percentiles' in locals() and critic_percentiles is not None:
             p10, p50, p90 = [float(x) for x in critic_percentiles[i].tolist()]
-            print(f"Critic scores p10/median/p90: {p10:.4f} / {p50:.4f} / {p90:.4f}")
+            print(f"Critic probabilities p10/median/p90: {p10:.4f} / {p50:.4f} / {p90:.4f}")
 
     print(f"{'─'*40}")
 
