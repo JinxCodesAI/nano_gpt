@@ -104,9 +104,9 @@ class CriticGUI:
         ttk.Label(threshold_frame, text="Remask Threshold (%):").pack(side=tk.LEFT, padx=5)
         
         self.threshold_var = tk.DoubleVar(value=30.0)
-        self.threshold_slider = ttk.Scale(threshold_frame, from_=0, to=100, 
+        self.threshold_slider = ttk.Scale(threshold_frame, from_=0, to=100,
                                          variable=self.threshold_var, orient=tk.HORIZONTAL,
-                                         length=300, command=self.update_wrongness_display)
+                                         length=300, command=self.on_threshold_change)
         self.threshold_slider.pack(side=tk.LEFT, padx=5)
         
         self.threshold_label = ttk.Label(threshold_frame, text="30.0%")
@@ -365,13 +365,13 @@ class CriticGUI:
         if self.model is None or self.current_tokens is None or self.current_scores is None:
             messagebox.showerror("Error", "No scores available for remasking")
             return
-        
+
         try:
             self.status_var.set("Remasking...")
             self.root.update()
-            
+
             threshold_pct = self.threshold_var.get()
-            
+
             # Remask worst tokens
             remasked_tokens, worst_indices = remask_worst_tokens(
                 self.current_tokens,
@@ -380,41 +380,122 @@ class CriticGUI:
                 threshold_pct,
                 content_len=len(self.current_tokens)
             )
-            
+
+            # Store remasked tokens
+            self.current_tokens = remasked_tokens
+            self.current_scores = None
+
             # Update text widget
             remasked_text = self.tokens_to_text(remasked_tokens)
             self.text_widget.delete("1.0", tk.END)
             self.text_widget.insert("1.0", remasked_text)
-            
+
             # Clear coloring
             for tag in self.text_widget.tag_names():
                 if tag.startswith("char_"):
                     self.text_widget.tag_delete(tag)
-            
+
             # Update workflow state
             self.workflow_state = 'unmask'
             self.remask_btn.config(state=tk.DISABLED)
             self.unmask_btn.config(state=tk.NORMAL)
             self.text_widget.config(state=tk.NORMAL)
-            
+
             num_remasked = len(worst_indices)
             self.status_var.set(f"Remasked {num_remasked} tokens. Edit text or click Unmask to continue.")
-            
+
         except Exception as e:
             messagebox.showerror("Error", f"Remasking failed: {e}")
             self.status_var.set("Remasking failed")
     
+    def on_threshold_change(self, *args):
+        """Handle threshold slider change - update display and preview"""
+        self.update_wrongness_display()
+
+        # If in remask state, preview which tokens will be masked
+        if self.workflow_state == 'remask' and self.current_scores is not None:
+            self.preview_remask()
+
+    def preview_remask(self):
+        """Preview which tokens will be masked at current threshold"""
+        try:
+            threshold_pct = self.threshold_var.get()
+
+            # Calculate which tokens would be remasked
+            scores_np = self.current_scores.cpu().numpy()
+            num_to_remask = int((threshold_pct / 100.0) * len(scores_np))
+            num_to_remask = max(1, min(num_to_remask, len(scores_np)))
+
+            # Get indices of worst tokens
+            worst_indices = np.argsort(scores_np)[::-1][:num_to_remask]
+            worst_set = set(worst_indices)
+
+            # Clear existing coloring
+            for tag in self.text_widget.tag_names():
+                if tag.startswith("char_") or tag.startswith("mask_preview_"):
+                    self.text_widget.tag_delete(tag)
+
+            # Get current text
+            text = self.text_widget.get("1.0", tk.END).strip()
+
+            # Build new display with [MASK] preview
+            new_text_parts = []
+            for i, char in enumerate(text):
+                if i >= len(scores_np):
+                    new_text_parts.append(char)
+                elif i in worst_set:
+                    new_text_parts.append('[MASK]')
+                else:
+                    new_text_parts.append(char)
+
+            # Update text widget
+            self.text_widget.delete("1.0", tk.END)
+
+            # Insert character by character with coloring
+            char_pos = 0
+            text_pos = 0
+            for i, char in enumerate(text):
+                if i >= len(scores_np):
+                    self.text_widget.insert(tk.END, char)
+                    continue
+
+                if i in worst_set:
+                    # Insert [MASK] with red background
+                    start_idx = self.text_widget.index(tk.END + "-1c")
+                    self.text_widget.insert(tk.END, '[MASK]')
+                    end_idx = self.text_widget.index(tk.END + "-1c")
+                    tag_name = f"mask_preview_{i}"
+                    self.text_widget.tag_add(tag_name, start_idx, end_idx)
+                    self.text_widget.tag_configure(tag_name, background="#FFB6C1")  # Light red
+                else:
+                    # Insert original character with gradient color
+                    score = float(scores_np[i])
+                    red = int(255 * score)
+                    green = int(255 * (1 - score))
+                    color = f'#{red:02x}{green:02x}00'
+
+                    start_idx = self.text_widget.index(tk.END + "-1c")
+                    self.text_widget.insert(tk.END, char)
+                    end_idx = self.text_widget.index(tk.END + "-1c")
+                    tag_name = f"char_{i}"
+                    self.text_widget.tag_add(tag_name, start_idx, end_idx)
+                    self.text_widget.tag_configure(tag_name, background=color)
+
+        except Exception as e:
+            # Silently fail for preview - don't interrupt user
+            pass
+
     def update_wrongness_display(self, *args):
         """Update the wrongness cutoff display based on threshold"""
         threshold_pct = self.threshold_var.get()
         self.threshold_label.config(text=f"{threshold_pct:.1f}%")
-        
+
         if self.current_scores is not None:
             # Calculate wrongness cutoff (score value at threshold percentile)
             scores_np = self.current_scores.cpu().numpy()
             num_to_remask = int((threshold_pct / 100.0) * len(scores_np))
             num_to_remask = max(1, min(num_to_remask, len(scores_np)))
-            
+
             # Get the score at the cutoff
             sorted_scores = np.sort(scores_np)[::-1]  # Descending
             if num_to_remask <= len(sorted_scores):
