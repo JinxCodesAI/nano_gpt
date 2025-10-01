@@ -331,7 +331,7 @@ def main():
     print(f"Seed: {seed}")
     print(f"Sequence length: {args.sequence_length}")
     print(f"Iterations: {iterations}")
-    print(f"Schedule: {'custom' if masking_ratios is not None else 'linear'} ({args.start_ratio:.1%}  {args.end_ratio:.1%})")
+    print(f"Schedule: {'custom' if masking_ratios is not None else 'linear'} ({args.start_ratio:.1%} -> {args.end_ratio:.1%})")
     print(f"Temperature: {args.temperature}, Top-p: {args.top_p}")
     print(f"Quality metric: {metric.value}")
     print("="*60)
