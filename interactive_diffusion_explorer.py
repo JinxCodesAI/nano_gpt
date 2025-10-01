@@ -1153,9 +1153,14 @@ class DiffusionExplorer:
             masked_positions = mask_full[0].nonzero(as_tuple=True)[0].tolist()
             print(f"\n🎯 Masked positions: {masked_positions}")
 
+            # Check if critic head is available
+            has_critic = getattr(self.model.config, 'add_critic_head', False) and hasattr(self.model, 'critic_head')
+
             # Option to unmask with model
             print(f"\nOptions:")
             print(f"  U - Run model unmasking on this sample")
+            if has_critic:
+                print(f"  C - Critic-guided iterative unmasking (unmask/remask loop)")
             print(f"  Any other key - Return to navigation")
 
             key = self.wait_for_key("Enter choice: ").lower()
@@ -1163,9 +1168,9 @@ class DiffusionExplorer:
             if key == 'u':
                 self.unmask_generated_sample(masked_x_full, mask_full, original_sample_tokens)
                 return
-
-            if key == 'u':
-                self.unmask_generated_sample(masked_x, mask, original_sample_tokens)
+            elif key == 'c' and has_critic:
+                self.critic_iterative_unmasking(masked_x_full, mask_full, original_sample_tokens, content_len)
+                return
 
         except Exception as e:
             print(f"❌ Error generating test sample: {e}")
@@ -1239,6 +1244,146 @@ class DiffusionExplorer:
 
         except Exception as e:
             print(f"❌ Error during unmasking: {e}")
+
+        self.wait_for_key()
+
+    def critic_iterative_unmasking(self, masked_tokens: torch.Tensor, mask: torch.Tensor, original_tokens: torch.Tensor, content_len: int):
+        """Iterative unmask/remask loop guided by critic scores"""
+        self.print_header("Critic-Guided Iterative Unmasking")
+
+        try:
+            # Work on device
+            current_tokens = masked_tokens.clone().to(DEVICE)
+            current_mask = mask.clone()
+            original_tokens_device = original_tokens.to(DEVICE)
+
+            iteration = 0
+            temperature = 0.8
+
+            while True:
+                iteration += 1
+                self.print_header(f"Iteration {iteration}: Unmasking Step")
+
+                # Count current masked positions
+                masked_positions = current_mask[0].nonzero(as_tuple=True)[0]
+                num_masked = len(masked_positions)
+
+                if num_masked == 0:
+                    print("✅ No masked tokens remaining!")
+                    self.wait_for_key()
+                    break
+
+                print(f"🎭 Currently masked tokens: {num_masked}")
+                print(f"📝 Current state:")
+                current_text = self.decode_tokens(current_tokens[0])
+                print(f"    {repr(current_text)}")
+                print()
+
+                # Unmask step: fill masked positions with model predictions
+                with torch.no_grad():
+                    with self.ctx:
+                        dummy_targets = torch.zeros_like(current_tokens)
+                        model_output = self.model(current_tokens, targets=dummy_targets)
+
+                        if isinstance(model_output, tuple):
+                            logits = model_output[0]
+                        else:
+                            logits = model_output
+
+                        scaled_logits = logits / temperature
+                        probs = torch.softmax(scaled_logits, dim=-1)
+
+                        # Sample predictions for masked positions
+                        for pos in masked_positions:
+                            pos_probs = probs[0, pos, :self.vocab_size-1]
+                            predicted_token = torch.multinomial(pos_probs, 1).item()
+                            current_tokens[0, pos] = predicted_token
+
+                        # Clear mask for these positions
+                        current_mask[0, masked_positions] = False
+
+                # Show unmasked result
+                print(f"✅ Unmasking complete!")
+                unmasked_text = self.decode_tokens(current_tokens[0])
+                print(f"📄 Unmasked state:")
+                print(f"    {repr(unmasked_text)}")
+                print()
+
+                # Calculate accuracy against original
+                correct = 0
+                for pos in masked_positions:
+                    if current_tokens[0, pos].item() == original_tokens_device[pos].item():
+                        correct += 1
+                accuracy = (correct / max(num_masked, 1)) * 100
+                print(f"🎯 Accuracy for this unmask step: {correct}/{num_masked} ({accuracy:.1f}%)")
+                print()
+
+                # Remask step
+                self.print_header(f"Iteration {iteration}: Remasking Step")
+
+                print("Enter remasking threshold (% of tokens to remask, 0-100):")
+                print("  0 = Exit iterative loop")
+                threshold_input = input("Threshold % (default 30): ").strip()
+
+                if threshold_input == '0':
+                    print("Exiting iterative unmasking.")
+                    self.wait_for_key()
+                    break
+
+                try:
+                    threshold_pct = float(threshold_input) if threshold_input else 30.0
+                    threshold_pct = max(0.0, min(100.0, threshold_pct))
+                except ValueError:
+                    threshold_pct = 30.0
+
+                # Calculate number of tokens to remask (only within content_len)
+                num_to_remask = int((threshold_pct / 100.0) * content_len)
+                num_to_remask = max(1, min(num_to_remask, content_len))
+
+                print(f"🔄 Remasking {num_to_remask} tokens (threshold: {threshold_pct:.1f}%)")
+                print()
+
+                # Use critic to score all content tokens
+                with torch.no_grad():
+                    with self.ctx:
+                        critic_logits = self.model.critic_scores(current_tokens)
+                        critic_probs = torch.sigmoid(critic_logits)
+
+                # Select top-k worst tokens (highest critic scores) within content
+                content_probs = critic_probs[0, :content_len]
+                _, worst_indices = torch.topk(content_probs, k=num_to_remask, largest=True)
+
+                # Show which tokens will be remasked (color them red)
+                print(f"🔴 Tokens selected for remasking (highest critic scores):")
+                remask_set = set(worst_indices.tolist())
+                colored_parts = []
+                for i in range(content_len):
+                    token_id = int(current_tokens[0, i].item())
+                    char = self.itos.get(token_id, f'[UNK:{token_id}]') if token_id < len(self.itos) else f'[UNK:{token_id}]'
+                    if i in remask_set:
+                        colored_parts.append(f'\033[31m{char}\033[0m')  # Red
+                    else:
+                        colored_parts.append(char)
+                print(''.join(colored_parts))
+                print()
+                print(f"    \033[31m🔴 = Will be remasked\033[0m  ⚪ = Kept")
+                print()
+
+                # Wait for user to observe
+                self.wait_for_key("Press any key to apply remasking and continue to next iteration...")
+
+                # Apply remasking
+                for idx in worst_indices:
+                    current_tokens[0, idx] = self.mask_token_id
+                    current_mask[0, idx] = True
+
+                print(f"✅ Remasked {num_to_remask} tokens")
+                print()
+
+        except Exception as e:
+            print(f"❌ Error during critic iterative unmasking: {e}")
+            import traceback
+            traceback.print_exc()
 
         self.wait_for_key()
 
