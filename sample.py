@@ -30,7 +30,7 @@ generation_start_wall_time = None
 # Model loading
 init_from = 'resume'  # 'resume' to load from checkpoint
 out_dir = 'out-char-diffusion'
-checkpoint_name = 'MLM_judge_flipped_from_start_7750.pt'  # Main model checkpoint
+checkpoint_name = 'a40_3750_01_10.pt'  # Main model checkpoint
 
 # Generation parameters
 num_samples = 16  # Number of samples to generate
@@ -44,7 +44,7 @@ compile = False  # Use PyTorch 2.0 compilation (disabled due to triton issues)
 # Sampling method
 sampling_method = 'diffusion'  # 'diffusion' or 'standard'
 
-seed_text = "GREY:\nHere come the lords of Buckingham and Derby.\n\nBUCKINGHAM:\nGood time of day unto your royal grace!"
+seed_text = "Be or not to be, that is the question."
 
 class SeedPlacement(Enum):
     PREFIX = 'prefix'
@@ -64,7 +64,7 @@ start_ratio = 0.95  # Initial ratio of tokens to remask (95%)
 end_ratio = 0.05   # Final ratio of tokens to remask (5%)
 
 # Remasking parameters
-randomness_strength = 0.4  # Balance between random (1.0) and model-guided (0.0) remasking
+randomness_strength = 0.2  # Balance between random (1.0) and model-guided (0.0) remasking
 intelligent_remasking = False  # Enable self-confidence based remasking when no remasking model
 
 # Quality metric configuration
@@ -557,6 +557,29 @@ with torch.no_grad():
 
 generation_time = time.time() - start_time
 
+# Compute critic percentiles per sample if critic head is available
+critic_percentiles = None
+if sampling_method == 'diffusion' and getattr(getattr(model, 'config', object()), 'add_critic_head', False):
+    with torch.no_grad():
+        if ctx is not None:
+            with ctx:
+                _critic_scores = model.critic_scores(generated_tokens)
+        else:
+            _critic_scores = model.critic_scores(generated_tokens)
+    # Exclude PAD and MASK tokens from percentile computation
+    _valid = (generated_tokens != mask_token_id)
+    if pad_token_id is not None:
+        _valid = _valid & (generated_tokens != pad_token_id)
+    _q = torch.tensor([0.1, 0.5, 0.9], device=generated_tokens.device, dtype=torch.float32)
+    _per_list = []
+    for b in range(generated_tokens.size(0)):
+        _s = _critic_scores[b][_valid[b]]
+        if _s.numel() == 0:
+            _per_list.append(torch.tensor([float('nan'), float('nan'), float('nan')], device='cpu'))
+        else:
+            _per_list.append(torch.quantile(_s.float(), _q).cpu())
+    critic_percentiles = torch.stack(_per_list, dim=0)
+
 # Display results
 print(f"\n{'='*60}")
 print(f"RESULTS")
@@ -576,6 +599,11 @@ for i in range(num_samples):
         elif metric == QualityMetric.JUDGE and 'judge_scores' in locals() and judge_scores is not None:
             score = float(judge_scores[i].item()) if hasattr(judge_scores, 'shape') else float(judge_scores[i])
             print(f"Quality score (Judge): {score:.4f}")
+        # Critic token score percentiles (if computed)
+        if 'critic_percentiles' in locals() and critic_percentiles is not None:
+            p10, p50, p90 = [float(x) for x in critic_percentiles[i].tolist()]
+            print(f"Critic scores p10/median/p90: {p10:.4f} / {p50:.4f} / {p90:.4f}")
+
     print(f"{'─'*40}")
 
     sample_text = decode(generated_tokens[i])
