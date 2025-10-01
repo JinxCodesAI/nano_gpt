@@ -115,6 +115,10 @@ class CriticGUI:
         ttk.Label(threshold_frame, text="Wrongness cutoff:").pack(side=tk.LEFT, padx=5)
         self.wrongness_label = ttk.Label(threshold_frame, text="N/A", foreground="blue")
         self.wrongness_label.pack(side=tk.LEFT, padx=5)
+
+        ttk.Label(threshold_frame, text="Tokens to remask:").pack(side=tk.LEFT, padx=5)
+        self.tokens_count_label = ttk.Label(threshold_frame, text="N/A", foreground="blue")
+        self.tokens_count_label.pack(side=tk.LEFT, padx=5)
         
         # Status bar
         self.status_var = tk.StringVar(value="Load a model to begin")
@@ -496,6 +500,9 @@ class CriticGUI:
             num_to_remask = int((threshold_pct / 100.0) * len(scores_np))
             num_to_remask = max(1, min(num_to_remask, len(scores_np)))
 
+            # Update token count
+            self.tokens_count_label.config(text=f"{num_to_remask} / {len(scores_np)}")
+
             # Get the score at the cutoff
             sorted_scores = np.sort(scores_np)[::-1]  # Descending
             if num_to_remask <= len(sorted_scores):
@@ -505,6 +512,7 @@ class CriticGUI:
                 self.wrongness_label.config(text="N/A")
         else:
             self.wrongness_label.config(text="N/A")
+            self.tokens_count_label.config(text="N/A")
 
 
 def main():
