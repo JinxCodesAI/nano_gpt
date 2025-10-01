@@ -12,6 +12,7 @@ import tkinter as tk
 from tkinter import ttk, filedialog, messagebox
 from pathlib import Path
 import re
+import json
 
 import torch
 import numpy as np
@@ -43,7 +44,13 @@ class CriticGUI:
         self.current_tokens = None
         self.current_scores = None
         self.workflow_state = 'generate'  # generate, unmask, score, remask
-        
+
+        # JSON save mode state
+        self.json_mode = False
+        self.json_data = None
+        self.current_sample_idx = 0
+        self.current_iteration_idx = 0
+
         self.setup_ui()
         
     def setup_ui(self):
@@ -51,12 +58,38 @@ class CriticGUI:
         # Top frame: Model loading
         top_frame = ttk.Frame(self.root, padding="10")
         top_frame.pack(fill=tk.X)
-        
+
         ttk.Label(top_frame, text="Model:").pack(side=tk.LEFT, padx=5)
         self.model_label = ttk.Label(top_frame, text="No model loaded", foreground="red")
         self.model_label.pack(side=tk.LEFT, padx=5)
-        
+
         ttk.Button(top_frame, text="Load Model", command=self.load_model).pack(side=tk.LEFT, padx=5)
+        ttk.Button(top_frame, text="Load JSON Save", command=self.load_json_save).pack(side=tk.LEFT, padx=5)
+
+        # Navigation frame (hidden by default, shown in JSON mode)
+        self.nav_frame = ttk.Frame(self.root, padding="10")
+
+        ttk.Label(self.nav_frame, text="Sample:").pack(side=tk.LEFT, padx=5)
+        self.sample_prev_btn = ttk.Button(self.nav_frame, text="◀", command=self.prev_sample, width=3)
+        self.sample_prev_btn.pack(side=tk.LEFT, padx=2)
+
+        self.sample_label = ttk.Label(self.nav_frame, text="0 / 0", width=10)
+        self.sample_label.pack(side=tk.LEFT, padx=5)
+
+        self.sample_next_btn = ttk.Button(self.nav_frame, text="▶", command=self.next_sample, width=3)
+        self.sample_next_btn.pack(side=tk.LEFT, padx=2)
+
+        ttk.Separator(self.nav_frame, orient=tk.VERTICAL).pack(side=tk.LEFT, fill=tk.Y, padx=10)
+
+        ttk.Label(self.nav_frame, text="Iteration:").pack(side=tk.LEFT, padx=5)
+        self.iter_prev_btn = ttk.Button(self.nav_frame, text="◀", command=self.prev_iteration, width=3)
+        self.iter_prev_btn.pack(side=tk.LEFT, padx=2)
+
+        self.iter_label = ttk.Label(self.nav_frame, text="0 / 0", width=10)
+        self.iter_label.pack(side=tk.LEFT, padx=5)
+
+        self.iter_next_btn = ttk.Button(self.nav_frame, text="▶", command=self.next_iteration, width=3)
+        self.iter_next_btn.pack(side=tk.LEFT, padx=2)
         
         # Middle frame: Text editor with scrollbar
         middle_frame = ttk.Frame(self.root, padding="10")
@@ -121,7 +154,7 @@ class CriticGUI:
         self.tokens_count_label.pack(side=tk.LEFT, padx=5)
         
         # Status bar
-        self.status_var = tk.StringVar(value="Load a model to begin")
+        self.status_var = tk.StringVar(value="Load a model or JSON save to begin")
         status_bar = ttk.Label(self.root, textvariable=self.status_var, relief=tk.SUNKEN, anchor=tk.W)
         status_bar.pack(fill=tk.X, side=tk.BOTTOM)
         
@@ -214,7 +247,166 @@ class CriticGUI:
         except Exception as e:
             messagebox.showerror("Error Loading Model", str(e))
             self.status_var.set("Error loading model")
-    
+
+    def load_json_save(self):
+        """Load a JSON save file with precomputed iterations"""
+        json_path = filedialog.askopenfilename(
+            title="Select JSON Save File",
+            filetypes=[("JSON Files", "*.json"), ("All Files", "*.*")]
+        )
+
+        if not json_path:
+            return
+
+        try:
+            self.status_var.set("Loading JSON save...")
+            self.root.update()
+
+            # Load JSON data
+            with open(json_path, 'r') as f:
+                self.json_data = json.load(f)
+
+            # Extract paths
+            generator_path = self.json_data['generator']
+            meta_path = self.json_data['meta']
+
+            # Load model
+            if not os.path.exists(generator_path):
+                messagebox.showerror("Error", f"Generator model not found: {generator_path}")
+                return
+
+            self.model, self.metadata = load_model_checkpoint(generator_path, self.device, self.dtype)
+
+            # Load vocabulary
+            if not os.path.exists(meta_path):
+                messagebox.showerror("Error", f"Meta file not found: {meta_path}")
+                return
+
+            self.itos, self.stoi, _ = load_vocabulary(meta_path)
+
+            # Enter JSON mode
+            self.json_mode = True
+            self.current_sample_idx = 0
+            self.current_iteration_idx = 0
+
+            # Update UI
+            model_name = Path(generator_path).name
+            self.model_label.config(text=f"{model_name} (JSON) ✓", foreground="green")
+
+            # Show navigation frame
+            self.nav_frame.pack(fill=tk.X, after=self.root.winfo_children()[0])
+
+            # Update navigation labels
+            num_samples = len(self.json_data['samples'])
+            num_iterations = len(self.json_data['samples'][0]['iterations']) if num_samples > 0 else 0
+            self.sample_label.config(text=f"1 / {num_samples}")
+            self.iter_label.config(text=f"1 / {num_iterations}")
+
+            # Load first iteration
+            self.load_iteration_from_json()
+
+            self.status_var.set(f"JSON loaded: {num_samples} samples, {num_iterations} iterations each")
+
+        except Exception as e:
+            import traceback
+            traceback.print_exc()
+            messagebox.showerror("Error Loading JSON", str(e))
+            self.status_var.set("Error loading JSON")
+
+    def load_iteration_from_json(self):
+        """Load and display the current sample/iteration from JSON data"""
+        if not self.json_mode or self.json_data is None:
+            return
+
+        try:
+            sample_data = self.json_data['samples'][self.current_sample_idx]
+            iteration_data = sample_data['iterations'][self.current_iteration_idx]
+
+            # Get tokens
+            input_masked = torch.tensor(iteration_data['input_masked'], dtype=torch.long)
+            output_unmasked = torch.tensor(iteration_data['output_unmasked'], dtype=torch.long)
+            remasked_indices = iteration_data['remasked_indices']
+
+            # Store current state
+            self.current_tokens = output_unmasked
+            self.current_scores = None
+
+            # Display input (masked)
+            input_text = self.tokens_to_text(input_masked)
+            self.text_widget.config(state=tk.NORMAL)
+            self.text_widget.delete("1.0", tk.END)
+            self.text_widget.insert("1.0", input_text)
+            self.text_widget.config(state=tk.DISABLED)
+
+            # Update button states for JSON mode
+            self.unmask_btn.config(state=tk.NORMAL)
+            self.score_btn.config(state=tk.DISABLED)
+            self.remask_btn.config(state=tk.DISABLED)
+
+            self.workflow_state = 'unmask'
+
+            iteration_num = iteration_data['iteration']
+            self.status_var.set(f"Sample {self.current_sample_idx + 1}, Iteration {iteration_num}: {len(remasked_indices)} tokens will be remasked")
+
+        except Exception as e:
+            import traceback
+            traceback.print_exc()
+            messagebox.showerror("Error", f"Failed to load iteration: {e}")
+
+    def prev_sample(self):
+        """Navigate to previous sample"""
+        if not self.json_mode:
+            return
+
+        if self.current_sample_idx > 0:
+            self.current_sample_idx -= 1
+            self.current_iteration_idx = 0
+            self.update_navigation_labels()
+            self.load_iteration_from_json()
+
+    def next_sample(self):
+        """Navigate to next sample"""
+        if not self.json_mode:
+            return
+
+        num_samples = len(self.json_data['samples'])
+        if self.current_sample_idx < num_samples - 1:
+            self.current_sample_idx += 1
+            self.current_iteration_idx = 0
+            self.update_navigation_labels()
+            self.load_iteration_from_json()
+
+    def prev_iteration(self):
+        """Navigate to previous iteration"""
+        if not self.json_mode:
+            return
+
+        if self.current_iteration_idx > 0:
+            self.current_iteration_idx -= 1
+            self.update_navigation_labels()
+            self.load_iteration_from_json()
+
+    def next_iteration(self):
+        """Navigate to next iteration"""
+        if not self.json_mode:
+            return
+
+        sample_data = self.json_data['samples'][self.current_sample_idx]
+        num_iterations = len(sample_data['iterations'])
+        if self.current_iteration_idx < num_iterations - 1:
+            self.current_iteration_idx += 1
+            self.update_navigation_labels()
+            self.load_iteration_from_json()
+
+    def update_navigation_labels(self):
+        """Update navigation label text"""
+        num_samples = len(self.json_data['samples'])
+        sample_data = self.json_data['samples'][self.current_sample_idx]
+        num_iterations = len(sample_data['iterations'])
+
+        self.sample_label.config(text=f"{self.current_sample_idx + 1} / {num_samples}")
+        self.iter_label.config(text=f"{self.current_iteration_idx + 1} / {num_iterations}")
+
     def text_to_tokens(self, text: str) -> torch.Tensor:
         """Convert text to tokens, handling [MASK] as special token"""
         # Replace [MASK] with a placeholder character temporarily
@@ -244,50 +436,57 @@ class CriticGUI:
         if self.model is None:
             messagebox.showerror("Error", "No model loaded")
             return
-        
+
         try:
             self.status_var.set("Unmasking...")
             self.root.update()
-            
-            # Get text from widget
-            text = self.text_widget.get("1.0", tk.END).strip()
-            
-            # Convert to tokens
-            tokens = self.text_to_tokens(text)
-            
-            # Unmask
-            unmasked_tokens = unmask_tokens(
-                self.model, tokens, 
-                self.metadata['mask_token_id'],
-                self.metadata['vocab_size'],
-                temperature=0.8,
-                device=self.device,
-                dtype=self.dtype
-            )
-            
-            # Store current tokens
-            self.current_tokens = unmasked_tokens
-            self.current_scores = None
-            
+
+            if self.json_mode:
+                # In JSON mode, load precomputed unmasked output
+                sample_data = self.json_data['samples'][self.current_sample_idx]
+                iteration_data = sample_data['iterations'][self.current_iteration_idx]
+                unmasked_tokens = torch.tensor(iteration_data['output_unmasked'], dtype=torch.long)
+                self.current_tokens = unmasked_tokens
+                self.current_scores = None
+            else:
+                # Normal mode: compute unmasking
+                text = self.text_widget.get("1.0", tk.END).strip()
+                tokens = self.text_to_tokens(text)
+
+                unmasked_tokens = unmask_tokens(
+                    self.model, tokens,
+                    self.metadata['mask_token_id'],
+                    self.metadata['vocab_size'],
+                    temperature=0.8,
+                    device=self.device,
+                    dtype=self.dtype
+                )
+
+                self.current_tokens = unmasked_tokens
+                self.current_scores = None
+
             # Update text widget
             unmasked_text = self.tokens_to_text(unmasked_tokens)
+            self.text_widget.config(state=tk.NORMAL)
             self.text_widget.delete("1.0", tk.END)
             self.text_widget.insert("1.0", unmasked_text)
-            
+            self.text_widget.config(state=tk.DISABLED)
+
             # Update workflow state
             self.workflow_state = 'score'
             self.unmask_btn.config(state=tk.DISABLED)
-            self.text_widget.config(state=tk.DISABLED)
-            
+
             if self.metadata['has_critic']:
                 self.score_btn.config(state=tk.NORMAL)
             else:
                 # Skip to remask if no critic
                 self.remask_btn.config(state=tk.NORMAL)
-            
+
             self.status_var.set("Unmasking complete. Click Score to evaluate.")
-            
+
         except Exception as e:
+            import traceback
+            traceback.print_exc()
             messagebox.showerror("Error", f"Unmasking failed: {e}")
             self.status_var.set("Unmasking failed")
     
@@ -371,25 +570,31 @@ class CriticGUI:
             return
 
         try:
-            threshold_pct = self.threshold_var.get()
+            if self.json_mode:
+                # In JSON mode, use precomputed remasked indices
+                sample_data = self.json_data['samples'][self.current_sample_idx]
+                iteration_data = sample_data['iterations'][self.current_iteration_idx]
+                remasked_indices = iteration_data['remasked_indices']
 
-            print(f"DEBUG: Remasking with threshold {threshold_pct}%")
-            print(f"DEBUG: current_tokens shape: {self.current_tokens.shape}")
-            print(f"DEBUG: current_scores shape: {self.current_scores.shape}")
-            print(f"DEBUG: mask_token_id: {self.metadata['mask_token_id']}")
+                # Apply remasking using precomputed indices
+                remasked_tokens = self.current_tokens.clone()
+                for idx in remasked_indices:
+                    remasked_tokens[idx] = self.metadata['mask_token_id']
 
-            # Remask worst tokens
-            remasked_tokens, worst_indices = remask_worst_tokens(
-                self.current_tokens,
-                self.current_scores,
-                self.metadata['mask_token_id'],
-                threshold_pct,
-                content_len=len(self.current_tokens) if self.current_tokens.dim() == 1 else self.current_tokens.shape[1]
-            )
+                num_remasked = len(remasked_indices)
+            else:
+                # Normal mode: compute remasking based on threshold
+                threshold_pct = self.threshold_var.get()
 
-            print(f"DEBUG: remasked_tokens shape: {remasked_tokens.shape}")
-            print(f"DEBUG: worst_indices: {worst_indices}")
-            print(f"DEBUG: Number of [MASK] tokens in result: {(remasked_tokens == self.metadata['mask_token_id']).sum().item()}")
+                remasked_tokens, worst_indices = remask_worst_tokens(
+                    self.current_tokens,
+                    self.current_scores,
+                    self.metadata['mask_token_id'],
+                    threshold_pct,
+                    content_len=len(self.current_tokens) if self.current_tokens.dim() == 1 else self.current_tokens.shape[1]
+                )
+
+                num_remasked = len(worst_indices)
 
             # Update workflow state FIRST to prevent preview from running
             self.workflow_state = 'unmask'
@@ -398,10 +603,8 @@ class CriticGUI:
             self.current_tokens = remasked_tokens
             self.current_scores = None
 
-            # Update text widget - CRITICAL: do this after workflow state change
+            # Update text widget
             remasked_text = self.tokens_to_text(remasked_tokens)
-            print(f"DEBUG: remasked_text length: {len(remasked_text)}")
-            print(f"DEBUG: [MASK] count in text: {remasked_text.count('[MASK]')}")
 
             # Clear ALL tags first
             for tag in self.text_widget.tag_names():
@@ -417,11 +620,18 @@ class CriticGUI:
 
             # Update button states
             self.remask_btn.config(state=tk.DISABLED)
-            self.unmask_btn.config(state=tk.NORMAL)
             self.score_btn.config(state=tk.DISABLED)
 
-            num_remasked = len(worst_indices)
-            self.status_var.set(f"Remasked {num_remasked} tokens. Edit text or click Unmask to continue.")
+            if self.json_mode:
+                # In JSON mode, disable unmask and enable navigation
+                self.unmask_btn.config(state=tk.DISABLED)
+                self.text_widget.config(state=tk.DISABLED)
+            else:
+                # In normal mode, enable unmask for next iteration
+                self.unmask_btn.config(state=tk.NORMAL)
+
+            self.status_var.set(f"Remasked {num_remasked} tokens. " +
+                              ("Navigate to next iteration." if self.json_mode else "Edit text or click Unmask to continue."))
 
         except Exception as e:
             import traceback
