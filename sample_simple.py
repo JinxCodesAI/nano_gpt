@@ -367,9 +367,31 @@ def main():
     # Quality metrics
     judge_scores = None
     node_stats = None
+    critic_percentiles = None
     if metric == QualityMetric.JUDGE:
         print("\nEvaluating quality with Judge model...")
         judge_scores = calculate_judge_scores(judge_model=judge_model, tokens=generated_tokens, device=args.device, ctx=ctx)
+        # Also compute critic percentiles to display, matching sample.py behavior
+        if getattr(model.config, 'add_critic_head', False):
+            with torch.no_grad():
+                if ctx is not None:
+                    with ctx:
+                        _critic_scores = model.critic_scores(generated_tokens)
+                else:
+                    _critic_scores = model.critic_scores(generated_tokens)
+            _valid = (generated_tokens != mask_token_id)
+            if pad_token_id is not None:
+                _valid = _valid & (generated_tokens != pad_token_id)
+            _q = torch.tensor([0.1, 0.5, 0.9], device=generated_tokens.device, dtype=torch.float32)
+            _per_list = []
+            _prob = torch.sigmoid(_critic_scores.float())
+            for b in range(generated_tokens.size(0)):
+                _s = _prob[b][_valid[b]]
+                if _s.numel() == 0:
+                    _per_list.append(torch.tensor([float('nan'), float('nan'), float('nan')], device='cpu'))
+                else:
+                    _per_list.append(torch.quantile(_s, _q).cpu())
+            critic_percentiles = torch.stack(_per_list, dim=0)
     elif metric == QualityMetric.NODE:
         print("\nComputing node (critic) quality statistics...")
         with torch.no_grad():
@@ -407,6 +429,9 @@ def main():
         if metric == QualityMetric.JUDGE and judge_scores is not None:
             score = float(judge_scores[i].item())
             print(f"Quality score (Judge): {score:.4f}")
+            if 'critic_percentiles' in locals() and critic_percentiles is not None:
+                p10, p50, p90 = [float(x) for x in critic_percentiles[i].tolist()]
+                print(f"Critic probabilities p10/median/p90: {p10:.4f} / {p50:.4f} / {p90:.4f}")
         elif metric == QualityMetric.NODE and node_stats is not None:
             mean_v, p10, p50, p90 = [float(x) for x in node_stats[i].tolist()]
             print(f"Critic prob stats: mean={mean_v:.4f} p10/median/p90={p10:.4f}/{p50:.4f}/{p90:.4f}")
