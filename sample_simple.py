@@ -16,6 +16,7 @@ import time
 import math
 import pickle
 import argparse
+import json
 from enum import Enum
 from contextlib import nullcontext
 
@@ -128,6 +129,7 @@ def diffusion_generate(
     show_progress: bool = True,
     ctx=None,
     schedule_mode: str = 'ratio',
+    save_iterations: bool = False,
 ):
     device = next(model.parameters()).device
 
@@ -162,6 +164,9 @@ def diffusion_generate(
     # Track min_wrongness from previous iteration for display
     prev_min_wrongness = None
 
+    # Track iteration data for saving
+    iteration_data = [] if save_iterations else None
+
     for iteration in range(iterations):
         if verbose or show_progress:
             masked_count = (tokens == mask_token_id).sum().item()
@@ -191,6 +196,13 @@ def diffusion_generate(
                 preview = sample_text[:100] + ('...' if len(sample_text) > 100 else '')
                 print(f"  Sample: {preview}")
 
+        # Save initial masked input if tracking iterations
+        if save_iterations:
+            iter_data = {
+                'iteration': iteration + 1,
+                'input_masked': tokens.cpu().tolist(),
+            }
+
         # Step 1: Predict and sample tokens for masked positions
         pred_tokens, _, logits = predict_and_sample_tokens(
             model=model,
@@ -208,9 +220,13 @@ def diffusion_generate(
             base_vocab_size=base_vocab_size,
         )
 
+        # Save unmasked output if tracking iterations
+        if save_iterations:
+            iter_data['output_unmasked'] = pred_tokens.cpu().tolist()
+
         # Step 2: Remask for next iteration (except last iteration)
         if iteration < iterations - 1:
-            remasked, min_wrongness = apply_remasking_step(
+            remasked, min_wrongness, remasked_indices = apply_remasking_step(
                 tokens=tokens,
                 prediction_tokens=pred_tokens,
                 iteration=iteration,
@@ -235,14 +251,27 @@ def diffusion_generate(
             if remasked is None:
                 if verbose or show_progress:
                     print(f"  Early termination: no tokens exceed threshold")
+                if save_iterations:
+                    iter_data['remasked_indices'] = []
+                    iteration_data.append(iter_data)
                 tokens = pred_tokens
                 break
+
+            if save_iterations:
+                iter_data['remasked_indices'] = remasked_indices
+                iteration_data.append(iter_data)
 
             tokens = remasked
             prev_min_wrongness = min_wrongness
         else:
+            # Last iteration: no remasking
+            if save_iterations:
+                iter_data['remasked_indices'] = []
+                iteration_data.append(iter_data)
             tokens = pred_tokens
 
+    if save_iterations:
+        return tokens, iteration_data
     return tokens
 
 
@@ -295,6 +324,7 @@ def main():
     parser.add_argument('--quality-metric', type=str, choices=[m.value for m in QualityMetric], default=QualityMetric.JUDGE.value, help='Quality metric to compute')
     parser.add_argument('--verbose', action='store_true', help='Verbose iteration logging')
     parser.add_argument('--no-progress', action='store_true', help='Disable progress logs')
+    parser.add_argument('--save', type=str, default=None, help='Save iteration data to JSON file (e.g., output.json)')
 
     args = parser.parse_args()
 
@@ -378,7 +408,7 @@ def main():
     start_time = time.time()
     with torch.no_grad():
         with ctx:
-            generated_tokens = diffusion_generate(
+            result = diffusion_generate(
                 model=model,
                 batch_size=args.num_samples,
                 total_length=args.sequence_length,
@@ -400,9 +430,22 @@ def main():
                 show_progress=not args.no_progress,
                 ctx=ctx,
                 schedule_mode=args.schedule_mode,
+                save_iterations=args.save is not None,
             )
 
+            if args.save is not None:
+                generated_tokens, iteration_data = result
+            else:
+                generated_tokens = result
+
     generation_time = time.time() - start_time
+
+    # Save iteration data if requested
+    if args.save is not None:
+        print(f"\nSaving iteration data to {args.save}...")
+        with open(args.save, 'w') as f:
+            json.dump(iteration_data, f, indent=2)
+        print(f"Saved {len(iteration_data)} iterations")
 
     # Quality metrics
     judge_scores = None
