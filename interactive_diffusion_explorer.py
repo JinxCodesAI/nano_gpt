@@ -36,7 +36,7 @@ except ImportError:
         HAS_KEYBOARD = False
 
 # Configuration
-MODEL_PATH = 'out-char-diffusion/a40_3750_01_10.pt'  # Hardcoded model path - change this as needed
+MODEL_DIR = 'out-char-diffusion'  # Directory containing model checkpoints (.pt/.pth)
 DATA_DIR = 'data'
 DEVICE = 'cuda' if torch.cuda.is_available() else 'cpu'
 DTYPE = 'float16' if DEVICE == 'cuda' else 'float32'
@@ -45,6 +45,8 @@ class DiffusionExplorer:
     def __init__(self, interactive: bool = True):
         self.interactive = bool(interactive)
         self.model = None
+        self.model_path = None  # Track currently loaded model path
+        self.model_dir = MODEL_DIR  # Current model directory
         self.stoi = None
         self.itos = None
         self.vocab_size = None  # model vocab size
@@ -116,65 +118,164 @@ class DiffusionExplorer:
                 print("Please enter a valid number.")
                 self.wait_for_key()
 
-    def load_model(self) -> bool:
-        """Load the diffusion model"""
-        self.print_header("Loading Model")
+    def list_checkpoints(self, directory: str) -> List[str]:
+        """List all checkpoint files (.pt, .pth) in the given directory (non-recursive)"""
+        if not os.path.exists(directory):
+            return []
 
-        if not os.path.exists(MODEL_PATH):
-            print(f"❌ Model not found: {MODEL_PATH}")
-            print("Please update MODEL_PATH in the script configuration.")
-            self.wait_for_key()
-            return False
-
+        checkpoints = []
         try:
-            print(f"📂 Loading model from: {MODEL_PATH}")
-            checkpoint = torch.load(MODEL_PATH, map_location=DEVICE, weights_only=False)
+            for item in os.listdir(directory):
+                if item.endswith('.pt') or item.endswith('.pth'):
+                    full_path = os.path.join(directory, item)
+                    if os.path.isfile(full_path):
+                        checkpoints.append(item)
+        except Exception:
+            return []
 
-            if 'model_args' not in checkpoint:
-                print("❌ Invalid checkpoint: missing 'model_args'")
-                self.wait_for_key()
-                return False
+        # Sort alphabetically
+        checkpoints.sort()
+        return checkpoints
 
-            model_args = checkpoint['model_args']
+    def select_model_directory(self) -> bool:
+        """Prompt user to change model directory"""
+        self.print_header("Change Model Directory")
+        print(f"Current directory: {self.model_dir}")
+        print()
+        new_dir = input("Enter new model directory path (or press Enter to keep current): ").strip()
 
-            # Ensure backward compatibility
-            if 'attention_type' not in model_args:
-                model_args['attention_type'] = 'causal'
-            if 'position_encoding' not in model_args:
-                model_args['position_encoding'] = 'absolute'
-
-            print(f"🔧 Model configuration:")
-            print(f"   • vocab_size: {model_args.get('vocab_size')}")
-            print(f"   • block_size: {model_args.get('block_size')}")
-            print(f"   • attention_type: {model_args.get('attention_type')}")
-            print(f"   • position_encoding: {model_args.get('position_encoding')}")
-
-            # Create model
-            gptconf = GPTConfig(**model_args)
-            self.model = GPT(gptconf)
-
-            # Load weights
-            state_dict = checkpoint['model']
-            unwanted_prefix = '_orig_mod.'
-            for k, v in list(state_dict.items()):
-                if k.startswith(unwanted_prefix):
-                    state_dict[k[len(unwanted_prefix):]] = state_dict.pop(k)
-
-            self.model.load_state_dict(state_dict)
-            self.model.eval()
-            self.model.to(DEVICE)
-
-            print(f"✅ Model loaded successfully")
-            print(f"   • Parameters: {self.model.get_num_params()/1e6:.1f}M")
-            print(f"   • Device: {DEVICE}")
-
-            self.wait_for_key()
+        if not new_dir:
             return True
 
-        except Exception as e:
-            print(f"❌ Error loading model: {e}")
+        if not os.path.exists(new_dir):
+            print(f"❌ Directory does not exist: {new_dir}")
             self.wait_for_key()
             return False
+
+        if not os.path.isdir(new_dir):
+            print(f"❌ Path is not a directory: {new_dir}")
+            self.wait_for_key()
+            return False
+
+        self.model_dir = new_dir
+        print(f"✅ Model directory changed to: {self.model_dir}")
+        self.wait_for_key()
+        return True
+
+    def load_model(self) -> bool:
+        """Load/change the diffusion model with checkpoint selection"""
+        while True:
+            self.print_header("Load/Change Model")
+
+            # Check if directory exists
+            if not os.path.exists(self.model_dir):
+                print(f"❌ Model directory not found: {self.model_dir}")
+                print()
+                print("Options:")
+                print("  1. Change model directory")
+                print("  0. Cancel")
+                choice = input("\nEnter choice: ").strip()
+
+                if choice == '1':
+                    if self.select_model_directory():
+                        continue
+                    else:
+                        continue
+                else:
+                    return False
+
+            # List available checkpoints
+            checkpoints = self.list_checkpoints(self.model_dir)
+
+            if not checkpoints:
+                print(f"❌ No checkpoint files (.pt, .pth) found in: {self.model_dir}")
+                print()
+                print("Options:")
+                print("  1. Change model directory")
+                print("  0. Cancel")
+                choice = input("\nEnter choice: ").strip()
+
+                if choice == '1':
+                    if self.select_model_directory():
+                        continue
+                    else:
+                        continue
+                else:
+                    return False
+
+            # Display checkpoints for selection
+            print(f"📂 Model directory: {self.model_dir}")
+            print(f"📦 Found {len(checkpoints)} checkpoint(s)\n")
+
+            choice = self.get_menu_choice(checkpoints, "Select a checkpoint to load:")
+
+            if choice == 0:
+                return False
+
+            selected_checkpoint = checkpoints[choice - 1]
+            checkpoint_path = os.path.join(self.model_dir, selected_checkpoint)
+
+            # Attempt to load the selected checkpoint
+            try:
+                self.print_header(f"Loading: {selected_checkpoint}")
+                print(f"📂 Loading model from: {checkpoint_path}")
+                checkpoint = torch.load(checkpoint_path, map_location=DEVICE, weights_only=False)
+
+                if 'model_args' not in checkpoint:
+                    print("❌ Invalid checkpoint: missing 'model_args'")
+                    print("This checkpoint is incompatible with the explorer.")
+                    print()
+                    print("Press any key to select a different checkpoint...")
+                    self.wait_for_key()
+                    continue
+
+                model_args = checkpoint['model_args']
+
+                # Ensure backward compatibility
+                if 'attention_type' not in model_args:
+                    model_args['attention_type'] = 'causal'
+                if 'position_encoding' not in model_args:
+                    model_args['position_encoding'] = 'absolute'
+
+                print(f"🔧 Model configuration:")
+                print(f"   • vocab_size: {model_args.get('vocab_size')}")
+                print(f"   • block_size: {model_args.get('block_size')}")
+                print(f"   • attention_type: {model_args.get('attention_type')}")
+                print(f"   • position_encoding: {model_args.get('position_encoding')}")
+
+                # Create model
+                gptconf = GPTConfig(**model_args)
+                model = GPT(gptconf)
+
+                # Load weights
+                state_dict = checkpoint['model']
+                unwanted_prefix = '_orig_mod.'
+                for k, v in list(state_dict.items()):
+                    if k.startswith(unwanted_prefix):
+                        state_dict[k[len(unwanted_prefix):]] = state_dict.pop(k)
+
+                model.load_state_dict(state_dict)
+                model.eval()
+                model.to(DEVICE)
+
+                # Success - update instance state
+                self.model = model
+                self.model_path = checkpoint_path
+
+                print(f"✅ Model loaded successfully")
+                print(f"   • Parameters: {self.model.get_num_params()/1e6:.1f}M")
+                print(f"   • Device: {DEVICE}")
+
+                self.wait_for_key()
+                return True
+
+            except Exception as e:
+                print(f"❌ Error loading checkpoint: {e}")
+                print()
+                print("This checkpoint may be incompatible or corrupted.")
+                print("Press any key to select a different checkpoint...")
+                self.wait_for_key()
+                continue
 
     def select_dataset(self) -> bool:
         """Select dataset from available datasets"""
@@ -1318,10 +1419,12 @@ class DiffusionExplorer:
         while True:
             options = []
 
+            # Always show model load/change option
             if self.model is None:
-                options.append("🔧 Load Model")
+                options.append("� Load Model")
             else:
-                options.append(f"✅ Model loaded ({self.model.get_num_params()/1e6:.1f}M params)")
+                model_name = Path(self.model_path).name if self.model_path else "unknown"
+                options.append(f"📦 Change Model (current: {model_name})")
 
             if self.model is not None:
                 if self.dataset_name is None:
@@ -1350,7 +1453,7 @@ class DiffusionExplorer:
             if choice == 0:
                 break
 
-            if "Load Model" in options[choice - 1]:
+            if "Load Model" in options[choice - 1] or "Change Model" in options[choice - 1]:
                 if self.load_model():
                     continue
             elif "Select Dataset" in options[choice - 1] or "Change Dataset" in options[choice - 1]:
