@@ -5,6 +5,7 @@ import math
 import torch
 import torch.nn.functional as F
 from collections import Counter
+from contextlib import nullcontext
 
 
 def linear_remasking_schedule(iteration, total_iterations, start_ratio, end_ratio):
@@ -71,7 +72,8 @@ def predict_and_sample_tokens(model, tokens, mask_token_id, temperature=1.0,
 top_p=1.0, vocab_size=None,
                             device='cuda', debug_logging_fn=None, itos=None, stoi=None,
                             verbose=False, log_debug=False, return_logits=False,
-                            pad_token_id=None, base_vocab_size=None, disable_sampler=False):
+                            pad_token_id=None, base_vocab_size=None, disable_sampler=False,
+                            timer=None):
     """
     Predict and sample new tokens for masked positions.
 
@@ -95,6 +97,7 @@ top_p=1.0, vocab_size=None,
         pad_token_id: Optional pad token ID
         base_vocab_size: Optional base vocabulary size (excludes special tokens)
         disable_sampler: If True, use naive sampling even if model has sampler head
+        timer: Optional TimingAccumulator for performance measurement
 
     Returns:
         tuple: (updated_tokens, logits) if return_logits else updated_tokens
@@ -113,66 +116,75 @@ top_p=1.0, vocab_size=None,
     # Pass dummy targets to get logits for all positions (not just the last one)
     dummy_targets = torch.zeros_like(tokens)
     with torch.no_grad():
-        logits, _ = model(tokens, targets=dummy_targets)
+        # Measure forward pass time
+        measure_ctx = timer.measure('forward') if timer else nullcontext()
+        with measure_ctx:
+            logits, _ = model(tokens, targets=dummy_targets)
 
         # Check if model has sampler head and use it for coherent sampling (unless disabled)
         if not disable_sampler and hasattr(model, 'sampler_head') and model.sampler_head is not None:
             # Get hidden states for sampler
             hidden_states = model._encode_tokens(tokens)
 
-            # Use sampler wavefront fill for coherent sampling
-            prediction_tokens = sampler_wavefront_fill(
-                model=model,
-                tokens=tokens,
-                hidden_states=hidden_states,
-                mask_token_id=mask_token_id,
-                temperature=temperature,
-                top_p=top_p,
-                vocab_size=vocab_size,
-                base_vocab_size=base_vocab_size,
-                min_neighbors_ratio=getattr(model.config, 'sampler_min_neighbors_ratio', 0.01)
-            )
+            # Measure sampler wavefront fill time
+            measure_ctx = timer.measure('sampling_sampler') if timer else nullcontext()
+            with measure_ctx:
+                # Use sampler wavefront fill for coherent sampling
+                prediction_tokens = sampler_wavefront_fill(
+                    model=model,
+                    tokens=tokens,
+                    hidden_states=hidden_states,
+                    mask_token_id=mask_token_id,
+                    temperature=temperature,
+                    top_p=top_p,
+                    vocab_size=vocab_size,
+                    base_vocab_size=base_vocab_size,
+                    min_neighbors_ratio=getattr(model.config, 'sampler_min_neighbors_ratio', 0.01)
+                )
 
             if return_logits:
                 return prediction_tokens, logits
             return prediction_tokens, prediction_tokens.clone()
 
 
-    # Extract logits for masked positions only
+    # Extract logits for masked positions only (naive sampling path)
     prediction_tokens = tokens.clone()
 
-    for batch_idx in range(batch_size):
-        batch_mask_positions = mask_positions[batch_idx]
-        if not batch_mask_positions.any():
-            continue
+    # Measure naive sampling time
+    measure_ctx = timer.measure('sampling_naive') if timer else nullcontext()
+    with measure_ctx:
+        for batch_idx in range(batch_size):
+            batch_mask_positions = mask_positions[batch_idx]
+            if not batch_mask_positions.any():
+                continue
 
-        # Get mask indices for this batch
-        mask_indices = torch.nonzero(batch_mask_positions).squeeze(-1)
+            # Get mask indices for this batch
+            mask_indices = torch.nonzero(batch_mask_positions).squeeze(-1)
 
-        # Extract logits for masked positions
-        masked_logits = logits[batch_idx, mask_indices, :]  # (num_masked, vocab_size)
+            # Extract logits for masked positions
+            masked_logits = logits[batch_idx, mask_indices, :]  # (num_masked, vocab_size)
 
-        # Exclude special tokens from sampling - only sample from base vocabulary
-        if vocab_size is not None:
-            # Set mask token logit to -inf so it's never sampled
-            masked_logits[:, mask_token_id] = float('-inf')
+            # Exclude special tokens from sampling - only sample from base vocabulary
+            if vocab_size is not None:
+                # Set mask token logit to -inf so it's never sampled
+                masked_logits[:, mask_token_id] = float('-inf')
 
-            # Set pad token logit to -inf if it exists
-            if pad_token_id is not None:
-                masked_logits[:, pad_token_id] = float('-inf')
+                # Set pad token logit to -inf if it exists
+                if pad_token_id is not None:
+                    masked_logits[:, pad_token_id] = float('-inf')
 
-            # If we have base_vocab_size, only allow sampling from base vocabulary
-            if base_vocab_size is not None:
-                # Set all special tokens (beyond base vocab) to -inf
-                if masked_logits.shape[-1] > base_vocab_size:
-                    masked_logits[:, base_vocab_size:] = float('-inf')
+                # If we have base_vocab_size, only allow sampling from base vocabulary
+                if base_vocab_size is not None:
+                    # Set all special tokens (beyond base vocab) to -inf
+                    if masked_logits.shape[-1] > base_vocab_size:
+                        masked_logits[:, base_vocab_size:] = float('-inf')
 
-            # Ensure we don't access beyond vocabulary
-            if masked_logits.shape[-1] > vocab_size:
-                masked_logits = masked_logits[:, :vocab_size]
+                # Ensure we don't access beyond vocabulary
+                if masked_logits.shape[-1] > vocab_size:
+                    masked_logits = masked_logits[:, :vocab_size]
 
-        # Sample new tokens
-        new_tokens = nucleus_sample(masked_logits, top_p=top_p, temperature=temperature)
+            # Sample new tokens
+            new_tokens = nucleus_sample(masked_logits, top_p=top_p, temperature=temperature)
 
         # Debug logging
         if debug_logging_fn and batch_idx == 0:

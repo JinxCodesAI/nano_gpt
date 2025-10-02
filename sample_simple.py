@@ -30,6 +30,7 @@ from sample_utils import (
     apply_remasking_step,
     calculate_judge_scores,
 )
+from timing_utils import IterationTimer
 
 
 class SeedPlacement(Enum):
@@ -131,8 +132,12 @@ def diffusion_generate(
     schedule_mode: str = 'ratio',
     save_iterations: bool = False,
     disable_sampler: bool = False,
+    enable_timing: bool = False,
 ):
     device = next(model.parameters()).device
+
+    # Initialize timing if enabled
+    iter_timer = IterationTimer() if enable_timing else None
 
     # Start with all positions masked
     tokens = torch.full((batch_size, total_length), int(mask_token_id), dtype=torch.long, device=device)
@@ -169,79 +174,118 @@ def diffusion_generate(
     samples_data = [[] for _ in range(batch_size)] if save_iterations else None
 
     for iteration in range(iterations):
-        if verbose or show_progress:
-            masked_count = (tokens == mask_token_id).sum().item()
-            total_tokens = tokens.numel()
-            masked_ratio = masked_count / total_tokens
+        # Start iteration timing
+        iter_ctx = iter_timer.iteration() if iter_timer else nullcontext()
+        with iter_ctx:
+            if verbose or show_progress:
+                masked_count = (tokens == mask_token_id).sum().item()
+                total_tokens = tokens.numel()
+                masked_ratio = masked_count / total_tokens
 
-            # Calculate current ratio/threshold for display
-            if masking_ratios is not None and iteration < len(masking_ratios):
-                current_ratio = masking_ratios[iteration]
-            else:
-                from sample_utils import linear_remasking_schedule
-                current_ratio = linear_remasking_schedule(iteration, iterations, start_ratio, end_ratio)
-
-            if schedule_mode == 'threshold':
-                # Threshold is inverted: ratio=0.95 means threshold=0.05
-                current_threshold = 1.0 - current_ratio
-                print(f"Iteration {iteration+1}/{iterations}: {masked_count}/{total_tokens} masked ({masked_ratio:.1%}), threshold={current_threshold:.3f}")
-            else:
-                # Ratio mode: show actual wrongness threshold from previous remasking
-                if prev_min_wrongness is not None:
-                    print(f"Iteration {iteration+1}/{iterations}: {masked_count}/{total_tokens} masked ({masked_ratio:.1%}), threshold={prev_min_wrongness:.3f}")
+                # Calculate current ratio/threshold for display
+                if masking_ratios is not None and iteration < len(masking_ratios):
+                    current_ratio = masking_ratios[iteration]
                 else:
-                    print(f"Iteration {iteration+1}/{iterations}: {masked_count}/{total_tokens} masked ({masked_ratio:.1%})")
+                    from sample_utils import linear_remasking_schedule
+                    current_ratio = linear_remasking_schedule(iteration, iterations, start_ratio, end_ratio)
 
-            if iteration in (0, iterations - 1):
-                sample_text = decode_fn(tokens[0])
-                preview = sample_text[:100] + ('...' if len(sample_text) > 100 else '')
-                print(f"  Sample: {preview}")
+                if schedule_mode == 'threshold':
+                    # Threshold is inverted: ratio=0.95 means threshold=0.05
+                    current_threshold = 1.0 - current_ratio
+                    print(f"Iteration {iteration+1}/{iterations}: {masked_count}/{total_tokens} masked ({masked_ratio:.1%}), threshold={current_threshold:.3f}")
+                else:
+                    # Ratio mode: show actual wrongness threshold from previous remasking
+                    if prev_min_wrongness is not None:
+                        print(f"Iteration {iteration+1}/{iterations}: {masked_count}/{total_tokens} masked ({masked_ratio:.1%}), threshold={prev_min_wrongness:.3f}")
+                    else:
+                        print(f"Iteration {iteration+1}/{iterations}: {masked_count}/{total_tokens} masked ({masked_ratio:.1%})")
 
-        # Step 1: Predict and sample tokens for masked positions
-        pred_tokens, logits = predict_and_sample_tokens(
-            model=model,
-            tokens=tokens,
-            mask_token_id=mask_token_id,
-            temperature=temperature,
-            top_p=top_p,
-            vocab_size=vocab_size,
-            device=device,
-            verbose=verbose,
-            return_logits=True,
-            pad_token_id=pad_token_id,
-            base_vocab_size=base_vocab_size,
-            disable_sampler=disable_sampler,
-        )
+                if iteration in (0, iterations - 1):
+                    sample_text = decode_fn(tokens[0])
+                    preview = sample_text[:100] + ('...' if len(sample_text) > 100 else '')
+                    print(f"  Sample: {preview}")
 
-        # Step 2: Remask for next iteration (except last iteration)
-        if iteration < iterations - 1:
-            remasked, min_wrongness, remasked_indices = apply_remasking_step(
+            # Step 1: Predict and sample tokens for masked positions
+            pred_tokens, logits = predict_and_sample_tokens(
+                model=model,
                 tokens=tokens,
-                prediction_tokens=pred_tokens,
-                iteration=iteration,
-                iterations=iterations,
-                schedule_type='linear' if masking_ratios is None else 'custom',
-                masking_ratios=masking_ratios,
-                start_ratio=start_ratio,
-                end_ratio=end_ratio,
-                remasking_model=None,
-                randomness_strength=randomness_strength,
                 mask_token_id=mask_token_id,
+                temperature=temperature,
+                top_p=top_p,
+                vocab_size=vocab_size,
                 device=device,
-                base_model=model,  # critic ordering
-                intelligent_remasking=False,
                 verbose=verbose,
-                logits_from_predict=logits,
-                protected_mask=protected_mask,
-                schedule_mode=schedule_mode,
+                return_logits=True,
+                pad_token_id=pad_token_id,
+                base_vocab_size=base_vocab_size,
+                disable_sampler=disable_sampler,
+                timer=iter_timer,
             )
 
-            # Check for early termination in threshold mode
-            if remasked is None:
-                if verbose or show_progress:
-                    print(f"  Early termination: no tokens exceed threshold")
+            # Step 2: Remask for next iteration (except last iteration)
+            if iteration < iterations - 1:
+                measure_ctx = iter_timer.measure('remasking') if iter_timer else nullcontext()
+                with measure_ctx:
+                    remasked, min_wrongness, remasked_indices = apply_remasking_step(
+                        tokens=tokens,
+                        prediction_tokens=pred_tokens,
+                        iteration=iteration,
+                        iterations=iterations,
+                        schedule_type='linear' if masking_ratios is None else 'custom',
+                        masking_ratios=masking_ratios,
+                        start_ratio=start_ratio,
+                        end_ratio=end_ratio,
+                        remasking_model=None,
+                        randomness_strength=randomness_strength,
+                        mask_token_id=mask_token_id,
+                        device=device,
+                        base_model=model,  # critic ordering
+                        intelligent_remasking=False,
+                        verbose=verbose,
+                        logits_from_predict=logits,
+                        protected_mask=protected_mask,
+                        schedule_mode=schedule_mode,
+                    )
+
+                # Check for early termination in threshold mode
+                if remasked is None:
+                    if verbose or show_progress:
+                        print(f"  Early termination: no tokens exceed threshold")
+                    if save_iterations:
+                        # Save final iteration data for all samples
+                        tokens_cpu = tokens.cpu().tolist()
+                        pred_tokens_cpu = pred_tokens.cpu().tolist()
+                        for sample_idx in range(batch_size):
+                            samples_data[sample_idx].append({
+                                'iteration': iteration + 1,
+                                'input_masked': tokens_cpu[sample_idx],
+                                'output_unmasked': pred_tokens_cpu[sample_idx],
+                                'remasked_indices': []
+                            })
+                    tokens = pred_tokens
+                    break
+
                 if save_iterations:
-                    # Save final iteration data for all samples
+                    # Organize remasked_indices by sample
+                    tokens_cpu = tokens.cpu().tolist()
+                    pred_tokens_cpu = pred_tokens.cpu().tolist()
+                    remasked_by_sample = [[] for _ in range(batch_size)]
+                    for batch_idx, pos in remasked_indices:
+                        remasked_by_sample[batch_idx].append(pos)
+
+                    for sample_idx in range(batch_size):
+                        samples_data[sample_idx].append({
+                            'iteration': iteration + 1,
+                            'input_masked': tokens_cpu[sample_idx],
+                            'output_unmasked': pred_tokens_cpu[sample_idx],
+                            'remasked_indices': remasked_by_sample[sample_idx]
+                        })
+
+                tokens = remasked
+                prev_min_wrongness = min_wrongness
+            else:
+                # Last iteration: no remasking
+                if save_iterations:
                     tokens_cpu = tokens.cpu().tolist()
                     pred_tokens_cpu = pred_tokens.cpu().tolist()
                     for sample_idx in range(batch_size):
@@ -252,43 +296,18 @@ def diffusion_generate(
                             'remasked_indices': []
                         })
                 tokens = pred_tokens
-                break
 
-            if save_iterations:
-                # Organize remasked_indices by sample
-                tokens_cpu = tokens.cpu().tolist()
-                pred_tokens_cpu = pred_tokens.cpu().tolist()
-                remasked_by_sample = [[] for _ in range(batch_size)]
-                for batch_idx, pos in remasked_indices:
-                    remasked_by_sample[batch_idx].append(pos)
+            # Print per-iteration timing if enabled
+            if iter_timer and (verbose or show_progress):
+                iter_timer.print_iteration_summary(iteration, show_percentages=True)
 
-                for sample_idx in range(batch_size):
-                    samples_data[sample_idx].append({
-                        'iteration': iteration + 1,
-                        'input_masked': tokens_cpu[sample_idx],
-                        'output_unmasked': pred_tokens_cpu[sample_idx],
-                        'remasked_indices': remasked_by_sample[sample_idx]
-                    })
-
-            tokens = remasked
-            prev_min_wrongness = min_wrongness
-        else:
-            # Last iteration: no remasking
-            if save_iterations:
-                tokens_cpu = tokens.cpu().tolist()
-                pred_tokens_cpu = pred_tokens.cpu().tolist()
-                for sample_idx in range(batch_size):
-                    samples_data[sample_idx].append({
-                        'iteration': iteration + 1,
-                        'input_masked': tokens_cpu[sample_idx],
-                        'output_unmasked': pred_tokens_cpu[sample_idx],
-                        'remasked_indices': []
-                    })
-            tokens = pred_tokens
+    # Print overall timing summary if enabled
+    if iter_timer:
+        iter_timer.print_overall_summary()
 
     if save_iterations:
-        return tokens, samples_data
-    return tokens
+        return tokens, samples_data, iter_timer
+    return tokens, iter_timer
 
 
 def build_decode_functions(itos, mask_token_id: int, pad_token_id: int | None):
@@ -342,6 +361,7 @@ def main():
     parser.add_argument('--no-progress', action='store_true', help='Disable progress logs')
     parser.add_argument('--save', type=str, default=None, help='Save iteration data to JSON file (e.g., output.json)')
     parser.add_argument('--disable-sampler', action='store_true', help='Disable sampler head (use naive sampling even if model has sampler)')
+    parser.add_argument('--enable-timing', action='store_true', help='Enable detailed timing breakdown (forward/sampling/remasking)')
 
     args = parser.parse_args()
 
@@ -450,12 +470,13 @@ def main():
                 schedule_mode=args.schedule_mode,
                 save_iterations=args.save is not None,
                 disable_sampler=args.disable_sampler,
+                enable_timing=args.enable_timing,
             )
 
             if args.save is not None:
-                generated_tokens, iteration_data = result
+                generated_tokens, iteration_data, iter_timer = result
             else:
-                generated_tokens = result
+                generated_tokens, iter_timer = result
 
     generation_time = time.time() - start_time
 
