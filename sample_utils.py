@@ -748,10 +748,9 @@ def sampler_wavefront_fill(model, tokens, hidden_states, mask_token_id,
                     right_ids[right_not_mask]
                 )
 
-        # Forward through sampler
+        # Forward through sampler (sampler_head now returns logits directly)
         sampler_input = torch.cat([left_emb, h, right_emb], dim=-1)
-        sampler_features = model.sampler_head(sampler_input)
-        logits = model.lm_head(sampler_features)
+        logits = model.sampler_head(sampler_input)  # Returns logits via its own output_head
 
         # Apply vocabulary restrictions
         if vocab_size is not None:

@@ -301,11 +301,14 @@ class SamplerHead(nn.Module):
     A lightweight, bidirectional MLP that conditions a token prediction on its
     hidden state and its immediate left and right neighbors.
 
-    This is an auxiliary network trained separately from the main transformer.
+    This is an auxiliary network trained COMPLETELY SEPARATELY from the main transformer.
     During training, inputs are detached to isolate sampler training.
 
+    CRITICAL: Has its own output_head (NOT shared with lm_head) to prevent gradients
+    from flowing to the weight-tied transformer embeddings.
+
     Input: [left_neighbor_embedding, hidden_state, right_neighbor_embedding]
-    Output: features (n_embd) to be passed to lm_head for token prediction
+    Output: logits (vocab_size) for token prediction
 
     When a neighbor is missing (boundary or [MASK]), use zero embedding.
     """
@@ -324,15 +327,21 @@ class SamplerHead(nn.Module):
             LayerNorm(config.n_embd, bias=config.bias)
         )
 
+        # Separate output head (NOT shared with lm_head)
+        # This prevents gradients from flowing to transformer embeddings via weight tying
+        self.output_head = nn.Linear(config.n_embd, config.vocab_size, bias=False)
+
     def forward(self, combined_input):
         """
         Args:
             combined_input: (N, 3*n_embd) concatenated [left_emb, hidden_state, right_emb]
 
         Returns:
-            features: (N, n_embd) features for lm_head to predict tokens
+            logits: (N, vocab_size) logits for token prediction
         """
-        return self.mlp(combined_input)
+        features = self.mlp(combined_input)
+        logits = self.output_head(features)
+        return logits
 
 
 class Block(nn.Module):
@@ -912,6 +921,9 @@ class GPT(nn.Module):
         This is an auxiliary loss that trains the sampler independently.
         All inputs are detached to prevent gradients from affecting the main model.
 
+        CRITICAL: Uses sampler_head's own output_head (not lm_head) to prevent
+        gradients from flowing to transformer embeddings via weight tying.
+
         Returns standard cross-entropy loss (no special weighting).
         """
         from sample_utils import prepare_sampler_inputs
@@ -932,9 +944,9 @@ class GPT(nn.Module):
         sampler_input = artifacts['sampler_input']  # (N, 3*n_embd)
         sampler_targets = artifacts['sampler_targets']  # (N,)
 
-        # Forward through sampler head
-        sampler_features = self.sampler_head(sampler_input)  # (N, n_embd)
-        sampler_logits = self.lm_head(sampler_features)  # (N, vocab_size)
+        # Forward through sampler head (includes its own output_head)
+        # This is completely separate from lm_head to prevent gradient flow to embeddings
+        sampler_logits = self.sampler_head(sampler_input)  # (N, vocab_size)
 
         # Compute standard cross-entropy loss
         sampler_loss = F.cross_entropy(sampler_logits, sampler_targets)
