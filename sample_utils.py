@@ -120,20 +120,20 @@ top_p=1.0, vocab_size=None,
                       hasattr(model, 'sampler_head') and
                       model.sampler_head is not None)
 
-        # Single forward pass for both sampler and naive paths
-        measure_ctx = timer.measure('forward') if timer else nullcontext()
-        with measure_ctx:
-            hidden_states = model._encode_tokens(tokens)
-            logits = model.lm_head(hidden_states)
-
-            # Get critic scores if model has critic head (reuse hidden states)
-            critic_scores = None
-            if (hasattr(model, 'critic_head') and
-                model.critic_head is not None and
-                getattr(model.config, 'add_critic_head', False)):
-                critic_scores = model.critic_head(hidden_states).squeeze(-1)
-
         if use_sampler:
+            # Sampler path: get hidden states for wavefront fill
+            measure_ctx = timer.measure('forward') if timer else nullcontext()
+            with measure_ctx:
+                hidden_states = model._encode_tokens(tokens)
+                logits = model.lm_head(hidden_states)
+
+                # Get critic scores if model has critic head (reuse hidden states)
+                critic_scores = None
+                if (hasattr(model, 'critic_head') and
+                    model.critic_head is not None and
+                    getattr(model.config, 'add_critic_head', False)):
+                    critic_scores = model.critic_head(hidden_states).squeeze(-1)
+
             # Sampler path: use wavefront fill
             measure_ctx = timer.measure('sampling_sampler') if timer else nullcontext()
             with measure_ctx:
@@ -153,7 +153,21 @@ top_p=1.0, vocab_size=None,
                 return prediction_tokens, logits, critic_scores
             return prediction_tokens, prediction_tokens.clone(), critic_scores
 
-        # Naive sampling path: extract logits for masked positions only
+        # Naive sampling path: use standard model forward pass
+        measure_ctx = timer.measure('forward') if timer else nullcontext()
+        with measure_ctx:
+            logits, _ = model(tokens, targets=dummy_targets)
+
+            # Get critic scores if model has critic head
+            critic_scores = None
+            if (hasattr(model, 'critic_head') and
+                model.critic_head is not None and
+                getattr(model.config, 'add_critic_head', False)):
+                # Need to get hidden states for critic
+                hidden_states = model._encode_tokens(tokens)
+                critic_scores = model.critic_head(hidden_states).squeeze(-1)
+
+        # Extract logits for masked positions only
         prediction_tokens = tokens.clone()
 
         # Measure naive sampling time
