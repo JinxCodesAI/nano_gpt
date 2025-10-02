@@ -153,63 +153,62 @@ top_p=1.0, vocab_size=None,
                 return prediction_tokens, logits, critic_scores
             return prediction_tokens, prediction_tokens.clone(), critic_scores
 
+        # Naive sampling path: extract logits for masked positions only
+        prediction_tokens = tokens.clone()
 
-    # Extract logits for masked positions only (naive sampling path)
-    prediction_tokens = tokens.clone()
+        # Measure naive sampling time
+        measure_ctx = timer.measure('sampling_naive') if timer else nullcontext()
+        with measure_ctx:
+            for batch_idx in range(batch_size):
+                batch_mask_positions = mask_positions[batch_idx]
+                if not batch_mask_positions.any():
+                    continue
 
-    # Measure naive sampling time
-    measure_ctx = timer.measure('sampling_naive') if timer else nullcontext()
-    with measure_ctx:
-        for batch_idx in range(batch_size):
-            batch_mask_positions = mask_positions[batch_idx]
-            if not batch_mask_positions.any():
-                continue
+                # Get mask indices for this batch
+                mask_indices = torch.nonzero(batch_mask_positions).squeeze(-1)
 
-            # Get mask indices for this batch
-            mask_indices = torch.nonzero(batch_mask_positions).squeeze(-1)
+                # Extract logits for masked positions
+                masked_logits = logits[batch_idx, mask_indices, :]  # (num_masked, vocab_size)
 
-            # Extract logits for masked positions
-            masked_logits = logits[batch_idx, mask_indices, :]  # (num_masked, vocab_size)
+                # Exclude special tokens from sampling - only sample from base vocabulary
+                if vocab_size is not None:
+                    # Set mask token logit to -inf so it's never sampled
+                    masked_logits[:, mask_token_id] = float('-inf')
 
-            # Exclude special tokens from sampling - only sample from base vocabulary
-            if vocab_size is not None:
-                # Set mask token logit to -inf so it's never sampled
-                masked_logits[:, mask_token_id] = float('-inf')
+                    # Set pad token logit to -inf if it exists
+                    if pad_token_id is not None:
+                        masked_logits[:, pad_token_id] = float('-inf')
 
-                # Set pad token logit to -inf if it exists
-                if pad_token_id is not None:
-                    masked_logits[:, pad_token_id] = float('-inf')
+                    # If we have base_vocab_size, only allow sampling from base vocabulary
+                    if base_vocab_size is not None:
+                        # Set all special tokens (beyond base vocab) to -inf
+                        if masked_logits.shape[-1] > base_vocab_size:
+                            masked_logits[:, base_vocab_size:] = float('-inf')
 
-                # If we have base_vocab_size, only allow sampling from base vocabulary
-                if base_vocab_size is not None:
-                    # Set all special tokens (beyond base vocab) to -inf
-                    if masked_logits.shape[-1] > base_vocab_size:
-                        masked_logits[:, base_vocab_size:] = float('-inf')
+                    # Ensure we don't access beyond vocabulary
+                    if masked_logits.shape[-1] > vocab_size:
+                        masked_logits = masked_logits[:, :vocab_size]
 
-                # Ensure we don't access beyond vocabulary
-                if masked_logits.shape[-1] > vocab_size:
-                    masked_logits = masked_logits[:, :vocab_size]
+                # Sample new tokens
+                new_tokens = nucleus_sample(masked_logits, top_p=top_p, temperature=temperature)
 
-            # Sample new tokens
-            new_tokens = nucleus_sample(masked_logits, top_p=top_p, temperature=temperature)
+                # Debug logging
+                if debug_logging_fn and batch_idx == 0:
+                    debug_logging_fn(
+                        sample_idx=batch_idx,
+                        logits=logits[batch_idx],
+                        mask_indices=mask_indices,
+                        masked_logits=masked_logits,
+                        new_tokens=new_tokens,
+                        mask_token_id=mask_token_id,
+                        vocab_size=vocab_size or masked_logits.shape[-1],
+                        itos=itos,
+                        stoi=stoi,
+                        log_debug=log_debug
+                    )
 
-        # Debug logging
-        if debug_logging_fn and batch_idx == 0:
-            debug_logging_fn(
-                sample_idx=batch_idx,
-                logits=logits[batch_idx],
-                mask_indices=mask_indices,
-                masked_logits=masked_logits,
-                new_tokens=new_tokens,
-                mask_token_id=mask_token_id,
-                vocab_size=vocab_size or masked_logits.shape[-1],
-                itos=itos,
-                stoi=stoi,
-                log_debug=log_debug
-            )
-
-        # Update prediction tokens
-        prediction_tokens[batch_idx, mask_indices] = new_tokens
+                # Update prediction tokens
+                prediction_tokens[batch_idx, mask_indices] = new_tokens
 
     if return_logits:
         return prediction_tokens, logits, critic_scores
