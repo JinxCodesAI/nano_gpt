@@ -203,7 +203,10 @@ tests/test_critic_utils.py::test_build_critic_artifacts_masked_and_ignore PASSED
 ## Git History
 
 ```
-e4f1865 (HEAD -> feature/sampler-head) Add comprehensive tests for sampler head
+9bc7c55 (HEAD -> feature/sampler-head) Integrate sampler head into sample_simple.py
+d07302e Fix sampler loss logging to match main and critic
+91f88e5 Add sampler head test configuration
+e4f1865 (origin/feature/sampler-head) Add comprehensive tests for sampler head
 773f8fc Implement sampler inference with wavefront filling
 282cbaa Implement sampler training integration
 ced47cd Add sampler head architecture to model.py
@@ -213,8 +216,8 @@ ced47cd Add sampler head architecture to model.py
 
 - **Branch**: `feature/sampler-head`
 - **Base**: `diffusion_05_09`
-- **Status**: Ready for review
-- **Remote**: Pushed to origin
+- **Status**: Ready for testing
+- **Remote**: Pushed to origin (needs update)
 
 ## Backward Compatibility
 
@@ -223,13 +226,53 @@ ced47cd Add sampler head architecture to model.py
 - Old checkpoints load correctly (sampler is optional)
 - No breaking changes to existing functionality
 - Sampler is opt-in via configuration (`add_sampler_head=False` by default)
+- `sample_simple.py` automatically detects and uses sampler when available
+
+## Logging
+
+✅ **Consistent logging across all components**:
+
+### Console Output
+- **Stage 1** (main only): `iter 100: loss 4.5000 (main 4.5000), time 150.00ms, mfu 25.50%`
+- **Stage 2** (main+sampler): `iter 1500: loss 9.2000 (main 4.6000, sampler 4.6000), time 155.00ms, mfu 26.00%`
+- **Stage 3** (main+sampler+critic): `iter 3500: loss 13.8000 (main 4.6000, sampler 4.6000, critic 4.6000), time 160.00ms, mfu 26.50%`
+
+### WandB Metrics
+- `train/loss` - Total loss
+- `train/loss_main` - Main LM loss
+- `train/loss_sampler` - Sampler loss (when active)
+- `train/loss_critic` - Critic loss (when active)
+
+## Integration with sample_simple.py
+
+✅ **Automatic sampler detection**:
+- `predict_and_sample_tokens` automatically detects if model has sampler head
+- Uses wavefront-based coherent sampling when sampler is available
+- Falls back to naive parallel sampling when sampler is not present
+- No changes needed to existing sampling scripts
+- Fully tested with `test_sample_simple_integration.py`
+
+## Test Configuration
+
+Ready-to-use configuration at `config/train_char_diffusion_sampler.py`:
+
+```bash
+python train.py config/train_char_diffusion_sampler.py
+```
+
+**Training Schedule**:
+- Iterations 0-1000: Main model only
+- Iterations 1000-3000: Main + Sampler
+- Iterations 3000-5000: Main + Sampler + Critic (warmup)
+- Iterations 5000+: Main + Sampler + Critic (full)
 
 ## Next Steps
 
-1. Create PR from `feature/sampler-head` to `diffusion_05_09`
-2. Review and merge
-3. Test with actual training runs
-4. Monitor sampler loss and coherence improvements
+1. Test training with `config/train_char_diffusion_sampler.py`
+2. Monitor loss components in console and WandB
+3. Test inference with `sample_simple.py` using trained checkpoint
+4. Evaluate coherence improvements vs baseline
+5. Create PR after successful testing
 
 ## Documentation
 
