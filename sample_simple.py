@@ -205,7 +205,7 @@ def diffusion_generate(
                     print(f"  Sample: {preview}")
 
             # Step 1: Predict and sample tokens for masked positions
-            pred_tokens, logits = predict_and_sample_tokens(
+            pred_tokens, logits, critic_scores = predict_and_sample_tokens(
                 model=model,
                 tokens=tokens,
                 mask_token_id=mask_token_id,
@@ -242,6 +242,7 @@ def diffusion_generate(
                         intelligent_remasking=False,
                         verbose=verbose,
                         logits_from_predict=logits,
+                        critic_scores_from_predict=critic_scores,
                         protected_mask=protected_mask,
                         schedule_mode=schedule_mode,
                     )

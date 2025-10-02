@@ -120,15 +120,21 @@ top_p=1.0, vocab_size=None,
                       hasattr(model, 'sampler_head') and
                       model.sampler_head is not None)
 
-        if use_sampler:
-            # Sampler path: get hidden states (will also compute logits internally)
-            measure_ctx = timer.measure('forward') if timer else nullcontext()
-            with measure_ctx:
-                hidden_states = model._encode_tokens(tokens)
-                # Get logits for return (needed for critic remasking)
-                logits = model.lm_head(hidden_states)
+        # Single forward pass for both sampler and naive paths
+        measure_ctx = timer.measure('forward') if timer else nullcontext()
+        with measure_ctx:
+            hidden_states = model._encode_tokens(tokens)
+            logits = model.lm_head(hidden_states)
 
-            # Measure sampler wavefront fill time
+            # Get critic scores if model has critic head (reuse hidden states)
+            critic_scores = None
+            if (hasattr(model, 'critic_head') and
+                model.critic_head is not None and
+                getattr(model.config, 'add_critic_head', False)):
+                critic_scores = model.critic_head(hidden_states).squeeze(-1)
+
+        if use_sampler:
+            # Sampler path: use wavefront fill
             measure_ctx = timer.measure('sampling_sampler') if timer else nullcontext()
             with measure_ctx:
                 prediction_tokens = sampler_wavefront_fill(
@@ -144,13 +150,8 @@ top_p=1.0, vocab_size=None,
                 )
 
             if return_logits:
-                return prediction_tokens, logits
-            return prediction_tokens, prediction_tokens.clone()
-
-        # Naive sampling path: only need logits
-        measure_ctx = timer.measure('forward') if timer else nullcontext()
-        with measure_ctx:
-            logits, _ = model(tokens, targets=dummy_targets)
+                return prediction_tokens, logits, critic_scores
+            return prediction_tokens, prediction_tokens.clone(), critic_scores
 
 
     # Extract logits for masked positions only (naive sampling path)
@@ -211,9 +212,9 @@ top_p=1.0, vocab_size=None,
         prediction_tokens[batch_idx, mask_indices] = new_tokens
 
     if return_logits:
-        return prediction_tokens, logits
+        return prediction_tokens, logits, critic_scores
     else:
-        return prediction_tokens
+        return prediction_tokens, None, critic_scores
 
 
 def calculate_selfconfidence_ratio(model, tokens, mask_token_id, device='cuda', ctx=None):
@@ -441,7 +442,7 @@ def apply_remasking_step(tokens, prediction_tokens, iteration, iterations, sched
                         masking_ratios=None, start_ratio=0.9, end_ratio=0.1, remasking_model=None,
                         randomness_strength=0.5, mask_token_id=None, device='cuda', base_model=None,
                         intelligent_remasking=False, verbose=False, logits_from_predict=None,
-                        protected_mask=None, schedule_mode='ratio'):
+                        protected_mask=None, schedule_mode='ratio', critic_scores_from_predict=None):
     """
     Apply remasking step with different scheduling options
 
@@ -556,8 +557,12 @@ def apply_remasking_step(tokens, prediction_tokens, iteration, iterations, sched
 
     # Critic-guided remasking path: precedence after remasking_model and before intelligent_remasking
     if base_model is not None and getattr(getattr(base_model, 'config', object()), 'add_critic_head', False) and not intelligent_remasking:
-        with torch.no_grad():
-            critic_logits = base_model.critic_scores(prediction_tokens)
+        # Use pre-computed critic scores if available, otherwise compute them
+        if critic_scores_from_predict is not None:
+            critic_logits = critic_scores_from_predict
+        else:
+            with torch.no_grad():
+                critic_logits = base_model.critic_scores(prediction_tokens)
         # Higher critic logit => higher error likelihood (wrongness)
         # Convert to probabilities for threshold mode
         wrongness_probs = torch.sigmoid(critic_logits)
