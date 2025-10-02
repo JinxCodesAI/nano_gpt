@@ -130,6 +130,7 @@ def diffusion_generate(
     ctx=None,
     schedule_mode: str = 'ratio',
     save_iterations: bool = False,
+    disable_sampler: bool = False,
 ):
     device = next(model.parameters()).device
 
@@ -209,6 +210,7 @@ def diffusion_generate(
             return_logits=True,
             pad_token_id=pad_token_id,
             base_vocab_size=base_vocab_size,
+            disable_sampler=disable_sampler,
         )
 
         # Step 2: Remask for next iteration (except last iteration)
@@ -339,6 +341,7 @@ def main():
     parser.add_argument('--verbose', action='store_true', help='Verbose iteration logging')
     parser.add_argument('--no-progress', action='store_true', help='Disable progress logs')
     parser.add_argument('--save', type=str, default=None, help='Save iteration data to JSON file (e.g., output.json)')
+    parser.add_argument('--disable-sampler', action='store_true', help='Disable sampler head (use naive sampling even if model has sampler)')
 
     args = parser.parse_args()
 
@@ -446,6 +449,7 @@ def main():
                 ctx=ctx,
                 schedule_mode=args.schedule_mode,
                 save_iterations=args.save is not None,
+                disable_sampler=args.disable_sampler,
             )
 
             if args.save is not None:

@@ -71,7 +71,7 @@ def predict_and_sample_tokens(model, tokens, mask_token_id, temperature=1.0,
 top_p=1.0, vocab_size=None,
                             device='cuda', debug_logging_fn=None, itos=None, stoi=None,
                             verbose=False, log_debug=False, return_logits=False,
-                            pad_token_id=None, base_vocab_size=None):
+                            pad_token_id=None, base_vocab_size=None, disable_sampler=False):
     """
     Predict and sample new tokens for masked positions.
 
@@ -94,6 +94,7 @@ top_p=1.0, vocab_size=None,
         return_logits: Whether to return logits (for critic remasking)
         pad_token_id: Optional pad token ID
         base_vocab_size: Optional base vocabulary size (excludes special tokens)
+        disable_sampler: If True, use naive sampling even if model has sampler head
 
     Returns:
         tuple: (updated_tokens, logits) if return_logits else updated_tokens
@@ -114,8 +115,8 @@ top_p=1.0, vocab_size=None,
     with torch.no_grad():
         logits, _ = model(tokens, targets=dummy_targets)
 
-        # Check if model has sampler head and use it for coherent sampling
-        if hasattr(model, 'sampler_head') and model.sampler_head is not None:
+        # Check if model has sampler head and use it for coherent sampling (unless disabled)
+        if not disable_sampler and hasattr(model, 'sampler_head') and model.sampler_head is not None:
             # Get hidden states for sampler
             hidden_states = model._encode_tokens(tokens)
 

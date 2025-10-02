@@ -7,7 +7,7 @@ eval_iters = 50
 log_interval = 10
 
 # save checkpoints when validation improves
-always_save_checkpoint = False
+always_save_checkpoint = True
 
 wandb_log = True # override via command line if you like
 wandb_project = 'char-diffusion'
