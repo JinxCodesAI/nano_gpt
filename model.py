@@ -794,11 +794,26 @@ class GPT(nn.Module):
                 self._last_lm_loss = float(loss.detach().item())
             except Exception:
                 self._last_lm_loss = 0.0
-            # Default critic component to 0.0; may be overwritten below when enabled
+            # Default sampler and critic components to 0.0; may be overwritten below when enabled
+            self._last_sampler_loss = 0.0
             self._last_critic_loss = 0.0
 
+            # Optional sampler loss (Stage 2+)
+            current_iter = getattr(self, '_current_iter', 0)
+            if (getattr(self.config, 'add_sampler_head', False) and
+                hasattr(self, 'sampler_head') and
+                current_iter >= getattr(self.config, 'start_sampler_iteration', 0)):
 
-            # Optional critic loss (multi-task) when enabled
+                sampler_loss = self._compute_sampler_loss(x, idx, targets)
+                if sampler_loss is not None:
+                    # Add sampler loss directly (no weight - standard cross-entropy)
+                    loss = loss + sampler_loss
+                    try:
+                        self._last_sampler_loss = float(sampler_loss.detach().item())
+                    except Exception:
+                        self._last_sampler_loss = 0.0
+
+            # Optional critic loss (multi-task) when enabled (Stage 3+)
             alpha_eff = self._effective_critic_alpha()
             if getattr(self.config, 'add_critic_head', False) and hasattr(self, 'critic_head') and alpha_eff > 0.0:
                 # Build critic artifacts using shared helper
@@ -887,6 +902,42 @@ class GPT(nn.Module):
             )
 
         return loss
+
+    def _compute_sampler_loss(self, hidden_states, idx, targets):
+        """
+        Compute sampler head loss using neighbor context.
+
+        This is an auxiliary loss that trains the sampler independently.
+        All inputs are detached to prevent gradients from affecting the main model.
+
+        Returns standard cross-entropy loss (no special weighting).
+        """
+        from sample_utils import prepare_sampler_inputs
+
+        artifacts = prepare_sampler_inputs(
+            idx=idx,
+            targets=targets,
+            hidden_states=hidden_states,
+            wte_embedding=self.transformer.wte,
+            mask_token_id=self.config.mask_token_id,
+            ignore_index=self.config.ignore_index
+        )
+
+        if artifacts is None:
+            return None  # No eligible positions
+
+        # All inputs are already detached by prepare_sampler_inputs
+        sampler_input = artifacts['sampler_input']  # (N, 3*n_embd)
+        sampler_targets = artifacts['sampler_targets']  # (N,)
+
+        # Forward through sampler head
+        sampler_features = self.sampler_head(sampler_input)  # (N, n_embd)
+        sampler_logits = self.lm_head(sampler_features)  # (N, vocab_size)
+
+        # Compute standard cross-entropy loss
+        sampler_loss = F.cross_entropy(sampler_logits, sampler_targets)
+
+        return sampler_loss
 
     def _effective_critic_alpha(self) -> float:
         """Compute iteration-based effective critic alpha with linear warmup.

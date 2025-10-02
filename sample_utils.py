@@ -623,6 +623,89 @@ def apply_remasking_step(tokens, prediction_tokens, iteration, iterations, sched
     return remasked_tokens, None, []
 
 
+def prepare_sampler_inputs(idx: torch.Tensor,
+                          targets: torch.Tensor,
+                          hidden_states: torch.Tensor,
+                          wte_embedding,
+                          mask_token_id: int,
+                          ignore_index: int):
+    """
+    Prepare sampler training artifacts from current batch.
+
+    Returns a dict with detached embeddings and training targets, similar to
+    build_critic_artifacts_from_logits pattern.
+
+    During training, every supervised position (targets != ignore_index) is eligible
+    because neighbors come from the actual input tokens, not from masked positions.
+
+    Args:
+        idx: (B, T) input token IDs
+        targets: (B, T) target token IDs
+        hidden_states: (B, T, n_embd) hidden states from transformer
+        wte_embedding: Token embedding layer (model.transformer.wte)
+        mask_token_id: ID of the mask token
+        ignore_index: Ignore index for loss computation (typically -100)
+
+    Returns:
+        dict with:
+            'sampler_input': (N, 3*n_embd) concatenated [left_emb, hidden, right_emb] - DETACHED
+            'sampler_targets': (N,) target token IDs for training
+            'num_positions': int, number of eligible positions
+    """
+    B, T, n_embd = hidden_states.shape
+    device = idx.device
+
+    # Find supervised positions (not ignore_index)
+    # During training, ALL supervised positions are eligible because neighbors
+    # come from the input sequence, not from predictions
+    valid = (targets != ignore_index)
+
+    # Get indices of all valid positions
+    batch_indices, pos_indices = valid.nonzero(as_tuple=True)
+    N = len(batch_indices)
+
+    if N == 0:
+        # No eligible positions
+        return None
+
+    # Gather hidden states for all valid positions (DETACH for auxiliary training)
+    h = hidden_states[batch_indices, pos_indices].detach()  # (N, n_embd)
+
+    # Gather targets
+    sampler_targets = targets[batch_indices, pos_indices]  # (N,)
+
+    # Prepare left neighbor embeddings (DETACHED)
+    # Use zero embedding when no left neighbor (position 0) or neighbor is [MASK]
+    left_emb = torch.zeros(N, n_embd, device=device, dtype=h.dtype)
+    left_exists = pos_indices > 0
+    if left_exists.any():
+        left_ids = idx[batch_indices[left_exists], pos_indices[left_exists] - 1]
+        left_not_mask = left_ids != mask_token_id
+        if left_not_mask.any():
+            # Get embeddings for non-mask neighbors (DETACHED)
+            left_emb[left_exists][left_not_mask] = wte_embedding(left_ids[left_not_mask]).detach()
+
+    # Prepare right neighbor embeddings (DETACHED)
+    # Use zero embedding when no right neighbor (position T-1) or neighbor is [MASK]
+    right_emb = torch.zeros(N, n_embd, device=device, dtype=h.dtype)
+    right_exists = pos_indices < (T - 1)
+    if right_exists.any():
+        right_ids = idx[batch_indices[right_exists], pos_indices[right_exists] + 1]
+        right_not_mask = right_ids != mask_token_id
+        if right_not_mask.any():
+            # Get embeddings for non-mask neighbors (DETACHED)
+            right_emb[right_exists][right_not_mask] = wte_embedding(right_ids[right_not_mask]).detach()
+
+    # Concatenate inputs for sampler (all detached)
+    sampler_input = torch.cat([left_emb, h, right_emb], dim=-1)  # (N, 3*n_embd)
+
+    return {
+        'sampler_input': sampler_input,
+        'sampler_targets': sampler_targets,
+        'num_positions': N,
+    }
+
+
 def build_critic_artifacts_from_logits(idx: torch.Tensor,
                                        logits: torch.Tensor,
                                        targets: torch.Tensor,

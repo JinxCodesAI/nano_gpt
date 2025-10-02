@@ -161,10 +161,13 @@ class Trainer:
                 # If TrainingStep captured component losses, include them (already unscaled like lossf)
                 try:
                     main_part = getattr(self.training_step, 'last_loss_main', None)
+                    sampler_part = getattr(self.training_step, 'last_loss_sampler', None)
                     critic_part = getattr(self.training_step, 'last_loss_critic', None)
                     if isinstance(main_part, (int, float)):
                         step_metrics['loss_main'] = float(main_part)
-                    if isinstance(critic_part, (int, float)):
+                    if isinstance(sampler_part, (int, float)) and sampler_part > 0:
+                        step_metrics['loss_sampler'] = float(sampler_part)
+                    if isinstance(critic_part, (int, float)) and critic_part > 0:
                         step_metrics['loss_critic'] = float(critic_part)
                 except Exception:
                     pass

@@ -49,6 +49,7 @@ class TrainingStep:
         self.logger = logger
         # Track last loss components (unscaled, sum equals total loss before grad_accum scaling)
         self.last_loss_main: float = 0.0
+        self.last_loss_sampler: float = 0.0
         self.last_loss_critic: float = 0.0
 
     def set_learning_rate(self, iter_num: int) -> float:
@@ -145,6 +146,10 @@ class TrainingStep:
                         self.last_loss_main = float(loss.detach().item())
                     except Exception:
                         self.last_loss_main = 0.0
+                try:
+                    self.last_loss_sampler = float(getattr(raw_model, "_last_sampler_loss"))
+                except Exception:
+                    self.last_loss_sampler = 0.0
                 try:
                     self.last_loss_critic = float(getattr(raw_model, "_last_critic_loss"))
                 except Exception:
