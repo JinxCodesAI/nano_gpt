@@ -296,6 +296,45 @@ class ScaledSigmoidHead(nn.Module):
         return torch.sigmoid(scaled_logits)
 
 
+class SamplerHead(nn.Module):
+    """
+    A lightweight, bidirectional MLP that conditions a token prediction on its
+    hidden state and its immediate left and right neighbors.
+
+    This is an auxiliary network trained separately from the main transformer.
+    During training, inputs are detached to isolate sampler training.
+
+    Input: [left_neighbor_embedding, hidden_state, right_neighbor_embedding]
+    Output: features (n_embd) to be passed to lm_head for token prediction
+
+    When a neighbor is missing (boundary or [MASK]), use zero embedding.
+    """
+    def __init__(self, config):
+        super().__init__()
+        # The input is the concatenation of three vectors:
+        # [Embedding(left_neighbor), HiddenState(current), Embedding(right_neighbor)]
+        input_dim = config.n_embd * 3
+
+        self.mlp = nn.Sequential(
+            nn.Linear(input_dim, config.n_embd, bias=config.bias),
+            nn.SiLU(),
+            LayerNorm(config.n_embd, bias=config.bias),
+            nn.Linear(config.n_embd, config.n_embd, bias=config.bias),
+            nn.SiLU(),
+            LayerNorm(config.n_embd, bias=config.bias)
+        )
+
+    def forward(self, combined_input):
+        """
+        Args:
+            combined_input: (N, 3*n_embd) concatenated [left_emb, hidden_state, right_emb]
+
+        Returns:
+            features: (N, n_embd) features for lm_head to predict tokens
+        """
+        return self.mlp(combined_input)
+
+
 class Block(nn.Module):
 
     def __init__(self, config):
@@ -356,6 +395,10 @@ class GPTConfig:
     start_critic_iteration: int = 0
     end_critic_iteration: int = 0
 
+    # Optional sampler head configuration (LANGUAGE_MODEL coherent sampling)
+    add_sampler_head: bool = False
+    start_sampler_iteration: int = 0  # Iteration to start training sampler (0 = from beginning)
+    sampler_min_neighbors_ratio: float = 0.01  # Minimum ratio of tokens to bootstrap when no neighbors available
 
     # Backward compatibility
     binary_classification: bool = False  # Legacy support
@@ -372,6 +415,15 @@ class GPTConfig:
             if self.attention_type != 'bidirectional':
                 self._log_warning(f"{self.mode.value} requires bidirectional attention. Changing from '{self.attention_type}' to 'bidirectional'")
                 self.attention_type = 'bidirectional'
+
+        # Validate sampler head requirements
+        if self.add_sampler_head:
+            if self.mode != ModelMode.LANGUAGE_MODEL:
+                raise ValueError("Sampler head only supported for LANGUAGE_MODEL mode")
+            if self.attention_type != 'bidirectional':
+                raise ValueError("Sampler head requires bidirectional attention (set attention_type='bidirectional')")
+            if self.mask_token_id is None:
+                raise ValueError("Sampler head requires mask_token_id to be configured")
 
     def _log_warning(self, message):
         """Log warning message - will be enhanced when logger is available"""
@@ -430,6 +482,15 @@ class GPT(nn.Module):
         if getattr(self.config, 'add_critic_head', False) and self.config.mode == ModelMode.LANGUAGE_MODEL:
             self.critic_head = nn.Linear(self.config.n_embd, 1, bias=False)
             self._log_info(f"Critic head enabled (alpha={self.config.critic_alpha})")
+
+        # Optional sampler head for LANGUAGE_MODEL coherent sampling
+        if getattr(config, 'add_sampler_head', False):
+            if config.mode != ModelMode.LANGUAGE_MODEL:
+                raise ValueError("Sampler head only supported for LANGUAGE_MODEL mode")
+            self.sampler_head = SamplerHead(config)
+            self._log_info(f"Sampler head enabled (start_iter={config.start_sampler_iteration})")
+        else:
+            self.sampler_head = None
 
         # init all weights
         self.apply(self._init_weights)
