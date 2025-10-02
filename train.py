@@ -119,6 +119,10 @@ start_critic_iteration = 0
 end_critic_iteration = 0
 critic_alpha = 0.5
 critic_target_scope = 'masked_and_ignore'
+# sampler head (optional, default disabled)
+add_sampler_head = False
+start_sampler_iteration = 0
+sampler_min_neighbors_ratio = 0.01
 
 # -----------------------------------------------------------------------------
 exec(open('configurator.py').read()) # overrides from command line or config file
@@ -247,6 +251,10 @@ model_args = dict(n_layer=n_layer, n_head=n_head, n_embd=n_embd, block_size=bloc
                   critic_target_scope=critic_target_scope,
                   start_critic_iteration=start_critic_iteration,
                   end_critic_iteration=end_critic_iteration,
+                  # sampler head parameters
+                  add_sampler_head=add_sampler_head,
+                  start_sampler_iteration=start_sampler_iteration,
+                  sampler_min_neighbors_ratio=sampler_min_neighbors_ratio,
                   mask_token_id=meta_mask_token_id,
                   pad_token_id=meta_pad_token_id) # start with model_args from command line
 if init_from == 'scratch':
