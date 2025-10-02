@@ -77,17 +77,26 @@ class ConsoleLogger(Logger):
 
         iter_num = metrics.get('iter', 0)
         loss_total = metrics.get('loss', 0.0)
-        # Accept multiple possible keys for components; default critic to 0 if missing
-        loss_critic = metrics.get('loss_critic', metrics.get('critic_loss', None))
-        if loss_critic is None:
-            loss_critic = 0.0
+
+        # Get component losses
         loss_main = metrics.get('loss_main', None)
-        if loss_main is None:
-            # If we have total and critic, derive main; else fall back to total
-            try:
-                loss_main = float(loss_total) - float(loss_critic)
-            except Exception:
-                loss_main = float(loss_total)
+        loss_sampler = metrics.get('loss_sampler', None)
+        loss_critic = metrics.get('loss_critic', metrics.get('critic_loss', None))
+
+        # Build loss breakdown string
+        loss_parts = []
+        if loss_main is not None:
+            loss_parts.append(f"main {loss_main:.4f}")
+        if loss_sampler is not None and loss_sampler > 0:
+            loss_parts.append(f"sampler {loss_sampler:.4f}")
+        if loss_critic is not None and loss_critic > 0:
+            loss_parts.append(f"critic {loss_critic:.4f}")
+
+        # If no components available, derive main from total
+        if not loss_parts:
+            loss_parts.append(f"main {loss_total:.4f}")
+
+        loss_breakdown = ", ".join(loss_parts)
 
         dt_ms = metrics.get('time_ms', 0.0)
         mfu_pct = metrics.get('mfu_pct', 0.0)
@@ -110,7 +119,7 @@ class ConsoleLogger(Logger):
                 extras.append(f"mem {mem_alloc:.0f}/{mem_reserved:.0f}MB")
         extras_str = (", " + ", ".join(extras)) if extras else ""
         print(
-            f"iter {iter_num}: loss {loss_total:.4f} (main {loss_main:.4f}, critic {loss_critic:.4f}), "
+            f"iter {iter_num}: loss {loss_total:.4f} ({loss_breakdown}), "
             f"time {dt_ms:.2f}ms, mfu {mfu_pct:.2f}%{extras_str}"
         )
 
@@ -224,7 +233,7 @@ class WandBLogger(Logger):
     def log_step(self, metrics: Dict[str, Any]) -> None:
         """
         Log training step metrics to WandB (every log_interval).
-        Includes: iter, train/loss, train/loss_main, train/loss_critic, time_ms, mfu,
+        Includes: iter, train/loss, train/loss_main, train/loss_sampler, train/loss_critic, time_ms, mfu,
         avg_abs_rel_err (if present), and any flattened loss_modifiers/* metrics present.
         """
         if not (self.enabled and self.master_process and self.wandb):
@@ -239,6 +248,8 @@ class WandBLogger(Logger):
         # Include decomposed losses when available
         if 'loss_main' in metrics:
             log_dict['train/loss_main'] = metrics['loss_main']
+        if 'loss_sampler' in metrics:
+            log_dict['train/loss_sampler'] = metrics['loss_sampler']
         if 'loss_critic' in metrics:
             log_dict['train/loss_critic'] = metrics['loss_critic']
         if 'time_ms' in metrics:
