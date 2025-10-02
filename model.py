@@ -827,6 +827,8 @@ class GPT(nn.Module):
                     ignore_index=int(self.config.ignore_index),
                     pad_token_id=getattr(self.config, 'pad_token_id', None),
                     scope=getattr(self.config, 'critic_target_scope', 'masked_and_ignore'),
+                    model=self,  # Pass model for sampler
+                    hidden_states=x  # Pass hidden states for sampler
                 )
                 critic_input = artifacts['critic_input']
                 critic_target = artifacts['critic_target']

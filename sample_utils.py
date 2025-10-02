@@ -623,6 +623,169 @@ def apply_remasking_step(tokens, prediction_tokens, iteration, iterations, sched
     return remasked_tokens, None, []
 
 
+def sampler_wavefront_fill(model, tokens, hidden_states, mask_token_id,
+                           temperature=1.0, top_p=1.0, vocab_size=None,
+                           base_vocab_size=None, min_neighbors_ratio=0.01):
+    """
+    Fill masked tokens using wavefront-based coherent sampling.
+
+    Fills tokens in waves, where each wave fills positions that have at least
+    one non-masked neighbor. This ensures local coherence.
+
+    Args:
+        model: GPT model with sampler_head
+        tokens: (B, T) current token sequence
+        hidden_states: (B, T, n_embd) hidden states from _encode_tokens
+        mask_token_id: ID of mask token
+        temperature: Sampling temperature
+        top_p: Nucleus sampling parameter
+        vocab_size: Full vocabulary size
+        base_vocab_size: Base vocabulary size (excluding special tokens)
+        min_neighbors_ratio: Minimum ratio of tokens with neighbors to proceed
+
+    Returns:
+        filled_tokens: (B, T) tokens with masks filled
+    """
+    B, T = tokens.shape
+    device = tokens.device
+    filled = tokens.clone()
+
+    # Maximum waves = sequence length (to prevent infinite loops)
+    max_waves = T
+
+    for wave in range(max_waves):
+        # Find masked positions
+        is_masked = (filled == mask_token_id)
+        num_masked = is_masked.sum().item()
+
+        if num_masked == 0:
+            break  # All masks filled
+
+        # Find masked positions with at least one non-masked neighbor
+        has_left_neighbor = torch.zeros_like(is_masked)
+        has_left_neighbor[:, 1:] = ~is_masked[:, :-1]
+
+        has_right_neighbor = torch.zeros_like(is_masked)
+        has_right_neighbor[:, :-1] = ~is_masked[:, 1:]
+
+        # Eligible: masked AND has at least one non-masked neighbor
+        eligible = is_masked & (has_left_neighbor | has_right_neighbor)
+        num_eligible = eligible.sum().item()
+
+        # Check if we have enough eligible tokens to proceed
+        if num_eligible == 0:
+            # EDGE CASE: No tokens with neighbors - need to bootstrap
+            # This happens when all (or most) tokens are masked
+            # Solution: Fill top 1% (min_neighbors_ratio) by confidence using naive sampling
+            # This creates "seed" tokens that allow the wavefront to proceed
+            eligible = _bootstrap_fill_by_confidence(
+                filled, is_masked, hidden_states, model,
+                min_neighbors_ratio, mask_token_id
+            )
+            num_eligible = eligible.sum().item()
+
+            if num_eligible == 0:
+                break  # Cannot make progress (should not happen)
+
+        # Fill eligible positions using sampler
+        batch_idx, pos_idx = eligible.nonzero(as_tuple=True)
+
+        # Gather hidden states
+        h = hidden_states[batch_idx, pos_idx]  # (N, n_embd)
+
+        # Gather left neighbor embeddings (zero if missing or masked)
+        left_emb = torch.zeros_like(h)
+        left_exists = pos_idx > 0
+        if left_exists.any():
+            left_batch = batch_idx[left_exists]
+            left_pos = pos_idx[left_exists] - 1
+            left_ids = filled[left_batch, left_pos]
+            left_not_mask = left_ids != mask_token_id
+            if left_not_mask.any():
+                left_emb[left_exists][left_not_mask] = model.transformer.wte(
+                    left_ids[left_not_mask]
+                )
+
+        # Gather right neighbor embeddings (zero if missing or masked)
+        right_emb = torch.zeros_like(h)
+        right_exists = pos_idx < (T - 1)
+        if right_exists.any():
+            right_batch = batch_idx[right_exists]
+            right_pos = pos_idx[right_exists] + 1
+            right_ids = filled[right_batch, right_pos]
+            right_not_mask = right_ids != mask_token_id
+            if right_not_mask.any():
+                right_emb[right_exists][right_not_mask] = model.transformer.wte(
+                    right_ids[right_not_mask]
+                )
+
+        # Forward through sampler
+        sampler_input = torch.cat([left_emb, h, right_emb], dim=-1)
+        sampler_features = model.sampler_head(sampler_input)
+        logits = model.lm_head(sampler_features)
+
+        # Apply vocabulary restrictions
+        if vocab_size is not None:
+            logits[:, mask_token_id] = float('-inf')
+            if base_vocab_size is not None and logits.shape[-1] > base_vocab_size:
+                logits[:, base_vocab_size:] = float('-inf')
+
+        # Sample tokens
+        new_tokens = nucleus_sample(logits, top_p=top_p, temperature=temperature)
+
+        # Update filled tokens
+        filled[batch_idx, pos_idx] = new_tokens
+
+    return filled
+
+
+def _bootstrap_fill_by_confidence(filled, is_masked, hidden_states, model,
+                                   min_ratio, mask_token_id):
+    """
+    Bootstrap filling when no masked tokens have non-masked neighbors.
+
+    This handles the edge case where all (or most) tokens are masked, preventing
+    the wavefront from starting. We select a small percentage (min_ratio, default 1%)
+    of masked positions with the highest logit confidence and mark them for naive
+    sampling. These "seed" tokens allow the wavefront to proceed.
+
+    Args:
+        filled: (B, T) current filled tokens
+        is_masked: (B, T) boolean mask of masked positions
+        hidden_states: (B, T, n_embd) hidden states from main model
+        model: GPT model
+        min_ratio: Ratio of masked tokens to bootstrap (default 0.01 = 1%)
+        mask_token_id: ID of mask token
+
+    Returns:
+        eligible: (B, T) boolean mask of positions to fill in this bootstrap step
+    """
+    B, T = filled.shape
+    num_masked = is_masked.sum().item()
+    num_to_fill = max(1, int(num_masked * min_ratio))
+
+    # Get logits for all masked positions using main lm_head
+    batch_idx, pos_idx = is_masked.nonzero(as_tuple=True)
+    h = hidden_states[batch_idx, pos_idx]
+    logits = model.lm_head(h)
+
+    # Get max logit (confidence) for each position
+    # Higher max logit = model is more confident about its top prediction
+    max_logits, _ = logits.max(dim=-1)
+
+    # Select top-k positions by confidence
+    if len(max_logits) <= num_to_fill:
+        # If we have fewer masked tokens than num_to_fill, bootstrap all of them
+        eligible = is_masked.clone()
+    else:
+        # Select top num_to_fill positions by confidence
+        _, top_indices = torch.topk(max_logits, num_to_fill)
+        eligible = torch.zeros_like(is_masked)
+        eligible[batch_idx[top_indices], pos_idx[top_indices]] = True
+
+    return eligible
+
+
 def prepare_sampler_inputs(idx: torch.Tensor,
                           targets: torch.Tensor,
                           hidden_states: torch.Tensor,
@@ -712,7 +875,9 @@ def build_critic_artifacts_from_logits(idx: torch.Tensor,
                                        mask_token_id: int,
                                        ignore_index: int,
                                        pad_token_id: int | None = None,
-                                       scope: str = 'masked_and_ignore'):
+                                       scope: str = 'masked_and_ignore',
+                                       model=None,
+                                       hidden_states=None):
     """
     Build critic sampling artifacts from LM logits and inputs.
     Returns a dict with:
@@ -720,7 +885,21 @@ def build_critic_artifacts_from_logits(idx: torch.Tensor,
       - critic_input: (B, T) input with masked positions filled by pred_tokens
       - critic_target: (B, T) float tensor, 0 for correct, 1 for error, with ignore positions set to 0 in masked_and_ignore scope
       - critic_valid: (B, T) bool tensor indicating which positions count for critic loss/stats
-    Sampling uses multinomial over softmax(logits) (no temperature/top-p here; match training/eval usage).
+
+    Sampling strategy:
+    - If model has sampler_head and hidden_states provided: use sampler_wavefront_fill for coherent sampling
+    - Otherwise: use naive multinomial sampling over softmax(logits)
+
+    Args:
+        idx: (B, T) input token IDs
+        logits: (B, T, vocab_size) logits from model
+        targets: (B, T) target token IDs
+        mask_token_id: ID of mask token
+        ignore_index: Ignore index for loss computation
+        pad_token_id: Optional pad token ID
+        scope: Critic target scope ('masked_and_ignore' or 'masked_only')
+        model: Optional model (for sampler head)
+        hidden_states: Optional (B, T, n_embd) hidden states (for sampler head)
     """
     if idx is None:
         raise RuntimeError("build_critic_artifacts_from_logits: idx is required")
@@ -733,12 +912,31 @@ def build_critic_artifacts_from_logits(idx: torch.Tensor,
 
     masked_positions = (idx == int(mask_token_id))
 
-    # Sample predictions from logits; flatten for efficiency then reshape back
+    # Sample predictions from logits
     with torch.no_grad():
-        probs = F.softmax(logits.detach(), dim=-1)
-        flat = probs.view(-1, probs.size(-1))
-        sampled = torch.multinomial(flat, num_samples=1).view(probs.size(0), probs.size(1))
-        pred_tokens = sampled
+        # Check if we should use sampler for coherent sampling
+        if (model is not None and
+            hasattr(model, 'sampler_head') and
+            model.sampler_head is not None and
+            hidden_states is not None):
+            # Use sampler for coherent sampling
+            pred_tokens = sampler_wavefront_fill(
+                model=model,
+                tokens=idx,
+                hidden_states=hidden_states,
+                mask_token_id=mask_token_id,
+                temperature=1.0,  # Use temperature=1.0 for training
+                top_p=1.0,  # No top-p filtering for training
+                vocab_size=model.config.vocab_size if hasattr(model, 'config') else None,
+                base_vocab_size=None,  # Allow all tokens during training
+                min_neighbors_ratio=getattr(model.config, 'sampler_min_neighbors_ratio', 0.01) if hasattr(model, 'config') else 0.01
+            )
+        else:
+            # Fallback to naive parallel sampling
+            probs = F.softmax(logits.detach(), dim=-1)
+            flat = probs.view(-1, probs.size(-1))
+            sampled = torch.multinomial(flat, num_samples=1).view(probs.size(0), probs.size(1))
+            pred_tokens = sampled
 
     critic_input = idx.clone()
     critic_input[masked_positions] = pred_tokens[masked_positions]
