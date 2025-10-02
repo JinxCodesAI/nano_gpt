@@ -67,13 +67,16 @@ def nucleus_sample(logits, top_p=1.0, temperature=1.0):
     probs = F.softmax(logits, dim=-1)
     return torch.multinomial(probs, num_samples=1).squeeze(-1)
 
-def predict_and_sample_tokens(model, tokens, mask_token_id, temperature=1.0, 
+def predict_and_sample_tokens(model, tokens, mask_token_id, temperature=1.0,
 top_p=1.0, vocab_size=None,
                             device='cuda', debug_logging_fn=None, itos=None, stoi=None,
                             verbose=False, log_debug=False, return_logits=False,
                             pad_token_id=None, base_vocab_size=None):
     """
-    Predict and sample new tokens for masked positions
+    Predict and sample new tokens for masked positions.
+
+    If the model has a sampler head, uses wavefront-based coherent sampling.
+    Otherwise, uses naive parallel sampling.
 
     Args:
         model: The language model
@@ -88,24 +91,50 @@ top_p=1.0, vocab_size=None,
         stoi: String to index mapping
         verbose: Enable verbose logging
         log_debug: Enable debug logging
+        return_logits: Whether to return logits (for critic remasking)
+        pad_token_id: Optional pad token ID
+        base_vocab_size: Optional base vocabulary size (excludes special tokens)
 
     Returns:
-        tuple: (updated_tokens, prediction_tokens)
+        tuple: (updated_tokens, logits) if return_logits else updated_tokens
     """
     batch_size, seq_len = tokens.shape
-
 
     # Find masked positions
     mask_positions = (tokens == mask_token_id)
 
     if not mask_positions.any():
+        if return_logits:
+            return tokens, None
         return tokens, tokens.clone()
 
-    # Forward pass through the model
+    # Forward pass through the model to get hidden states
     # Pass dummy targets to get logits for all positions (not just the last one)
     dummy_targets = torch.zeros_like(tokens)
     with torch.no_grad():
         logits, _ = model(tokens, targets=dummy_targets)
+
+        # Check if model has sampler head and use it for coherent sampling
+        if hasattr(model, 'sampler_head') and model.sampler_head is not None:
+            # Get hidden states for sampler
+            hidden_states = model._encode_tokens(tokens)
+
+            # Use sampler wavefront fill for coherent sampling
+            prediction_tokens = sampler_wavefront_fill(
+                model=model,
+                tokens=tokens,
+                hidden_states=hidden_states,
+                mask_token_id=mask_token_id,
+                temperature=temperature,
+                top_p=top_p,
+                vocab_size=vocab_size,
+                base_vocab_size=base_vocab_size,
+                min_neighbors_ratio=getattr(model.config, 'sampler_min_neighbors_ratio', 0.01)
+            )
+
+            if return_logits:
+                return prediction_tokens, logits
+            return prediction_tokens, prediction_tokens.clone()
 
 
     # Extract logits for masked positions only
