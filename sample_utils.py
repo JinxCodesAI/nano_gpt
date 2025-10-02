@@ -112,24 +112,25 @@ top_p=1.0, vocab_size=None,
             return tokens, None
         return tokens, tokens.clone()
 
-    # Forward pass through the model to get hidden states
-    # Pass dummy targets to get logits for all positions (not just the last one)
+    # Forward pass through the model
     dummy_targets = torch.zeros_like(tokens)
     with torch.no_grad():
-        # Measure forward pass time
-        measure_ctx = timer.measure('forward') if timer else nullcontext()
-        with measure_ctx:
-            logits, _ = model(tokens, targets=dummy_targets)
+        # Check if we'll use sampler (need hidden states) or naive sampling (only need logits)
+        use_sampler = (not disable_sampler and
+                      hasattr(model, 'sampler_head') and
+                      model.sampler_head is not None)
 
-        # Check if model has sampler head and use it for coherent sampling (unless disabled)
-        if not disable_sampler and hasattr(model, 'sampler_head') and model.sampler_head is not None:
-            # Get hidden states for sampler
-            hidden_states = model._encode_tokens(tokens)
+        if use_sampler:
+            # Sampler path: get hidden states (will also compute logits internally)
+            measure_ctx = timer.measure('forward') if timer else nullcontext()
+            with measure_ctx:
+                hidden_states = model._encode_tokens(tokens)
+                # Get logits for return (needed for critic remasking)
+                logits = model.lm_head(hidden_states)
 
             # Measure sampler wavefront fill time
             measure_ctx = timer.measure('sampling_sampler') if timer else nullcontext()
             with measure_ctx:
-                # Use sampler wavefront fill for coherent sampling
                 prediction_tokens = sampler_wavefront_fill(
                     model=model,
                     tokens=tokens,
@@ -145,6 +146,11 @@ top_p=1.0, vocab_size=None,
             if return_logits:
                 return prediction_tokens, logits
             return prediction_tokens, prediction_tokens.clone()
+
+        # Naive sampling path: only need logits
+        measure_ctx = timer.measure('forward') if timer else nullcontext()
+        with measure_ctx:
+            logits, _ = model(tokens, targets=dummy_targets)
 
 
     # Extract logits for masked positions only (naive sampling path)

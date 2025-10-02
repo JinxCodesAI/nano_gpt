@@ -132,12 +132,11 @@ def diffusion_generate(
     schedule_mode: str = 'ratio',
     save_iterations: bool = False,
     disable_sampler: bool = False,
-    enable_timing: bool = False,
 ):
     device = next(model.parameters()).device
 
-    # Initialize timing if enabled
-    iter_timer = IterationTimer() if enable_timing else None
+    # Initialize timing (always enabled for performance analysis)
+    iter_timer = IterationTimer()
 
     # Start with all positions masked
     tokens = torch.full((batch_size, total_length), int(mask_token_id), dtype=torch.long, device=device)
@@ -297,12 +296,12 @@ def diffusion_generate(
                         })
                 tokens = pred_tokens
 
-            # Print per-iteration timing if enabled
-            if iter_timer and (verbose or show_progress):
+            # Print per-iteration timing (only in verbose mode)
+            if verbose:
                 iter_timer.print_iteration_summary(iteration, show_percentages=True)
 
-    # Print overall timing summary if enabled
-    if iter_timer:
+    # Print overall timing summary (always show at end unless --no-progress)
+    if show_progress:
         iter_timer.print_overall_summary()
 
     if save_iterations:
@@ -361,7 +360,6 @@ def main():
     parser.add_argument('--no-progress', action='store_true', help='Disable progress logs')
     parser.add_argument('--save', type=str, default=None, help='Save iteration data to JSON file (e.g., output.json)')
     parser.add_argument('--disable-sampler', action='store_true', help='Disable sampler head (use naive sampling even if model has sampler)')
-    parser.add_argument('--enable-timing', action='store_true', help='Enable detailed timing breakdown (forward/sampling/remasking)')
 
     args = parser.parse_args()
 
@@ -470,7 +468,6 @@ def main():
                 schedule_mode=args.schedule_mode,
                 save_iterations=args.save is not None,
                 disable_sampler=args.disable_sampler,
-                enable_timing=args.enable_timing,
             )
 
             if args.save is not None:
