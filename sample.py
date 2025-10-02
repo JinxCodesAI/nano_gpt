@@ -57,8 +57,6 @@ seed_placement = SeedPlacement.RANDOM_PLACEMENT
 # Diffusion parameters (only used if sampling_method='diffusion')
 temperature = 0.8  # Temperature for sampling
 top_p = 1.0  # Nucleus sampling parameter (1.0 = disabled)
-repetition_penalty = 1.0  # Penalty for repeating recent tokens
-repetition_window = 0  # Look back window for repetition penalty
 diffusion_iterations = 15  # Number of demasking iterations
 start_ratio = 0.95  # Initial ratio of tokens to remask (95%)
 end_ratio = 0.05   # Final ratio of tokens to remask (5%)
@@ -300,14 +298,12 @@ def diffusion_generate(model, batch_size, total_length, iterations, mask_token_i
             log_iteration_progress(iteration, iterations, tokens, mask_token_id, decode_fn)
 
         # Step 1: Predict tokens for masked positions
-        tokens, prediction_tokens, logits = predict_and_sample_tokens(
+        prediction_tokens, logits = predict_and_sample_tokens(
             model=model,
             tokens=tokens,
             mask_token_id=mask_token_id,
             temperature=temperature,
             top_p=top_p,
-            repetition_penalty=repetition_penalty,
-            repetition_window=repetition_window,
             vocab_size=vocab_size,
             device=device,
             verbose=verbose and use_verbose_logging,
@@ -315,6 +311,8 @@ def diffusion_generate(model, batch_size, total_length, iterations, mask_token_i
             pad_token_id=pad_token_id,
             base_vocab_size=base_vocab_size
         )
+
+        tokens = prediction_tokens
 
         # Step 2: Remask for next iteration (except last iteration)
         if iteration < iterations - 1:
@@ -467,7 +465,6 @@ if sampling_method == 'diffusion':
     print(f"Iterations: {diffusion_iterations}")
     print(f"Schedule: {schedule_type} ({start_ratio:.1%} → {end_ratio:.1%})")
     print(f"Temperature: {temperature}, Top-p: {top_p}")
-    print(f"Repetition penalty: {repetition_penalty} (window: {repetition_window})")
 else:
     print(f"Max new tokens: {max_new_tokens}")
     print(f"Temperature: {std_temperature}, Top-k: {top_k}")

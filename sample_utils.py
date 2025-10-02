@@ -67,53 +67,8 @@ def nucleus_sample(logits, top_p=1.0, temperature=1.0):
     probs = F.softmax(logits, dim=-1)
     return torch.multinomial(probs, num_samples=1).squeeze(-1)
 
-
-def apply_repetition_penalty(logits, input_ids, penalty=1.0, window=10):
-    """
-    Apply repetition penalty to logits
-
-    Args:
-        logits: Logits tensor (batch_size, seq_len, vocab_size)
-        input_ids: Input token IDs (batch_size, seq_len)
-        penalty: Repetition penalty factor (>1.0 = discourage repetition)
-        window: Look back window for repetition
-
-    Returns:
-        Modified logits
-    """
-    if penalty == 1.0:
-        return logits
-
-    batch_size, seq_len, vocab_size = logits.shape
-
-    # Only look at the last position's logits (for autoregressive generation)
-    last_logits = logits[:, -1, :].clone()  # (batch_size, vocab_size)
-
-    # Look back in the sequence for repeated tokens
-    for batch_idx in range(batch_size):
-        # Get recent tokens (within window)
-        start_idx = max(0, seq_len - window)
-        recent_tokens = input_ids[batch_idx, start_idx:seq_len]
-
-        # Apply penalty to tokens that appeared recently
-        for i in range(recent_tokens.size(0)):
-            token_id = recent_tokens[i].item()  # Convert tensor to scalar
-            if 0 <= token_id < vocab_size:
-                # If logit is positive, divide by penalty; if negative, multiply
-                if last_logits[batch_idx, token_id] > 0:
-                    last_logits[batch_idx, token_id] /= penalty
-                else:
-                    last_logits[batch_idx, token_id] *= penalty
-
-    # Replace the last position logits
-    modified_logits = logits.clone()
-    modified_logits[:, -1, :] = last_logits
-
-    return modified_logits
-
-
-def predict_and_sample_tokens(model, tokens, mask_token_id, temperature=1.0, top_p=1.0,
-                            repetition_penalty=1.0, repetition_window=10, vocab_size=None,
+def predict_and_sample_tokens(model, tokens, mask_token_id, temperature=1.0, 
+top_p=1.0, vocab_size=None,
                             device='cuda', debug_logging_fn=None, itos=None, stoi=None,
                             verbose=False, log_debug=False, return_logits=False,
                             pad_token_id=None, base_vocab_size=None):
@@ -126,8 +81,6 @@ def predict_and_sample_tokens(model, tokens, mask_token_id, temperature=1.0, top
         mask_token_id: ID of the mask token
         temperature: Sampling temperature
         top_p: Nucleus sampling parameter
-        repetition_penalty: Repetition penalty factor
-        repetition_window: Window for repetition penalty
         vocab_size: Vocabulary size
         device: Device to run on
         debug_logging_fn: Optional debug logging function
@@ -188,22 +141,6 @@ def predict_and_sample_tokens(model, tokens, mask_token_id, temperature=1.0, top
             if masked_logits.shape[-1] > vocab_size:
                 masked_logits = masked_logits[:, :vocab_size]
 
-        # Apply repetition penalty if needed
-        if repetition_penalty != 1.0:
-            # For each masked position, apply repetition penalty based on the full sequence
-            for mask_idx in range(len(mask_indices)):
-                # Create dummy logits for this single position
-                single_logits = masked_logits[mask_idx:mask_idx+1, :].unsqueeze(0)  # (1, 1, vocab_size)
-                single_seq = tokens[batch_idx:batch_idx+1, :]  # (1, seq_len)
-
-                # Apply repetition penalty
-                penalized_logits = apply_repetition_penalty(
-                    single_logits, single_seq, repetition_penalty, repetition_window
-                )
-
-                # Update the masked logits
-                masked_logits[mask_idx, :] = penalized_logits.squeeze(0).squeeze(0)
-
         # Sample new tokens
         new_tokens = nucleus_sample(masked_logits, top_p=top_p, temperature=temperature)
 
@@ -226,9 +163,9 @@ def predict_and_sample_tokens(model, tokens, mask_token_id, temperature=1.0, top
         prediction_tokens[batch_idx, mask_indices] = new_tokens
 
     if return_logits:
-        return prediction_tokens, prediction_tokens, logits
+        return prediction_tokens, logits
     else:
-        return prediction_tokens, prediction_tokens
+        return prediction_tokens
 
 
 def calculate_selfconfidence_ratio(model, tokens, mask_token_id, device='cuda', ctx=None):

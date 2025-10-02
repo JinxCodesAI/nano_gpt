@@ -197,14 +197,12 @@ def diffusion_generate(
                 print(f"  Sample: {preview}")
 
         # Step 1: Predict and sample tokens for masked positions
-        pred_tokens, _, logits = predict_and_sample_tokens(
+        pred_tokens, logits = predict_and_sample_tokens(
             model=model,
             tokens=tokens,
             mask_token_id=mask_token_id,
             temperature=temperature,
             top_p=top_p,
-            repetition_penalty=1.0,
-            repetition_window=0,
             vocab_size=vocab_size,
             device=device,
             verbose=verbose,
