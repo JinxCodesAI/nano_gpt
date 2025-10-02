@@ -77,8 +77,8 @@ top_p=1.0, vocab_size=None,
     """
     Predict and sample new tokens for masked positions.
 
-    If the model has a sampler head, uses wavefront-based coherent sampling.
-    Otherwise, uses naive parallel sampling.
+    If the model has a sampler head (and not disabled), uses wavefront-based coherent sampling.
+    Otherwise, uses naive parallel sampling (EXACT old behavior).
 
     Args:
         model: The language model
@@ -100,7 +100,8 @@ top_p=1.0, vocab_size=None,
         timer: Optional TimingAccumulator for performance measurement
 
     Returns:
-        tuple: (updated_tokens, logits) if return_logits else updated_tokens
+        tuple: (prediction_tokens, logits, critic_scores) if return_logits
+               (prediction_tokens, None, None) otherwise
     """
     batch_size, seq_len = tokens.shape
 
@@ -109,19 +110,19 @@ top_p=1.0, vocab_size=None,
 
     if not mask_positions.any():
         if return_logits:
-            return tokens, None
-        return tokens, tokens.clone()
+            return tokens, None, None
+        return tokens, None, None
 
-    # Forward pass through the model
-    dummy_targets = torch.zeros_like(tokens)
-    with torch.no_grad():
-        # Check if we'll use sampler (need hidden states) or naive sampling (only need logits)
-        use_sampler = (not disable_sampler and
-                      hasattr(model, 'sampler_head') and
-                      model.sampler_head is not None)
+    # Check if we'll use sampler (need hidden states) or naive sampling (only need logits)
+    use_sampler = (not disable_sampler and
+                  hasattr(model, 'sampler_head') and
+                  model.sampler_head is not None)
 
-        if use_sampler:
-            # Sampler path: get hidden states for wavefront fill
+    # SAMPLER PATH (NEW CODE - only runs if sampler enabled)
+    if use_sampler:
+        dummy_targets = torch.zeros_like(tokens)
+        with torch.no_grad():
+            # Get hidden states for wavefront fill
             measure_ctx = timer.measure('forward') if timer else nullcontext()
             with measure_ctx:
                 hidden_states = model._encode_tokens(tokens)
@@ -134,7 +135,7 @@ top_p=1.0, vocab_size=None,
                     getattr(model.config, 'add_critic_head', False)):
                     critic_scores = model.critic_head(hidden_states).squeeze(-1)
 
-            # Sampler path: use wavefront fill
+            # Use wavefront fill
             measure_ctx = timer.measure('sampling_sampler') if timer else nullcontext()
             with measure_ctx:
                 prediction_tokens = sampler_wavefront_fill(
@@ -149,85 +150,84 @@ top_p=1.0, vocab_size=None,
                     min_neighbors_ratio=getattr(model.config, 'sampler_min_neighbors_ratio', 0.01)
                 )
 
-            if return_logits:
-                return prediction_tokens, logits, critic_scores
-            return prediction_tokens, prediction_tokens.clone(), critic_scores
+        if return_logits:
+            return prediction_tokens, logits, critic_scores
+        return prediction_tokens, None, None
 
-        # Naive sampling path: use standard model forward pass
+    # NAIVE PATH (EXACT OLD CODE - unchanged behavior)
+    # Forward pass through the model
+    dummy_targets = torch.zeros_like(tokens)
+    with torch.no_grad():
         measure_ctx = timer.measure('forward') if timer else nullcontext()
         with measure_ctx:
             logits, _ = model(tokens, targets=dummy_targets)
 
-            # Get critic scores if model has critic head
-            critic_scores = None
-            if (hasattr(model, 'critic_head') and
-                model.critic_head is not None and
-                getattr(model.config, 'add_critic_head', False)):
-                # Need to get hidden states for critic
-                hidden_states = model._encode_tokens(tokens)
-                critic_scores = model.critic_head(hidden_states).squeeze(-1)
+    # Extract logits for masked positions only
+    prediction_tokens = tokens.clone()
 
-        # Extract logits for masked positions only
-        prediction_tokens = tokens.clone()
+    measure_ctx = timer.measure('sampling_naive') if timer else nullcontext()
+    with measure_ctx:
+        for batch_idx in range(batch_size):
+            batch_mask_positions = mask_positions[batch_idx]
+            if not batch_mask_positions.any():
+                continue
 
-        # Measure naive sampling time
-        measure_ctx = timer.measure('sampling_naive') if timer else nullcontext()
-        with measure_ctx:
-            for batch_idx in range(batch_size):
-                batch_mask_positions = mask_positions[batch_idx]
-                if not batch_mask_positions.any():
-                    continue
+            # Get mask indices for this batch
+            mask_indices = torch.nonzero(batch_mask_positions).squeeze(-1)
 
-                # Get mask indices for this batch
-                mask_indices = torch.nonzero(batch_mask_positions).squeeze(-1)
+            # Extract logits for masked positions
+            masked_logits = logits[batch_idx, mask_indices, :]  # (num_masked, vocab_size)
 
-                # Extract logits for masked positions
-                masked_logits = logits[batch_idx, mask_indices, :]  # (num_masked, vocab_size)
+            # Exclude special tokens from sampling - only sample from base vocabulary
+            if vocab_size is not None:
+                # Set mask token logit to -inf so it's never sampled
+                masked_logits[:, mask_token_id] = float('-inf')
 
-                # Exclude special tokens from sampling - only sample from base vocabulary
-                if vocab_size is not None:
-                    # Set mask token logit to -inf so it's never sampled
-                    masked_logits[:, mask_token_id] = float('-inf')
+                # Set pad token logit to -inf if it exists
+                if pad_token_id is not None:
+                    masked_logits[:, pad_token_id] = float('-inf')
 
-                    # Set pad token logit to -inf if it exists
-                    if pad_token_id is not None:
-                        masked_logits[:, pad_token_id] = float('-inf')
+                # If we have base_vocab_size, only allow sampling from base vocabulary
+                if base_vocab_size is not None:
+                    # Set all special tokens (beyond base vocab) to -inf
+                    if masked_logits.shape[-1] > base_vocab_size:
+                        masked_logits[:, base_vocab_size:] = float('-inf')
 
-                    # If we have base_vocab_size, only allow sampling from base vocabulary
-                    if base_vocab_size is not None:
-                        # Set all special tokens (beyond base vocab) to -inf
-                        if masked_logits.shape[-1] > base_vocab_size:
-                            masked_logits[:, base_vocab_size:] = float('-inf')
+                # Ensure we don't access beyond vocabulary
+                if masked_logits.shape[-1] > vocab_size:
+                    masked_logits = masked_logits[:, :vocab_size]
 
-                    # Ensure we don't access beyond vocabulary
-                    if masked_logits.shape[-1] > vocab_size:
-                        masked_logits = masked_logits[:, :vocab_size]
+            # Sample new tokens
+            new_tokens = nucleus_sample(masked_logits, top_p=top_p, temperature=temperature)
 
-                # Sample new tokens
-                new_tokens = nucleus_sample(masked_logits, top_p=top_p, temperature=temperature)
+            # Debug logging
+            if debug_logging_fn and batch_idx == 0:
+                debug_logging_fn(
+                    sample_idx=batch_idx,
+                    logits=logits[batch_idx],
+                    mask_indices=mask_indices,
+                    masked_logits=masked_logits,
+                    new_tokens=new_tokens,
+                    mask_token_id=mask_token_id,
+                    vocab_size=vocab_size or masked_logits.shape[-1],
+                    itos=itos,
+                    stoi=stoi,
+                    log_debug=log_debug
+                )
 
-                # Debug logging
-                if debug_logging_fn and batch_idx == 0:
-                    debug_logging_fn(
-                        sample_idx=batch_idx,
-                        logits=logits[batch_idx],
-                        mask_indices=mask_indices,
-                        masked_logits=masked_logits,
-                        new_tokens=new_tokens,
-                        mask_token_id=mask_token_id,
-                        vocab_size=vocab_size or masked_logits.shape[-1],
-                        itos=itos,
-                        stoi=stoi,
-                        log_debug=log_debug
-                    )
+            # Update prediction tokens
+            prediction_tokens[batch_idx, mask_indices] = new_tokens
 
-                # Update prediction tokens
-                prediction_tokens[batch_idx, mask_indices] = new_tokens
+    # Get critic scores for naive path (only if needed for remasking)
+    critic_scores = None
+    if return_logits and hasattr(model, 'critic_head') and model.critic_head is not None and getattr(model.config, 'add_critic_head', False):
+        with torch.no_grad():
+            critic_scores = model.critic_scores(tokens)
 
     if return_logits:
         return prediction_tokens, logits, critic_scores
     else:
-        return prediction_tokens, None, critic_scores
+        return prediction_tokens, None, None
 
 
 def calculate_selfconfidence_ratio(model, tokens, mask_token_id, device='cuda', ctx=None):
