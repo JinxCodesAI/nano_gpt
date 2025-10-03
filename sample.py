@@ -19,6 +19,9 @@ from sample_utils import (
     calculate_judge_scores,
 )
 
+from core.common.timings import TimingAccumulator, print_global_summary
+from timings_singleton import set_global_timer, get_global_timer
+
 
 # Global timestamp to mark the beginning of generation (aligned with the
 # "Starting diffusion generation" log inside diffusion_generate)
@@ -36,7 +39,7 @@ checkpoint_name = '7250_1.77_pad_no_entropy.pt'  # Main model checkpoint
 num_samples = 16  # Number of samples to generate
 sequence_length = 1024  # Total length of generated sequence
 max_new_tokens = 100  # For regular sampling (non-diffusion)
-seed = -1
+seed = 1
 device = 'cuda'
 dtype = 'float16'  # Use float16 for RTX 2060 compatibility
 compile = False  # Use PyTorch 2.0 compilation (disabled due to triton issues)
@@ -63,7 +66,7 @@ end_ratio = 0.05   # Final ratio of tokens to remask (5%)
 
 # Remasking parameters
 randomness_strength = 0.2  # Balance between random (1.0) and model-guided (0.0) remasking
-intelligent_remasking = False  # Enable self-confidence based remasking when no remasking model
+intelligent_remasking = True  # Enable self-confidence based remasking when no remasking model
 
 # Quality metric configuration
 class QualityMetric(Enum):
@@ -116,6 +119,12 @@ torch.backends.cuda.matmul.allow_tf32 = True
 torch.backends.cudnn.allow_tf32 = True
 device_type = 'cuda' if 'cuda' in device else 'cpu'
 ptdtype = {'float32': torch.float32, 'bfloat16': torch.bfloat16, 'float16': torch.float16}[dtype]
+# Initialize and register global timing accumulator for this run
+_global_timer = TimingAccumulator()
+if device_type == 'cuda':
+    _global_timer.set_cuda_sync(True)
+set_global_timer(_global_timer)
+
 ctx = nullcontext() if device_type == 'cpu' else torch.amp.autocast(device_type=device_type, dtype=ptdtype)
 
 # -----------------------------------------------------------------------------
@@ -223,6 +232,10 @@ def log_iteration_progress(iteration, total_iterations, tokens, mask_token_id, d
     if not show_progress:
         return
 
+    # Guard against incorrect types to fail fast if tokens is not a tensor
+    if not torch.is_tensor(tokens):
+        raise TypeError(f"tokens must be a torch.Tensor, got {type(tokens)}")
+
     masked_count = (tokens == mask_token_id).sum().item()
     total_tokens = tokens.numel()
     masked_ratio = masked_count / total_tokens
@@ -298,43 +311,59 @@ def diffusion_generate(model, batch_size, total_length, iterations, mask_token_i
             log_iteration_progress(iteration, iterations, tokens, mask_token_id, decode_fn)
 
         # Step 1: Predict tokens for masked positions
-        prediction_tokens, logits = predict_and_sample_tokens(
-            model=model,
-            tokens=tokens,
-            mask_token_id=mask_token_id,
-            temperature=temperature,
-            top_p=top_p,
-            vocab_size=vocab_size,
-            device=device,
-            verbose=verbose and use_verbose_logging,
-            return_logits=True,
-            pad_token_id=pad_token_id,
-            base_vocab_size=base_vocab_size
-        )
+        _t = get_global_timer()
+        _cm = _t.measure('predict_and_sample') if _t is not None else nullcontext()
+        with _cm:
+            prediction_tokens, logits = predict_and_sample_tokens(
+                model=model,
+                tokens=tokens,
+                mask_token_id=mask_token_id,
+                temperature=temperature,
+                top_p=top_p,
+                vocab_size=vocab_size,
+                device=device,
+                verbose=verbose and use_verbose_logging,
+                return_logits=True,
+                pad_token_id=pad_token_id,
+                base_vocab_size=base_vocab_size
+            )
 
         tokens = prediction_tokens
 
         # Step 2: Remask for next iteration (except last iteration)
         if iteration < iterations - 1:
-            tokens = apply_remasking_step(
-                tokens=tokens,
-                prediction_tokens=prediction_tokens,
-                iteration=iteration,
-                iterations=iterations,
-                schedule_type=schedule_type,
-                masking_ratios=masking_ratios,
-                start_ratio=start_ratio,
-                end_ratio=end_ratio,
-                remasking_model=remasking_model,
-                randomness_strength=randomness_strength,
-                mask_token_id=mask_token_id,
-                device=device,
-                base_model=model,
-                intelligent_remasking=(False if (remasking_model is None and getattr(getattr(model, 'config', object()), 'add_critic_head', False)) else intelligent_remasking),
-                verbose=verbose and use_verbose_logging,
-                logits_from_predict=logits,
-                protected_mask=protected_mask
-            )
+            _t = get_global_timer()
+            _cm = _t.measure('remask') if _t is not None else nullcontext()
+            with _cm:
+                _remask_result = apply_remasking_step(
+                    tokens=tokens,
+                    prediction_tokens=prediction_tokens,
+                    iteration=iteration,
+                    iterations=iterations,
+                    schedule_type=schedule_type,
+                    masking_ratios=masking_ratios,
+                    start_ratio=start_ratio,
+                    end_ratio=end_ratio,
+                    remasking_model=remasking_model,
+                    randomness_strength=randomness_strength,
+                    mask_token_id=mask_token_id,
+                    device=device,
+                    base_model=model,
+                    intelligent_remasking=(False if (remasking_model is None and getattr(getattr(model, 'config', object()), 'add_critic_head', False)) else intelligent_remasking),
+                    verbose=verbose and use_verbose_logging,
+                    logits_from_predict=logits,
+                    protected_mask=protected_mask
+                )
+            # apply_remasking_step returns (remasked_tokens, min_wrongness, remasked_indices)
+            if isinstance(_remask_result, tuple):
+                remasked_tokens = _remask_result[0]
+                # Early termination signal in threshold mode (nothing to mask)
+                if remasked_tokens is None:
+                    break
+                tokens = remasked_tokens
+            else:
+                # Backward-compat path
+                tokens = _remask_result
 
     return tokens
 
@@ -508,24 +537,30 @@ with torch.no_grad():
             judge_scores = None
             if metric == QualityMetric.SELF:
                 print("\nCalculating self-confidence scores...")
-                confidence_scores = calculate_selfconfidence_ratio(
-                    model=model,
-                    tokens=generated_tokens,
-                    mask_token_id=mask_token_id,
-                    device=device,
-                    ctx=ctx
-                )
+                _t = get_global_timer()
+                _cm = _t.measure('self_conf_eval') if _t is not None else nullcontext()
+                with _cm:
+                    confidence_scores = calculate_selfconfidence_ratio(
+                        model=model,
+                        tokens=generated_tokens,
+                        mask_token_id=mask_token_id,
+                        device=device,
+                        ctx=ctx
+                    )
             elif metric == QualityMetric.JUDGE:
                 if judge_model is None:
                     raise ValueError("quality_metric 'Judge' requires a valid judge model to be loaded")
                 print("\nEvaluating quality with Judge model...")
                 _judge_start = time.time()
-                judge_scores = calculate_judge_scores(
-                    judge_model=judge_model,
-                    tokens=generated_tokens,
-                    device=device,
-                    ctx=ctx
-                )
+                _t = get_global_timer()
+                _cm = _t.measure('judge_eval') if _t is not None else nullcontext()
+                with _cm:
+                    judge_scores = calculate_judge_scores(
+                        judge_model=judge_model,
+                        tokens=generated_tokens,
+                        device=device,
+                        ctx=ctx
+                    )
                 judge_time = time.time() - _judge_start
                 # Compute judge token throughput: batch_size * effective sequence length (with CLS if used)
                 judge_seq_len = int(generated_tokens.size(1))
@@ -629,10 +664,18 @@ _total_tokens = num_samples * _tokens_per_sample
 _time_per_sample = _full_time / max(1, num_samples)
 _tokens_per_sec = (_total_tokens / _full_time) if _full_time > 0 else float('inf')
 
-print(f"\n{'='*60}")
-print("PERFORMANCE SUMMARY")
-print(f"Total wall time: {_full_time:.2f} s | Time per sample: {_time_per_sample:.2f} s")
-print(f"Throughput: {_tokens_per_sec:.2f} tokens/s (tokens: {_total_tokens})")
+# Model-only throughput based on timer window (first measure start → last measure end)
+try:
+    from core.common.timings import get_global_timer as _get_t
+    _t = _get_t()
+    _timer_total = _t.get_total_time() if _t is not None else _full_time
+except Exception:
+    _timer_total = _full_time
+_model_tokens_per_sec = (_total_tokens / _timer_total) if _timer_total > 0 else float('inf')
+from core.common.timings import print_global_hierarchical_summary as _print_h
+_print_h(title="OPERATION TIMING (hierarchical)", show_counts=True)
+# Defer throughput print to the bottom near judge info
+_throughput_line = f"Throughput: {_model_tokens_per_sec:.2f} tokens/s (tokens: {_total_tokens})"
 
 if judge_time is not None:
     _judge_time_per_sample = judge_time / max(1, num_samples)
@@ -642,6 +685,9 @@ if judge_time is not None:
     print(f"Worst judge score: {judge_scores.min().item():.4f}")
     if judge_tokens_total is not None and judge_tokens_per_sec is not None:
         print(f"Judge throughput: {judge_tokens_per_sec:.2f} tokens/s (judge tokens: {judge_tokens_total})")
+
+# Print model-only throughput at the bottom, near judge info
+print(_throughput_line)
 
 print(f"\n{'='*60}")
 print(f"GENERATION COMPLETE")

@@ -11,3 +11,4 @@ env/
 venv/
 wandb/
 out/*
+out-char-diffusion/ckpt_meta.json
