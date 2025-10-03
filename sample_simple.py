@@ -570,18 +570,24 @@ def main():
         print(sample_text)
 
     total_tokens = args.num_samples * args.sequence_length
-    tokens_per_sec = (total_tokens / generation_time) if generation_time > 0 else float('inf')
-    print("\n" + "="*60)
-    print("PERFORMANCE SUMMARY")
-    print(f"Total wall time: {generation_time:.2f} s | Time per sample: {generation_time/max(1,args.num_samples):.2f} s")
-    print(f"Throughput: {tokens_per_sec:.2f} tokens/s (tokens: {total_tokens})")
-
-    if judge_scores is not None:
-        print(f"Judge score mean: {judge_scores.mean().item():.4f} | min: {judge_scores.min().item():.4f} | max: {judge_scores.max().item():.4f}")
-    # Detailed operation timing summary (counts and total time per category)
+    # Model-only throughput based on timer window (first measure start → last measure end)
+    try:
+        from core.common.timings import get_global_timer as _get_t
+        _t = _get_t()
+        _timer_total = _t.get_total_time() if _t is not None else generation_time
+    except Exception:
+        _timer_total = generation_time
+    tokens_per_sec = (total_tokens / _timer_total) if _timer_total > 0 else float('inf')
+    # Defer throughput print to the bottom near judge info
+    _throughput_line = f"Throughput: {tokens_per_sec:.2f} tokens/s (tokens: {total_tokens})"
     from core.common.timings import print_global_hierarchical_summary as _print_h
     _print_h(title="OPERATION TIMING (hierarchical)", show_counts=True)
 
+    if judge_scores is not None:
+        print(f"Judge score mean: {judge_scores.mean().item():.4f} | min: {judge_scores.min().item():.4f} | max: {judge_scores.max().item():.4f}")
+
+    # Print throughput at the bottom, near judge info
+    print(_throughput_line)
 
     print("\n" + "="*60)
     print("GENERATION COMPLETE")
