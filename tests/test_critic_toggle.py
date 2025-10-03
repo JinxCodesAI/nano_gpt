@@ -1,6 +1,11 @@
 import types
+import os
+import sys
 import torch
 import pytest
+
+# Ensure project root is on sys.path
+sys.path.append(os.path.dirname(os.path.dirname(__file__)))
 
 from model import GPT, GPTConfig, ModelMode
 
