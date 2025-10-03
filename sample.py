@@ -306,6 +306,11 @@ def diffusion_generate(model, batch_size, total_length, iterations, mask_token_i
             print(f"  - Using random remasking")
         print("=" * 60)
 
+        # Disable critic computations inside forward() during LM inference; critic_scores remains available
+        if hasattr(model, 'disable_critic'):
+            model.disable_critic()
+
+
     for iteration in range(iterations):
         if verbose or show_progress:
             log_iteration_progress(iteration, iterations, tokens, mask_token_id, decode_fn)
@@ -360,15 +365,22 @@ def diffusion_generate(model, batch_size, total_length, iterations, mask_token_i
                 # Early termination signal in threshold mode (nothing to mask)
                 if remasked_tokens is None:
                     break
+
                 tokens = remasked_tokens
             else:
                 # Backward-compat path
                 tokens = _remask_result
 
+
+    # Re-enable critic computations after inference
+    if hasattr(model, 'enable_critic'):
+        model.enable_critic()
+
     return tokens
 
 def standard_generate(model, start_ids, max_new_tokens, temperature=1.0, top_k=None):
     """
+
     Standard autoregressive generation (batched across num_samples)
     """
     model.eval()

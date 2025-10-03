@@ -389,6 +389,10 @@ class GPT(nn.Module):
         self.config = config
         self.logger = logger
 
+        # Runtime toggle to enable/disable critic computations inside forward()
+        self._critic_enabled = True
+
+
         # Create transformer components - conditionally include position embeddings
         transformer_components = dict(
             wte = nn.Embedding(config.vocab_size, config.n_embd),
@@ -643,6 +647,14 @@ class GPT(nn.Module):
         x = self.transformer.ln_f(x)
         return x
 
+    def disable_critic(self):
+        """Disable critic computations inside forward() (LM mode)."""
+        self._critic_enabled = False
+
+    def enable_critic(self):
+        """Enable critic computations inside forward() (LM mode)."""
+        self._critic_enabled = True
+
     def forward(self, idx, targets=None, attention_mask=None, loss_modifiers=None):
         # Optional global timing start
         _timer = None
@@ -768,7 +780,7 @@ class GPT(nn.Module):
 
             # Optional critic loss (multi-task) when enabled
             alpha_eff = self._effective_critic_alpha()
-            if getattr(self.config, 'add_critic_head', False) and hasattr(self, 'critic_head') and alpha_eff > 0.0:
+            if getattr(self.config, 'add_critic_head', False) and hasattr(self, 'critic_head') and alpha_eff > 0.0 and getattr(self, '_critic_enabled', True):
                 # Build critic artifacts using shared helper
                 if idx is None or getattr(self.config, 'mask_token_id', None) is None:
                     raise RuntimeError("critic_target_scope requires idx and mask_token_id; misconfiguration detected")

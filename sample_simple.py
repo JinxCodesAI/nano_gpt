@@ -170,6 +170,11 @@ def diffusion_generate(
     # Track iteration data for saving - organize by sample
     samples_data = [[] for _ in range(batch_size)] if save_iterations else None
 
+
+    # Disable critic computations inside forward() during LM inference; critic_scores remains available
+    if hasattr(model, 'disable_critic'):
+        model.disable_critic()
+
     for iteration in range(iterations):
         if verbose or show_progress:
             masked_count = (tokens == mask_token_id).sum().item()
@@ -292,6 +297,10 @@ def diffusion_generate(
                         'remasked_indices': []
                     })
             tokens = pred_tokens
+
+    # Re-enable critic computations after inference
+    if hasattr(model, 'enable_critic'):
+        model.enable_critic()
 
     if save_iterations:
         return tokens, samples_data
