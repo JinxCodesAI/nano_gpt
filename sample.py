@@ -223,6 +223,10 @@ def log_iteration_progress(iteration, total_iterations, tokens, mask_token_id, d
     if not show_progress:
         return
 
+    # Guard against incorrect types to fail fast if tokens is not a tensor
+    if not torch.is_tensor(tokens):
+        raise TypeError(f"tokens must be a torch.Tensor, got {type(tokens)}")
+
     masked_count = (tokens == mask_token_id).sum().item()
     total_tokens = tokens.numel()
     masked_ratio = masked_count / total_tokens
@@ -316,7 +320,7 @@ def diffusion_generate(model, batch_size, total_length, iterations, mask_token_i
 
         # Step 2: Remask for next iteration (except last iteration)
         if iteration < iterations - 1:
-            tokens = apply_remasking_step(
+            _remask_result = apply_remasking_step(
                 tokens=tokens,
                 prediction_tokens=prediction_tokens,
                 iteration=iteration,
@@ -335,6 +339,16 @@ def diffusion_generate(model, batch_size, total_length, iterations, mask_token_i
                 logits_from_predict=logits,
                 protected_mask=protected_mask
             )
+            # apply_remasking_step returns (remasked_tokens, min_wrongness, remasked_indices)
+            if isinstance(_remask_result, tuple):
+                remasked_tokens = _remask_result[0]
+                # Early termination signal in threshold mode (nothing to mask)
+                if remasked_tokens is None:
+                    break
+                tokens = remasked_tokens
+            else:
+                # Backward-compat path
+                tokens = _remask_result
 
     return tokens
 
