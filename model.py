@@ -17,6 +17,9 @@ import torch
 import torch.nn as nn
 from torch.nn import functional as F
 
+import time
+from timings_singleton import get_global_timer
+
 from sample_utils import build_critic_artifacts_from_logits
 
 class ModelMode(Enum):
@@ -641,6 +644,19 @@ class GPT(nn.Module):
         return x
 
     def forward(self, idx, targets=None, attention_mask=None, loss_modifiers=None):
+        # Optional global timing start
+        _timer = None
+        try:
+            _timer = get_global_timer()
+        except Exception:
+            _timer = None
+        if _timer is not None and torch.cuda.is_available():
+            try:
+                torch.cuda.synchronize()
+            except Exception:
+                pass
+        _t0 = time.perf_counter()
+
         device = idx.device
         b, t = idx.size()
         assert t <= self.config.block_size, f"Cannot forward sequence of length {t}, block size is only {self.config.block_size}"
@@ -650,11 +666,24 @@ class GPT(nn.Module):
 
         # Mode-specific output and loss computation
         if self.config.mode == ModelMode.SEQUENCE_SCORER:
-            return self._forward_sequence_scorer(x, targets, loss_modifiers)
+            out = self._forward_sequence_scorer(x, targets, loss_modifiers)
         elif self.config.mode == ModelMode.TOKEN_CLASSIFIER:
-            return self._forward_token_classifier(x, targets, loss_modifiers)
+            out = self._forward_token_classifier(x, targets, loss_modifiers)
         else:  # LANGUAGE_MODEL
-            return self._forward_language_model(x, targets, loss_modifiers, idx=idx)
+            out = self._forward_language_model(x, targets, loss_modifiers, idx=idx)
+
+        # Record forward timing if a global timer is registered
+        try:
+            if _timer is not None:
+                if torch.cuda.is_available():
+                    try:
+                        torch.cuda.synchronize()
+                    except Exception:
+                        pass
+                _timer.record('model.forward', time.perf_counter() - _t0)
+        except Exception:
+            pass
+        return out
 
     def _forward_sequence_scorer(self, x, targets, loss_modifiers):
         """Sequence scoring forward pass"""
@@ -749,6 +778,7 @@ class GPT(nn.Module):
                     targets=targets,
                     mask_token_id=int(self.config.mask_token_id),
                     ignore_index=int(self.config.ignore_index),
+
                     pad_token_id=getattr(self.config, 'pad_token_id', None),
                     scope=getattr(self.config, 'critic_target_scope', 'masked_and_ignore'),
                 )
@@ -787,6 +817,19 @@ class GPT(nn.Module):
         device = idx.device
         b, t = idx.size()
         assert t <= self.config.block_size
+        # Optional global timing start for critic_scores
+        _timer = None
+        try:
+            _timer = get_global_timer()
+        except Exception:
+            _timer = None
+        if _timer is not None and torch.cuda.is_available():
+            try:
+                torch.cuda.synchronize()
+            except Exception:
+                pass
+        _t0 = time.perf_counter()
+
         tok_emb = self.transformer.wte(idx)
         if hasattr(self.transformer, 'wpe'):
             pos = torch.arange(0, t, dtype=torch.long, device=device)
@@ -799,7 +842,19 @@ class GPT(nn.Module):
             x = block(x, attention_mask=attention_mask)
         x = self.transformer.ln_f(x)
         logits = self.critic_head(x).squeeze(-1)
+        # Record timing if global timer
+        try:
+            if _timer is not None:
+                if torch.cuda.is_available():
+                    try:
+                        torch.cuda.synchronize()
+                    except Exception:
+                        pass
+                _timer.record('model.critic_scores', time.perf_counter() - _t0)
+        except Exception:
+            pass
         return logits
+
 
     def _compute_weighted_classification_loss(self, logits, targets, num_classes):
         """Compute classification loss with dynamic class weighting for imbalanced datasets"""

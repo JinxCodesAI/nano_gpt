@@ -32,6 +32,9 @@ from sample_utils import (
 )
 
 
+from core.common.timings import TimingAccumulator, print_global_summary
+from timings_singleton import set_global_timer, get_global_timer
+
 class SeedPlacement(Enum):
     PREFIX = 'prefix'
     RANDOM = 'random'
@@ -197,42 +200,48 @@ def diffusion_generate(
                 print(f"  Sample: {preview}")
 
         # Step 1: Predict and sample tokens for masked positions
-        pred_tokens, logits = predict_and_sample_tokens(
-            model=model,
-            tokens=tokens,
-            mask_token_id=mask_token_id,
-            temperature=temperature,
-            top_p=top_p,
-            vocab_size=vocab_size,
-            device=device,
-            verbose=verbose,
-            return_logits=True,
-            pad_token_id=pad_token_id,
-            base_vocab_size=base_vocab_size,
-        )
+        _t = get_global_timer()
+        _cm = _t.measure('predict_and_sample') if _t is not None else nullcontext()
+        with _cm:
+            pred_tokens, logits = predict_and_sample_tokens(
+                model=model,
+                tokens=tokens,
+                mask_token_id=mask_token_id,
+                temperature=temperature,
+                top_p=top_p,
+                vocab_size=vocab_size,
+                device=device,
+                verbose=verbose,
+                return_logits=True,
+                pad_token_id=pad_token_id,
+                base_vocab_size=base_vocab_size,
+            )
 
         # Step 2: Remask for next iteration (except last iteration)
         if iteration < iterations - 1:
-            remasked, min_wrongness, remasked_indices = apply_remasking_step(
-                tokens=tokens,
-                prediction_tokens=pred_tokens,
-                iteration=iteration,
-                iterations=iterations,
-                schedule_type='linear' if masking_ratios is None else 'custom',
-                masking_ratios=masking_ratios,
-                start_ratio=start_ratio,
-                end_ratio=end_ratio,
-                remasking_model=None,
-                randomness_strength=randomness_strength,
-                mask_token_id=mask_token_id,
-                device=device,
-                base_model=model,  # critic ordering
-                intelligent_remasking=False,
-                verbose=verbose,
-                logits_from_predict=logits,
-                protected_mask=protected_mask,
-                schedule_mode=schedule_mode,
-            )
+            _t = get_global_timer()
+            _cm = _t.measure('remask') if _t is not None else nullcontext()
+            with _cm:
+                remasked, min_wrongness, remasked_indices = apply_remasking_step(
+                    tokens=tokens,
+                    prediction_tokens=pred_tokens,
+                    iteration=iteration,
+                    iterations=iterations,
+                    schedule_type='linear' if masking_ratios is None else 'custom',
+                    masking_ratios=masking_ratios,
+                    start_ratio=start_ratio,
+                    end_ratio=end_ratio,
+                    remasking_model=None,
+                    randomness_strength=randomness_strength,
+                    mask_token_id=mask_token_id,
+                    device=device,
+                    base_model=model,  # critic ordering
+                    intelligent_remasking=False,
+                    verbose=verbose,
+                    logits_from_predict=logits,
+                    protected_mask=protected_mask,
+                    schedule_mode=schedule_mode,
+                )
 
             # Check for early termination in threshold mode
             if remasked is None:
@@ -352,6 +361,12 @@ def main():
     torch.backends.cuda.matmul.allow_tf32 = True
     torch.backends.cudnn.allow_tf32 = True
     device_type = 'cuda' if 'cuda' in args.device else 'cpu'
+    # Initialize and register global timing accumulator for this run
+    _global_timer = TimingAccumulator()
+    if device_type == 'cuda':
+        _global_timer.set_cuda_sync(True)
+    set_global_timer(_global_timer)
+
     ptdtype = {'float32': torch.float32, 'bfloat16': torch.bfloat16, 'float16': torch.float16}[args.dtype]
     ctx = nullcontext() if device_type == 'cpu' else torch.amp.autocast(device_type=device_type, dtype=ptdtype)
 
@@ -481,7 +496,10 @@ def main():
     critic_percentiles = None
     if metric == QualityMetric.JUDGE:
         print("\nEvaluating quality with Judge model...")
-        judge_scores = calculate_judge_scores(judge_model=judge_model, tokens=generated_tokens, device=args.device, ctx=ctx)
+        _t = get_global_timer()
+        _cm = _t.measure('judge_eval') if _t is not None else nullcontext()
+        with _cm:
+            judge_scores = calculate_judge_scores(judge_model=judge_model, tokens=generated_tokens, device=args.device, ctx=ctx)
         # Also compute critic percentiles to display, matching sample.py behavior
         if getattr(model.config, 'add_critic_head', False):
             with torch.no_grad():
@@ -539,6 +557,7 @@ def main():
         print(f"SAMPLE {i+1}/{args.num_samples}")
         if metric == QualityMetric.JUDGE and judge_scores is not None:
             score = float(judge_scores[i].item())
+
             print(f"Quality score (Judge): {score:.4f}")
             if 'critic_percentiles' in locals() and critic_percentiles is not None:
                 p10, p50, p90 = [float(x) for x in critic_percentiles[i].tolist()]
@@ -559,6 +578,10 @@ def main():
 
     if judge_scores is not None:
         print(f"Judge score mean: {judge_scores.mean().item():.4f} | min: {judge_scores.min().item():.4f} | max: {judge_scores.max().item():.4f}")
+    # Detailed operation timing summary (counts and total time per category)
+    from core.common.timings import print_global_hierarchical_summary as _print_h
+    _print_h(title="OPERATION TIMING (hierarchical)", show_counts=True)
+
 
     print("\n" + "="*60)
     print("GENERATION COMPLETE")
