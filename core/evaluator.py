@@ -6,12 +6,10 @@ logic extracted from the original estimate_loss() function in train.py.
 """
 
 import torch
-from model import ModelMode
+from model import ModelMode, CriticMode
 from core.batch import Batch, unpack_batch
 
 from typing import Dict
-
-from sample_utils import build_critic_artifacts_from_logits
 
 
 class Evaluator:
@@ -100,14 +98,10 @@ class Evaluator:
                     # Validation-only accumulators for extra console stats
                     val_tokens_total = 0
                     val_masked_total = 0
-                    critic_correct_total = 0
                     critic_sum_pred_t0 = 0.0
-                    critic_sum_pred_t1 = 0.0
                     critic_cnt_t0 = 0
-                    critic_cnt_t1 = 0
                     # For percentiles (store samples; memory OK at eval scale)
                     critic_pred_t0_list = []
-                    critic_pred_t1_list = []
 
                     for k in range(self.eval_iters):
                         batch = self.consumer.get_batch(split, self.device)
@@ -119,7 +113,7 @@ class Evaluator:
                         has_critic = False
                         try:
                             if getattr(raw_model.config, 'mode', None) == ModelMode.LANGUAGE_MODEL \
-                               and getattr(raw_model.config, 'add_critic_head', False):
+                               and getattr(raw_model.config, 'critic_mode', CriticMode.NONE) == CriticMode.TARGETED:
                                 has_critic = True
                                 alpha_eff = float(raw_model._effective_critic_alpha())
                         except Exception:
@@ -137,46 +131,18 @@ class Evaluator:
                             supervised_mask = (Y != ignore_index)
                             val_masked_total += int(supervised_mask.sum().item())
 
+                            # Simplified critic stats for new implementation
                             if has_critic:
-                                # Ensure mask token available
-                                if getattr(raw_model.config, 'mask_token_id', None) is None:
-                                    raise RuntimeError("Evaluator: mask_token_id is required for critic stats")
-                                # Build critic artifacts using the same helper as training/model
-                                artifacts = build_critic_artifacts_from_logits(
-                                    idx=X,
-                                    logits=logits,
-                                    targets=Y,
-                                    mask_token_id=int(raw_model.config.mask_token_id),
-                                    ignore_index=int(getattr(raw_model.config, 'ignore_index', -100)),
-                                    pad_token_id=getattr(raw_model.config, 'pad_token_id', None),
-                                    scope=getattr(raw_model.config, 'critic_target_scope', 'masked_and_ignore'),
-                                )
-                                pred_tokens = artifacts['pred_tokens']
-                                critic_input = artifacts['critic_input']
-                                critic_target = artifacts['critic_target']
-                                critic_valid = artifacts['critic_valid']
+                                # Compute critic confidence scores for all tokens
+                                critic_scores = raw_model.critic_scores(X)
 
-                                # Correct predictions among masked positions only (display metric)
-                                masked_positions = (X == int(raw_model.config.mask_token_id))
-                                critic_correct_total += int((pred_tokens[masked_positions] == Y[masked_positions]).sum().item())
-
-                                # Compute critic logits for stats
-                                critic_logits = raw_model.critic_scores(critic_input)
-
-                                # Sigmoid probabilities
-                                critic_prob = torch.sigmoid(critic_logits)
-                                t0_mask = critic_valid & (critic_target == 0)
-                                t1_mask = critic_valid & (critic_target == 1)
-                                if t0_mask.any():
-                                    vals0 = critic_prob[t0_mask]
-                                    critic_sum_pred_t0 += float(vals0.sum().item())
-                                    critic_cnt_t0 += int(t0_mask.sum().item())
-                                    critic_pred_t0_list.append(vals0.detach().float().cpu())
-                                if t1_mask.any():
-                                    vals1 = critic_prob[t1_mask]
-                                    critic_sum_pred_t1 += float(vals1.sum().item())
-                                    critic_cnt_t1 += int(t1_mask.sum().item())
-                                    critic_pred_t1_list.append(vals1.detach().float().cpu())
+                                # Compute stats only on supervised positions
+                                valid_mask = supervised_mask
+                                if valid_mask.any():
+                                    valid_scores = critic_scores[valid_mask]
+                                    critic_sum_pred_t0 += float(valid_scores.sum().item())
+                                    critic_cnt_t0 += int(valid_mask.sum().item())
+                                    critic_pred_t0_list.append(valid_scores.detach().float().cpu())
 
                     out[split] = float(losses.mean().item())
 
@@ -184,48 +150,28 @@ class Evaluator:
                     if split == 'val':
                         out['val/tokens_total'] = int(val_tokens_total)
                         out['val/masked_total'] = int(val_masked_total)
-                        if has_critic:
-                            out['val/critic_correct_total'] = int(critic_correct_total)
-                            out['val/critic_target_zeros'] = int(critic_cnt_t0)
-                            out['val/critic_target_ones'] = int(critic_cnt_t1)
-                            if critic_cnt_t0 > 0:
-                                out['val/critic_pred_mean_for_target0'] = float(critic_sum_pred_t0 / max(critic_cnt_t0, 1))
-                                # percentiles for target 0
+                        if has_critic and critic_cnt_t0 > 0:
+                            # Simplified critic stats: mean and percentiles of confidence scores
+                            out['val/critic_confidence_mean'] = float(critic_sum_pred_t0 / max(critic_cnt_t0, 1))
+                            try:
+                                import torch as _t
+                                preds = _t.cat(critic_pred_t0_list, dim=0).view(-1)
+                                out['val/critic_confidence_p10'] = float(_t.quantile(preds, _t.tensor(0.1)).item())
+                                out['val/critic_confidence_p50'] = float(_t.quantile(preds, _t.tensor(0.5)).item())
+                                out['val/critic_confidence_p90'] = float(_t.quantile(preds, _t.tensor(0.9)).item())
+                            except Exception:
                                 try:
-                                    import torch as _t
-                                    preds0 = _t.cat(critic_pred_t0_list, dim=0).view(-1)
-                                    out['val/critic_pred_p10_for_target0'] = float(_t.quantile(preds0, _t.tensor(0.1)).item())
-                                    out['val/critic_pred_p90_for_target0'] = float(_t.quantile(preds0, _t.tensor(0.9)).item())
+                                    preds = _t.cat(critic_pred_t0_list, dim=0).view(-1)
+                                    sorted_preds, _ = _t.sort(preds)
+                                    n = sorted_preds.numel()
+                                    i10 = max(int(0.1 * (n - 1)), 0)
+                                    i50 = max(int(0.5 * (n - 1)), 0)
+                                    i90 = max(int(0.9 * (n - 1)), 0)
+                                    out['val/critic_confidence_p10'] = float(sorted_preds[i10].item())
+                                    out['val/critic_confidence_p50'] = float(sorted_preds[i50].item())
+                                    out['val/critic_confidence_p90'] = float(sorted_preds[i90].item())
                                 except Exception:
-                                    try:
-                                        preds0 = _t.cat(critic_pred_t0_list, dim=0).view(-1)
-                                        sorted0, _ = _t.sort(preds0)
-                                        n0 = sorted0.numel()
-                                        i10 = max(int(0.1 * (n0 - 1)), 0)
-                                        i90 = max(int(0.9 * (n0 - 1)), 0)
-                                        out['val/critic_pred_p10_for_target0'] = float(sorted0[i10].item())
-                                        out['val/critic_pred_p90_for_target0'] = float(sorted0[i90].item())
-                                    except Exception:
-                                        pass
-                            if critic_cnt_t1 > 0:
-                                out['val/critic_pred_mean_for_target1'] = float(critic_sum_pred_t1 / max(critic_cnt_t1, 1))
-                                # percentiles for target 1
-                                try:
-                                    import torch as _t
-                                    preds1 = _t.cat(critic_pred_t1_list, dim=0).view(-1)
-                                    out['val/critic_pred_p10_for_target1'] = float(_t.quantile(preds1, _t.tensor(0.1)).item())
-                                    out['val/critic_pred_p90_for_target1'] = float(_t.quantile(preds1, _t.tensor(0.9)).item())
-                                except Exception:
-                                    try:
-                                        preds1 = _t.cat(critic_pred_t1_list, dim=0).view(-1)
-                                        sorted1, _ = _t.sort(preds1)
-                                        n1 = sorted1.numel()
-                                        j10 = max(int(0.1 * (n1 - 1)), 0)
-                                        j90 = max(int(0.9 * (n1 - 1)), 0)
-                                        out['val/critic_pred_p10_for_target1'] = float(sorted1[j10].item())
-                                        out['val/critic_pred_p90_for_target1'] = float(sorted1[j90].item())
-                                    except Exception:
-                                        pass
+                                    pass
                 else:
                     # Sequence scorer, validation split: two-stage evaluation
                     nonzero_losses = []
