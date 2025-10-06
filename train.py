@@ -274,6 +274,9 @@ elif init_from == 'resume':
     iter_num = checkpoint['iter_num']
     best_val_loss = checkpoint['best_val_loss']
 
+# Log critic mode configuration
+logger.log_info(f"Critic mode: {model.config.critic_mode.value}")
+
 # crop down the model block size if desired, using model surgery
 if block_size < model.config.block_size:
     model.crop_block_size(block_size)

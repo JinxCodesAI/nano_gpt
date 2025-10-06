@@ -20,6 +20,32 @@ from torch.nn import functional as F
 import time
 from timings_singleton import get_global_timer
 
+# Timing helpers that don't interfere with torch.compile
+# These are marked to be skipped during compilation
+@torch.compiler.disable
+def _record_timing_start():
+    """Start timing - excluded from torch.compile graph"""
+    return time.perf_counter()
+
+@torch.compiler.disable
+def _record_timing_end(timer, category, start_time):
+    """End timing and record - excluded from torch.compile graph"""
+    if timer is not None:
+        try:
+            if torch.cuda.is_available():
+                torch.cuda.synchronize()
+        except Exception:
+            pass
+        timer.record(category, time.perf_counter() - start_time)
+
+@torch.compiler.disable
+def _safe_item(tensor):
+    """Safely extract scalar value from tensor - excluded from torch.compile graph"""
+    try:
+        return float(tensor.detach().item())
+    except Exception:
+        return 0.0
+
 class ModelMode(Enum):
     """Defines the operational modes for the transformer model"""
     LANGUAGE_MODEL = "language_model"      # Standard language modeling
@@ -446,6 +472,17 @@ class GPT(nn.Module):
 
         # init all weights
         self.apply(self._init_weights)
+
+        # Special initialization for critic head to encourage diversity in TARGETLESS mode
+        if self.config.critic_mode == CriticMode.TARGETLESS and hasattr(self, 'critic_head'):
+            # Initialize the final linear layer with smaller weights for more uniform initial outputs
+            final_linear = self.critic_head[2]  # The second Linear layer
+            with torch.no_grad():
+                torch.nn.init.normal_(final_linear.weight, mean=0.0, std=0.001)
+                if final_linear.bias is not None:
+                    # Small random bias to create initial diversity
+                    torch.nn.init.uniform_(final_linear.bias, -0.1, 0.1)
+            self._log_info("Critic head: using small-scale initialization for TARGETLESS mode")
         # apply special scaled init to the residual projections, per GPT-2 paper
         for pn, p in self.named_parameters():
             if pn.endswith('c_proj.weight'):
@@ -664,16 +701,15 @@ class GPT(nn.Module):
     def forward(self, idx, targets=None, attention_mask=None, loss_modifiers=None):
         # Optional global timing start
         _timer = None
+        _t0 = None
         try:
             _timer = get_global_timer()
+            if _timer is not None:
+                if torch.cuda.is_available():
+                    torch.cuda.synchronize()
+                _t0 = _record_timing_start()
         except Exception:
-            _timer = None
-        if _timer is not None and torch.cuda.is_available():
-            try:
-                torch.cuda.synchronize()
-            except Exception:
-                pass
-        _t0 = time.perf_counter()
+            pass
 
         device = idx.device
         b, t = idx.size()
@@ -692,13 +728,8 @@ class GPT(nn.Module):
 
         # Record forward timing if a global timer is registered
         try:
-            if _timer is not None:
-                if torch.cuda.is_available():
-                    try:
-                        torch.cuda.synchronize()
-                    except Exception:
-                        pass
-                _timer.record('model.forward', time.perf_counter() - _t0)
+            if _timer is not None and _t0 is not None:
+                _record_timing_end(_timer, 'model.forward', _t0)
         except Exception:
             pass
         return out
@@ -776,9 +807,32 @@ class GPT(nn.Module):
                 num_valid_tokens = mask.float().sum(dim=1, keepdim=True) + 1e-8
                 mean_confidence = valid_confidences.sum(dim=1, keepdim=True) / num_valid_tokens
 
+                # Ensure mean_confidence is never zero and is always positive
+                # Add epsilon and clamp to ensure safe division
+                mean_confidence = torch.clamp(mean_confidence, min=1e-6)
+
                 # Detach the normalization factor to stop the model from indirectly
                 # manipulating the mean to its advantage
                 loss_weights = predicted_confidence / mean_confidence.detach()
+
+                # Ensure loss_weights is always positive
+                loss_weights = torch.clamp(loss_weights, min=1e-6)
+
+                # Calculate variance of loss_weights (only over valid tokens)
+                valid_loss_weights = loss_weights[mask]
+                variance = torch.var(valid_loss_weights, unbiased=False)
+
+                # Store variance for logging (not sqrt)
+                self._last_critic_loss = _safe_item(variance)
+
+                # Multiply loss_weights by sqrt of variance
+                sqrt_variance = torch.sqrt(variance.detach() + 1e-8)  # Add epsilon for numerical stability
+                loss_weights = loss_weights * (1+sqrt_variance)
+
+                # Re-normalize to maintain mean of 1 after variance scaling
+                valid_scaled_weights = loss_weights * mask.float()
+                mean_scaled_weights = valid_scaled_weights.sum() / mask.float().sum()
+                loss_weights = loss_weights / (mean_scaled_weights.detach() + 1e-8)
 
                 # The gradient flows through 'loss_weights' to train the critic
                 weighted_lm_loss = per_token_lm_loss * loss_weights
@@ -796,7 +850,7 @@ class GPT(nn.Module):
                 predicted_confidence = self.critic_head(x).squeeze(-1)
                 # Critic has its own, separate loss against the explicit target
                 loss_critic = F.mse_loss(predicted_confidence[mask], true_confidence[mask])
-                self._last_critic_loss = float(loss_critic.detach().item())
+                self._last_critic_loss = _safe_item(loss_critic)
 
                 # 2. Use the Critic to weight the LM loss
                 # We detach the critic's prediction so the LM can't cheat
@@ -823,11 +877,8 @@ class GPT(nn.Module):
                 )
 
             # Expose LM loss component for external logging
-            try:
-                lm_loss_val = final_lm_loss if self.config.critic_mode == CriticMode.TARGETED else loss
-                self._last_lm_loss = float(lm_loss_val.detach().item())
-            except Exception:
-                self._last_lm_loss = 0.0
+            lm_loss_val = final_lm_loss if self.config.critic_mode == CriticMode.TARGETED else loss
+            self._last_lm_loss = _safe_item(lm_loss_val)
 
         else:
             # Inference optimization
@@ -847,16 +898,15 @@ class GPT(nn.Module):
         assert t <= self.config.block_size
         # Optional global timing start for critic_scores
         _timer = None
+        _t0 = None
         try:
             _timer = get_global_timer()
+            if _timer is not None:
+                if torch.cuda.is_available():
+                    torch.cuda.synchronize()
+                _t0 = _record_timing_start()
         except Exception:
-            _timer = None
-        if _timer is not None and torch.cuda.is_available():
-            try:
-                torch.cuda.synchronize()
-            except Exception:
-                pass
-        _t0 = time.perf_counter()
+            pass
 
         tok_emb = self.transformer.wte(idx)
         if hasattr(self.transformer, 'wpe'):
@@ -872,13 +922,8 @@ class GPT(nn.Module):
         logits = self.critic_head(x).squeeze(-1)
         # Record timing if global timer
         try:
-            if _timer is not None:
-                if torch.cuda.is_available():
-                    try:
-                        torch.cuda.synchronize()
-                    except Exception:
-                        pass
-                _timer.record('model.critic_scores', time.perf_counter() - _t0)
+            if _timer is not None and _t0 is not None:
+                _record_timing_end(_timer, 'model.critic_scores', _t0)
         except Exception:
             pass
         return logits
