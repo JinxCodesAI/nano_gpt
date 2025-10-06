@@ -1,239 +1,163 @@
-## Goal and Scope
+The goal is to modify your `GPT` model so you can easily switch between and test three different behaviors for the `critic_head` in `LANGUAGE_MODEL` mode:
 
-Add an optional, non-breaking Critic head to the existing GPT model that learns to predict token-level error likelihoods and can guide re-masking during diffusion-style generation. This is an extension (default-off) that must not change existing behavior unless explicitly enabled via configuration.
+1.  **`NONE`**: The default, with no critic involved.
+2.  **`TARGETLESS`**: Your idea, where the critic's normalized output directly weights the loss.
+3.  **`TARGETED`**: My idea, where the critic is trained against an explicit confidence target.
 
-## Backward Compatibility Requirements
-- New config flag add_critic_head: default False
-- All current training modes must keep working unchanged when add_critic_head is False: LANGUAGE_MODEL, TOKEN_CLASSIFIER, SEQUENCE_SCORER
-- Checkpoint load/resume must work for older checkpoints without this flag
-- Sampling code should continue to work without critic unless explicitly enabled
+-----
 
-## Audience and quick background
+### Step 1: Configure the Experiment in `GPTConfig` ⚙️
 
-This document targets a Python-proficient developer who is not deeply familiar with ML or this codebase. It explains what to change, where, and why.
+First, we'll update the configuration class to be clean and simple.
 
-- Language modeling (LM): the model predicts tokens; training minimizes cross-entropy between predictions and ground-truth tokens.
-- Diffusion-style demasking (in this repo): we iteratively fill masked tokens, then re-mask a subset and repeat. Today, the subset is chosen by heuristics (confidence or randomness).
-- Critic head (this proposal): an auxiliary per-token classifier producing a logit that estimates “this token is likely wrong.” During training it learns from differences between the model’s own predictions and the ground truth. During inference it can guide which tokens to re-mask.
+1.  **Add a `CriticMode` Enum:** At the top of your file, near `ModelMode`, add this new `Enum` to define our three options.
 
-## Where things live in this repo (key references)
+    ```python
+    class CriticMode(Enum):
+        """Defines the training mode for the critic head"""
+        NONE = "none"
+        TARGETLESS = "targetless"
+        TARGETED = "targeted"
+    ```
 
-- model.py
-  - GPTConfig (dataclass): holds model hyperparameters and mode (ModelMode)
-  - GPT: transformer body plus heads
-    - forward() dispatches to _forward_language_model/_forward_token_classifier/_forward_sequence_scorer
-    - _forward_language_model(): current LM loss implementation
-    - freeze_transformer_weights()/unfreeze_transformer_weights(): transfer learning support
-- sample_utils.py
-  - predict_and_sample_tokens(): fills masked positions using LM logits
-  - apply_remasking_step(): decides what to re-mask next; supports external remasking_model, “intelligent_remasking” (self-confidence), or random
-- sample.py
-  - diffusion_generate(): generation loop calling predict_and_sample_tokens() then apply_remasking_step()
-  - Loads mask_token_id/pad_token_id from dataset meta.pkl
-- train.py
-  - Assembles config, constructs GPTConfig and GPT, training orchestrated by Trainer
-  - Uses DatasetConsumer (data/common) and CheckpointManager
-  - validator: config/validator.py validates training configs
-- core/training_step.py
-  - TrainingStep.execute_step(): calls model(X, Y, loss_modifiers=...) inside AMP, handles grad scaling/accumulation/clip/step
+2.  **Update `GPTConfig`:** Find your `GPTConfig` dataclass and replace the entire "Optional critic head configuration" section with the following. This removes the old, obsolete parameters and adds our new `critic_mode` selector.
 
-These are the only places we need to touch or reference for the critic extension.
+    ```python
+    # In GPTConfig...
 
-## High-Level Design
-- Multi-task extension of LANGUAGE_MODEL only. The Critic head shares the transformer trunk and predicts a single logit per token representing “error likelihood”.
-- Training (when enabled): LM loss is computed as today. Additionally, a second forward pass runs on a “filled” sequence (masked positions replaced by sampled tokens (multinomial sampling) drawn from the LM output) to compute a critic loss (BCEWithLogits). Final loss = LM loss (with existing loss modifiers applied) + alpha * critic_loss.
-- Inference: When enabled and no external remasking model is provided, re-masking selection can use critic scores instead of 1 - confidence. Randomness blending and protection masks remain as they are today.
+    # --- DELETE THIS SECTION ---
+    # add_critic_head: bool = False
+    # critic_alpha: float = 0.5
+    # critic_target_scope: str = 'masked_and_ignore'
+    # mask_token_id: int = None
+    # pad_token_id: int = None
 
-## Model Changes (model.py)
-1) GPTConfig additions
-- add_critic_head: bool = False (default)
-- critic_alpha: float = 0.5 (weight for critic loss in training)
-- critic_target_scope: str = 'masked_and_ignore' | 'masked_only' (default 'masked_and_ignore')
-  - masked_and_ignore (default): compute critic on positions that were MASKED in the input (idx == mask_token_id) plus positions with targets == ignore_index (excluding PAD). For ignore positions, target is always 0. For masked positions, target = 0 when prediction equals Y, else 1.
-  - masked_only: compute critic only on positions MASKED in the input (idx == mask_token_id); target = 0 when prediction equals Y, else 1.
-- mask_token_id: Optional[int] = None  # set from consumer.meta in train.py (option 2 wiring)
-- pad_token_id: Optional[int] = None   # set from consumer.meta in train.py (option 2 wiring)
+    # --- ADD THIS NEW SECTION ---
+    # Optional critic head configuration
+    critic_mode: CriticMode = CriticMode.NONE
+    critic_alpha: float = 0.5 # Weight for the critic's own loss ONLY in TARGETED mode
 
+    # This part can stay as is
+    # Critic alpha warmup
+    start_critic_iteration: int = 0
+    end_critic_iteration: int = 0
+    ```
 
-These config fields are saved in checkpoints via existing model_args flow and default to safe values for older checkpoints.
+-----
 
-2) Parameters
-- Conditionally create a critic_head when add_critic_head is True:
-  - critic_head = nn.Linear(n_embd, 1, bias=False)  # raw logits for BCEWithLogits
-  - Keep separate from existing heads; does not interfere with weight tying
-  - Ensure freeze/unfreeze methods keep heads trainable if transformer is frozen
+### Step 2: Upgrade the Critic Head in `GPT.__init__`
 
-3) Public helper for inference
-- Add method: critic_scores(self, idx, attention_mask=None) -> Tensor[(B,T)]
-  - Runs the same transformer encoding path up to ln_f and returns per-token critic logits (squeezed)
-  - Requires add_critic_head True; else raise a clear error
+We'll make the critic more expressive and ensure its output is a normalized `[0, 1]` confidence score.
 
-4) Training integration inside LANGUAGE_MODEL path only
-- In _forward_language_model, keep current logic to compute logits and base LM loss
-- Apply existing loss modifiers to LM only (unchanged behavior and signatures)
-- If add_critic_head and targets is not None:
-  - Build critic_input by filling masked positions in the current batch with predicted tokens from the LM logits
-    - Sampling policy: start with argmax for stability; later we can add multinomial sampling under a flag
-    - Use the same ignore_index mask; identify masked positions using (idx == mask_token_id) from the unfilled input. mask_token_id is available via consumer.meta; preferred: pass consumer.meta['mask_token_id'] into model.config (option 2 wiring) so forward can reconstruct mask_positions exactly. If mask_token_id is not wired into the model, fall back to positions where targets != ignore_index.
-  - Forward pass 2 (with grad): logits_critic = critic_head(ENCODE(critic_input))
-  - Build critic_target: float tensor shape (B,T,1) where 1.0 for error and 0.0 otherwise; scope controlled by critic_target_scope='all'
-    - all: evaluate all positions (excluding padding/ignored); target=1 if critic_input token != ground truth Y else 0
-## Configuration wiring and persistence
+1.  **Find the critic initialization:** In the `GPT.__init__` method, locate the section that initializes the `critic_head`.
 
-- New GPTConfig fields (model.py): add_critic_head, critic_alpha, critic_target_scope (defaults safe)
-- Persistence: these flow through train.py via model_args into checkpoints (CheckpointManager). Older checkpoints load as-is (defaults take effect).
-- Validator: update config/validator.py to allow these keys if present. Keep defaults disabled to preserve existing behavior.
+2.  **Replace it:** Replace the existing `if` block and the simple `nn.Linear` with this new version, which creates a small MLP with a Sigmoid output.
 
-### Enabling the critic during training (two options)
+    ```python
+    # In GPT.__init__...
 
-1) Preferred minimal-change approach consistent with repo policy (avoid changing train.py):
-   - Train a baseline LM checkpoint without critic (as today), then create a new config that sets init_from_checkpoint to that checkpoint and toggles add_critic_head=True when resuming; implement model-side logic that respects add_critic_head during resume. Note: because train.py constructs model_args from a fixed dict, enabling critic on a fresh-from-scratch run will require adding the keys to model_args (see option 2).
+    # --- DELETE THIS LINE ---
+    # if getattr(self.config, 'add_critic_head', False) and self.config.mode == ModelMode.LANGUAGE_MODEL:
 
-2) Small, explicit train.py wiring (optional, convenience):
-   - In the block where model_args is constructed, include:
-     - mask_token_id=consumer.meta.get('mask_token_id', None)
-     - pad_token_id=consumer.meta.get('pad_token_id', None)
+    # --- REPLACE IT AND THE CRITIC HEAD WITH THIS ---
+    # Optional critic head for LANGUAGE_MODEL multi-tasking
+    if self.config.critic_mode != CriticMode.NONE and self.config.mode == ModelMode.LANGUAGE_MODEL:
+        self.critic_head = nn.Sequential(
+            nn.Linear(self.config.n_embd, self.config.n_embd // 2),
+            nn.GELU(),
+            nn.Linear(self.config.n_embd // 2, 1),
+            nn.Sigmoid() # This ensures the output is a [0, 1] confidence score
+        )
+        self._log_info(f"Critic head enabled (mode={self.config.critic_mode.value})")
+    ```
 
-     - add_critic_head=globals().get('add_critic_head', False)
-     - critic_alpha=globals().get('critic_alpha', 0.5)
-     - critic_target_scope=globals().get('critic_target_scope', 'masked_and_ignore')
-   - This keeps behavior identical by default and allows enabling via command-line/config overrides.
+-----
 
-### Inference-time enabling
+### Step 3: Implement the Core Logic in `_forward_language_model` 🧠
 
-- No changes required to sample.py CLI: if model.config.add_critic_head is True and no external remasking_model is provided, apply_remasking_step can automatically use the critic path.
+This is the main surgery. We will completely replace the old critic logic with the new, clean, branching logic.
 
-## Code references for each change
+1.  **Remove the old critic logic:** In `_forward_language_model`, find and **delete the entire `if` block** that begins with `if getattr(self.config, 'add_critic_head', False) ...`. This block contains the call to `build_critic_artifacts_from_logits` and all the associated logic.
 
-- model.py
-  - class GPTConfig: add fields add_critic_head, critic_alpha, critic_target_scope
-  - class GPT.__init__: if config.add_critic_head: self.critic_head = nn.Linear(n_embd, 1, bias=False)
-  - GPT.freeze_transformer_weights(): ensure critic_head remains trainable (like lm_head)
-  - GPT.critic_scores(idx, attention_mask=None): new helper that returns per-token logits (B,T)
-  - GPT._forward_language_model(...): compute LM loss (with loss_modifiers), then, if add_critic_head and targets present, compute critic loss on filled sequences and add to total
+2.  **Insert the new, unified logic:** In its place, insert the following code. It will handle all three critic modes.
 
-- sample_utils.py
-  - apply_remasking_step(...): add critic branch between remasking_model and intelligent_remasking
+    ```python
+    # In _forward_language_model, right after the line:
+    # logits = self.lm_head(x)
 
-- sample.py
-  - diffusion_generate(...): unchanged logic; rely on apply_remasking_step precedence
+    # --- START OF NEW UNIFIED LOSS LOGIC ---
 
-- config/validator.py
-  - Allow/validate the three new config keys (no default enabling)
+    # This is the base calculation, common to all modes.
+    # It gets the standard per-token loss without any weighting.
+    per_token_lm_loss = F.cross_entropy(
+        logits.view(-1, logits.size(-1)),
+        targets.view(-1),
+        ignore_index=self.config.ignore_index,
+        reduction='none'
+    ).view(targets.shape)
 
-## How to enable & run (examples)
+    mask = (targets != self.config.ignore_index)
+    self._last_critic_loss = 0.0 # Will be updated by TARGETED mode if active
 
-Training from scratch with critic (if option 2 wiring is added):
+    # --- Branching logic based on the config setting ---
 
-- In your training config (e.g., config/my_training/with_critic.py), set:
-  - add_critic_head = True
-  - critic_alpha = 0.5  # tune 0.1–1.0
-  - critic_target_scope = 'all'
-- Run:
-  - python train.py config/my_training/with_critic.py
+    if self.config.critic_mode == CriticMode.TARGETLESS:
+        # ---- YOUR IDEA ----
+        predicted_confidence = self.critic_head(x).squeeze(-1)
+        
+        # Normalize weights to have a mean of 1 across each sequence in the batch
+        valid_confidences = predicted_confidence * mask.float()
+        num_valid_tokens = mask.float().sum(dim=1, keepdim=True) + 1e-8
+        mean_confidence = valid_confidences.sum(dim=1, keepdim=True) / num_valid_tokens
+        
+        # We detach the normalization factor to stop the model from indirectly
+        # manipulating the mean to its advantage.
+        loss_weights = predicted_confidence / mean_confidence.detach()
 
-Training by resuming from a baseline LM checkpoint (option 1):
+        # The gradient flows through 'loss_weights' to train the critic
+        weighted_lm_loss = per_token_lm_loss * loss_weights
+        loss = (weighted_lm_loss * mask.float()).sum() / mask.float().sum()
 
-- Keep train.py unchanged; use an LM checkpoint produced previously
-- In your resume config:
-  - init_from = 'resume'; init_from_checkpoint points to that checkpoint
-  - add_critic_head = True (picked up via checkpoint model_args if present; else requires option 2 wiring)
+    elif self.config.critic_mode == CriticMode.TARGETED:
+        # ---- MY IDEA ----
+        # 1. Train the Critic: It must predict the model's true confidence (1 - entropy)
+        with torch.no_grad():
+            probs = F.softmax(logits, dim=-1)
+            entropy = -torch.sum(probs * F.log_softmax(logits, dim=-1), dim=-1)
+            normalized_entropy = entropy / math.log(self.config.vocab_size)
+            true_confidence = 1.0 - normalized_entropy
+        
+        predicted_confidence = self.critic_head(x).squeeze(-1)
+        # Critic has its own, separate loss against the explicit target
+        loss_critic = F.mse_loss(predicted_confidence[mask], true_confidence[mask])
+        self._last_critic_loss = float(loss_critic.detach().item())
+        
+        # 2. Use the Critic to weight the LM loss
+        # We detach the critic's prediction so the LM can't cheat
+        loss_weights = 1.0 + predicted_confidence.detach() 
+        weighted_lm_loss = per_token_lm_loss * loss_weights
+        final_lm_loss = (weighted_lm_loss * mask.float()).sum() / mask.float().sum()
+        
+        alpha_eff = self._effective_critic_alpha()
+        loss = final_lm_loss + alpha_eff * loss_critic
 
-Sampling with critic guidance:
+    else: # This covers CriticMode.NONE
+        # ---- NO CRITIC: Standard Cross Entropy Loss ----
+        loss = per_token_lm_loss.sum() / mask.float().sum()
+        
+    # --- END OF NEW UNIFIED LOSS LOGIC ---
 
-- sample.py will detect critic availability via model.config.add_critic_head
-- Ensure no external remasking_model is passed to favor the critic branch
+    # This section for logging can be updated to handle the new `final_lm_loss` variable
+    try:
+        lm_loss_val = final_lm_loss if self.config.critic_mode == CriticMode.TARGETED else loss
+        self._last_lm_loss = float(lm_loss_val.detach().item())
+    except Exception:
+        self._last_lm_loss = 0.0
+    ```
 
+-----
 
-Notes:
-- We do not modify the signature of forward nor loss_modifiers interfaces
-- We add a new helper critic_scores() for inference-time utilities
+### Step 4: Final Cleanup
 
-## Sampling/Inference Changes (sample_utils.py and sample.py)
-1) sample_utils.apply_remasking_step
-- Add an optional path to use critic scores when remasking_model is None and intelligent_remasking is False and the base model has add_critic_head=True
-- Implementation sketch:
-  - With torch.no_grad(), compute scores = model.critic_scores(prediction_tokens)
-  - scores meaning: higher logit = higher error probability
-  - Mask scores at positions that are not unmaskable or are protected
-  - Blend with randomness_strength as today
-  - Pick top-k (per row) indices to re-mask
-  - Set those positions to mask_token_id
-- Precedence order becomes: remasking_model > critic_head > intelligent_remasking > random
-
-2) sample.py integration
-- Detect availability of critic via getattr(model.config, 'add_critic_head', False)
-- Pass this intent implicitly through to apply_remasking_step; no CLI change is required initially (optional future flag enable_critic_remasking)
-- Do not alter any other generation flow
-
-## Train/Eval Code (train.py, core/training_step.py)
-- No structural changes. The entire feature is gated inside model forward and the sampling utilities
-- DDP/AMP/GradScaler behavior stays identical
-- Unfreezing logic remains identical (transformer may be frozen/unfrozen; the critic head is always trainable when present)
-
-## Detailed Steps
-1) Add config fields to GPTConfig with defaults and post-init no-op for BC
-2) In GPT.__init__:
-   - Instantiate critic_head if config.add_critic_head
-   - Extend freeze_transformer_weights() to leave critic_head trainable
-3) Implement GPT.critic_scores(idx, attention_mask=None)
-   - Run the standard embedding/blocks/ln_f path and apply critic_head, returning logits.squeeze(-1)
-4) Extend _forward_language_model to compute combined loss when add_critic_head and targets is not None
-   - Compute LM logits and base LM loss (unchanged)
-   - Apply loss_modifiers to LM loss only (unchanged)
-   - Build critic_input by filling masked positions (see Design) and compute logits_critic
-   - Build critic_target tensor and valid mask; compute loss_critic with BCEWithLogitsLoss
-   - loss = loss_after_modifiers + critic_alpha * loss_critic
-   - Return LM logits and combined loss
-5) In sample_utils.apply_remasking_step add critic path as described; preserve existing API and default behavior
-6) In sample.py, do a minimal detection of model.config.add_critic_head and let apply_remasking_step use the critic automatically when enabled
-
-## Data/Targets for Critic
-- Mask identification: prefer using (idx == mask_token_id) captured before filling to identify positions originally masked in the iteration.
-- Targets are defined per critic_target_scope:
-  - masked_and_ignore (default):
-    - Valid positions: (idx == mask_token_id) OR (targets == ignore_index), excluding PAD.
-    - For masked positions: target 0 if prediction equals Y, else 1.
-    - For ignore_index positions: target 0 (always).
-  - masked_only:
-    - Valid positions: (idx == mask_token_id), excluding PAD.
-    - Target 0 if prediction equals Y, else 1.
-
-### Example (spaces omitted for clarity)
-Original text:
-  brown,fox,jumped,over,tall,fence
-Input (BERT-style corruption in positions 1 and 3; position 4 replaced by random token "ball"):
-  [MASK],fox,[MASK],ball,tall,fence
-Ground truth targets Y (ignore = no supervision for LM head):
-  brown,ignore,jumped,over,ignore,ignore
-Sampled prediction from LM:
-  brown,fox,run,in,tall,fence
-Critic target per scope:
-- masked_and_ignore (default):
-  Valid = masked positions {0,2} union ignore positions {1,4,5} (PAD excluded)
-  Targets:
-    pos0: masked, brown==brown -> 0
-    pos1: ignore -> 0
-    pos2: masked, run!=jumped -> 1
-    pos4: ignore -> 0
-    pos5: ignore -> 0
-  Result: [0, 0, 1, -, 0, 0]
-- masked_only:
-  Valid = masked positions {0,2}
-  Targets:
-    pos0: 0
-    pos2: 1
-  Result: [0, -, 1, -, -, -]
-
-## Logging
-- At model init: log that critic head is enabled and critic_alpha
-- Optionally (future): expose per-iteration scalar for critic loss via logger; for now, keep the training loop untouched
-## Migration / Config Integration
-- Add config flag add_critic_head and critic_alpha to training configs; default False/0.5
-- Update config.validator to allow/validate the new keys (no enabling by default)
-- No changes required to CheckpointManager; new fields flow through model_args as today
-
-## Risks and Mitigations
-- Mask identification: mask_token_id exists in consumer.meta and is used by sampling. For training, wire mask_token_id into model.config (option 2) so forward can compute mask positions exactly from (idx == mask_token_id); if not wired, temporarily approximate masked positions with (targets != ignore_index).
-- Numerical stability: use BCEWithLogitsLoss with reduction by valid count; clamp valid count to avoid divide-by-zero
-
+1.  **Remove the unused import:** At the top of your file, delete the line:
+    `from sample_utils import build_critic_artifacts_from_logits`

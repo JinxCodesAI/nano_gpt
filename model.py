@@ -20,13 +20,18 @@ from torch.nn import functional as F
 import time
 from timings_singleton import get_global_timer
 
-from sample_utils import build_critic_artifacts_from_logits
-
 class ModelMode(Enum):
     """Defines the operational modes for the transformer model"""
     LANGUAGE_MODEL = "language_model"      # Standard language modeling
+    SELF_SUPERVISED_LLM = "self_supervised_llm"  # Computes loss not based on targets but based on sequence score
     TOKEN_CLASSIFIER = "token_classifier"  # Per-token classification
     SEQUENCE_SCORER = "sequence_scorer"    # Sequence-level 0-1 scoring
+
+class CriticMode(Enum):
+    """Defines the training mode for the critic head"""
+    NONE = "none"
+    TARGETLESS = "targetless"
+    TARGETED = "targeted"
 
 class RotaryPositionalEmbedding(nn.Module):
     """
@@ -348,13 +353,9 @@ class GPTConfig:
     unfreeze_at_iteration: int = None
     unfreeze_lr_multiplier: float = 0.1
 
-
-    # Optional critic head configuration (LANGUAGE_MODEL multi-task)
-    add_critic_head: bool = False
-    critic_alpha: float = 0.5
-    critic_target_scope: str = 'masked_and_ignore'
-    mask_token_id: int = None
-    pad_token_id: int = None
+    # Optional critic head configuration
+    critic_mode: CriticMode = CriticMode.NONE
+    critic_alpha: float = 0.5  # Weight for the critic's own loss ONLY in TARGETED mode
     # Critic alpha warmup
     start_critic_iteration: int = 0
     end_critic_iteration: int = 0
@@ -434,9 +435,14 @@ class GPT(nn.Module):
             raise ValueError(f"Unknown model mode: {self.config.mode}")
 
         # Optional critic head for LANGUAGE_MODEL multi-tasking
-        if getattr(self.config, 'add_critic_head', False) and self.config.mode == ModelMode.LANGUAGE_MODEL:
-            self.critic_head = nn.Linear(self.config.n_embd, 1, bias=False)
-            self._log_info(f"Critic head enabled (alpha={self.config.critic_alpha})")
+        if self.config.critic_mode != CriticMode.NONE and self.config.mode == ModelMode.LANGUAGE_MODEL:
+            self.critic_head = nn.Sequential(
+                nn.Linear(self.config.n_embd, self.config.n_embd // 2),
+                nn.GELU(),
+                nn.Linear(self.config.n_embd // 2, 1),
+                nn.Sigmoid()  # This ensures the output is a [0, 1] confidence score
+            )
+            self._log_info(f"Critic head enabled (mode={self.config.critic_mode.value})")
 
         # init all weights
         self.apply(self._init_weights)
@@ -748,70 +754,80 @@ class GPT(nn.Module):
         """Language modeling forward pass with optional critic head"""
         if targets is not None:
             logits = self.lm_head(x)
+
+            # Compute per-token LM loss (common to all modes)
+            per_token_lm_loss = F.cross_entropy(
+                logits.view(-1, logits.size(-1)),
+                targets.view(-1),
+                ignore_index=self.config.ignore_index,
+                reduction='none'
+            ).view(targets.shape)
+
+            mask = (targets != self.config.ignore_index)
+            self._last_critic_loss = 0.0  # Will be updated by TARGETED mode if active
+
+            # Branching logic based on critic mode
+            if self.config.critic_mode == CriticMode.TARGETLESS:
+                # TARGETLESS: Critic's normalized output directly weights the loss
+                predicted_confidence = self.critic_head(x).squeeze(-1)
+
+                # Normalize weights to have a mean of 1 across each sequence in the batch
+                valid_confidences = predicted_confidence * mask.float()
+                num_valid_tokens = mask.float().sum(dim=1, keepdim=True) + 1e-8
+                mean_confidence = valid_confidences.sum(dim=1, keepdim=True) / num_valid_tokens
+
+                # Detach the normalization factor to stop the model from indirectly
+                # manipulating the mean to its advantage
+                loss_weights = predicted_confidence / mean_confidence.detach()
+
+                # The gradient flows through 'loss_weights' to train the critic
+                weighted_lm_loss = per_token_lm_loss * loss_weights
+                loss = (weighted_lm_loss * mask.float()).sum() / mask.float().sum()
+
+            elif self.config.critic_mode == CriticMode.TARGETED:
+                # TARGETED: Critic is trained against an explicit confidence target
+                # 1. Train the Critic: It must predict the model's true confidence (1 - entropy)
+                with torch.no_grad():
+                    probs = F.softmax(logits, dim=-1)
+                    entropy = -torch.sum(probs * F.log_softmax(logits, dim=-1), dim=-1)
+                    normalized_entropy = entropy / math.log(self.config.vocab_size)
+                    true_confidence = 1.0 - normalized_entropy
+
+                predicted_confidence = self.critic_head(x).squeeze(-1)
+                # Critic has its own, separate loss against the explicit target
+                loss_critic = F.mse_loss(predicted_confidence[mask], true_confidence[mask])
+                self._last_critic_loss = float(loss_critic.detach().item())
+
+                # 2. Use the Critic to weight the LM loss
+                # We detach the critic's prediction so the LM can't cheat
+                loss_weights = 1.0 + predicted_confidence.detach()
+                weighted_lm_loss = per_token_lm_loss * loss_weights
+                final_lm_loss = (weighted_lm_loss * mask.float()).sum() / mask.float().sum()
+
+                alpha_eff = self._effective_critic_alpha()
+                loss = final_lm_loss + alpha_eff * loss_critic
+
+            else:  # CriticMode.NONE
+                # NO CRITIC: Standard Cross Entropy Loss
+                loss = per_token_lm_loss.sum() / mask.float().sum()
+
+            # Apply loss modifiers if present (after critic logic)
             if loss_modifiers is not None and not loss_modifiers.is_empty():
-                # Existing loss modifier logic
-                flat_logits = logits.view(-1, logits.size(-1))
-                flat_targets = targets.view(-1)
-                per_position_loss = F.cross_entropy(
-                    flat_logits, flat_targets,
-                    ignore_index=self.config.ignore_index,
-                    reduction='none'
-                )
-                per_position_loss = per_position_loss.view(targets.size(0), targets.size(1))
-                mask = targets != self.config.ignore_index
-                base_loss = (per_position_loss * mask.float()).sum() / (mask.float().sum() + 1e-8)
+                # For compatibility with existing loss modifiers
+                base_loss = loss
                 loss = loss_modifiers.modify_loss(
                     logits, targets, base_loss, mask=mask,
-                    per_position_loss=per_position_loss,
+                    per_position_loss=per_token_lm_loss,
                     ignore_index=self.config.ignore_index,
                     model_mode=self.config.mode
                 )
-            else:
-                loss = F.cross_entropy(logits.view(-1, logits.size(-1)), targets.view(-1), ignore_index=self.config.ignore_index)
 
-            # Expose LM loss component for external logging (detach to avoid graph retention)
+            # Expose LM loss component for external logging
             try:
-                self._last_lm_loss = float(loss.detach().item())
+                lm_loss_val = final_lm_loss if self.config.critic_mode == CriticMode.TARGETED else loss
+                self._last_lm_loss = float(lm_loss_val.detach().item())
             except Exception:
                 self._last_lm_loss = 0.0
-            # Default critic component to 0.0; may be overwritten below when enabled
-            self._last_critic_loss = 0.0
-
-
-            # Optional critic loss (multi-task) when enabled
-            alpha_eff = self._effective_critic_alpha()
-            if getattr(self.config, 'add_critic_head', False) and hasattr(self, 'critic_head') and alpha_eff > 0.0 and getattr(self, '_critic_enabled', True):
-                # Build critic artifacts using shared helper
-                if idx is None or getattr(self.config, 'mask_token_id', None) is None:
-                    raise RuntimeError("critic_target_scope requires idx and mask_token_id; misconfiguration detected")
-                artifacts = build_critic_artifacts_from_logits(
-                    idx=idx,
-                    logits=logits,
-                    targets=targets,
-                    mask_token_id=int(self.config.mask_token_id),
-                    ignore_index=int(self.config.ignore_index),
-
-                    pad_token_id=getattr(self.config, 'pad_token_id', None),
-                    scope=getattr(self.config, 'critic_target_scope', 'masked_and_ignore'),
-                )
-                critic_input = artifacts['critic_input']
-                critic_target = artifacts['critic_target']
-                critic_valid = artifacts['critic_valid']
-
-                # Encode critic input through the transformer trunk
-                h2 = self._encode_tokens(critic_input)
-                critic_logits = self.critic_head(h2).squeeze(-1)
-
-                critic_loss_per_pos = F.binary_cross_entropy_with_logits(critic_logits, critic_target, reduction='none')
-                denom = (critic_valid.float().sum() + 1e-8)
-                critic_loss = (critic_loss_per_pos * critic_valid.float()).sum() / denom
-                loss = loss + float(alpha_eff) * critic_loss
-
-                # Expose critic loss component for external logging (after computing critic_loss)
-                try:
-                    self._last_critic_loss = float(critic_loss.detach().item())
-                except Exception:
-                    self._last_critic_loss = 0.0
 
         else:
             # Inference optimization
@@ -821,8 +837,8 @@ class GPT(nn.Module):
         return logits, loss
     @torch.no_grad()
     def critic_scores(self, idx, attention_mask=None):
-        """Return per-token critic logits (B, T). Requires add_critic_head=True and LANGUAGE_MODEL mode."""
-        if not getattr(self.config, 'add_critic_head', False) or not hasattr(self, 'critic_head'):
+        """Return per-token critic confidence scores (B, T). Requires critic_mode != NONE and LANGUAGE_MODEL mode."""
+        if self.config.critic_mode == CriticMode.NONE or not hasattr(self, 'critic_head'):
             raise RuntimeError("critic_head not enabled in config")
         if self.config.mode != ModelMode.LANGUAGE_MODEL:
             raise RuntimeError("critic_scores is only available in LANGUAGE_MODEL mode")

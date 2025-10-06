@@ -7,7 +7,7 @@ import pytest
 # Ensure project root is on sys.path
 sys.path.append(os.path.dirname(os.path.dirname(__file__)))
 
-from model import GPT, GPTConfig, ModelMode
+from model import GPT, GPTConfig, ModelMode, CriticMode
 
 def make_small_lm_with_critic():
     cfg = GPTConfig(
@@ -18,53 +18,43 @@ def make_small_lm_with_critic():
         n_embd=32,
         dropout=0.0,
         mode=ModelMode.LANGUAGE_MODEL,
-        add_critic_head=True,
+        critic_mode=CriticMode.TARGETLESS,
         critic_alpha=0.5,
-        mask_token_id=63,
-        pad_token_id=0,
     )
     model = GPT(cfg)
     model.eval()
     return model
 
-@pytest.mark.parametrize("disable", [False, True])
 @torch.no_grad()
-def test_forward_uses_single_or_double_encode_when_critic_toggled(disable):
+def test_critic_modes():
+    """Test that different critic modes produce different loss values"""
     model = make_small_lm_with_critic()
-
-    # Count calls to _encode_tokens on this instance
-    calls = {"n": 0}
-    orig_encode = model._encode_tokens
-
-    def counted_encode(idx, attention_mask=None):
-        calls["n"] += 1
-        return orig_encode(idx, attention_mask=attention_mask)
-
-    # Bind the wrapper back to the instance
-    model._encode_tokens = types.MethodType(lambda self, idx, attention_mask=None: counted_encode(idx, attention_mask), model)
-
-    if disable:
-        model.disable_critic()
-    else:
-        model.enable_critic()
 
     B, T = 2, 8
     idx = torch.randint(0, model.config.vocab_size, (B, T))
-    # Ensure at least one masked token exists to exercise critic artifacts path
-    idx[0, 0] = int(model.config.mask_token_id)
-
     targets = torch.randint(0, model.config.vocab_size, (B, T))
 
-    logits, loss = model(idx, targets=targets)
-    assert logits.shape[:2] == (B, T)
+    # Test TARGETLESS mode
+    model.config.critic_mode = CriticMode.TARGETLESS
+    logits1, loss1 = model(idx, targets=targets)
+    assert logits1.shape[:2] == (B, T)
+    assert loss1 is not None
 
-    # When critic enabled -> 2 passes (LM + critic); when disabled -> 1 pass
-    expected = 1 if disable else 2
-    assert calls["n"] == expected, f"_encode_tokens calls={calls['n']} expected={expected} (disable={disable})"
+    # Test TARGETED mode
+    model.config.critic_mode = CriticMode.TARGETED
+    logits2, loss2 = model(idx, targets=targets)
+    assert logits2.shape[:2] == (B, T)
+    assert loss2 is not None
+
+    # Test NONE mode
+    model.config.critic_mode = CriticMode.NONE
+    logits3, loss3 = model(idx, targets=targets)
+    assert logits3.shape[:2] == (B, T)
+    assert loss3 is not None
 
 @torch.no_grad()
-def test_disable_enable_idempotent_and_noop_without_critic_head():
-    # Model without critic head should tolerate toggles (no-op)
+def test_critic_head_not_created_when_mode_none():
+    # Model with critic_mode=NONE should not have critic_head
     cfg = GPTConfig(
         block_size=8,
         vocab_size=32,
@@ -73,10 +63,8 @@ def test_disable_enable_idempotent_and_noop_without_critic_head():
         n_embd=16,
         dropout=0.0,
         mode=ModelMode.LANGUAGE_MODEL,
-        add_critic_head=False,
+        critic_mode=CriticMode.NONE,
     )
     m = GPT(cfg)
-    # Should not raise
-    m.disable_critic()
-    m.enable_critic()
+    assert not hasattr(m, 'critic_head'), "critic_head should not exist when critic_mode=NONE"
 

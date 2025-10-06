@@ -1,6 +1,6 @@
 """
 Simplified diffusion sampling script with critic-guided remasking and linear schedule.
-- Supports LANGUAGE_MODEL checkpoints with critic head enabled (add_critic_head=True)
+- Supports LANGUAGE_MODEL checkpoints with critic head enabled (critic_mode != 'none')
 - Supports Judge and Node Quality metrics
 - Supports two schedule modes:
   * 'ratio' (default): Uses linear schedule to decide how many tokens to re-mask; critic provides ordering
@@ -22,7 +22,7 @@ from contextlib import nullcontext
 
 import torch
 
-from model import GPTConfig, GPT, ModelMode
+from model import GPTConfig, GPT, ModelMode, CriticMode
 from sample_utils import (
     linear_remasking_schedule,
     nucleus_sample,
@@ -384,8 +384,8 @@ def main():
     model, checkpoint = load_model_from_checkpoint(main_ckpt, args.device, compile_model=False)
     if getattr(model.config, 'mode', None) != ModelMode.LANGUAGE_MODEL:
         raise ValueError('This script supports LANGUAGE_MODEL checkpoints only')
-    if not getattr(model.config, 'add_critic_head', False):
-        raise ValueError('Model must have critic head enabled (add_critic_head=True)')
+    if getattr(model.config, 'critic_mode', CriticMode.NONE) == CriticMode.NONE:
+        raise ValueError('Model must have critic head enabled (critic_mode != "none")')
 
     # Load vocabulary/meta
     stoi, itos, meta_vocab_size, dataset_name, meta = load_vocabulary(checkpoint)
@@ -510,7 +510,7 @@ def main():
         with _cm:
             judge_scores = calculate_judge_scores(judge_model=judge_model, tokens=generated_tokens, device=args.device, ctx=ctx)
         # Also compute critic percentiles to display, matching sample.py behavior
-        if getattr(model.config, 'add_critic_head', False):
+        if getattr(model.config, 'critic_mode', CriticMode.NONE) != CriticMode.NONE:
             with torch.no_grad():
                 if ctx is not None:
                     with ctx:

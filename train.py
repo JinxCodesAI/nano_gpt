@@ -27,7 +27,7 @@ import torch
 from torch.nn.parallel import DistributedDataParallel as DDP
 from torch.distributed import init_process_group, destroy_process_group
 
-from model import GPTConfig, GPT, ModelMode
+from model import GPTConfig, GPT, ModelMode, CriticMode
 import torch._dynamo
 
 from dataset_consumer import DatasetConsumer
@@ -114,11 +114,10 @@ unfreeze_at_iteration = None  # Dynamic unfreezing
 unfreeze_lr_multiplier = 0.1  # LR multiplier when unfreezing
 seq_scorer_log_abs_rel_err = True  # running average abs(target - pred)/max(|target|, eps)
 # critic head (optional, default disabled)
-add_critic_head = False
+critic_mode = 'none'  # 'none', 'targetless', 'targeted'
+critic_alpha = 0.5  # Weight for the critic's own loss ONLY in TARGETED mode
 start_critic_iteration = 0
 end_critic_iteration = 0
-critic_alpha = 0.5
-critic_target_scope = 'masked_and_ignore'
 
 # -----------------------------------------------------------------------------
 exec(open('configurator.py').read()) # overrides from command line or config file
@@ -242,13 +241,10 @@ model_args = dict(n_layer=n_layer, n_head=n_head, n_embd=n_embd, block_size=bloc
                   unfreeze_at_iteration=unfreeze_at_iteration,
                   unfreeze_lr_multiplier=unfreeze_lr_multiplier,
                   # critic head parameters
-                  add_critic_head=add_critic_head,
+                  critic_mode=CriticMode(critic_mode),
                   critic_alpha=critic_alpha,
-                  critic_target_scope=critic_target_scope,
                   start_critic_iteration=start_critic_iteration,
-                  end_critic_iteration=end_critic_iteration,
-                  mask_token_id=meta_mask_token_id,
-                  pad_token_id=meta_pad_token_id) # start with model_args from command line
+                  end_critic_iteration=end_critic_iteration) # start with model_args from command line
 if init_from == 'scratch':
     # init a new model from scratch
     logger.log_info("Initializing a new model from scratch")

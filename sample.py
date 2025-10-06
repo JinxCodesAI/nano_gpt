@@ -12,7 +12,7 @@ from collections import Counter
 from enum import Enum
 
 import torch
-from model import GPTConfig, GPT, ModelMode
+from model import GPTConfig, GPT, ModelMode, CriticMode
 from sample_utils import (
     linear_remasking_schedule, nucleus_sample, apply_remasking,
     calculate_selfconfidence_ratio, predict_and_sample_tokens, apply_remasking_step,
@@ -298,7 +298,7 @@ def diffusion_generate(model, batch_size, total_length, iterations, mask_token_i
         print(f"  - Temperature: {temperature}")
         if remasking_model is not None:
             print(f"  - Using remasking model")
-        elif getattr(getattr(model, 'config', object()), 'add_critic_head', False):
+        elif getattr(getattr(model, 'config', object()), 'critic_mode', CriticMode.NONE) != CriticMode.NONE:
             print(f"  - Using critic-guided remasking")
         elif intelligent_remasking:
             print(f"  - Using intelligent self-remasking")
@@ -354,7 +354,7 @@ def diffusion_generate(model, batch_size, total_length, iterations, mask_token_i
                     mask_token_id=mask_token_id,
                     device=device,
                     base_model=model,
-                    intelligent_remasking=(False if (remasking_model is None and getattr(getattr(model, 'config', object()), 'add_critic_head', False)) else intelligent_remasking),
+                    intelligent_remasking=(False if (remasking_model is None and getattr(getattr(model, 'config', object()), 'critic_mode', CriticMode.NONE) != CriticMode.NONE) else intelligent_remasking),
                     verbose=verbose and use_verbose_logging,
                     logits_from_predict=logits,
                     protected_mask=protected_mask
@@ -510,7 +510,7 @@ else:
     print(f"Max new tokens: {max_new_tokens}")
     print(f"Temperature: {std_temperature}, Top-k: {top_k}")
     # Informational: Critic-guided remasking will be used if available (no external remasking model)
-    if sampling_method == 'diffusion' and remasking_model is None and getattr(getattr(model, 'config', object()), 'add_critic_head', False):
+    if sampling_method == 'diffusion' and remasking_model is None and getattr(getattr(model, 'config', object()), 'critic_mode', CriticMode.NONE) != CriticMode.NONE:
         print("Critic-guided remasking: enabled (using model's critic head)")
 
     print(f"Start text: '{start_text}'")
@@ -603,7 +603,7 @@ generation_time = time.time() - start_time
 
 # Compute critic percentiles per sample if critic head is available
 critic_percentiles = None
-if sampling_method == 'diffusion' and getattr(getattr(model, 'config', object()), 'add_critic_head', False):
+if sampling_method == 'diffusion' and getattr(getattr(model, 'config', object()), 'critic_mode', CriticMode.NONE) != CriticMode.NONE:
     with torch.no_grad():
         if ctx is not None:
             with ctx:

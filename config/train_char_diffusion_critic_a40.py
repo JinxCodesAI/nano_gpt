@@ -80,10 +80,10 @@ ignore_index = -100  # Default PyTorch ignore index
 # batch_size = 4
 # block_size = 128
 
-add_critic_head = True
+critic_mode = 'targetless'  # 'none', 'targetless', 'targeted'
+critic_alpha = 0.5
 start_critic_iteration = 1000
 end_critic_iteration = 3000
-critic_alpha = 0.5
 loss_modifiers_enabled = True
 
 entropy_modifier_enabled = False
