@@ -148,7 +148,7 @@ class DataProviderBase:
             "split": split,
             "produced_at": int(time.time() * 1000),
         }
-        # Add batch-specific metadata
+        # Add batch-specific metadata (includes model_mode if provided by sample_batch)
         metadata.update(batch_metadata)
         # write atomic
         d = self.train_dir if split == "train" else self.val_dir

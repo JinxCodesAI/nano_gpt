@@ -15,10 +15,12 @@ This guide explains how to add a new dataset to the streaming data pipeline and 
 
 ### Model vs Data roles (unambiguous)
 
-- model_mode (in your training config) is the single switch that governs model architecture and training behavior. Valid values map to ModelMode in model.py: 'language_model', 'token_classifier', 'sequence_scorer'.
-- training_type (in provider meta) is a data/schema descriptor produced by your DataProvider (e.g., 'LM', 'MLM'). It helps consumers understand batch structure but does not choose model architecture.
-- When you want BERT-style masked language modeling, set model_mode = 'language_model' and attention_type = 'bidirectional' in your config. The provider can still set meta['training_type'] = 'MLM' to describe the dataset.
-- The training loop reads model_mode from the config; it does not read training_type.
+- **Dual-mode architecture (NEW)**: Models now support both LANGUAGE_MODEL and SEQUENCE_SCORER modes simultaneously. Mode switching happens at runtime based on batch metadata.
+- **model_mode (batch-level, optional)**: Each batch can specify its model_mode ('language_model' or 'sequence_scorer') in the batch metadata. The training loop switches the model to the appropriate mode before processing each batch. If not specified, defaults to LANGUAGE_MODEL.
+- **training_type (provider meta)**: A data/schema descriptor produced by your DataProvider (e.g., 'LM', 'MLM', 'SEQUENCE_SCORING', 'DUAL_MODE'). It helps consumers understand batch structure but does not directly control model mode.
+- **Config-level mode (DEPRECATED)**: The config-level model_mode field has been removed. Models default to LANGUAGE_MODEL and switch based on batch metadata.
+- When you want BERT-style masked language modeling, set attention_type = 'bidirectional' in your config. The provider can set meta['training_type'] = 'MLM' to describe the dataset.
+- For dual-mode training, use a provider that generates batches with different model_mode values (see data/dual_mode example).
 
 ### Step 1: Implement a Provider
 Create data/<your_dataset>/prepare_streaming.py by subclassing DataProviderBase.
@@ -33,10 +35,11 @@ class DataProviderBase:
 
 Your provider implements:
 - build_meta(): returns a dict with at least:
-  - training_type: e.g., "LM", "MLM", "CLASSIFICATION", ...
+  - training_type: e.g., "LM", "MLM", "SEQUENCE_SCORING", "DUAL_MODE", ...
   - batch_schema: list of fields, each: {name, dtype, shape[, role]}
   - dataset-specific keys (e.g., vocab_size, stoi/itos)
 - sample_batch(split, rng): returns one batch as a dict[name -> tensor] with shapes [batch_size, ...]. The base class handles concatenation and atomic saving.
+  - **Optional**: Include 'model_mode' key in the returned dict to specify the model mode for this batch ('language_model' or 'sequence_scorer'). This enables batch-level mode switching during training.
 
 Minimal example (character-level LM):
 
@@ -133,8 +136,56 @@ Troubleshooting (reshuffle/permutation and device alignment)
 - Ensure sample_batch returns tensors with correct dtypes and shapes that match batch_schema.
 - For DDP, prefer separate datasets/queues per rank or document your strategy; shared queues across ranks are not yet coordinated.
 
+### Dual-mode providers (batch-level mode switching)
+
+Starting with the dual-mode architecture, you can create providers that generate batches for multiple model modes in a single stream. Each batch includes a `model_mode` field that tells the training loop which mode to use.
+
+**Example: DualModeProvider (data/dual_mode)**
+
+The DualModeProvider combines char_diffusion (LANGUAGE_MODEL) and sequence_scorer (SEQUENCE_SCORER) batches:
+
+````python
+class DualModeProvider(DataProviderBase):
+    def sample_batch(self, split, rng):
+        # Determine mode for this batch (e.g., alternate or random)
+        mode = self._determine_mode_for_batch(batch_idx, rng)
+
+        if mode == 'language_model':
+            batch = self.lm_provider.sample_batch(split, rng)
+        else:
+            batch = self.ss_provider.sample_batch(split, rng)
+
+        # Add model_mode metadata
+        batch['model_mode'] = mode
+        return batch
+````
+
+**Key features:**
+- `model_mode` field in batch dict: 'language_model' or 'sequence_scorer'
+- Training loop automatically switches model mode before processing each batch
+- Enables training a single model on multiple tasks simultaneously
+- Configurable distribution and alternation frequency
+
+**Configuration:**
+````python
+# config/train_dual_mode.py
+dataset = 'dual_mode'
+mode_distribution = {
+    'language_model': 0.5,
+    'sequence_scorer': 0.5,
+}
+alternation_frequency = 1  # Switch every batch
+````
+
+**Benefits:**
+- Single model learns both tasks
+- Shared representations across tasks
+- More efficient than training separate models
+- Flexible task mixing during training
+
 ### Troubleshooting
 - Consumer error: "Queue directory not found" -> run prepare.py with the same config.
 - Device moves: DatasetConsumer uses pinned memory and non_blocking transfers on CUDA.
 - Meta changes: If you change meta shape/schema, purge queue files to avoid loading stale batches.
+- Dual-mode errors: Ensure both sub-providers use the same vocab_size and special tokens.
 

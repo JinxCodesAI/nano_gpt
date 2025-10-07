@@ -124,8 +124,21 @@ class TrainingStep:
                 self.model.require_backward_grad_sync = (
                     micro_step == self.grad_accum_steps - 1
                 )
-            X, Y = unpack_batch(batch)
+
+            # Switch model mode based on batch metadata (if provided)
             raw_model = self.model.module if self.ddp else self.model
+            if '_model_mode' in batch:
+                mode_str = batch['_model_mode']
+                # Convert string to ModelMode enum
+                if mode_str == 'language_model' or mode_str == ModelMode.LANGUAGE_MODEL:
+                    raw_model.set_mode(ModelMode.LANGUAGE_MODEL)
+                elif mode_str == 'sequence_scorer' or mode_str == ModelMode.SEQUENCE_SCORER:
+                    raw_model.set_mode(ModelMode.SEQUENCE_SCORER)
+                # If mode_str is already a ModelMode enum, use it directly
+                elif isinstance(mode_str, ModelMode):
+                    raw_model.set_mode(mode_str)
+
+            X, Y = unpack_batch(batch)
 
             with self.ctx:
                 # Delegate to model forward; model handles critic internally when enabled

@@ -330,7 +330,18 @@ class DatasetConsumer:
 
         for k in list(batch_tensors.keys()):
             batch_tensors[k] = _to_device(batch_tensors[k])
-        
+
+        # Add batch-level metadata (e.g., model_mode) if available
+        # Extract metadata for the current batch slice
+        if metadata:
+            # Check if model_mode is in metadata (list of values per batch)
+            if 'model_mode' in metadata:
+                model_modes = metadata['model_mode']
+                if isinstance(model_modes, list) and len(model_modes) > start_idx:
+                    # Get the model_mode for the first sample in this batch
+                    # (all samples in a batch should have the same mode)
+                    batch_tensors['_model_mode'] = model_modes[start_idx]
+
         return batch_tensors
 
     def reset_state(self, split: Optional[str] = None) -> None:
