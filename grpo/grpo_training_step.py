@@ -203,7 +203,8 @@ class GRPOTrainingStep:
             # For BERT-style models: pass masked input, get logits, extract probs for generated tokens
             # We need P(generated_token | masked_context) at each masked position
             # IMPORTANT: Must pass dummy targets to get full sequence logits (not just last position)
-            dummy_targets = torch.zeros_like(X_repeated)
+            # Create dummy targets WITHOUT gradients to avoid unnecessary computation graph
+            dummy_targets = torch.zeros_like(X_repeated).detach()
 
             with self.ctx:
                 logits_current, _ = self.generator(X_repeated, targets=dummy_targets)
@@ -226,18 +227,19 @@ class GRPOTrainingStep:
             mask_repeated_for_sum = mask_repeated
 
             # Compute log-probs and gather in one step to save memory
+            # IMPORTANT: completions and mask are constants (from sampling), detach to avoid unnecessary graph
             log_probs_current = F.log_softmax(logits_current, dim=-1)  # (B*k, T', V)
             token_log_probs = torch.gather(
                 log_probs_current,
                 dim=-1,
-                index=completions_for_gather.unsqueeze(-1)
+                index=completions_for_gather.detach().unsqueeze(-1)
             ).squeeze(-1)  # (B*k, T')
 
             # Free logits_current immediately to save memory
             del logits_current, log_probs_current
 
             # Sum only over masked positions (where actions were taken)
-            sequence_log_probs = (token_log_probs * mask_repeated_for_sum.float()).sum(dim=1)  # (B*k,)
+            sequence_log_probs = (token_log_probs * mask_repeated_for_sum.detach().float()).sum(dim=1)  # (B*k,)
 
             # Debug: Check if log probs are reasonable
             num_masked_per_seq = mask_repeated_for_sum.float().sum(dim=1).mean().item()
@@ -256,11 +258,12 @@ class GRPOTrainingStep:
 
             # STEP 5: Compute KL divergence to reference policy
             # Same as above: pass dummy targets to get full sequence logits
+            # CRITICAL: Detach X_repeated to avoid building computation graph for reference model
             t3b = time.perf_counter()
 
             with torch.no_grad():
                 with self.ctx:
-                    logits_ref, _ = self.reference(X_repeated, targets=dummy_targets)
+                    logits_ref, _ = self.reference(X_repeated.detach(), targets=dummy_targets)
 
                 # Verify shapes match
                 if logits_ref.shape[1] != completions.shape[1]:
@@ -273,13 +276,13 @@ class GRPOTrainingStep:
                 token_log_probs_ref = torch.gather(
                     log_probs_ref,
                     dim=-1,
-                    index=completions_for_gather.unsqueeze(-1)
+                    index=completions_for_gather.detach().unsqueeze(-1)
                 ).squeeze(-1)
 
                 # Free reference logits immediately
                 del logits_ref, log_probs_ref
 
-                sequence_log_probs_ref = (token_log_probs_ref * mask_repeated_for_sum.float()).sum(dim=1)
+                sequence_log_probs_ref = (token_log_probs_ref * mask_repeated_for_sum.detach().float()).sum(dim=1)
 
                 # Free token log probs
                 del token_log_probs_ref
@@ -350,6 +353,8 @@ class GRPOTrainingStep:
                 self.generator.parameters(),
                 self.grad_clip
             )
+            
+        t__before_opt = time.perf_counter()
 
         # Optimizer step
         self.scaler.step(self.optimizer)
@@ -358,7 +363,7 @@ class GRPOTrainingStep:
 
         t_opt = time.perf_counter()
         mem_alloc = torch.cuda.memory_allocated() / (1024**2) if torch.cuda.is_available() else 0
-        print(f"  5. Optimizer step finished: mem={mem_alloc:.0f}MB, time={t_opt-step_start:.3f}s total")
+        print(f"  5. Optimizer step finished: mem={mem_alloc:.0f}MB, time={t_opt-t__before_opt:.3f}s optimizer, time={t_opt-step_start:.3f}s total")
 
         # Average metrics across micro-steps
         metrics = {
