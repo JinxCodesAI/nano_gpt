@@ -159,16 +159,38 @@ def load_model_from_checkpoint(checkpoint_path, device, compile_model=False):
         print(f"Ignoring training-only init_from_checkpoint: {model_args['init_from_checkpoint']}")
         model_args['init_from_checkpoint'] = None
 
+    # Filter out deprecated config fields (for backward compatibility with old checkpoints)
+    deprecated_fields = {'mode', 'num_token_classes', 'binary_classification'}
+    filtered_model_args = {k: v for k, v in model_args.items() if k not in deprecated_fields}
+
+    # Store the old mode if present (we'll set it after model creation)
+    old_mode = model_args.get('mode', None)
+
     # Print model configuration for debugging
     print(f"Model config from checkpoint:")
-    print(f"  - vocab_size: {model_args.get('vocab_size')}")
-    print(f"  - block_size: {model_args.get('block_size')}")
-    print(f"  - attention_type: {model_args.get('attention_type')}")
-    print(f"  - position_encoding: {model_args.get('position_encoding')}")
+    print(f"  - vocab_size: {filtered_model_args.get('vocab_size')}")
+    print(f"  - block_size: {filtered_model_args.get('block_size')}")
+    print(f"  - attention_type: {filtered_model_args.get('attention_type')}")
+    print(f"  - position_encoding: {filtered_model_args.get('position_encoding')}")
+    if old_mode:
+        print(f"  - mode (deprecated): {old_mode} - will be set after model creation")
 
     # Create model
-    gptconf = GPTConfig(**model_args)
+    gptconf = GPTConfig(**filtered_model_args)
     model = GPT(gptconf)
+
+    # Set mode based on old config if present
+    if old_mode:
+        if old_mode == 'sequence_scorer' or old_mode == ModelMode.SEQUENCE_SCORER:
+            model.set_mode(ModelMode.SEQUENCE_SCORER)
+            print(f"  - Set model mode to SEQUENCE_SCORER")
+        elif old_mode == 'language_model' or old_mode == ModelMode.LANGUAGE_MODEL:
+            model.set_mode(ModelMode.LANGUAGE_MODEL)
+            print(f"  - Set model mode to LANGUAGE_MODEL")
+        # token_classifier is deprecated, default to LANGUAGE_MODEL
+        elif old_mode == 'token_classifier':
+            model.set_mode(ModelMode.LANGUAGE_MODEL)
+            print(f"  - WARNING: token_classifier mode deprecated, using LANGUAGE_MODEL")
 
     # Load state dict
     state_dict = checkpoint['model']

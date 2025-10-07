@@ -128,13 +128,25 @@ def load_model_from_checkpoint(checkpoint_path, device, compile_model=False):
         model_args['attention_type'] = 'causal'
     if 'position_encoding' not in model_args:
         model_args['position_encoding'] = 'absolute'
-    
+
     # Clear init_from_checkpoint to avoid chain-loading
     if 'init_from_checkpoint' in model_args:
         model_args['init_from_checkpoint'] = None
-    
-    gptconf = GPTConfig(**model_args)
+
+    # Filter out deprecated config fields (for backward compatibility with old checkpoints)
+    deprecated_fields = {'mode', 'num_token_classes', 'binary_classification'}
+    old_mode = model_args.get('mode', None)
+    filtered_model_args = {k: v for k, v in model_args.items() if k not in deprecated_fields}
+
+    gptconf = GPTConfig(**filtered_model_args)
     model = GPT(gptconf, logger=logger)
+
+    # Set mode based on old config if present
+    if old_mode:
+        if old_mode == 'sequence_scorer' or old_mode == ModelMode.SEQUENCE_SCORER:
+            model.set_mode(ModelMode.SEQUENCE_SCORER)
+        elif old_mode == 'language_model' or old_mode == ModelMode.LANGUAGE_MODEL:
+            model.set_mode(ModelMode.LANGUAGE_MODEL)
     
     state_dict = checkpoint['model']
     

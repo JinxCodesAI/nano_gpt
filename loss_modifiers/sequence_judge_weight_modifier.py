@@ -95,16 +95,26 @@ class SequenceScoringJudgeWeightModifier(BaseLossModifier):
         if 'model' not in ckpt or 'model_args' not in ckpt:
             raise ValueError("Judge checkpoint must contain 'model' and 'model_args'")
         model_args = dict(ckpt['model_args'])
-        # Enforce SEQUENCE_SCORER
-        mode = ModelMode(model_args.get('mode', 'sequence_scorer'))
-        if mode != ModelMode.SEQUENCE_SCORER:
-            raise ValueError(f"Judge checkpoint mode must be SEQUENCE_SCORER, got {mode}")
+
+        # Check old mode (for validation)
+        old_mode = model_args.get('mode', 'sequence_scorer')
+        if old_mode not in ['sequence_scorer', ModelMode.SEQUENCE_SCORER]:
+            raise ValueError(f"Judge checkpoint mode must be SEQUENCE_SCORER, got {old_mode}")
+
         # Do NOT chain-load judge's original pretrain; we have full weights here
         model_args['init_from_checkpoint'] = None
         # The judge is used only for inference inside the modifier: don't freeze
         model_args['freeze_transformer'] = False
-        gptconf = GPTConfig(**model_args)
+
+        # Filter out deprecated config fields
+        deprecated_fields = {'mode', 'num_token_classes', 'binary_classification'}
+        filtered_model_args = {k: v for k, v in model_args.items() if k not in deprecated_fields}
+
+        gptconf = GPTConfig(**filtered_model_args)
         judge = GPT(gptconf)
+
+        # Set to SEQUENCE_SCORER mode
+        judge.set_mode(ModelMode.SEQUENCE_SCORER)
         state_dict = self._cleanup_state_dict_keys(ckpt['model'])
         judge.load_state_dict(state_dict)
         judge.to(self.device)

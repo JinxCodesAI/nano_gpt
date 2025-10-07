@@ -25,12 +25,16 @@ class MLMInferenceEngine:
         else:
             raise ValueError("Checkpoint missing model_args")
 
-        # Ensure model is in language modeling mode for inference
-        model_args['mode'] = ModelMode.LANGUAGE_MODEL
+        # Filter out deprecated config fields (for backward compatibility with old checkpoints)
+        deprecated_fields = {'mode', 'num_token_classes', 'binary_classification'}
+        filtered_model_args = {k: v for k, v in model_args.items() if k not in deprecated_fields}
 
         # Create and load model
-        config = GPTConfig(**model_args)
+        config = GPTConfig(**filtered_model_args)
         self.model = GPT(config)
+
+        # Ensure model is in language modeling mode for inference
+        self.model.set_mode(ModelMode.LANGUAGE_MODEL)
         state_dict = checkpoint.get('model', checkpoint)
         self.model.load_state_dict(state_dict)
         self.model.to(device)
