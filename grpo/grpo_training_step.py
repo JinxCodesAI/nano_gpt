@@ -286,6 +286,9 @@ class GRPOTrainingStep:
 
             # STEP 6: Compute GRPO loss
             # Policy gradient term (maximize reward-weighted log-probs)
+            # Note: sequence_log_probs are large negative numbers (sum of log probs over ~400 tokens)
+            # advantages are zero-mean, so pg_loss can be positive or negative
+            # What matters: gradient direction is correct (minimize pg_loss → increase log_probs for positive advantages)
             pg_loss = -(sequence_log_probs * advantages.detach()).mean()
 
             # KL penalty term (prevent deviation from reference)
@@ -296,7 +299,15 @@ class GRPOTrainingStep:
 
             t4 = time.perf_counter()
             mem_alloc = torch.cuda.memory_allocated() / (1024**2) if torch.cuda.is_available() else 0
-            print(f"  [Micro {micro_step}] 4. Loss computed: mem={mem_alloc:.0f}MB, time={t4-t0:.3f}s (total so far), pg_loss={pg_loss.item():.6f}, kl={kl_penalty.item():.6f}, total={loss.item():.6f}")
+
+            # Debug: Show actual values to understand the loss
+            avg_seq_log_prob = sequence_log_probs.mean().item()
+            avg_advantage = advantages.mean().item()
+            avg_kl = kl_divergence.mean().item()
+
+            print(f"  [Micro {micro_step}] 4. Loss computed: mem={mem_alloc:.0f}MB, time={t4-t0:.3f}s")
+            print(f"      pg_loss={pg_loss.item():.4f}, kl_penalty={kl_penalty.item():.4f}, total={loss.item():.4f}")
+            print(f"      avg_seq_log_prob={avg_seq_log_prob:.2f}, avg_advantage={avg_advantage:.4f}, avg_kl={avg_kl:.4f}")
 
             # STEP 7: Backward pass
             self.scaler.scale(loss).backward()
