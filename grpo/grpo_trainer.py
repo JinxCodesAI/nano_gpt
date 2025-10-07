@@ -42,7 +42,6 @@ class GRPOTrainer:
         master_process: bool,
         log_interval: int,
         save_interval: int,
-        sample_interval: int,
         max_iters: int,
         batch_size: int,
         iter_num: int = 0,
@@ -65,7 +64,6 @@ class GRPOTrainer:
             master_process: Whether this is the master process
             log_interval: Log every N iterations
             save_interval: Save checkpoint every N iterations
-            sample_interval: Sample generations every N iterations
             max_iters: Maximum training iterations
             batch_size: Batch size
             iter_num: Starting iteration number
@@ -84,7 +82,6 @@ class GRPOTrainer:
         self.master_process = bool(master_process)
         self.log_interval = int(log_interval)
         self.save_interval = int(save_interval)
-        self.sample_interval = int(sample_interval)
         self.max_iters = int(max_iters)
         self.batch_size = int(batch_size)
         self.iter_num = int(iter_num)
@@ -153,10 +150,6 @@ class GRPOTrainer:
                 ckpt_path = self.checkpoint_manager.save()
                 self.logger.log_checkpoint(f"Saved checkpoint to {ckpt_path}")
             
-            # Periodic sampling (optional, for monitoring quality)
-            if self.sample_interval > 0 and self.iter_num % self.sample_interval == 0 and self.master_process:
-                self._sample_and_log(self.iter_num)
-            
             # Increment iteration
             self.iter_num += 1
             local_iter_num += 1
@@ -168,59 +161,4 @@ class GRPOTrainer:
             t0 = time.time()
         
         self.logger.log_info(f"GRPO training completed after {self.iter_num} iterations")
-    
-    def _sample_and_log(self, iter_num: int) -> None:
-        """
-        Generate sample completions and log them for quality monitoring.
-
-        Args:
-            iter_num: Current iteration number
-        """
-        import torch
-        from sample_utils import predict_and_sample_tokens, calculate_judge_scores
-        from core.batch import unpack_batch
-
-        self.generator.eval()
-
-        try:
-            # Get a sample batch
-            sample_batch = self.consumer.get_batch('val', self.device)
-            X, Y = unpack_batch(sample_batch)
-
-            # Limit to first few samples for logging
-            num_samples = min(4, X.shape[0])
-            X_sample = X[:num_samples]
-
-            # Generate completions
-            with torch.no_grad():
-                completions = predict_and_sample_tokens(
-                    model=self.generator,
-                    tokens=X_sample,
-                    mask_token_id=self.training_step.mask_token_id,
-                    temperature=self.training_step.temperature,
-                    top_p=self.training_step.top_p,
-                    vocab_size=self.training_step.vocab_size,
-                    device=self.device,
-                    verbose=False,
-                    return_logits=False,
-                    pad_token_id=self.training_step.pad_token_id,
-                    base_vocab_size=self.training_step.base_vocab_size
-                )
-
-                # Score with judge
-                scores = calculate_judge_scores(
-                    judge_model=self.judge,
-                    tokens=completions,
-                    device=self.device,
-                    ctx=self.training_step.ctx
-                )
-
-            # Log samples
-            self.logger.log_info(f"[Iter {iter_num}] Sample scores: {scores.tolist()}")
-
-        except Exception as e:
-            self.logger.log_info(f"[Iter {iter_num}] Sampling failed: {e}")
-
-        finally:
-            self.generator.train()
 

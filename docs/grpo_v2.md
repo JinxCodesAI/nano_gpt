@@ -270,9 +270,6 @@ class GRPOTrainer:
             if iter_num % self.config['save_interval'] == 0:
                 self.checkpoint_manager.save()
             
-            # Optional: Sample generations to monitor quality
-            if iter_num % self.config['sample_interval'] == 0:
-                self._sample_and_log(iter_num)
             
             iter_num += 1
 ```
@@ -359,7 +356,6 @@ max_iters = 10000
 grad_clip = 1.0
 log_interval = 10
 save_interval = 1000
-sample_interval = 500       # How often to sample for monitoring
 
 # Dataset (reuse existing)
 dataset = 'char_diffusion'

@@ -115,8 +115,6 @@ if composition_config is not None:
 
 log_interval = 1           # Log metrics every N iterations
 save_interval = 100        # Save checkpoint every N iterations
-sample_interval = 0      # Generate samples for monitoring every N iterations
-                            # Set to 0 to disable sampling
 
 # WandB logging
 wandb_log = False           # Enable WandB logging

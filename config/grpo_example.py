@@ -73,7 +73,6 @@ block_size = 1024
 
 log_interval = 10
 save_interval = 1000
-sample_interval = 500       # Set to 0 to disable
 
 # WandB (optional)
 wandb_log = False

@@ -306,7 +306,6 @@ trainer = GRPOTrainer(
     master_process=master_process,
     log_interval=log_interval,
     save_interval=save_interval,
-    sample_interval=sample_interval,
     max_iters=max_iters,
     batch_size=batch_size,
     iter_num=0,
