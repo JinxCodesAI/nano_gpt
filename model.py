@@ -386,8 +386,8 @@ class GPT(nn.Module):
 
         # Main head
         self.lm_head = nn.Linear(config.n_embd, config.vocab_size, bias=False)
-        self.transformer.wte.weight = self.lm_head.weight # https://paperswithcode.com/method/weight-tying
-
+        self.transformer.wte.weight = self.lm_head.weight 
+        
         # Sequence scoring head
         self.sequence_head = ScaledSigmoidHead(config.n_embd)
         # Initialize with small weights for stability
