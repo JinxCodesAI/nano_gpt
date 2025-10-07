@@ -173,6 +173,17 @@ class GRPOTrainingStep:
             mem_alloc = torch.cuda.memory_allocated() / (1024**2) if torch.cuda.is_available() else 0
             print(f"  [Micro {micro_step}] 2. Forward and sample: mem={mem_alloc:.0f}MB, time={t1-t0:.3f}s")
 
+            # Check if all completions are identical (sampling failed)
+            # This can happen if all masks are filled with the same token
+            if self.group_size > 1:
+                first_completion = completions[0]
+                all_identical = all(torch.equal(completions[i], first_completion) for i in range(1, self.group_size))
+                if all_identical:
+                    print(f"  WARNING: All {self.group_size} completions are identical! Skipping this batch.")
+                    # Fetch next batch and restart this micro-step
+                    batch = consumer.get_batch('train', device)
+                    continue
+
             # STEP 3: Score completions with judge
             with torch.no_grad():
                 rewards = calculate_judge_scores(
