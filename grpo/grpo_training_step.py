@@ -113,6 +113,10 @@ class GRPOTrainingStep:
 
         last_loss = None
 
+        # Timing for performance analysis
+        import time
+        step_start = time.perf_counter()
+
         for micro_step in range(self.grad_accum_steps):
             # DDP gradient sync only on last micro-step
             if self.ddp:
@@ -127,10 +131,14 @@ class GRPOTrainingStep:
             # - Large logits tensors (B*k, T, V)
 
             # Unpack batch
+            t0 = time.perf_counter()
             X, Y = unpack_batch(batch)  # X: (B, T), Y: (B, T)
 
             # Identify masked positions (positions we want to fill in)
             mask = (X == self.mask_token_id)  # (B, T)
+
+            mem_alloc = torch.cuda.memory_allocated() / (1024**2) if torch.cuda.is_available() else 0
+            print(f"  [Micro {micro_step}] 1. Iteration start: mem={mem_alloc:.0f}MB, time={0:.3f}s")
 
             # STEP 1: Generate k completions per input
             # Repeat each input k times: (B*k, T)
@@ -154,6 +162,10 @@ class GRPOTrainingStep:
                     base_vocab_size=self.base_vocab_size
                 )
 
+            t1 = time.perf_counter()
+            mem_alloc = torch.cuda.memory_allocated() / (1024**2) if torch.cuda.is_available() else 0
+            print(f"  [Micro {micro_step}] 2. Samples generated: mem={mem_alloc:.0f}MB, time={t1-t0:.3f}s")
+
             # STEP 2: Score completions with judge
             with torch.no_grad():
                 rewards = calculate_judge_scores(
@@ -163,12 +175,20 @@ class GRPOTrainingStep:
                     ctx=self.ctx
                 )  # (B*k,)
 
+            t2 = time.perf_counter()
+            mem_alloc = torch.cuda.memory_allocated() / (1024**2) if torch.cuda.is_available() else 0
+            print(f"  [Micro {micro_step}] 3. Samples scored: mem={mem_alloc:.0f}MB, time={t2-t1:.3f}s, rewards={rewards.mean().item():.4f}±{rewards.std().item():.4f}")
+
             # STEP 3: Calculate advantages (group-relative)
             # Reshape to (B, k) to compute per-group baseline
             B = X.shape[0]
             rewards_grouped = rewards.view(B, self.group_size)  # (B, k)
             baseline = rewards_grouped.mean(dim=1, keepdim=True)  # (B, 1)
             advantages = rewards_grouped - baseline  # (B, k)
+
+            # Debug: Check if advantages are all zero
+            if advantages.abs().max().item() < 1e-8:
+                print(f"  WARNING: All advantages are near zero! rewards_grouped={rewards_grouped.flatten().tolist()}")
 
             # Normalize advantages for stability
             advantages = (advantages - advantages.mean()) / (advantages.std() + 1e-8)
@@ -203,6 +223,11 @@ class GRPOTrainingStep:
 
             # Sum only over masked positions (where actions were taken)
             sequence_log_probs = (token_log_probs * mask_repeated_for_sum.float()).sum(dim=1)  # (B*k,)
+
+            # Debug: Check if log probs are reasonable
+            num_masked = mask_repeated_for_sum.float().sum(dim=1).mean().item()
+            if sequence_log_probs.abs().max().item() < 1e-8:
+                print(f"  WARNING: All sequence_log_probs are near zero! num_masked={num_masked:.1f}")
 
             # Free token_log_probs after computing sequence log probs
             del token_log_probs
@@ -244,6 +269,10 @@ class GRPOTrainingStep:
             # Total loss (scaled for gradient accumulation)
             loss = (pg_loss + kl_penalty) / self.grad_accum_steps
 
+            t3 = time.perf_counter()
+            mem_alloc = torch.cuda.memory_allocated() / (1024**2) if torch.cuda.is_available() else 0
+            print(f"  [Micro {micro_step}] 4. Loss computed: mem={mem_alloc:.0f}MB, time={t3-t2:.3f}s, pg_loss={pg_loss.item():.6f}, kl={kl_penalty.item():.6f}, total={loss.item():.6f}")
+
             # STEP 7: Backward pass
             self.scaler.scale(loss).backward()
 
@@ -280,6 +309,10 @@ class GRPOTrainingStep:
         self.scaler.step(self.optimizer)
         self.scaler.update()
         self.optimizer.zero_grad(set_to_none=True)
+
+        t_opt = time.perf_counter()
+        mem_alloc = torch.cuda.memory_allocated() / (1024**2) if torch.cuda.is_available() else 0
+        print(f"  5. Optimizer step finished: mem={mem_alloc:.0f}MB, time={t_opt-step_start:.3f}s total")
 
         # Average metrics across micro-steps
         metrics = {

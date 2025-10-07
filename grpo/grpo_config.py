@@ -113,9 +113,9 @@ else:
 # Logging and checkpointing
 # -----------------------------------------------------------------------------
 
-log_interval = 10           # Log metrics every N iterations
-save_interval = 1000        # Save checkpoint every N iterations
-sample_interval = 500       # Generate samples for monitoring every N iterations
+log_interval = 1           # Log metrics every N iterations
+save_interval = 100        # Save checkpoint every N iterations
+sample_interval = 0      # Generate samples for monitoring every N iterations
                             # Set to 0 to disable sampling
 
 # WandB logging
@@ -132,7 +132,7 @@ out_dir = 'out-grpo'        # Directory for checkpoints and logs
 
 device = 'cuda'             # Device: 'cpu', 'cuda', 'cuda:0', etc.
 dtype = 'bfloat16'          # Data type: 'float32', 'bfloat16', 'float16'
-compile = False             # Use torch.compile (may cause issues with GRPO)
+compile = True             # Use torch.compile (may cause issues with GRPO)
 
 # DDP settings
 backend = 'nccl'            # DDP backend
