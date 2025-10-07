@@ -241,7 +241,7 @@ scheduler = CosineLRScheduler(
 )
 
 # Gradient scaler for mixed precision
-scaler = torch.cuda.amp.GradScaler(enabled=(dtype == 'float16'))
+scaler = torch.amp.GradScaler(device_type='cuda', enabled=(dtype == 'float16'))
 
 # -----------------------------------------------------------------------------
 # Initialize checkpoint manager

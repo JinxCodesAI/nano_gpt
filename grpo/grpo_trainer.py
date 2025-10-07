@@ -193,7 +193,7 @@ class GRPOTrainer:
 
             # Generate completions
             with torch.no_grad():
-                completions, _ = predict_and_sample_tokens(
+                completions = predict_and_sample_tokens(
                     model=self.generator,
                     tokens=X_sample,
                     mask_token_id=self.training_step.mask_token_id,
