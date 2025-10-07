@@ -271,6 +271,7 @@ class DatasetConsumer:
             self._current_batch_idx[split] = 0
 
         tensors = self._loaded_data[split]
+        metadata = self._loaded_metadata[split]
         assert tensors is not None
         # derive total samples in this file from first tensor
         first_key = next(iter(tensors))
