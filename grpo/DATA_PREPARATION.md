@@ -22,6 +22,11 @@ Loaded composition config from data\char_diffusion\config\complex.py
 
 Then the process will appear to "hang" - **this is normal!** The provider is running in an infinite loop, waiting to generate files when needed.
 
+**IMPORTANT:** You do NOT need to wait for this to finish. You can:
+1. Leave it running in the background (recommended)
+2. Stop it with Ctrl+C after a few seconds (some files will be generated)
+3. Start training immediately in another terminal - it will consume files as they're generated
+
 ### How It Works
 
 1. **Initial Setup**: The provider checks if data files already exist
