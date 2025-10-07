@@ -209,16 +209,23 @@ class GRPOTrainingStep:
             mem_alloc = torch.cuda.memory_allocated() / (1024**2) if torch.cuda.is_available() else 0
             print(f"  [Micro {micro_step}] 3b. Current policy forward: mem={mem_alloc:.0f}MB, time={t3-t2:.3f}s")
 
+            # Debug: Check shapes before matching
+            print(f"  [DEBUG] logits_current.shape={logits_current.shape}, completions.shape={completions.shape}, mask_repeated.shape={mask_repeated.shape}")
+            print(f"  [DEBUG] mask_repeated.sum()={mask_repeated.sum().item()}")
+
             # Ensure shapes match
             if logits_current.shape[1] != completions.shape[1]:
                 # Truncate or pad to match
                 min_len = min(logits_current.shape[1], completions.shape[1])
+                print(f"  [DEBUG] Shape mismatch! Truncating to min_len={min_len}")
                 logits_current = logits_current[:, :min_len, :]
                 completions_for_gather = completions[:, :min_len]
                 mask_repeated_for_sum = mask_repeated[:, :min_len]
+                print(f"  [DEBUG] After truncation: mask_repeated_for_sum.sum()={mask_repeated_for_sum.sum().item()}")
             else:
                 completions_for_gather = completions
                 mask_repeated_for_sum = mask_repeated
+                print(f"  [DEBUG] No truncation needed, mask_repeated_for_sum.sum()={mask_repeated_for_sum.sum().item()}")
 
             # Compute log-probs and gather in one step to save memory
             log_probs_current = F.log_softmax(logits_current, dim=-1)  # (B*k, T', V)
