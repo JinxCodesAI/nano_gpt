@@ -150,10 +150,11 @@ class GRPOTrainingStep:
             X_repeated = X.repeat_interleave(self.group_size, dim=0)
             mask_repeated = mask.repeat_interleave(self.group_size, dim=0)
 
-            # Sample completions using existing infrastructure
-            # Don't return logits to save memory - we'll recompute them later
-            with torch.no_grad():
-                completions = predict_and_sample_tokens(
+            # STEP 2: Forward pass WITH gradients and sample completions
+            # CRITICAL: Use same logits for both sampling and gradient computation
+            # This ensures policy gradient is computed on the correct distribution
+            with self.ctx:
+                completions, logits_current = predict_and_sample_tokens(
                     model=self.generator,
                     tokens=X_repeated,
                     mask_token_id=self.mask_token_id,
@@ -162,16 +163,17 @@ class GRPOTrainingStep:
                     vocab_size=self.vocab_size,
                     device=device,
                     verbose=False,
-                    return_logits=False,  # Save memory by not returning logits
+                    return_logits=True,  # Return logits for gradient computation
                     pad_token_id=self.pad_token_id,
-                    base_vocab_size=self.base_vocab_size
+                    base_vocab_size=self.base_vocab_size,
+                    no_grad=False  # Enable gradients for policy gradient
                 )
 
             t1 = time.perf_counter()
             mem_alloc = torch.cuda.memory_allocated() / (1024**2) if torch.cuda.is_available() else 0
-            print(f"  [Micro {micro_step}] 2. Samples generated: mem={mem_alloc:.0f}MB, time={t1-t0:.3f}s")
+            print(f"  [Micro {micro_step}] 2. Forward and sample: mem={mem_alloc:.0f}MB, time={t1-t0:.3f}s")
 
-            # STEP 2: Score completions with judge
+            # STEP 3: Score completions with judge
             with torch.no_grad():
                 rewards = calculate_judge_scores(
                     judge_model=self.judge,
@@ -184,7 +186,7 @@ class GRPOTrainingStep:
             mem_alloc = torch.cuda.memory_allocated() / (1024**2) if torch.cuda.is_available() else 0
             print(f"  [Micro {micro_step}] 3. Samples scored: mem={mem_alloc:.0f}MB, time={t2-t1:.3f}s, rewards={rewards.mean().item():.4f}±{rewards.std().item():.4f}")
 
-            # STEP 3: Calculate advantages (group-relative)
+            # STEP 4: Calculate advantages (group-relative)
             # Reshape to (B, k) to compute per-group baseline
             B = X.shape[0]
             rewards_grouped = rewards.view(B, self.group_size)  # (B, k)
@@ -199,20 +201,7 @@ class GRPOTrainingStep:
             advantages = (advantages - advantages.mean()) / (advantages.std() + 1e-8)
             advantages = advantages.view(-1)  # Flatten back to (B*k,)
 
-            # STEP 4: Compute log-probabilities (with gradients)
-            # For BERT-style models: pass masked input, get logits, extract probs for generated tokens
-            # We need P(generated_token | masked_context) at each masked position
-            # IMPORTANT: Must pass dummy targets to get full sequence logits (not just last position)
-            # Create dummy targets WITHOUT gradients to avoid unnecessary computation graph
-            dummy_targets = torch.zeros_like(X_repeated).detach()
-
-            with self.ctx:
-                logits_current, _ = self.generator(X_repeated, targets=dummy_targets)
-
-            t3 = time.perf_counter()
-            mem_alloc = torch.cuda.memory_allocated() / (1024**2) if torch.cuda.is_available() else 0
-            print(f"  [Micro {micro_step}] 3b. Current policy forward: mem={mem_alloc:.0f}MB, time={t3-t2:.3f}s")
-
+            # STEP 5: Compute log-probabilities from the SAME logits used for sampling
             # Verify shapes match - no fallback, fail fast
             if logits_current.shape[1] != completions.shape[1]:
                 raise RuntimeError(
@@ -223,43 +212,43 @@ class GRPOTrainingStep:
                     f"This indicates a bug in the model or sampling code."
                 )
 
-            completions_for_gather = completions
-            mask_repeated_for_sum = mask_repeated
-
             # Compute log-probs and gather in one step to save memory
             # IMPORTANT: completions and mask are constants (from sampling), detach to avoid unnecessary graph
-            log_probs_current = F.log_softmax(logits_current, dim=-1)  # (B*k, T', V)
+            log_probs_current = F.log_softmax(logits_current, dim=-1)  # (B*k, T, V)
             token_log_probs = torch.gather(
                 log_probs_current,
                 dim=-1,
-                index=completions_for_gather.detach().unsqueeze(-1)
-            ).squeeze(-1)  # (B*k, T')
+                index=completions.detach().unsqueeze(-1)
+            ).squeeze(-1)  # (B*k, T)
 
-            # Free logits_current immediately to save memory
-            del logits_current, log_probs_current
+            # Free log_probs_current to save memory
+            del log_probs_current
 
             # Sum only over masked positions (where actions were taken)
-            sequence_log_probs = (token_log_probs * mask_repeated_for_sum.detach().float()).sum(dim=1)  # (B*k,)
+            sequence_log_probs = (token_log_probs * mask_repeated.detach().float()).sum(dim=1)  # (B*k,)
 
             # Debug: Check if log probs are reasonable
-            num_masked_per_seq = mask_repeated_for_sum.float().sum(dim=1).mean().item()
-            total_masks_in_repeated = mask_repeated_for_sum.sum().item()
+            num_masked_per_seq = mask_repeated.float().sum(dim=1).mean().item()
+            total_masks_in_repeated = mask_repeated.sum().item()
 
             # Only warn if we actually have zero masks (which shouldn't happen)
             if total_masks_in_repeated == 0:
                 print(f"  WARNING: No masked positions found! This should not happen. Original masks_in_X={num_masks_in_X}")
             elif sequence_log_probs.abs().max().item() < 1e-8:
                 # Log probs are zero despite having masks - this is suspicious
-                avg_log_prob = token_log_probs[mask_repeated_for_sum].mean().item() if total_masks_in_repeated > 0 else 0
+                avg_log_prob = token_log_probs[mask_repeated].mean().item() if total_masks_in_repeated > 0 else 0
                 print(f"  WARNING: sequence_log_probs near zero despite {total_masks_in_repeated} masks! avg_token_log_prob={avg_log_prob:.6f}")
 
-            # Free token_log_probs after computing sequence log probs
-            del token_log_probs
+            # Free token_log_probs and logits_current after computing sequence log probs
+            del token_log_probs, logits_current
 
-            # STEP 5: Compute KL divergence to reference policy
-            # Same as above: pass dummy targets to get full sequence logits
+            t4 = time.perf_counter()
+            mem_alloc = torch.cuda.memory_allocated() / (1024**2) if torch.cuda.is_available() else 0
+            print(f"  [Micro {micro_step}] 4. Log probs computed: mem={mem_alloc:.0f}MB, time={t4-t3:.3f}s")
+
+            # STEP 6: Compute KL divergence to reference policy
             # CRITICAL: Detach X_repeated to avoid building computation graph for reference model
-            t3b = time.perf_counter()
+            dummy_targets = torch.zeros_like(X_repeated).detach()
 
             with torch.no_grad():
                 with self.ctx:
@@ -276,24 +265,24 @@ class GRPOTrainingStep:
                 token_log_probs_ref = torch.gather(
                     log_probs_ref,
                     dim=-1,
-                    index=completions_for_gather.detach().unsqueeze(-1)
+                    index=completions.detach().unsqueeze(-1)
                 ).squeeze(-1)
 
                 # Free reference logits immediately
                 del logits_ref, log_probs_ref
 
-                sequence_log_probs_ref = (token_log_probs_ref * mask_repeated_for_sum.detach().float()).sum(dim=1)
+                sequence_log_probs_ref = (token_log_probs_ref * mask_repeated.detach().float()).sum(dim=1)
 
                 # Free token log probs
                 del token_log_probs_ref
 
             kl_divergence = sequence_log_probs - sequence_log_probs_ref  # (B*k,)
 
-            t3c = time.perf_counter()
+            t5 = time.perf_counter()
             mem_alloc = torch.cuda.memory_allocated() / (1024**2) if torch.cuda.is_available() else 0
-            print(f"  [Micro {micro_step}] 3c. Reference policy forward: mem={mem_alloc:.0f}MB, time={t3c-t3b:.3f}s")
+            print(f"  [Micro {micro_step}] 5. Reference policy forward: mem={mem_alloc:.0f}MB, time={t5-t4:.3f}s")
 
-            # STEP 6: Compute GRPO loss
+            # STEP 7: Compute GRPO loss
             # Policy gradient term (maximize reward-weighted log-probs)
             # Note: sequence_log_probs are large negative numbers (sum of log probs over ~400 tokens)
             # advantages are zero-mean, so pg_loss can be positive or negative
@@ -306,7 +295,7 @@ class GRPOTrainingStep:
             # Total loss (scaled for gradient accumulation)
             loss = (pg_loss + kl_penalty) / self.grad_accum_steps
 
-            t4 = time.perf_counter()
+            t6 = time.perf_counter()
             mem_alloc = torch.cuda.memory_allocated() / (1024**2) if torch.cuda.is_available() else 0
 
             # Debug: Show actual values to understand the loss
@@ -314,16 +303,16 @@ class GRPOTrainingStep:
             avg_advantage = advantages.mean().item()
             avg_kl = kl_divergence.mean().item()
 
-            print(f"  [Micro {micro_step}] 4. Loss computed: mem={mem_alloc:.0f}MB, time={t4-t3c:.3f}s")
+            print(f"  [Micro {micro_step}] 6. Loss computed: mem={mem_alloc:.0f}MB, time={t6-t5:.3f}s")
             print(f"      pg_loss={pg_loss.item():.4f}, kl_penalty={kl_penalty.item():.4f}, total={loss.item():.4f}")
             print(f"      avg_seq_log_prob={avg_seq_log_prob:.2f}, avg_advantage={avg_advantage:.4f}, avg_kl={avg_kl:.4f}")
 
-            # STEP 7: Backward pass
-            t5 = time.perf_counter()
+            # STEP 8: Backward pass
+            t7 = time.perf_counter()
             self.scaler.scale(loss).backward()
-            t6 = time.perf_counter()
+            t8 = time.perf_counter()
             mem_alloc = torch.cuda.memory_allocated() / (1024**2) if torch.cuda.is_available() else 0
-            print(f"  [Micro {micro_step}] 5. Backward: mem={mem_alloc:.0f}MB, time={t6-t5:.3f}s")
+            print(f"  [Micro {micro_step}] 7. Backward: mem={mem_alloc:.0f}MB, time={t8-t7:.3f}s")
 
             # Accumulate metrics (extract scalars before deleting tensors)
             accumulated_metrics['pg_loss'] += float(pg_loss.item())

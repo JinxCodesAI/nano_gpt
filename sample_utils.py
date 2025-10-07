@@ -5,6 +5,7 @@ import math
 import torch
 import torch.nn.functional as F
 from collections import Counter
+from contextlib import nullcontext
 
 
 def linear_remasking_schedule(iteration, total_iterations, start_ratio, end_ratio):
@@ -67,11 +68,11 @@ def nucleus_sample(logits, top_p=1.0, temperature=1.0):
     probs = F.softmax(logits, dim=-1)
     return torch.multinomial(probs, num_samples=1).squeeze(-1)
 
-def predict_and_sample_tokens(model, tokens, mask_token_id, temperature=1.0, 
+def predict_and_sample_tokens(model, tokens, mask_token_id, temperature=1.0,
 top_p=1.0, vocab_size=None,
                             device='cuda', debug_logging_fn=None, itos=None, stoi=None,
                             verbose=False, log_debug=False, return_logits=False,
-                            pad_token_id=None, base_vocab_size=None):
+                            pad_token_id=None, base_vocab_size=None, no_grad=True):
     """
     Predict and sample new tokens for masked positions
 
@@ -88,9 +89,13 @@ top_p=1.0, vocab_size=None,
         stoi: String to index mapping
         verbose: Enable verbose logging
         log_debug: Enable debug logging
+        return_logits: If True, return logits along with tokens
+        pad_token_id: ID of the pad token to exclude from sampling
+        base_vocab_size: Base vocabulary size (exclude special tokens beyond this)
+        no_grad: If True (default), run forward pass without gradients. Set to False for GRPO training.
 
     Returns:
-        tuple: (updated_tokens, prediction_tokens)
+        tuple: (updated_tokens, prediction_tokens) or (updated_tokens, prediction_tokens, logits) if return_logits=True
     """
     batch_size, seq_len = tokens.shape
 
@@ -104,7 +109,10 @@ top_p=1.0, vocab_size=None,
     # Forward pass through the model
     # Pass dummy targets to get logits for all positions (not just the last one)
     dummy_targets = torch.zeros_like(tokens)
-    with torch.no_grad():
+
+    # Conditionally use no_grad context
+    grad_context = torch.no_grad() if no_grad else nullcontext()
+    with grad_context:
         logits, _ = model(tokens, targets=dummy_targets)
 
 
