@@ -107,7 +107,7 @@ class TargetSmoothingModifier(BaseLossModifier):
         return smoothed
     
     def supports_mode(self, mode: ModelMode) -> bool:
-        return mode in (ModelMode.LANGUAGE_MODEL, ModelMode.TOKEN_CLASSIFIER)
+        return mode == ModelMode.LANGUAGE_MODEL
 
     def modify_loss(
         self,

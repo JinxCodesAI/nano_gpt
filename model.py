@@ -25,7 +25,6 @@ from sample_utils import build_critic_artifacts_from_logits
 class ModelMode(Enum):
     """Defines the operational modes for the transformer model"""
     LANGUAGE_MODEL = "language_model"      # Standard language modeling
-    TOKEN_CLASSIFIER = "token_classifier"  # Per-token classification
     SEQUENCE_SCORER = "sequence_scorer"    # Sequence-level 0-1 scoring
 
 class RotaryPositionalEmbedding(nn.Module):
@@ -337,17 +336,14 @@ class GPTConfig:
     attention_type: str = 'causal' # 'causal' for autoregressive, 'bidirectional' for BERT-style
     position_encoding: str = 'absolute' # 'absolute' or 'rotary'
 
-    # Multi-mode support
-    mode: ModelMode = ModelMode.LANGUAGE_MODEL
-    num_token_classes: int = 2  # For token classification
-    cls_token_id: int = None  # For sequence scoring
+    # Dual-mode support: model has both heads, mode is switchable at runtime
+    cls_token_id: int = None  # For sequence scoring mode
 
     # Transfer learning support
     freeze_transformer: bool = False
     init_from_checkpoint: str = None
     unfreeze_at_iteration: int = None
     unfreeze_lr_multiplier: float = 0.1
-
 
     # Optional critic head configuration (LANGUAGE_MODEL multi-task)
     add_critic_head: bool = False
@@ -359,27 +355,6 @@ class GPTConfig:
     start_critic_iteration: int = 0
     end_critic_iteration: int = 0
 
-
-    # Backward compatibility
-    binary_classification: bool = False  # Legacy support
-
-    def __post_init__(self):
-        # Handle backward compatibility
-        if self.binary_classification and self.mode == ModelMode.LANGUAGE_MODEL:
-            self._log_warning("binary_classification=True detected, converting to TOKEN_CLASSIFIER mode")
-            self.mode = ModelMode.TOKEN_CLASSIFIER
-            self.num_token_classes = 2
-
-        # Enforce bidirectional attention for classification tasks
-        if self.mode in [ModelMode.TOKEN_CLASSIFIER, ModelMode.SEQUENCE_SCORER]:
-            if self.attention_type != 'bidirectional':
-                self._log_warning(f"{self.mode.value} requires bidirectional attention. Changing from '{self.attention_type}' to 'bidirectional'")
-                self.attention_type = 'bidirectional'
-
-    def _log_warning(self, message):
-        """Log warning message - will be enhanced when logger is available"""
-        print(f"WARNING: {message}")
-
 class GPT(nn.Module):
 
     def __init__(self, config, logger=None):
@@ -388,6 +363,9 @@ class GPT(nn.Module):
         assert config.block_size is not None
         self.config = config
         self.logger = logger
+
+        # Runtime mode switching (default: LANGUAGE_MODEL)
+        self._current_mode = ModelMode.LANGUAGE_MODEL
 
         # Create transformer components - conditionally include position embeddings
         transformer_components = dict(
@@ -406,31 +384,26 @@ class GPT(nn.Module):
 
         self.transformer = nn.ModuleDict(transformer_components)
 
-        # Create mode-specific output heads
-        if self.config.mode == ModelMode.LANGUAGE_MODEL:
-            # Existing language modeling head
-            self.lm_head = nn.Linear(config.n_embd, config.vocab_size, bias=False)
-            # with weight tying when using torch.compile() some warnings get generated:
-            # "UserWarning: functional_call was passed multiple values for tied weights.
-            # This behavior is deprecated and will be an error in future versions"
-            # not 100% sure what this is, so far seems to be harmless. TODO investigate
-            self.transformer.wte.weight = self.lm_head.weight # https://paperswithcode.com/method/weight-tying
-        elif self.config.mode == ModelMode.TOKEN_CLASSIFIER:
-            # Token-level classification head
-            self.lm_head = nn.Linear(config.n_embd, config.num_token_classes, bias=False)
-            self._log_info(f"Token classifier head: {config.num_token_classes} classes per token")
-        elif self.config.mode == ModelMode.SEQUENCE_SCORER:
-            # Sequence-level scoring head with learnable temperature scaling
-            self.sequence_head = ScaledSigmoidHead(config.n_embd)
-            # Initialize with small weights for stability
-            with torch.no_grad():
-                self.sequence_head.base_predictor.weight.normal_(0.0, 0.01)
-            self._log_info("Sequence scorer head: ScaledSigmoidHead (0-1)")
-        else:
-            raise ValueError(f"Unknown model mode: {self.config.mode}")
+        # Create BOTH output heads for dual-mode support
+        # Language modeling head
+        self.lm_head = nn.Linear(config.n_embd, config.vocab_size, bias=False)
+        # Weight tying for language model head
+        # with weight tying when using torch.compile() some warnings get generated:
+        # "UserWarning: functional_call was passed multiple values for tied weights.
+        # This behavior is deprecated and will be an error in future versions"
+        # not 100% sure what this is, so far seems to be harmless. TODO investigate
+        self.transformer.wte.weight = self.lm_head.weight # https://paperswithcode.com/method/weight-tying
+
+        # Sequence scoring head
+        self.sequence_head = ScaledSigmoidHead(config.n_embd)
+        # Initialize with small weights for stability
+        with torch.no_grad():
+            self.sequence_head.base_predictor.weight.normal_(0.0, 0.01)
+
+        self._log_info("Dual-mode model: LANGUAGE_MODEL head (vocab_size) + SEQUENCE_SCORER head (0-1)")
 
         # Optional critic head for LANGUAGE_MODEL multi-tasking
-        if getattr(self.config, 'add_critic_head', False) and self.config.mode == ModelMode.LANGUAGE_MODEL:
+        if getattr(self.config, 'add_critic_head', False):
             self.critic_head = nn.Linear(self.config.n_embd, 1, bias=False)
             self._log_info(f"Critic head enabled (alpha={self.config.critic_alpha})")
 
@@ -441,8 +414,8 @@ class GPT(nn.Module):
             if pn.endswith('c_proj.weight'):
                 torch.nn.init.normal_(p, mean=0.0, std=0.02/math.sqrt(2 * config.n_layer))
 
-        # Add dedicated CLS embedding parameter (optional, used in SEQUENCE_SCORER)
-        if self.config.mode == ModelMode.SEQUENCE_SCORER and self.config.cls_token_id is not None:
+        # Add dedicated CLS embedding parameter (optional, used in SEQUENCE_SCORER mode)
+        if self.config.cls_token_id is not None:
             # A standalone parameter so freezing the transformer does not freeze CLS
             self.cls_embedding = nn.Parameter(torch.empty(self.config.n_embd))
             with torch.no_grad():
@@ -459,6 +432,21 @@ class GPT(nn.Module):
 
         # report number of parameters
         self._log_info("number of parameters: %.2fM" % (self.get_num_params()/1e6,))
+
+    def set_mode(self, mode: ModelMode) -> None:
+        """
+        Switch the model's operational mode at runtime.
+
+        Args:
+            mode: ModelMode.LANGUAGE_MODEL or ModelMode.SEQUENCE_SCORER
+        """
+        if not isinstance(mode, ModelMode):
+            raise TypeError(f"mode must be a ModelMode enum, got {type(mode)}")
+        self._current_mode = mode
+
+    def get_mode(self) -> ModelMode:
+        """Get the current operational mode."""
+        return self._current_mode
 
     def _log_info(self, message):
         """Log info message using logger if available, otherwise print."""
@@ -664,11 +652,9 @@ class GPT(nn.Module):
         # Encode through transformer trunk
         x = self._encode_tokens(idx, attention_mask=attention_mask)
 
-        # Mode-specific output and loss computation
-        if self.config.mode == ModelMode.SEQUENCE_SCORER:
+        # Mode-specific output and loss computation based on current runtime mode
+        if self._current_mode == ModelMode.SEQUENCE_SCORER:
             out = self._forward_sequence_scorer(x, targets, loss_modifiers)
-        elif self.config.mode == ModelMode.TOKEN_CLASSIFIER:
-            out = self._forward_token_classifier(x, targets, loss_modifiers)
         else:  # LANGUAGE_MODEL
             out = self._forward_language_model(x, targets, loss_modifiers, idx=idx)
 
@@ -698,32 +684,7 @@ class GPT(nn.Module):
                 # Note: Some modifiers may not be applicable to sequence scoring
                 loss = loss_modifiers.modify_loss(
                     logits.unsqueeze(-1), targets, base_loss,
-                    model_mode=self.config.mode
-                )
-            else:
-                loss = base_loss
-        else:
-            loss = None
-
-        return logits, loss
-
-    def _forward_token_classifier(self, x, targets, loss_modifiers):
-        """Token classification forward pass"""
-        logits = self.lm_head(x)
-
-        if targets is not None:
-            num_classes = self.config.num_token_classes
-            if targets.dim() == 3:  # Soft targets
-                base_loss = F.cross_entropy(logits.view(-1, num_classes), targets.view(-1, num_classes))
-            else:  # Hard targets with dynamic weighting
-                base_loss = self._compute_weighted_classification_loss(logits, targets, num_classes)
-
-            # Apply loss modifiers if available
-            if loss_modifiers is not None and not loss_modifiers.is_empty():
-                mask = targets != -1  # Valid token mask
-                loss = loss_modifiers.modify_loss(
-                    logits, targets, base_loss, mask=mask,
-                    ignore_index=-1, model_mode=self.config.mode
+                    model_mode=self._current_mode
                 )
             else:
                 loss = base_loss
@@ -752,7 +713,7 @@ class GPT(nn.Module):
                     logits, targets, base_loss, mask=mask,
                     per_position_loss=per_position_loss,
                     ignore_index=self.config.ignore_index,
-                    model_mode=self.config.mode
+                    model_mode=self._current_mode
                 )
             else:
                 loss = F.cross_entropy(logits.view(-1, logits.size(-1)), targets.view(-1), ignore_index=self.config.ignore_index)
@@ -809,11 +770,9 @@ class GPT(nn.Module):
         return logits, loss
     @torch.no_grad()
     def critic_scores(self, idx, attention_mask=None):
-        """Return per-token critic logits (B, T). Requires add_critic_head=True and LANGUAGE_MODEL mode."""
+        """Return per-token critic logits (B, T). Requires add_critic_head=True."""
         if not getattr(self.config, 'add_critic_head', False) or not hasattr(self, 'critic_head'):
             raise RuntimeError("critic_head not enabled in config")
-        if self.config.mode != ModelMode.LANGUAGE_MODEL:
-            raise RuntimeError("critic_scores is only available in LANGUAGE_MODEL mode")
         device = idx.device
         b, t = idx.size()
         assert t <= self.config.block_size
@@ -855,32 +814,6 @@ class GPT(nn.Module):
             pass
         return logits
 
-
-    def _compute_weighted_classification_loss(self, logits, targets, num_classes):
-        """Compute classification loss with dynamic class weighting for imbalanced datasets"""
-        flattened_targets = targets.view(-1)
-        valid_targets = flattened_targets[flattened_targets != -1]
-
-        if len(valid_targets) > 0 and num_classes > 1:
-            # Dynamic class weighting for imbalanced datasets
-            unique, counts = torch.unique(valid_targets, return_counts=True)
-            n_samples = len(valid_targets)
-
-            class_weights = torch.zeros(num_classes, device=targets.device, dtype=logits.dtype)
-            for cls, count in zip(unique, counts):
-                if cls < num_classes:  # Ensure class index is valid
-                    class_weights[cls] = n_samples / (num_classes * count)
-
-            loss = F.cross_entropy(
-                logits.view(-1, num_classes), flattened_targets,
-                weight=class_weights, ignore_index=-1
-            )
-        else:
-            loss = F.cross_entropy(
-                logits.view(-1, num_classes), flattened_targets, ignore_index=-1
-            )
-
-        return loss
 
     def _effective_critic_alpha(self) -> float:
         """Compute iteration-based effective critic alpha with linear warmup.

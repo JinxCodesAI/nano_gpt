@@ -80,7 +80,7 @@ class Evaluator:
 
         # Determine model mode (DDP-safe)
         raw_model = self.model.module if hasattr(self.model, 'module') else self.model
-        is_sequence_scorer = getattr(raw_model.config, 'mode', None) == ModelMode.SEQUENCE_SCORER
+        is_sequence_scorer = raw_model.get_mode() == ModelMode.SEQUENCE_SCORER
 
 
         # Temporarily disable loss modifiers during evaluation to get comparable baseline metrics
@@ -118,7 +118,7 @@ class Evaluator:
                         alpha_eff = 0.0
                         has_critic = False
                         try:
-                            if getattr(raw_model.config, 'mode', None) == ModelMode.LANGUAGE_MODEL \
+                            if raw_model.get_mode() == ModelMode.LANGUAGE_MODEL \
                                and getattr(raw_model.config, 'add_critic_head', False):
                                 has_critic = True
                                 alpha_eff = float(raw_model._effective_critic_alpha())
