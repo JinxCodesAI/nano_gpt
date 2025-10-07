@@ -327,7 +327,7 @@ class GRPOTrainingStep:
 
             # Free all intermediate tensors to save memory
             del X, Y, mask, X_repeated, mask_repeated
-            del completions, completions_for_gather, mask_repeated_for_sum
+            del completions
             del rewards, rewards_grouped, baseline, advantages
             del sequence_log_probs, sequence_log_probs_ref, kl_divergence
             del pg_loss, kl_penalty
