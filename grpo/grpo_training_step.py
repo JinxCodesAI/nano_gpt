@@ -202,6 +202,12 @@ class GRPOTrainingStep:
             # STEP 4: Compute log-probabilities (with gradients)
             # For BERT-style models: pass masked input, get logits, extract probs for generated tokens
             # We need P(generated_token | masked_context) at each masked position
+
+            # Debug: Print model config on first iteration
+            if micro_step == 0 and hasattr(self.generator, 'config'):
+                print(f"  [DEBUG] Generator config: mode={getattr(self.generator.config, 'mode', 'unknown')}, "
+                      f"vocab_size={getattr(self.generator.config, 'vocab_size', 'unknown')}")
+
             with self.ctx:
                 logits_current, _ = self.generator(X_repeated, targets=None)
 
@@ -209,23 +215,18 @@ class GRPOTrainingStep:
             mem_alloc = torch.cuda.memory_allocated() / (1024**2) if torch.cuda.is_available() else 0
             print(f"  [Micro {micro_step}] 3b. Current policy forward: mem={mem_alloc:.0f}MB, time={t3-t2:.3f}s")
 
-            # Debug: Check shapes before matching
-            print(f"  [DEBUG] logits_current.shape={logits_current.shape}, completions.shape={completions.shape}, mask_repeated.shape={mask_repeated.shape}")
-            print(f"  [DEBUG] mask_repeated.sum()={mask_repeated.sum().item()}")
-
-            # Ensure shapes match
+            # Verify shapes match - no fallback, fail fast
             if logits_current.shape[1] != completions.shape[1]:
-                # Truncate or pad to match
-                min_len = min(logits_current.shape[1], completions.shape[1])
-                print(f"  [DEBUG] Shape mismatch! Truncating to min_len={min_len}")
-                logits_current = logits_current[:, :min_len, :]
-                completions_for_gather = completions[:, :min_len]
-                mask_repeated_for_sum = mask_repeated[:, :min_len]
-                print(f"  [DEBUG] After truncation: mask_repeated_for_sum.sum()={mask_repeated_for_sum.sum().item()}")
-            else:
-                completions_for_gather = completions
-                mask_repeated_for_sum = mask_repeated
-                print(f"  [DEBUG] No truncation needed, mask_repeated_for_sum.sum()={mask_repeated_for_sum.sum().item()}")
+                raise RuntimeError(
+                    f"Shape mismatch: logits_current.shape={logits_current.shape}, "
+                    f"completions.shape={completions.shape}. "
+                    f"Model forward pass returned wrong sequence length. "
+                    f"Expected {completions.shape[1]}, got {logits_current.shape[1]}. "
+                    f"This indicates a bug in the model or sampling code."
+                )
+
+            completions_for_gather = completions
+            mask_repeated_for_sum = mask_repeated
 
             # Compute log-probs and gather in one step to save memory
             log_probs_current = F.log_softmax(logits_current, dim=-1)  # (B*k, T', V)
