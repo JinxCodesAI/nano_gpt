@@ -1,0 +1,220 @@
+"""
+GRPO Training Step: Core logic for Group-Relative Policy Optimization.
+
+This module implements the GRPO training step that:
+1. Fetches masked inputs from the dataset
+2. Generates k completions per input
+3. Scores completions with a frozen judge model
+4. Computes advantages (group-relative rewards)
+5. Calculates GRPO loss with KL divergence penalty
+6. Updates generator weights
+"""
+
+from typing import Tuple, Dict, Any, Optional
+import torch
+import torch.nn.functional as F
+from contextlib import nullcontext
+
+from sample_utils import predict_and_sample_tokens, calculate_judge_scores
+from core.batch import unpack_batch
+
+
+class GRPOTrainingStep:
+    """
+    Encapsulates one GRPO training iteration.
+    
+    The GRPO algorithm trains a generator model to produce high-quality completions
+    by using a frozen judge model as a reward signal and computing group-relative
+    advantages to reduce variance.
+    """
+    
+    def __init__(
+        self,
+        generator_model,
+        reference_model,
+        judge_model,
+        optimizer: torch.optim.Optimizer,
+        scaler: torch.cuda.amp.GradScaler,
+        config: Dict[str, Any],
+        ctx=None,
+    ):
+        """
+        Initialize GRPO training step.
+        
+        Args:
+            generator_model: Model to train (will be updated)
+            reference_model: Frozen copy of initial generator (for KL penalty)
+            judge_model: Frozen judge model (for reward signal)
+            optimizer: Optimizer for generator
+            scaler: Gradient scaler for mixed precision
+            config: Configuration dict with GRPO hyperparameters
+            ctx: Context manager for autocast (nullcontext or torch.amp.autocast)
+        """
+        self.generator = generator_model
+        self.reference = reference_model
+        self.judge = judge_model
+        self.optimizer = optimizer
+        self.scaler = scaler
+        self.config = config
+        self.ctx = ctx if ctx is not None else nullcontext()
+        
+        # Freeze reference and judge models
+        self.reference.eval()
+        for param in self.reference.parameters():
+            param.requires_grad = False
+            
+        self.judge.eval()
+        for param in self.judge.parameters():
+            param.requires_grad = False
+        
+        # Extract config values
+        self.group_size = int(config.get('group_size', 8))
+        self.kl_beta = float(config.get('kl_beta', 0.1))
+        self.grad_clip = float(config.get('grad_clip', 1.0))
+        self.mask_token_id = int(config['mask_token_id'])
+        self.pad_token_id = config.get('pad_token_id', None)
+        self.base_vocab_size = config.get('base_vocab_size', None)
+        self.vocab_size = int(config['vocab_size'])
+        self.temperature = float(config.get('temperature', 0.8))
+        self.top_p = float(config.get('top_p', 0.95))
+        self.device = config['device']
+        
+    def execute_step(
+        self,
+        batch: Dict[str, torch.Tensor],
+        consumer,
+        device: str,
+    ) -> Tuple[torch.Tensor, Dict[str, torch.Tensor], Dict[str, float]]:
+        """
+        Execute one GRPO training step.
+        
+        Args:
+            batch: Dict with 'x' (masked input) and 'y' (targets)
+            consumer: DatasetConsumer for fetching next batch
+            device: Device string
+            
+        Returns:
+            Tuple of (loss, next_batch, metrics_dict)
+        """
+        # Unpack batch
+        X, Y = unpack_batch(batch)  # X: (B, T), Y: (B, T)
+        
+        # Identify masked positions (positions we want to fill in)
+        mask = (X == self.mask_token_id)  # (B, T)
+        
+        # STEP 1: Generate k completions per input
+        # Repeat each input k times: (B*k, T)
+        X_repeated = X.repeat_interleave(self.group_size, dim=0)
+        mask_repeated = mask.repeat_interleave(self.group_size, dim=0)
+        
+        # Sample completions using existing infrastructure
+        # This returns both the sampled tokens AND the logits
+        with torch.no_grad():
+            completions, logits_gen = predict_and_sample_tokens(
+                model=self.generator,
+                tokens=X_repeated,
+                mask_token_id=self.mask_token_id,
+                temperature=self.temperature,
+                top_p=self.top_p,
+                vocab_size=self.vocab_size,
+                device=device,
+                verbose=False,
+                return_logits=True,
+                pad_token_id=self.pad_token_id,
+                base_vocab_size=self.base_vocab_size
+            )
+        
+        # STEP 2: Score completions with judge
+        with torch.no_grad():
+            rewards = calculate_judge_scores(
+                judge_model=self.judge,
+                tokens=completions,
+                device=device,
+                ctx=self.ctx
+            )  # (B*k,)
+        
+        # STEP 3: Calculate advantages (group-relative)
+        # Reshape to (B, k) to compute per-group baseline
+        B = X.shape[0]
+        rewards_grouped = rewards.view(B, self.group_size)  # (B, k)
+        baseline = rewards_grouped.mean(dim=1, keepdim=True)  # (B, 1)
+        advantages = rewards_grouped - baseline  # (B, k)
+        
+        # Normalize advantages for stability
+        advantages = (advantages - advantages.mean()) / (advantages.std() + 1e-8)
+        advantages = advantages.view(-1)  # Flatten back to (B*k,)
+        
+        # STEP 4: Compute log-probabilities (with gradients)
+        # Forward pass through generator to get logits
+        with self.ctx:
+            logits_current, _ = self.generator(X_repeated, targets=None)
+        
+        log_probs_current = F.log_softmax(logits_current, dim=-1)  # (B*k, T, V)
+        
+        # Gather log-probs for sampled tokens
+        token_log_probs = torch.gather(
+            log_probs_current, 
+            dim=-1,
+            index=completions.unsqueeze(-1)
+        ).squeeze(-1)  # (B*k, T)
+        
+        # Sum only over masked positions
+        sequence_log_probs = (token_log_probs * mask_repeated.float()).sum(dim=1)  # (B*k,)
+        
+        # STEP 5: Compute KL divergence to reference policy
+        with torch.no_grad():
+            with self.ctx:
+                logits_ref, _ = self.reference(X_repeated, targets=None)
+            log_probs_ref = F.log_softmax(logits_ref, dim=-1)
+            token_log_probs_ref = torch.gather(
+                log_probs_ref,
+                dim=-1,
+                index=completions.unsqueeze(-1)
+            ).squeeze(-1)
+            sequence_log_probs_ref = (token_log_probs_ref * mask_repeated.float()).sum(dim=1)
+        
+        kl_divergence = sequence_log_probs - sequence_log_probs_ref  # (B*k,)
+        
+        # STEP 6: Compute GRPO loss
+        # Policy gradient term (maximize reward-weighted log-probs)
+        pg_loss = -(sequence_log_probs * advantages.detach()).mean()
+        
+        # KL penalty term (prevent deviation from reference)
+        kl_penalty = self.kl_beta * kl_divergence.mean()
+        
+        # Total loss
+        loss = pg_loss + kl_penalty
+        
+        # STEP 7: Backward pass
+        self.optimizer.zero_grad(set_to_none=True)
+        self.scaler.scale(loss).backward()
+        
+        # Gradient clipping
+        if self.grad_clip > 0:
+            self.scaler.unscale_(self.optimizer)
+            torch.nn.utils.clip_grad_norm_(
+                self.generator.parameters(),
+                self.grad_clip
+            )
+        
+        # Optimizer step
+        self.scaler.step(self.optimizer)
+        self.scaler.update()
+        
+        # Fetch next batch
+        next_batch = consumer.get_batch('train', device)
+        
+        # Collect metrics
+        metrics = {
+            'loss': float(loss.item()),
+            'pg_loss': float(pg_loss.item()),
+            'kl_penalty': float(kl_penalty.item()),
+            'mean_reward': float(rewards.mean().item()),
+            'std_reward': float(rewards.std().item()),
+            'mean_advantage': float(advantages.mean().item()),
+            'mean_kl': float(kl_divergence.mean().item()),
+            'mean_log_prob': float(sequence_log_probs.mean().item()),
+        }
+        
+        return loss, next_batch, metrics
+
