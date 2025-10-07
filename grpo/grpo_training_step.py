@@ -137,8 +137,13 @@ class GRPOTrainingStep:
             # Identify masked positions (positions we want to fill in)
             mask = (X == self.mask_token_id)  # (B, T)
 
+            # Debug: Check how many masks we have
+            num_masks_in_X = mask.sum().item()
+            total_tokens = X.numel()
+            mask_pct = 100.0 * num_masks_in_X / total_tokens if total_tokens > 0 else 0
+
             mem_alloc = torch.cuda.memory_allocated() / (1024**2) if torch.cuda.is_available() else 0
-            print(f"  [Micro {micro_step}] 1. Iteration start: mem={mem_alloc:.0f}MB, time={0:.3f}s")
+            print(f"  [Micro {micro_step}] 1. Iteration start: mem={mem_alloc:.0f}MB, time={0:.3f}s, masks_in_X={num_masks_in_X}/{total_tokens} ({mask_pct:.1f}%)")
 
             # STEP 1: Generate k completions per input
             # Repeat each input k times: (B*k, T)
@@ -164,7 +169,10 @@ class GRPOTrainingStep:
 
             t1 = time.perf_counter()
             mem_alloc = torch.cuda.memory_allocated() / (1024**2) if torch.cuda.is_available() else 0
-            print(f"  [Micro {micro_step}] 2. Samples generated: mem={mem_alloc:.0f}MB, time={t1-t0:.3f}s")
+
+            # Debug: Check if completions still have masks
+            num_masks_in_completions = (completions == self.mask_token_id).sum().item()
+            print(f"  [Micro {micro_step}] 2. Samples generated: mem={mem_alloc:.0f}MB, time={t1-t0:.3f}s, masks_in_completions={num_masks_in_completions}")
 
             # STEP 2: Score completions with judge
             with torch.no_grad():
@@ -226,8 +234,9 @@ class GRPOTrainingStep:
 
             # Debug: Check if log probs are reasonable
             num_masked = mask_repeated_for_sum.float().sum(dim=1).mean().item()
+            total_masks_in_repeated = mask_repeated_for_sum.sum().item()
             if sequence_log_probs.abs().max().item() < 1e-8:
-                print(f"  WARNING: All sequence_log_probs are near zero! num_masked={num_masked:.1f}")
+                print(f"  WARNING: All sequence_log_probs are near zero! num_masked={num_masked:.1f}, total_masks_in_repeated={total_masks_in_repeated}")
 
             # Free token_log_probs after computing sequence log probs
             del token_log_probs
