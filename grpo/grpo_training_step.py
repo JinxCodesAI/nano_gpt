@@ -169,33 +169,52 @@ class GRPOTrainingStep:
             advantages = advantages.view(-1)  # Flatten back to (B*k,)
 
             # STEP 4: Compute log-probabilities (with gradients)
-            # Forward pass through generator to get logits
+            # Forward pass through generator on the MASKED input to get action probabilities
             with self.ctx:
                 logits_current, _ = self.generator(X_repeated, targets=None)
 
-            log_probs_current = F.log_softmax(logits_current, dim=-1)  # (B*k, T, V)
+            # Ensure shapes match
+            if logits_current.shape[1] != completions.shape[1]:
+                # Truncate or pad to match
+                min_len = min(logits_current.shape[1], completions.shape[1])
+                logits_current = logits_current[:, :min_len, :]
+                completions_for_gather = completions[:, :min_len]
+                mask_repeated_for_sum = mask_repeated[:, :min_len]
+            else:
+                completions_for_gather = completions
+                mask_repeated_for_sum = mask_repeated
 
-            # Gather log-probs for sampled tokens
+            log_probs_current = F.log_softmax(logits_current, dim=-1)  # (B*k, T', V)
+
+            # Gather log-probs for the sampled tokens at masked positions
+            # completions contains the filled-in tokens, we need log-prob of those tokens
+            # at the positions where they were sampled (masked positions)
             token_log_probs = torch.gather(
                 log_probs_current,
                 dim=-1,
-                index=completions.unsqueeze(-1)
-            ).squeeze(-1)  # (B*k, T)
+                index=completions_for_gather.unsqueeze(-1)
+            ).squeeze(-1)  # (B*k, T')
 
-            # Sum only over masked positions
-            sequence_log_probs = (token_log_probs * mask_repeated.float()).sum(dim=1)  # (B*k,)
+            # Sum only over masked positions (where actions were taken)
+            sequence_log_probs = (token_log_probs * mask_repeated_for_sum.float()).sum(dim=1)  # (B*k,)
 
             # STEP 5: Compute KL divergence to reference policy
             with torch.no_grad():
                 with self.ctx:
                     logits_ref, _ = self.reference(X_repeated, targets=None)
+
+                # Ensure shapes match
+                if logits_ref.shape[1] != completions.shape[1]:
+                    min_len = min(logits_ref.shape[1], completions.shape[1])
+                    logits_ref = logits_ref[:, :min_len, :]
+
                 log_probs_ref = F.log_softmax(logits_ref, dim=-1)
                 token_log_probs_ref = torch.gather(
                     log_probs_ref,
                     dim=-1,
-                    index=completions.unsqueeze(-1)
+                    index=completions_for_gather.unsqueeze(-1)
                 ).squeeze(-1)
-                sequence_log_probs_ref = (token_log_probs_ref * mask_repeated.float()).sum(dim=1)
+                sequence_log_probs_ref = (token_log_probs_ref * mask_repeated_for_sum.float()).sum(dim=1)
 
             kl_divergence = sequence_log_probs - sequence_log_probs_ref  # (B*k,)
 
