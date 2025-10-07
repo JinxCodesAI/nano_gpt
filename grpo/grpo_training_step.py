@@ -146,6 +146,7 @@ class GRPOTrainingStep:
             if num_masks_in_X == 0:
                 print(f"  [Micro {micro_step}] WARNING: No masks in batch, skipping")
                 batch = consumer.get_batch('train', device)
+                micro_step -= 1  # Don't count this as a valid step
                 continue
 
             mem_alloc = torch.cuda.memory_allocated() / (1024**2) if torch.cuda.is_available() else 0
@@ -170,7 +171,7 @@ class GRPOTrainingStep:
                     top_p=self.top_p,
                     vocab_size=self.vocab_size,
                     device=device,
-                    verbose=False,
+                    verbose=True,  # Enable detailed timing logs
                     return_logits=True,  # Return logits for gradient computation
                     pad_token_id=self.pad_token_id,
                     base_vocab_size=self.base_vocab_size,

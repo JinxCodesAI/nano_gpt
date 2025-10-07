@@ -97,6 +97,9 @@ top_p=1.0, vocab_size=None,
     Returns:
         tuple: (updated_tokens, prediction_tokens) or (updated_tokens, prediction_tokens, logits) if return_logits=True
     """
+    import time
+    t_start = time.perf_counter()
+
     batch_size, seq_len = tokens.shape
 
 
@@ -112,12 +115,21 @@ top_p=1.0, vocab_size=None,
 
     # Conditionally use no_grad context
     grad_context = torch.no_grad() if no_grad else nullcontext()
+
+    t_forward_start = time.perf_counter()
     with grad_context:
         logits, _ = model(tokens, targets=dummy_targets)
+    t_forward_end = time.perf_counter()
+
+    if verbose:
+        print(f"      [predict_and_sample] Forward pass: {t_forward_end - t_forward_start:.3f}s")
 
 
     # Extract logits for masked positions only
     prediction_tokens = tokens.clone()
+
+    t_sampling_start = time.perf_counter()
+    total_sampling_time = 0.0
 
     for batch_idx in range(batch_size):
         batch_mask_positions = mask_positions[batch_idx]
@@ -150,7 +162,10 @@ top_p=1.0, vocab_size=None,
                 masked_logits = masked_logits[:, :vocab_size]
 
         # Sample new tokens
+        t_sample_start = time.perf_counter()
         new_tokens = nucleus_sample(masked_logits, top_p=top_p, temperature=temperature)
+        t_sample_end = time.perf_counter()
+        total_sampling_time += (t_sample_end - t_sample_start)
 
         # Debug logging
         if debug_logging_fn and batch_idx == 0:
@@ -169,6 +184,13 @@ top_p=1.0, vocab_size=None,
 
         # Update prediction tokens
         prediction_tokens[batch_idx, mask_indices] = new_tokens
+
+    t_sampling_end = time.perf_counter()
+    t_end = time.perf_counter()
+
+    if verbose:
+        print(f"      [predict_and_sample] Sampling loop: {t_sampling_end - t_sampling_start:.3f}s (nucleus_sample: {total_sampling_time:.3f}s)")
+        print(f"      [predict_and_sample] Total time: {t_end - t_start:.3f}s")
 
     if return_logits:
         return prediction_tokens, logits
