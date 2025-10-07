@@ -169,10 +169,7 @@ class GRPOTrainingStep:
 
             t1 = time.perf_counter()
             mem_alloc = torch.cuda.memory_allocated() / (1024**2) if torch.cuda.is_available() else 0
-
-            # Debug: Check if completions still have masks
-            num_masks_in_completions = (completions == self.mask_token_id).sum().item()
-            print(f"  [Micro {micro_step}] 2. Samples generated: mem={mem_alloc:.0f}MB, time={t1-t0:.3f}s, masks_in_completions={num_masks_in_completions}")
+            print(f"  [Micro {micro_step}] 2. Samples generated: mem={mem_alloc:.0f}MB, time={t1-t0:.3f}s")
 
             # STEP 2: Score completions with judge
             with torch.no_grad():
@@ -238,10 +235,16 @@ class GRPOTrainingStep:
             sequence_log_probs = (token_log_probs * mask_repeated_for_sum.float()).sum(dim=1)  # (B*k,)
 
             # Debug: Check if log probs are reasonable
-            num_masked = mask_repeated_for_sum.float().sum(dim=1).mean().item()
+            num_masked_per_seq = mask_repeated_for_sum.float().sum(dim=1).mean().item()
             total_masks_in_repeated = mask_repeated_for_sum.sum().item()
-            if sequence_log_probs.abs().max().item() < 1e-8:
-                print(f"  WARNING: All sequence_log_probs are near zero! num_masked={num_masked:.1f}, total_masks_in_repeated={total_masks_in_repeated}")
+
+            # Only warn if we actually have zero masks (which shouldn't happen)
+            if total_masks_in_repeated == 0:
+                print(f"  WARNING: No masked positions found! This should not happen. Original masks_in_X={num_masks_in_X}")
+            elif sequence_log_probs.abs().max().item() < 1e-8:
+                # Log probs are zero despite having masks - this is suspicious
+                avg_log_prob = token_log_probs[mask_repeated_for_sum].mean().item() if total_masks_in_repeated > 0 else 0
+                print(f"  WARNING: sequence_log_probs near zero despite {total_masks_in_repeated} masks! avg_token_log_prob={avg_log_prob:.6f}")
 
             # Free token_log_probs after computing sequence log probs
             del token_log_probs
