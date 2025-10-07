@@ -56,10 +56,23 @@ beta2 = 0.95                # Adam beta2
 grad_clip = 1.0             # Gradient clipping threshold
 
 # Batch size
+# MEMORY NOTE: GRPO is memory-intensive due to:
+# - 3 forward passes per micro-step (sampling, current policy, reference policy)
+# - group_size multiplier (processes batch_size * group_size samples)
+# - Effective batch = batch_size * group_size * gradient_accumulation_steps
+#
+# Memory usage comparison:
+# - Standard training with batch_size=4: processes 4 samples
+# - GRPO with batch_size=1, group_size=8: processes 8 samples (2x more)
+# - GRPO with batch_size=2, group_size=8: processes 16 samples (4x more)
+#
+# Recommended settings for memory-constrained training:
+# - batch_size=1-2, group_size=4-8, gradient_accumulation_steps=8-16
+# - Increase gradient_accumulation_steps rather than batch_size
 batch_size = 1             # Number of unique inputs per iteration
                             # Total samples processed = batch_size * group_size
 
-gradient_accumulation_steps = 16  # Gradient accumulation
+gradient_accumulation_steps = 16  # Gradient accumulation (increase this for larger effective batch)
 
 # -----------------------------------------------------------------------------
 # Dataset

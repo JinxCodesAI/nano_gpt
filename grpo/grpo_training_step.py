@@ -120,6 +120,12 @@ class GRPOTrainingStep:
                     micro_step == self.grad_accum_steps - 1
                 )
 
+            # Memory optimization: explicitly delete tensors after use
+            # GRPO is memory-intensive due to:
+            # - 3 forward passes (sampling, current policy, reference policy)
+            # - group_size multiplier (B*k samples)
+            # - Large logits tensors (B*k, T, V)
+
             # Unpack batch
             X, Y = unpack_batch(batch)  # X: (B, T), Y: (B, T)
 
@@ -132,9 +138,9 @@ class GRPOTrainingStep:
             mask_repeated = mask.repeat_interleave(self.group_size, dim=0)
 
             # Sample completions using existing infrastructure
-            # This returns both the sampled tokens AND the logits
+            # Don't return logits to save memory - we'll recompute them later
             with torch.no_grad():
-                completions, logits_gen = predict_and_sample_tokens(
+                completions = predict_and_sample_tokens(
                     model=self.generator,
                     tokens=X_repeated,
                     mask_token_id=self.mask_token_id,
@@ -143,7 +149,7 @@ class GRPOTrainingStep:
                     vocab_size=self.vocab_size,
                     device=device,
                     verbose=False,
-                    return_logits=True,
+                    return_logits=False,  # Save memory by not returning logits
                     pad_token_id=self.pad_token_id,
                     base_vocab_size=self.base_vocab_size
                 )
@@ -184,19 +190,22 @@ class GRPOTrainingStep:
                 completions_for_gather = completions
                 mask_repeated_for_sum = mask_repeated
 
+            # Compute log-probs and gather in one step to save memory
             log_probs_current = F.log_softmax(logits_current, dim=-1)  # (B*k, T', V)
-
-            # Gather log-probs for the sampled tokens at masked positions
-            # completions contains the filled-in tokens, we need log-prob of those tokens
-            # at the positions where they were sampled (masked positions)
             token_log_probs = torch.gather(
                 log_probs_current,
                 dim=-1,
                 index=completions_for_gather.unsqueeze(-1)
             ).squeeze(-1)  # (B*k, T')
 
+            # Free logits_current immediately to save memory
+            del logits_current, log_probs_current
+
             # Sum only over masked positions (where actions were taken)
             sequence_log_probs = (token_log_probs * mask_repeated_for_sum.float()).sum(dim=1)  # (B*k,)
+
+            # Free token_log_probs after computing sequence log probs
+            del token_log_probs
 
             # STEP 5: Compute KL divergence to reference policy
             with torch.no_grad():
@@ -214,7 +223,14 @@ class GRPOTrainingStep:
                     dim=-1,
                     index=completions_for_gather.unsqueeze(-1)
                 ).squeeze(-1)
+
+                # Free reference logits immediately
+                del logits_ref, log_probs_ref
+
                 sequence_log_probs_ref = (token_log_probs_ref * mask_repeated_for_sum.float()).sum(dim=1)
+
+                # Free token log probs
+                del token_log_probs_ref
 
             kl_divergence = sequence_log_probs - sequence_log_probs_ref  # (B*k,)
 
@@ -231,7 +247,7 @@ class GRPOTrainingStep:
             # STEP 7: Backward pass
             self.scaler.scale(loss).backward()
 
-            # Accumulate metrics
+            # Accumulate metrics (extract scalars before deleting tensors)
             accumulated_metrics['pg_loss'] += float(pg_loss.item())
             accumulated_metrics['kl_penalty'] += float(kl_penalty.item())
             accumulated_metrics['mean_reward'] += float(rewards.mean().item())
@@ -241,6 +257,13 @@ class GRPOTrainingStep:
             accumulated_metrics['mean_log_prob'] += float(sequence_log_probs.mean().item())
 
             last_loss = loss
+
+            # Free all intermediate tensors to save memory
+            del X, Y, mask, X_repeated, mask_repeated
+            del completions, completions_for_gather, mask_repeated_for_sum
+            del rewards, rewards_grouped, baseline, advantages
+            del sequence_log_probs, sequence_log_probs_ref, kl_divergence
+            del pg_loss, kl_penalty
 
             # Fetch next batch
             batch = consumer.get_batch('train', device)
