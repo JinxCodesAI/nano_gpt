@@ -27,10 +27,10 @@ top_p = 0.95                # Nucleus sampling threshold
 # -----------------------------------------------------------------------------
 
 # Generator model (will be trained)
-generator_checkpoint = 'out-char-diffusion/checkpoint.pt'
+generator_checkpoint = 'out-char-diffusion/7250_1.77_pad_no_entropy.pt'
 
 # Judge model (frozen, provides reward signal)
-judge_checkpoint = 'out-char-diffusion/judge.pt'
+judge_checkpoint = 'out-char-diffusion/scoring_p90_0.0128.pt'
 
 # Reference model (optional, if None will copy from generator_checkpoint)
 # This is a frozen copy of the initial generator for KL penalty
@@ -56,10 +56,10 @@ beta2 = 0.95                # Adam beta2
 grad_clip = 1.0             # Gradient clipping threshold
 
 # Batch size
-batch_size = 16             # Number of unique inputs per iteration
+batch_size = 1             # Number of unique inputs per iteration
                             # Total samples processed = batch_size * group_size
 
-gradient_accumulation_steps = 1  # Gradient accumulation
+gradient_accumulation_steps = 16  # Gradient accumulation
 
 # -----------------------------------------------------------------------------
 # Dataset
@@ -68,6 +68,33 @@ gradient_accumulation_steps = 1  # Gradient accumulation
 dataset = 'char_diffusion'  # Dataset name (must have masked inputs)
 block_size = 1024           # Sequence length
 target_size = None          # Target size (defaults to block_size)
+
+
+composition_config = 'complex' # refers to data/char_diffusion/config/complex.py  use None if config is not defined
+
+# Load global variables from composition config if specified
+if composition_config is not None:
+    import os
+    import sys
+    config_path = os.path.join('data', 'char_diffusion', 'config', f'{composition_config}.py')
+    if os.path.exists(config_path):
+        import importlib.util
+        spec = importlib.util.spec_from_file_location(f"{composition_config}_config", config_path)
+        config_module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(config_module)
+        
+        # Import all global variables from the config
+        for attr_name in dir(config_module):
+            if not attr_name.startswith('_'):
+                globals()[attr_name] = getattr(config_module, attr_name)
+        print(f"Loaded composition config from {config_path}")
+    else:
+        print(f"Warning: composition config file not found at {config_path}")
+else:
+    # Set default values when no composition config is used
+    use_all_stages_for_training = None
+    unmasking_stages = None
+    validation_stages = None
 
 # -----------------------------------------------------------------------------
 # Logging and checkpointing

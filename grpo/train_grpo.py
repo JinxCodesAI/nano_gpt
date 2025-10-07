@@ -100,7 +100,8 @@ logger.log_info(f"GRPO Training Configuration:")
 logger.log_info(f"  group_size: {group_size}")
 logger.log_info(f"  kl_beta: {kl_beta}")
 logger.log_info(f"  batch_size: {batch_size}")
-logger.log_info(f"  effective_batch_size: {batch_size * group_size}")
+logger.log_info(f"  gradient_accumulation_steps: {gradient_accumulation_steps}")
+logger.log_info(f"  effective_batch_size: {batch_size * group_size * gradient_accumulation_steps}")
 logger.log_info(f"  learning_rate: {learning_rate}")
 logger.log_info(f"  max_iters: {max_iters}")
 logger.log_info(f"  tokens per iteration: {tokens_per_iter:,}")
@@ -260,6 +261,7 @@ grpo_config = {
     'group_size': group_size,
     'kl_beta': kl_beta,
     'grad_clip': grad_clip,
+    'gradient_accumulation_steps': gradient_accumulation_steps,
     'mask_token_id': mask_token_id,
     'pad_token_id': pad_token_id,
     'base_vocab_size': base_vocab_size,
@@ -277,6 +279,7 @@ grpo_step = GRPOTrainingStep(
     scaler=scaler,
     config=grpo_config,
     ctx=ctx,
+    ddp=ddp,
 )
 
 # -----------------------------------------------------------------------------
