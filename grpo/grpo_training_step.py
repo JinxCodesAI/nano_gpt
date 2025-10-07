@@ -202,14 +202,11 @@ class GRPOTrainingStep:
             # STEP 4: Compute log-probabilities (with gradients)
             # For BERT-style models: pass masked input, get logits, extract probs for generated tokens
             # We need P(generated_token | masked_context) at each masked position
-
-            # Debug: Print model config on first iteration
-            if micro_step == 0 and hasattr(self.generator, 'config'):
-                print(f"  [DEBUG] Generator config: mode={getattr(self.generator.config, 'mode', 'unknown')}, "
-                      f"vocab_size={getattr(self.generator.config, 'vocab_size', 'unknown')}")
+            # IMPORTANT: Must pass dummy targets to get full sequence logits (not just last position)
+            dummy_targets = torch.zeros_like(X_repeated)
 
             with self.ctx:
-                logits_current, _ = self.generator(X_repeated, targets=None)
+                logits_current, _ = self.generator(X_repeated, targets=dummy_targets)
 
             t3 = time.perf_counter()
             mem_alloc = torch.cuda.memory_allocated() / (1024**2) if torch.cuda.is_available() else 0
@@ -258,15 +255,17 @@ class GRPOTrainingStep:
             del token_log_probs
 
             # STEP 5: Compute KL divergence to reference policy
-            # Same as above: pass masked input to get reference policy probs
+            # Same as above: pass dummy targets to get full sequence logits
             with torch.no_grad():
                 with self.ctx:
-                    logits_ref, _ = self.reference(X_repeated, targets=None)
+                    logits_ref, _ = self.reference(X_repeated, targets=dummy_targets)
 
-                # Ensure shapes match
+                # Verify shapes match
                 if logits_ref.shape[1] != completions.shape[1]:
-                    min_len = min(logits_ref.shape[1], completions.shape[1])
-                    logits_ref = logits_ref[:, :min_len, :]
+                    raise RuntimeError(
+                        f"Reference model shape mismatch: logits_ref.shape={logits_ref.shape}, "
+                        f"completions.shape={completions.shape}"
+                    )
 
                 log_probs_ref = F.log_softmax(logits_ref, dim=-1)
                 token_log_probs_ref = torch.gather(
