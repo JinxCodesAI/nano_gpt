@@ -256,6 +256,8 @@ class GRPOTrainingStep:
 
             # STEP 5: Compute KL divergence to reference policy
             # Same as above: pass dummy targets to get full sequence logits
+            t3b = time.perf_counter()
+
             with torch.no_grad():
                 with self.ctx:
                     logits_ref, _ = self.reference(X_repeated, targets=dummy_targets)
@@ -284,6 +286,10 @@ class GRPOTrainingStep:
 
             kl_divergence = sequence_log_probs - sequence_log_probs_ref  # (B*k,)
 
+            t3c = time.perf_counter()
+            mem_alloc = torch.cuda.memory_allocated() / (1024**2) if torch.cuda.is_available() else 0
+            print(f"  [Micro {micro_step}] 3c. Reference policy forward: mem={mem_alloc:.0f}MB, time={t3c-t3b:.3f}s")
+
             # STEP 6: Compute GRPO loss
             # Policy gradient term (maximize reward-weighted log-probs)
             # Note: sequence_log_probs are large negative numbers (sum of log probs over ~400 tokens)
@@ -305,12 +311,16 @@ class GRPOTrainingStep:
             avg_advantage = advantages.mean().item()
             avg_kl = kl_divergence.mean().item()
 
-            print(f"  [Micro {micro_step}] 4. Loss computed: mem={mem_alloc:.0f}MB, time={t4-t0:.3f}s")
+            print(f"  [Micro {micro_step}] 4. Loss computed: mem={mem_alloc:.0f}MB, time={t4-t3c:.3f}s")
             print(f"      pg_loss={pg_loss.item():.4f}, kl_penalty={kl_penalty.item():.4f}, total={loss.item():.4f}")
             print(f"      avg_seq_log_prob={avg_seq_log_prob:.2f}, avg_advantage={avg_advantage:.4f}, avg_kl={avg_kl:.4f}")
 
             # STEP 7: Backward pass
+            t5 = time.perf_counter()
             self.scaler.scale(loss).backward()
+            t6 = time.perf_counter()
+            mem_alloc = torch.cuda.memory_allocated() / (1024**2) if torch.cuda.is_available() else 0
+            print(f"  [Micro {micro_step}] 5. Backward: mem={mem_alloc:.0f}MB, time={t6-t5:.3f}s")
 
             # Accumulate metrics (extract scalars before deleting tensors)
             accumulated_metrics['pg_loss'] += float(pg_loss.item())
