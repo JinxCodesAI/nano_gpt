@@ -477,8 +477,8 @@ if quality_metric == QualityMetric.JUDGE:
     if not os.path.exists(judge_checkpoint_path):
         raise FileNotFoundError(f"Judge checkpoint not found: {judge_checkpoint_path}")
     judge_model, _ = load_model_from_checkpoint(judge_checkpoint_path, device, compile_model=False)
-    if getattr(judge_model.config, 'mode', None) != ModelMode.SEQUENCE_SCORER:
-        raise ValueError("Judge model must be configured with mode=SEQUENCE_SCORER")
+    # Set judge model to SEQUENCE_SCORER mode
+    judge_model.set_mode(ModelMode.SEQUENCE_SCORER)
 
 # Print generation settings
 print(f"\n{'='*60}")

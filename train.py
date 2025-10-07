@@ -230,12 +230,12 @@ checkpoint_manager.set_metadata(model_args={}, config=config)
 
 
 # model init
+# Note: mode and num_token_classes are no longer part of GPTConfig (dual-mode architecture)
+# Model mode is set after creation using set_mode()
 model_args = dict(n_layer=n_layer, n_head=n_head, n_embd=n_embd, block_size=block_size,
                   bias=bias, vocab_size=None, dropout=dropout, attention_type=attention_type,
                   position_encoding=position_encoding,
-                  # multi-mode parameters
-                  mode=ModelMode(model_mode),
-                  num_token_classes=num_token_classes,
+                  # multi-mode parameters (mode is set after model creation)
                   cls_token_id=cls_token_id,
                   freeze_transformer=freeze_transformer,
                   init_from_checkpoint=init_from_checkpoint,
@@ -277,6 +277,20 @@ elif init_from == 'resume':
     checkpoint_manager.load_model_state(model, state_dict)
     iter_num = checkpoint['iter_num']
     best_val_loss = checkpoint['best_val_loss']
+
+# Set model mode (dual-mode architecture: mode is set at runtime, not in config)
+# Convert string model_mode to ModelMode enum and set it
+if model_mode == 'language_model':
+    model.set_mode(ModelMode.LANGUAGE_MODEL)
+elif model_mode == 'sequence_scorer':
+    model.set_mode(ModelMode.SEQUENCE_SCORER)
+elif model_mode == 'token_classifier':
+    # TOKEN_CLASSIFIER mode has been removed; use LANGUAGE_MODEL with bidirectional attention
+    logger.log_info("WARNING: token_classifier mode is deprecated. Using language_model mode instead.")
+    model.set_mode(ModelMode.LANGUAGE_MODEL)
+else:
+    logger.log_info(f"WARNING: Unknown model_mode '{model_mode}', defaulting to LANGUAGE_MODEL")
+    model.set_mode(ModelMode.LANGUAGE_MODEL)
 
 # crop down the model block size if desired, using model surgery
 if block_size < model.config.block_size:

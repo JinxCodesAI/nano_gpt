@@ -373,8 +373,8 @@ def main():
     # Load main model
     main_ckpt = os.path.join(args.out_dir, args.checkpoint_name)
     model, checkpoint = load_model_from_checkpoint(main_ckpt, args.device, compile_model=False)
-    if getattr(model.config, 'mode', None) != ModelMode.LANGUAGE_MODEL:
-        raise ValueError('This script supports LANGUAGE_MODEL checkpoints only')
+    # Ensure model is in LANGUAGE_MODEL mode (dual-mode models default to this)
+    model.set_mode(ModelMode.LANGUAGE_MODEL)
     if not getattr(model.config, 'add_critic_head', False):
         raise ValueError('Model must have critic head enabled (add_critic_head=True)')
 
@@ -407,8 +407,8 @@ def main():
         if not os.path.exists(judge_ckpt):
             raise FileNotFoundError(f"Judge checkpoint not found: {judge_ckpt}")
         judge_model, _ = load_model_from_checkpoint(judge_ckpt, args.device, compile_model=False)
-        if getattr(judge_model.config, 'mode', None) != ModelMode.SEQUENCE_SCORER:
-            raise ValueError('Judge model must be configured with mode=SEQUENCE_SCORER')
+        # Set judge model to SEQUENCE_SCORER mode
+        judge_model.set_mode(ModelMode.SEQUENCE_SCORER)
 
     # Parse masking ratios if provided
     masking_ratios = None
