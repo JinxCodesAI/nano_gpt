@@ -208,6 +208,10 @@ class GRPOTrainingStep:
             with self.ctx:
                 logits_current, _ = self.generator(X_repeated, targets=None)
 
+            t3 = time.perf_counter()
+            mem_alloc = torch.cuda.memory_allocated() / (1024**2) if torch.cuda.is_available() else 0
+            print(f"  [Micro {micro_step}] 3b. Current policy forward: mem={mem_alloc:.0f}MB, time={t3-t2:.3f}s")
+
             # Ensure shapes match
             if logits_current.shape[1] != completions.shape[1]:
                 # Truncate or pad to match
@@ -280,9 +284,9 @@ class GRPOTrainingStep:
             # Total loss (scaled for gradient accumulation)
             loss = (pg_loss + kl_penalty) / self.grad_accum_steps
 
-            t3 = time.perf_counter()
+            t4 = time.perf_counter()
             mem_alloc = torch.cuda.memory_allocated() / (1024**2) if torch.cuda.is_available() else 0
-            print(f"  [Micro {micro_step}] 4. Loss computed: mem={mem_alloc:.0f}MB, time={t3-t2:.3f}s, pg_loss={pg_loss.item():.6f}, kl={kl_penalty.item():.6f}, total={loss.item():.6f}")
+            print(f"  [Micro {micro_step}] 4. Loss computed: mem={mem_alloc:.0f}MB, time={t4-t0:.3f}s (total so far), pg_loss={pg_loss.item():.6f}, kl={kl_penalty.item():.6f}, total={loss.item():.6f}")
 
             # STEP 7: Backward pass
             self.scaler.scale(loss).backward()
