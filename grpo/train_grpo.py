@@ -241,7 +241,12 @@ scheduler = CosineLRScheduler(
 )
 
 # Gradient scaler for mixed precision
-scaler = torch.amp.GradScaler(device_type='cuda', enabled=(dtype == 'float16'))
+# Try new API first, fall back to old API for compatibility
+try:
+    scaler = torch.amp.GradScaler('cuda', enabled=(dtype == 'float16'))
+except TypeError:
+    # Fallback for older PyTorch versions
+    scaler = torch.cuda.amp.GradScaler(enabled=(dtype == 'float16'))
 
 # -----------------------------------------------------------------------------
 # Initialize checkpoint manager
