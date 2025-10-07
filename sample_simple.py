@@ -90,7 +90,23 @@ def load_model_from_checkpoint(checkpoint_path: str, device: str, compile_model:
         if k.startswith(unwanted_prefix):
             state_dict[k[len(unwanted_prefix):]] = state_dict.pop(k)
 
-    model.load_state_dict(state_dict)
+    # Handle old checkpoints with single head (backward compatibility)
+    # New models have both lm_head and sequence_head, old models had only one
+    has_lm_head = any(k.startswith('lm_head.') for k in state_dict.keys())
+    has_sequence_head = any(k.startswith('sequence_head.') for k in state_dict.keys())
+
+    if not has_lm_head and has_sequence_head:
+        # Old SEQUENCE_SCORER checkpoint - initialize lm_head from wte (weight tying)
+        if 'transformer.wte.weight' in state_dict:
+            state_dict['lm_head.weight'] = state_dict['transformer.wte.weight'].clone()
+    elif has_lm_head and not has_sequence_head:
+        # Old LANGUAGE_MODEL checkpoint - initialize sequence_head with small random weights
+        n_embd = state_dict['transformer.wte.weight'].shape[1]
+        state_dict['sequence_head.base_predictor.weight'] = torch.randn(1, n_embd) * 0.01
+        state_dict['sequence_head.base_predictor.bias'] = torch.zeros(1)
+        state_dict['sequence_head.log_temperature'] = torch.zeros(1)
+
+    model.load_state_dict(state_dict, strict=False)
     model.eval()
     model.to(device)
 

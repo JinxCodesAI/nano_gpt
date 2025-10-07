@@ -36,7 +36,21 @@ class MLMInferenceEngine:
         # Ensure model is in language modeling mode for inference
         self.model.set_mode(ModelMode.LANGUAGE_MODEL)
         state_dict = checkpoint.get('model', checkpoint)
-        self.model.load_state_dict(state_dict)
+
+        # Handle old checkpoints with single head (backward compatibility)
+        has_lm_head = any(k.startswith('lm_head.') for k in state_dict.keys())
+        has_sequence_head = any(k.startswith('sequence_head.') for k in state_dict.keys())
+
+        if not has_lm_head and has_sequence_head:
+            if 'transformer.wte.weight' in state_dict:
+                state_dict['lm_head.weight'] = state_dict['transformer.wte.weight'].clone()
+        elif has_lm_head and not has_sequence_head:
+            n_embd = state_dict['transformer.wte.weight'].shape[1]
+            state_dict['sequence_head.base_predictor.weight'] = torch.randn(1, n_embd) * 0.01
+            state_dict['sequence_head.base_predictor.bias'] = torch.zeros(1)
+            state_dict['sequence_head.log_temperature'] = torch.zeros(1)
+
+        self.model.load_state_dict(state_dict, strict=False)
         self.model.to(device)
         self.model.eval()
 

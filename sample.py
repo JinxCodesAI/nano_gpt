@@ -201,7 +201,27 @@ def load_model_from_checkpoint(checkpoint_path, device, compile_model=False):
         if k.startswith(unwanted_prefix):
             state_dict[k[len(unwanted_prefix):]] = state_dict.pop(k)
 
-    model.load_state_dict(state_dict)
+    # Handle old checkpoints with single head (backward compatibility)
+    # New models have both lm_head and sequence_head, old models had only one
+    has_lm_head = any(k.startswith('lm_head.') for k in state_dict.keys())
+    has_sequence_head = any(k.startswith('sequence_head.') for k in state_dict.keys())
+
+    if not has_lm_head and has_sequence_head:
+        # Old SEQUENCE_SCORER checkpoint - initialize lm_head from wte (weight tying)
+        print("  - Old SEQUENCE_SCORER checkpoint detected, initializing missing lm_head")
+        if 'transformer.wte.weight' in state_dict:
+            state_dict['lm_head.weight'] = state_dict['transformer.wte.weight'].clone()
+    elif has_lm_head and not has_sequence_head:
+        # Old LANGUAGE_MODEL checkpoint - initialize sequence_head with small random weights
+        print("  - Old LANGUAGE_MODEL checkpoint detected, initializing missing sequence_head")
+        # Get embedding dimension from existing weights
+        n_embd = state_dict['transformer.wte.weight'].shape[1]
+        # Initialize sequence_head components with small random weights
+        state_dict['sequence_head.base_predictor.weight'] = torch.randn(1, n_embd) * 0.01
+        state_dict['sequence_head.base_predictor.bias'] = torch.zeros(1)
+        state_dict['sequence_head.log_temperature'] = torch.zeros(1)
+
+    model.load_state_dict(state_dict, strict=False)  # Use strict=False to allow missing keys in edge cases
     model.eval()
     model.to(device)
 
