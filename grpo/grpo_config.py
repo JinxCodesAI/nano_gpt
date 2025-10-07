@@ -85,6 +85,11 @@ target_size = None          # Target size (defaults to block_size)
 
 composition_config = 'complex' # refers to data/char_diffusion/config/complex.py  use None if config is not defined
 
+# Initialize stage variables before loading composition config
+use_all_stages_for_training = None
+unmasking_stages = None
+validation_stages = None
+
 # Load global variables from composition config if specified
 if composition_config is not None:
     import os
@@ -95,7 +100,7 @@ if composition_config is not None:
         spec = importlib.util.spec_from_file_location(f"{composition_config}_config", config_path)
         config_module = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(config_module)
-        
+
         # Import all global variables from the config
         for attr_name in dir(config_module):
             if not attr_name.startswith('_'):
@@ -103,11 +108,6 @@ if composition_config is not None:
         print(f"Loaded composition config from {config_path}")
     else:
         print(f"Warning: composition config file not found at {config_path}")
-else:
-    # Set default values when no composition config is used
-    use_all_stages_for_training = None
-    unmasking_stages = None
-    validation_stages = None
 
 # -----------------------------------------------------------------------------
 # Logging and checkpointing
@@ -148,11 +148,26 @@ seed = 1337                 # Random seed
 # Data streaming
 # -----------------------------------------------------------------------------
 
+# Data streaming config (must match prepare.py expectations)
+batches_per_file = 100  # Samples per file
+max_backlog_files = 3   # Maximum files in queue
+sleep_seconds = 1.0     # Sleep between file checks
+data_stream_verbose = True  # Enable verbose logging
+
+# Consumer config (for training)
 data_prefer_queue = True
 data_cache_files = 1
 data_wait_sleep_seconds = 1.0
 data_wait_timeout_seconds = None
-data_stream_verbose = False
+
+# Ignore index for loss computation
+ignore_index = -100
+
+# Model mode (required by data provider)
+model_mode = 'language_model'
+
+# Enable line-aligned sequences (default for char_diffusion)
+enable_line_aligned_sequences = True
 
 # -----------------------------------------------------------------------------
 # Evaluation (disabled for GRPO)
