@@ -142,8 +142,16 @@ class GRPOTrainingStep:
             total_tokens = X.numel()
             mask_pct = 100.0 * num_masks_in_X / total_tokens if total_tokens > 0 else 0
 
+            # Skip if no masks (nothing to learn)
+            if num_masks_in_X == 0:
+                print(f"  [Micro {micro_step}] WARNING: No masks in batch, skipping")
+                batch = consumer.get_batch('train', device)
+                continue
+
             mem_alloc = torch.cuda.memory_allocated() / (1024**2) if torch.cuda.is_available() else 0
             print(f"  [Micro {micro_step}] 1. Iteration start: mem={mem_alloc:.0f}MB, time={0:.3f}s, masks_in_X={num_masks_in_X}/{total_tokens} ({mask_pct:.1f}%)")
+
+            t0 = time.perf_counter()
 
             # STEP 1: Generate k completions per input
             # Repeat each input k times: (B*k, T)
