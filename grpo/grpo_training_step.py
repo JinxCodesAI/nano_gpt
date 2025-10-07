@@ -203,7 +203,8 @@ class GRPOTrainingStep:
             advantages = advantages.view(-1)  # Flatten back to (B*k,)
 
             # STEP 4: Compute log-probabilities (with gradients)
-            # Forward pass through generator on the MASKED input to get action probabilities
+            # For BERT-style models: pass masked input, get logits, extract probs for generated tokens
+            # We need P(generated_token | masked_context) at each masked position
             with self.ctx:
                 logits_current, _ = self.generator(X_repeated, targets=None)
 
@@ -242,6 +243,7 @@ class GRPOTrainingStep:
             del token_log_probs
 
             # STEP 5: Compute KL divergence to reference policy
+            # Same as above: pass masked input to get reference policy probs
             with torch.no_grad():
                 with self.ctx:
                     logits_ref, _ = self.reference(X_repeated, targets=None)
