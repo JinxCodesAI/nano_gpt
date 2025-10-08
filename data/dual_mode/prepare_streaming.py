@@ -52,6 +52,14 @@ class DualModeProvider(DataProviderBase):
         # Batch counter for alternation
         self._batch_counter = 0
 
+        # RNG for mode selection (initialized once)
+        self._mode_rng = torch.Generator()
+        self._mode_rng.manual_seed(self.seed + 999)  # Different seed from data generation
+
+        # Current mode (stays same for alternation_frequency batches)
+        self._current_mode = None
+        self._batches_in_current_mode = 0
+
         if self.verbose:
             print(f"[dual_mode] DualModeProvider initialized:")
             print(f"  mode_distribution: {self.mode_distribution}")
@@ -159,28 +167,36 @@ class DualModeProvider(DataProviderBase):
             ],
         }
     
-    def _determine_mode_for_batch(self, batch_idx: int, rng: torch.Generator) -> str:
+    def _determine_mode_for_batch(self) -> str:
         """
         Determine which mode to use for this batch.
-        
-        Uses alternation_frequency to control switching frequency.
-        Within each alternation window, uses mode_distribution to decide.
+
+        Every alternation_frequency batches, randomly select a new mode.
+        Keep the same mode for alternation_frequency consecutive batches.
         """
-        # Determine alternation window
-        window_idx = batch_idx // self.alternation_frequency
-        
-        # Use RNG seeded by window to ensure deterministic but varied distribution
-        window_rng = torch.Generator()
-        window_rng.manual_seed(rng.initial_seed() + window_idx)
-        
-        # Sample mode based on distribution
-        rand_val = torch.rand(1, generator=window_rng).item()
-        lm_ratio = self.mode_distribution.get('language_model', 0.5)
-        
-        if rand_val < lm_ratio:
-            return 'language_model'
-        else:
-            return 'sequence_scorer'
+        # Check if we need to select a new mode
+        if self._current_mode is None or self._batches_in_current_mode >= self.alternation_frequency:
+            # Select new mode based on distribution
+            lm_weight = self.mode_distribution.get('language_model', 0.5)
+            ss_weight = self.mode_distribution.get('sequence_scorer', 0.5)
+            total_weight = lm_weight + ss_weight
+
+            # Random number from 0 to total_weight
+            rand_val = torch.rand(1, generator=self._mode_rng).item() * total_weight
+
+            # Select mode based on threshold
+            if rand_val < lm_weight:
+                self._current_mode = 'language_model'
+            else:
+                self._current_mode = 'sequence_scorer'
+
+            # Reset counter for new mode
+            self._batches_in_current_mode = 0
+
+        # Increment counter
+        self._batches_in_current_mode += 1
+
+        return self._current_mode
     
     def sample_batch(self, split: str, rng: torch.Generator) -> Dict[str, Any]:
         """
@@ -190,8 +206,7 @@ class DualModeProvider(DataProviderBase):
         Batch keys vary by mode (x/y for language_model, input_ids/targets for sequence_scorer).
         """
         # Determine mode for this batch
-        mode = self._determine_mode_for_batch(self._batch_counter, rng)
-        self._batch_counter += 1
+        mode = self._determine_mode_for_batch()
 
         # Generate batch from appropriate provider
         if mode == 'language_model':
