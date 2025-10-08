@@ -273,42 +273,87 @@ class DatasetConsumer:
         tensors = self._loaded_data[split]
         metadata = self._loaded_metadata[split]
         assert tensors is not None
-        # derive total samples in this file from first tensor
-        first_key = next(iter(tensors))
-        total_samples = tensors[first_key].shape[0]
 
-        start_idx = self._current_batch_idx[split] * self.batch_size
-        end_idx = min(start_idx + self.batch_size, total_samples)
+        # If per-batch modes are provided, use num_batches to detect EOF
+        modes_list = None
+        num_batches_meta = None
+        if metadata and 'model_mode' in metadata:
+            modes_list = metadata['model_mode']
+            if not isinstance(modes_list, list):
+                raise TypeError("metadata['model_mode'] must be a list of length num_batches")
+            num_batches_meta = int(metadata.get('num_batches', -1))
+            if num_batches_meta <= 0 or len(modes_list) != num_batches_meta:
+                raise ValueError(
+                    f"Invalid metadata['model_mode']: expected list length == num_batches ({num_batches_meta}), got {len(modes_list)}"
+                )
+            # If we've consumed all batches, advance file
+            if self._current_batch_idx[split] >= num_batches_meta:
+                if self._mode == "queue":
+                    path = self._split_files[split][self._current_file_idx[split]]
+                    self._maybe_delete_consumed(split, path)
+                    self._split_files[split] = self._list_available_files(split)
+                self._advance_to_next_file(split)
+                self._ensure_data_available(split)
+                tensors, metadata = self._load_file(split, self._current_file_idx[split])
+                self._loaded_data[split] = tensors
+                self._loaded_metadata[split] = metadata
+                self._current_batch_idx[split] = 0
+                modes_list = metadata.get('model_mode') if metadata else None
 
-        # if consumed all samples, advance file
-        if start_idx >= total_samples:
-            # in queue mode: delete the file we just finished
-            if self._mode == "queue":
-                path = self._split_files[split][self._current_file_idx[split]]
-                self._maybe_delete_consumed(split, path)
-                # refresh file list for queue mode to get new arrivals
-                self._split_files[split] = self._list_available_files(split)
-            # advance to next file
-            self._advance_to_next_file(split)
-            # ensure availability again (may block)
-            self._ensure_data_available(split)
-            # load new file
-            tensors, metadata = self._load_file(split, self._current_file_idx[split])
-            self._loaded_data[split] = tensors
-            self._loaded_metadata[split] = metadata
-            self._current_batch_idx[split] = 0
-            # recompute indices
+        # Decide slicing strategy
+        batch_tensors: Dict[str, torch.Tensor] = {}
+        if modes_list is not None:
+            # Per-mode slicing: compute position within the stream for the selected mode
+            batch_idx = self._current_batch_idx[split]
+            cur_mode = modes_list[batch_idx]
+            # Count previous batches of the same mode
+            prev_same_mode = sum(1 for i in range(batch_idx) if modes_list[i] == cur_mode)
+            start_idx = prev_same_mode * self.batch_size
+            end_idx = start_idx + self.batch_size
+
+            LM_KEYS = {"x", "y", "attention_mask"}
+            SS_KEYS = {"input_ids", "targets"}
+            mode_keys = LM_KEYS if cur_mode == 'language_model' else SS_KEYS
+
+            for k in mode_keys:
+                if k in tensors:
+                    v = tensors[k]
+                    total = v.shape[0]
+                    if start_idx >= total:
+                        # This indicates misaligned tensors vs metadata
+                        raise IndexError(
+                            f"Start index {start_idx} out of range for key '{k}' with total {total}; check provider write logic"
+                        )
+                    batch_tensors[k] = v[start_idx:min(end_idx, total)]
+        else:
+            # Legacy single-schema slicing: use first tensor to derive indices
             first_key = next(iter(tensors))
             total_samples = tensors[first_key].shape[0]
-            start_idx = 0
-            end_idx = min(self.batch_size, total_samples)
+            start_idx = self._current_batch_idx[split] * self.batch_size
+            end_idx = min(start_idx + self.batch_size, total_samples)
+            if start_idx >= total_samples:
+                if self._mode == "queue":
+                    path = self._split_files[split][self._current_file_idx[split]]
+                    self._maybe_delete_consumed(split, path)
+                    self._split_files[split] = self._list_available_files(split)
+                self._advance_to_next_file(split)
+                self._ensure_data_available(split)
+                tensors, metadata = self._load_file(split, self._current_file_idx[split])
+                self._loaded_data[split] = tensors
+                self._loaded_metadata[split] = metadata
+                self._current_batch_idx[split] = 0
+                first_key = next(iter(tensors))
+                total_samples = tensors[first_key].shape[0]
+                start_idx = 0
+                end_idx = min(self.batch_size, total_samples)
+            for k, v in tensors.items():
+                batch_tensors[k] = v[start_idx:end_idx]
 
-        # slice per field
-        batch_tensors: Dict[str, torch.Tensor] = {}
-        for k, v in tensors.items():
-            batch_tensors[k] = v[start_idx:end_idx]
-
-        cur_bs = next(iter(batch_tensors.values())).shape[0]
+        # Pad to full batch_size if needed
+        if batch_tensors:
+            cur_bs = next(iter(batch_tensors.values())).shape[0]
+        else:
+            cur_bs = 0
         if 0 < cur_bs < self.batch_size:
             need = self.batch_size - cur_bs
 
@@ -333,25 +378,22 @@ class DatasetConsumer:
             batch_tensors[k] = _to_device(batch_tensors[k])
 
         # Add batch-level metadata (e.g., model_mode) if available
-        # Extract metadata for the current batch index (not sample index)
-        if metadata:
-            if 'model_mode' in metadata:
-                model_modes = metadata['model_mode']
-                # Enforce per-batch model_mode list with strict validation
-                if not isinstance(model_modes, list):
-                    raise TypeError("metadata['model_mode'] must be a list of length num_batches")
-                num_batches = int(metadata.get('num_batches', -1))
-                if num_batches <= 0 or len(model_modes) != num_batches:
-                    raise ValueError(
-                        f"Invalid metadata['model_mode']: expected list length == num_batches ({num_batches}), got {len(model_modes)}"
-                    )
-                # current_batch_idx was incremented above; use previous index for this batch
-                batch_idx = max(self._current_batch_idx[split] - 1, 0)
-                if batch_idx >= num_batches:
-                    raise IndexError(
-                        f"Batch index out of range: batch_idx={batch_idx}, num_batches={num_batches}"
-                    )
-                batch_tensors['_model_mode'] = model_modes[batch_idx]
+        if metadata and 'model_mode' in metadata:
+            # current_batch_idx was incremented above; use previous index for this batch
+            batch_idx_for_meta = max(self._current_batch_idx[split] - 1, 0)
+            if not isinstance(metadata['model_mode'], list):
+                raise TypeError("metadata['model_mode'] must be a list of length num_batches")
+            if num_batches_meta is None:
+                num_batches_meta = int(metadata.get('num_batches', -1))
+            if num_batches_meta <= 0 or len(metadata['model_mode']) != num_batches_meta:
+                raise ValueError(
+                    f"Invalid metadata['model_mode']: expected list length == num_batches ({num_batches_meta}), got {len(metadata['model_mode'])}"
+                )
+            if batch_idx_for_meta >= num_batches_meta:
+                raise IndexError(
+                    f"Batch index out of range: batch_idx={batch_idx_for_meta}, num_batches={num_batches_meta}"
+                )
+            batch_tensors['_model_mode'] = metadata['model_mode'][batch_idx_for_meta]
 
         return batch_tensors
 

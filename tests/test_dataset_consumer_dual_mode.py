@@ -33,7 +33,11 @@ def setup_dual_mode_test_dir(root: str):
     x = torch.zeros(batch_size * num_batches, 4, dtype=torch.long)
     y = torch.zeros(batch_size * num_batches, 4, dtype=torch.long)
 
-    tensors = {'x': x, 'y': y}
+    # Provide one SS batch worth of tensors to match the sequence_scorer slot
+    input_ids = torch.full((batch_size, 4), 7, dtype=torch.long)
+    targets = torch.linspace(0.0, 1.0, batch_size, dtype=torch.float32)
+
+    tensors = {'x': x, 'y': y, 'input_ids': input_ids, 'targets': targets}
     metadata = {
         'batch_size': batch_size,
         'num_batches': num_batches,
@@ -84,8 +88,8 @@ def test_consumer_sets_model_mode_per_batch():
         # Second batch
         b2 = consumer.get_batch('train', device='cpu')
         assert b2['_model_mode'] == 'sequence_scorer'
-        assert b2['x'].shape == (2, 4)
-        assert b2['y'].shape == (2, 4)
+        # For sequence_scorer mode, x/y are not present; keys are input_ids/targets
+        assert set(b2.keys()) == {'input_ids', 'targets', '_model_mode'}
 
         # Third batch
         b3 = consumer.get_batch('train', device='cpu')
