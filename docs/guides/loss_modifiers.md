@@ -567,6 +567,24 @@ python train.py \
   --mask_ratio_weight_max=5.0
 ```
 
+## Implementation Notes
+
+These quick references capture the original scratchpad guidance that informed the
+current modifier implementations:
+
+- **Entropy Modifier**: High entropy in the wrong-answer distribution is a good
+  signal (uniform uncertainty → rich gradients); low entropy means the model is
+  confidently wrong, so we up-weight those samples. Always mask to the relevant
+  positions before averaging entropies.
+- **Target Smoothing**: Label smoothing converts each target token into a
+  probability distribution. Exclude special tokens or padding from smoothing to
+  avoid leaking probability mass into sentinel IDs.
+- **Mask-Ratio Weighting**: Weights are inversely proportional to the square
+  root of the valid-token ratio by default (`1 / sqrt(mask_ratio)`) so that
+  heavily masked sequences still contribute meaningful gradients without
+  exploding loss values. Clamp the weights to a sensible range before applying
+  them to the per-sequence losses.
+
 ## References
 
 - [Label Smoothing Paper](https://arxiv.org/abs/1512.00567)
