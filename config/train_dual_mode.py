@@ -7,7 +7,7 @@ scoring modes at runtime, based on batch metadata.
 
 # Dataset configuration
 dataset = 'dual_mode'
-batch_size = 64
+batch_size = 16
 block_size = 256
 target_size = 256
 
@@ -35,8 +35,8 @@ attention_type = 'bidirectional'  # Required for both modes
 position_encoding = 'absolute'
 
 # Sequence scorer configuration
-cls_token_id = None  # Will be set from vocabulary (base_vocab_size + 2)
-mlm_checkpoint_path = 'out-char-diffusion/ckpt.pt'  # Path to MLM model for unmasking
+cls_token_id = None  # CLS token for sequence scoring
+mlm_checkpoint_path = 'out-char-diffusion/1.69_MLM_8500.pt'  # Path to MLM model for unmasking
 
 # Char diffusion (LANGUAGE_MODEL) configuration
 mask_probability = 0.15
@@ -67,7 +67,7 @@ dtype = 'bfloat16'
 compile = False
 
 # Gradient accumulation
-gradient_accumulation_steps = 1
+gradient_accumulation_steps = 4
 
 # Output
 out_dir = 'out/dual_mode'
