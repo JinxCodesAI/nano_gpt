@@ -78,9 +78,8 @@ class Evaluator:
         out = {}
         self.model.eval()
 
-        # Determine model mode (DDP-safe)
+        # DDP-safe direct handle
         raw_model = self.model.module if hasattr(self.model, 'module') else self.model
-        is_sequence_scorer = raw_model.get_mode() == ModelMode.SEQUENCE_SCORER
 
 
         # Temporarily disable loss modifiers during evaluation to get comparable baseline metrics
@@ -94,194 +93,135 @@ class Evaluator:
 
 
             for split in splits:
-                # For non-sequence scorer or for train split: original behavior
-                if (not is_sequence_scorer) or (split != 'val'):
-                    losses = torch.zeros(self.eval_iters)
-                    # Validation-only accumulators for extra console stats
-                    val_tokens_total = 0
-                    val_masked_total = 0
-                    critic_correct_total = 0
-                    critic_sum_pred_t0 = 0.0
-                    critic_sum_pred_t1 = 0.0
-                    critic_cnt_t0 = 0
-                    critic_cnt_t1 = 0
-                    # For percentiles (store samples; memory OK at eval scale)
-                    critic_pred_t0_list = []
-                    critic_pred_t1_list = []
+                # Unified evaluation: switch mode per-batch and compute loss
+                losses = torch.zeros(self.eval_iters)
+                # Validation-only accumulators for LM critic stats
+                val_tokens_total = 0
+                val_masked_total = 0
+                critic_correct_total = 0
+                critic_sum_pred_t0 = 0.0
+                critic_sum_pred_t1 = 0.0
+                critic_cnt_t0 = 0
+                critic_cnt_t1 = 0
+                critic_pred_t0_list = []
+                critic_pred_t1_list = []
 
-                    for k in range(self.eval_iters):
-                        batch = self.consumer.get_batch(split, self.device)
-                        X, Y = unpack_batch(batch)
-                        with self.ctx:
-                            logits, loss = self.model(X, Y, loss_modifiers=self.loss_modifier_pipeline)
-                        # Apply blended critic scheme for LANGUAGE_MODEL with critic enabled
+                for k in range(self.eval_iters):
+                    batch = self.consumer.get_batch(split, self.device)
+
+                    # Switch model mode based on batch metadata (same policy as training)
+                    if '_model_mode' in batch:
+                        mode_str = batch['_model_mode']
+                        if mode_str == 'language_model' or mode_str == ModelMode.LANGUAGE_MODEL:
+                            raw_model.set_mode(ModelMode.LANGUAGE_MODEL)
+                        elif mode_str == 'sequence_scorer' or mode_str == ModelMode.SEQUENCE_SCORER:
+                            raw_model.set_mode(ModelMode.SEQUENCE_SCORER)
+                        elif isinstance(mode_str, ModelMode):
+                            raw_model.set_mode(mode_str)
+
+                    X, Y = unpack_batch(batch)
+                    with self.ctx:
+                        logits, loss = self.model(X, Y, loss_modifiers=self.loss_modifier_pipeline)
+
+                    # If LM with critic enabled, deblend alpha for reporting
+                    alpha_eff = 0.0
+                    has_critic = False
+                    try:
+                        if raw_model.get_mode() == ModelMode.LANGUAGE_MODEL \
+                           and getattr(raw_model.config, 'add_critic_head', False):
+                            has_critic = True
+                            alpha_eff = float(raw_model._effective_critic_alpha())
+                    except Exception:
                         alpha_eff = 0.0
-                        has_critic = False
-                        try:
-                            if raw_model.get_mode() == ModelMode.LANGUAGE_MODEL \
-                               and getattr(raw_model.config, 'add_critic_head', False):
-                                has_critic = True
-                                alpha_eff = float(raw_model._effective_critic_alpha())
-                        except Exception:
-                            alpha_eff = 0.0
-                        val = float(loss.item())
-                        if alpha_eff > 0.0:
-                            val = val / (1.0 + alpha_eff)
-                        losses[k] = val
+                    val = float(loss.item())
+                    if alpha_eff > 0.0:
+                        val = val / (1.0 + alpha_eff)
+                    losses[k] = val
 
-                        # Collect validation-only stats (do not log for train split)
-                        if split == 'val':
-                            val_tokens_total += int(Y.numel())
-                            ignore_index = int(getattr(raw_model.config, 'ignore_index', -100))
-                            # For display, keep "masked_total" as supervised positions (Y != ignore_index)
-                            supervised_mask = (Y != ignore_index)
-                            val_masked_total += int(supervised_mask.sum().item())
+                    # Validation-only stats for LM batches
+                    if split == 'val' and raw_model.get_mode() == ModelMode.LANGUAGE_MODEL:
+                        val_tokens_total += int(Y.numel())
+                        ignore_index = int(getattr(raw_model.config, 'ignore_index', -100))
+                        supervised_mask = (Y != ignore_index)
+                        val_masked_total += int(supervised_mask.sum().item())
 
-                            if has_critic:
-                                # Ensure mask token available
-                                if getattr(raw_model.config, 'mask_token_id', None) is None:
-                                    raise RuntimeError("Evaluator: mask_token_id is required for critic stats")
-                                # Build critic artifacts using the same helper as training/model
-                                artifacts = build_critic_artifacts_from_logits(
-                                    idx=X,
-                                    logits=logits,
-                                    targets=Y,
-                                    mask_token_id=int(raw_model.config.mask_token_id),
-                                    ignore_index=int(getattr(raw_model.config, 'ignore_index', -100)),
-                                    pad_token_id=getattr(raw_model.config, 'pad_token_id', None),
-                                    scope=getattr(raw_model.config, 'critic_target_scope', 'masked_and_ignore'),
-                                )
-                                pred_tokens = artifacts['pred_tokens']
-                                critic_input = artifacts['critic_input']
-                                critic_target = artifacts['critic_target']
-                                critic_valid = artifacts['critic_valid']
-
-                                # Correct predictions among masked positions only (display metric)
-                                masked_positions = (X == int(raw_model.config.mask_token_id))
-                                critic_correct_total += int((pred_tokens[masked_positions] == Y[masked_positions]).sum().item())
-
-                                # Compute critic logits for stats
-                                critic_logits = raw_model.critic_scores(critic_input)
-
-                                # Sigmoid probabilities
-                                critic_prob = torch.sigmoid(critic_logits)
-                                t0_mask = critic_valid & (critic_target == 0)
-                                t1_mask = critic_valid & (critic_target == 1)
-                                if t0_mask.any():
-                                    vals0 = critic_prob[t0_mask]
-                                    critic_sum_pred_t0 += float(vals0.sum().item())
-                                    critic_cnt_t0 += int(t0_mask.sum().item())
-                                    critic_pred_t0_list.append(vals0.detach().float().cpu())
-                                if t1_mask.any():
-                                    vals1 = critic_prob[t1_mask]
-                                    critic_sum_pred_t1 += float(vals1.sum().item())
-                                    critic_cnt_t1 += int(t1_mask.sum().item())
-                                    critic_pred_t1_list.append(vals1.detach().float().cpu())
-
-                    out[split] = float(losses.mean().item())
-
-                    # Attach validation-only console stats
-                    if split == 'val':
-                        out['val/tokens_total'] = int(val_tokens_total)
-                        out['val/masked_total'] = int(val_masked_total)
                         if has_critic:
-                            out['val/critic_correct_total'] = int(critic_correct_total)
-                            out['val/critic_target_zeros'] = int(critic_cnt_t0)
-                            out['val/critic_target_ones'] = int(critic_cnt_t1)
-                            if critic_cnt_t0 > 0:
-                                out['val/critic_pred_mean_for_target0'] = float(critic_sum_pred_t0 / max(critic_cnt_t0, 1))
-                                # percentiles for target 0
-                                try:
-                                    import torch as _t
-                                    preds0 = _t.cat(critic_pred_t0_list, dim=0).view(-1)
-                                    out['val/critic_pred_p10_for_target0'] = float(_t.quantile(preds0, _t.tensor(0.1)).item())
-                                    out['val/critic_pred_p90_for_target0'] = float(_t.quantile(preds0, _t.tensor(0.9)).item())
-                                except Exception:
-                                    try:
-                                        preds0 = _t.cat(critic_pred_t0_list, dim=0).view(-1)
-                                        sorted0, _ = _t.sort(preds0)
-                                        n0 = sorted0.numel()
-                                        i10 = max(int(0.1 * (n0 - 1)), 0)
-                                        i90 = max(int(0.9 * (n0 - 1)), 0)
-                                        out['val/critic_pred_p10_for_target0'] = float(sorted0[i10].item())
-                                        out['val/critic_pred_p90_for_target0'] = float(sorted0[i90].item())
-                                    except Exception:
-                                        pass
-                            if critic_cnt_t1 > 0:
-                                out['val/critic_pred_mean_for_target1'] = float(critic_sum_pred_t1 / max(critic_cnt_t1, 1))
-                                # percentiles for target 1
-                                try:
-                                    import torch as _t
-                                    preds1 = _t.cat(critic_pred_t1_list, dim=0).view(-1)
-                                    out['val/critic_pred_p10_for_target1'] = float(_t.quantile(preds1, _t.tensor(0.1)).item())
-                                    out['val/critic_pred_p90_for_target1'] = float(_t.quantile(preds1, _t.tensor(0.9)).item())
-                                except Exception:
-                                    try:
-                                        preds1 = _t.cat(critic_pred_t1_list, dim=0).view(-1)
-                                        sorted1, _ = _t.sort(preds1)
-                                        n1 = sorted1.numel()
-                                        j10 = max(int(0.1 * (n1 - 1)), 0)
-                                        j90 = max(int(0.9 * (n1 - 1)), 0)
-                                        out['val/critic_pred_p10_for_target1'] = float(sorted1[j10].item())
-                                        out['val/critic_pred_p90_for_target1'] = float(sorted1[j90].item())
-                                    except Exception:
-                                        pass
-                else:
-                    # Sequence scorer, validation split: two-stage evaluation
-                    nonzero_losses = []
-                    zero_preds = []
-                    zeros_collected = 0
+                            if getattr(raw_model.config, 'mask_token_id', None) is None:
+                                raise RuntimeError("Evaluator: mask_token_id is required for critic stats")
+                            artifacts = build_critic_artifacts_from_logits(
+                                idx=X,
+                                logits=logits,
+                                targets=Y,
+                                mask_token_id=int(raw_model.config.mask_token_id),
+                                ignore_index=int(getattr(raw_model.config, 'ignore_index', -100)),
+                                pad_token_id=getattr(raw_model.config, 'pad_token_id', None),
+                                scope=getattr(raw_model.config, 'critic_target_scope', 'masked_and_ignore'),
+                            )
+                            pred_tokens = artifacts['pred_tokens']
+                            critic_input = artifacts['critic_input']
+                            critic_target = artifacts['critic_target']
+                            critic_valid = artifacts['critic_valid']
+                            masked_positions = (X == int(raw_model.config.mask_token_id))
+                            critic_correct_total += int((pred_tokens[masked_positions] == Y[masked_positions]).sum().item())
+                            critic_logits = raw_model.critic_scores(critic_input)
+                            critic_prob = torch.sigmoid(critic_logits)
+                            t0_mask = critic_valid & (critic_target == 0)
+                            t1_mask = critic_valid & (critic_target == 1)
+                            if t0_mask.any():
+                                vals0 = critic_prob[t0_mask]
+                                critic_sum_pred_t0 += float(vals0.sum().item())
+                                critic_cnt_t0 += int(t0_mask.sum().item())
+                                critic_pred_t0_list.append(vals0.detach().float().cpu())
+                            if t1_mask.any():
+                                vals1 = critic_prob[t1_mask]
+                                critic_sum_pred_t1 += float(vals1.sum().item())
+                                critic_cnt_t1 += int(t1_mask.sum().item())
+                                critic_pred_t1_list.append(vals1.detach().float().cpu())
 
-                    # First pass: fixed eval_iters window (for val loss comparability)
-                    for k in range(self.eval_iters):
-                        batch = self.consumer.get_batch(split, self.device)
-                        X, Y = unpack_batch(batch)
-                        mask_nonzero = (Y > 0)
-                        mask_zero = (Y == 0)
-                        if mask_nonzero.any():
-                            Xnz = X[mask_nonzero]
-                            Ynz = Y[mask_nonzero]
-                            with self.ctx:
-                                _, loss_nz = self.model(Xnz, Ynz, attention_mask=None, loss_modifiers=self.loss_modifier_pipeline)
-                            nonzero_losses.append(float(loss_nz.item()))
-                        if mask_zero.any():
-                            Xz = X[mask_zero]
-                            with self.ctx:
-                                logits_z, _ = self.model(Xz, targets=None, attention_mask=None, loss_modifiers=self.loss_modifier_pipeline)
-                            zero_preds.append(logits_z.detach().float().cpu())
-                            zeros_collected += int(mask_zero.sum().item())
+                out[split] = float(losses.mean().item())
 
-                    # Optional top-up: draw extra val batches only to stabilize zero-only stats
-                    if (self.min_zero_for_stats > 0 and zeros_collected < self.min_zero_for_stats
-                        and self.max_extra_batches_for_zero_stats > 0):
-                        extra = 0
-                        while extra < self.max_extra_batches_for_zero_stats and zeros_collected < self.min_zero_for_stats:
-                            batch = self.consumer.get_batch(split, self.device)
-                            X, Y = unpack_batch(batch)
-                            mask_zero = (Y == 0)
-                            if mask_zero.any():
-                                Xz = X[mask_zero]
-                                with self.ctx:
-                                    logits_z, _ = self.model(Xz, targets=None, loss_modifiers=self.loss_modifier_pipeline)
-                                zero_preds.append(logits_z.detach().float().cpu())
-                                zeros_collected += int(mask_zero.sum().item())
-                            extra += 1
-
-                    if len(nonzero_losses) > 0:
-                        out['val'] = float(sum(nonzero_losses) / len(nonzero_losses))
-                    else:
-                        out['val'] = float('nan')
-
-                    if len(zero_preds) > 0:
-                        preds = torch.cat(zero_preds, dim=0).view(-1)
-                        out['val/zero_mean'] = float(preds.mean().item())
+                if split == 'val' and (critic_cnt_t0 + critic_cnt_t1) > 0:
+                    out['val/tokens_total'] = int(val_tokens_total)
+                    out['val/masked_total'] = int(val_masked_total)
+                    out['val/critic_correct_total'] = int(critic_correct_total)
+                    out['val/critic_target_zeros'] = int(critic_cnt_t0)
+                    out['val/critic_target_ones'] = int(critic_cnt_t1)
+                    if critic_cnt_t0 > 0:
+                        out['val/critic_pred_mean_for_target0'] = float(critic_sum_pred_t0 / max(critic_cnt_t0, 1))
                         try:
-                            out['val/zero_p90'] = float(torch.quantile(preds, torch.tensor(0.9)).item())
+                            import torch as _t
+                            preds0 = _t.cat(critic_pred_t0_list, dim=0).view(-1)
+                            out['val/critic_pred_p10_for_target0'] = float(_t.quantile(preds0, _t.tensor(0.1)).item())
+                            out['val/critic_pred_p90_for_target0'] = float(_t.quantile(preds0, _t.tensor(0.9)).item())
                         except Exception:
-                            sorted_preds, _ = torch.sort(preds)
-                            n = sorted_preds.numel()
-                            idx = max(int(0.9 * (n - 1)), 0)
-                            out['val/zero_p90'] = float(sorted_preds[idx].item())
+                            try:
+                                preds0 = _t.cat(critic_pred_t0_list, dim=0).view(-1)
+                                sorted0, _ = _t.sort(preds0)
+                                n0 = sorted0.numel()
+                                i10 = max(int(0.1 * (n0 - 1)), 0)
+                                i90 = max(int(0.9 * (n0 - 1)), 0)
+                                out['val/critic_pred_p10_for_target0'] = float(sorted0[i10].item())
+                                out['val/critic_pred_p90_for_target0'] = float(sorted0[i90].item())
+                            except Exception:
+                                pass
+                    if critic_cnt_t1 > 0:
+                        out['val/critic_pred_mean_for_target1'] = float(critic_sum_pred_t1 / max(critic_cnt_t1, 1))
+                        try:
+                            import torch as _t
+                            preds1 = _t.cat(critic_pred_t1_list, dim=0).view(-1)
+                            out['val/critic_pred_p10_for_target1'] = float(_t.quantile(preds1, _t.tensor(0.1)).item())
+                            out['val/critic_pred_p90_for_target1'] = float(_t.quantile(preds1, _t.tensor(0.9)).item())
+                        except Exception:
+                            try:
+                                preds1 = _t.cat(critic_pred_t1_list, dim=0).view(-1)
+                                sorted1, _ = _t.sort(preds1)
+                                n1 = sorted1.numel()
+                                j10 = max(int(0.1 * (n1 - 1)), 0)
+                                j90 = max(int(0.9 * (n1 - 1)), 0)
+                                out['val/critic_pred_p10_for_target1'] = float(sorted1[j10].item())
+                                out['val/critic_pred_p90_for_target1'] = float(sorted1[j90].item())
+                            except Exception:
+                                pass
 
         self.model.train()
         return out
