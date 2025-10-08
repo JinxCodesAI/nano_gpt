@@ -122,24 +122,42 @@ class DataProviderBase:
 
         # collect batches
         batches = [self.sample_batch(split, rng) for _ in range(self.batches_per_file)]
-        # concatenate along batch dimension
-        tensor_keys = [k for k in batches[0].keys() if isinstance(batches[0][k], torch.Tensor)]
+
+        # Collect all unique keys across all batches (handles varying schemas)
+        all_keys = set()
+        for batch in batches:
+            all_keys.update(batch.keys())
+
+        # Separate tensor keys from metadata keys
+        tensor_keys = set()
+        metadata_keys = set()
+        for k in all_keys:
+            # Check if this key contains tensors in any batch
+            is_tensor = any(k in b and isinstance(b[k], torch.Tensor) for b in batches)
+            if is_tensor:
+                tensor_keys.add(k)
+            else:
+                metadata_keys.add(k)
+
+        # Concatenate tensors along batch dimension
+        # Only concatenate batches that have this key
         tensors: Dict[str, torch.Tensor] = {}
         for k in tensor_keys:
-            tensors[k] = torch.cat([b[k] for b in batches], dim=0)
-            
-        # collect non-tensor metadata from batches
+            batches_with_key = [b[k] for b in batches if k in b]
+            if batches_with_key:
+                tensors[k] = torch.cat(batches_with_key, dim=0)
+
+        # Collect non-tensor metadata from batches
         batch_metadata = {}
-        for k in batches[0].keys():
-            if k not in tensor_keys and k not in batch_metadata:
-                # Collect all values for this key across batches
-                values = []
-                for batch in batches:
-                    if k in batch:
-                        if isinstance(batch[k], list):
-                            values.extend(batch[k])
-                        else:
-                            values.append(batch[k])
+        for k in metadata_keys:
+            values = []
+            for batch in batches:
+                if k in batch:
+                    if isinstance(batch[k], list):
+                        values.extend(batch[k])
+                    else:
+                        values.append(batch[k])
+            if values:
                 batch_metadata[k] = values
         metadata = {
             "batch_size": self.batch_size,

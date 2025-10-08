@@ -57,6 +57,19 @@ class DualModeProvider(DataProviderBase):
             print(f"  mode_distribution: {self.mode_distribution}")
             print(f"  alternation_frequency: {self.alternation_frequency}")
             print(f"  vocab_size: {self.vocab_size}")
+            print(f"  Special tokens:")
+            print(f"    MASK: {self.mask_token_id}")
+            print(f"    PAD:  {self.pad_token_id}")
+            print(f"    CLS:  {self.cls_token_id}")
+            print(f"  Special tokens:")
+            print(f"    MASK: {self.mask_token_id}")
+            print(f"    PAD:  {self.pad_token_id}")
+            print(f"    CLS:  {self.cls_token_id}")
+            print(f"  Batch normalization: all batches use (x, y) keys")
+            print(f"  mask_token_id: {self.mask_token_id}")
+            print(f"  pad_token_id: {self.pad_token_id}")
+            print(f"  cls_token_id: {self.cls_token_id}")
+            print(f"  Special tokens: MASK={self.mask_token_id}, PAD={self.pad_token_id}, CLS={self.cls_token_id}")
 
     def _init_language_model_provider(self, cfg: Dict) -> None:
         """Initialize char_diffusion provider for LANGUAGE_MODEL batches."""
@@ -134,11 +147,12 @@ class DualModeProvider(DataProviderBase):
             "mode_distribution": self.mode_distribution,
             "alternation_frequency": self.alternation_frequency,
             "batch_schema": [
-                # Schema is flexible - batches can have different fields based on mode
-                # LANGUAGE_MODEL batches: x, y (both int64, shape [block_size])
-                # SEQUENCE_SCORER batches: input_ids (int64, [block_size]), targets (float32, [])
+                # Mixed schema - batches have different fields based on mode
+                # LANGUAGE_MODEL batches: x, y, attention_mask
                 {"name": "x", "dtype": "int64", "shape": [self.block_size], "role": "input", "mode": "language_model"},
                 {"name": "y", "dtype": "int64", "shape": [self.target_size or self.block_size], "role": "target", "mode": "language_model"},
+                {"name": "attention_mask", "dtype": "int64", "shape": [self.block_size], "role": "mask", "mode": "language_model"},
+                # SEQUENCE_SCORER batches: input_ids, targets
                 {"name": "input_ids", "dtype": "int64", "shape": [self.block_size], "role": "input", "mode": "sequence_scorer"},
                 {"name": "targets", "dtype": "float32", "shape": [], "role": "target", "mode": "sequence_scorer"},
             ],
@@ -170,30 +184,25 @@ class DualModeProvider(DataProviderBase):
     def sample_batch(self, split: str, rng: torch.Generator) -> Dict[str, Any]:
         """
         Sample one batch, alternating between LANGUAGE_MODEL and SEQUENCE_SCORER modes.
-        
+
         Returns a dict with tensors and metadata including 'model_mode'.
+        Batch keys vary by mode (x/y for language_model, input_ids/targets for sequence_scorer).
         """
         # Determine mode for this batch
         mode = self._determine_mode_for_batch(self._batch_counter, rng)
         self._batch_counter += 1
-        
+
         # Generate batch from appropriate provider
         if mode == 'language_model':
-            # Get batch from char_diffusion provider
+            # Get batch from char_diffusion provider (keys: x, y, attention_mask)
             batch = self.lm_provider.sample_batch(split, rng)
-            # Ensure batch has x, y keys (char_diffusion format)
-            if 'x' not in batch or 'y' not in batch:
-                raise ValueError("CharDiffusionProvider batch must have 'x' and 'y' keys")
         else:
-            # Get batch from sequence_scorer provider
+            # Get batch from sequence_scorer provider (keys: input_ids, targets)
             batch = self.ss_provider.sample_batch(split, rng)
-            # Ensure batch has input_ids, targets keys (sequence_scorer format)
-            if 'input_ids' not in batch or 'targets' not in batch:
-                raise ValueError("SequenceScorerProvider batch must have 'input_ids' and 'targets' keys")
-        
+
         # Add model_mode metadata to batch
         batch['model_mode'] = mode
-        
+
         return batch
 
 
