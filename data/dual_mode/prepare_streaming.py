@@ -156,14 +156,8 @@ class DualModeProvider(DataProviderBase):
             "mode_distribution": self.mode_distribution,
             "alternation_frequency": self.alternation_frequency,
             "batch_schema": [
-                # Mixed schema - batches have different fields based on mode
-                # LANGUAGE_MODEL batches: x, y, attention_mask
-                {"name": "x", "dtype": "int64", "shape": [self.block_size], "role": "input", "mode": "language_model"},
-                {"name": "y", "dtype": "int64", "shape": [self.target_size or self.block_size], "role": "target", "mode": "language_model"},
-                {"name": "attention_mask", "dtype": "int64", "shape": [self.block_size], "role": "mask", "mode": "language_model"},
-                # SEQUENCE_SCORER batches: input_ids, targets
-                {"name": "input_ids", "dtype": "int64", "shape": [self.block_size], "role": "input", "mode": "sequence_scorer"},
-                {"name": "targets", "dtype": "float32", "shape": [], "role": "target", "mode": "sequence_scorer"},
+                {"name": "input", "dtype": "int64", "shape": [self.block_size], "role": "input"},
+                {"name": "target", "dtype": "variant", "shape": "[self.block_size] or []", "role": "target"},
             ],
         }
     
@@ -225,12 +219,26 @@ class DualModeProvider(DataProviderBase):
         per_seed = (self.seed * 1000003) ^ (hash(split) & 0xFFFFFFFF) ^ seq
         rng.manual_seed(per_seed)
 
+        def _normalize(b: Dict[str, Any]) -> tuple[Dict[str, torch.Tensor], Dict]:
+            # Map to unified {'input','target'} naming
+            if 'input' in b and 'target' in b:
+                inp, tgt = b['input'], b['target']
+            elif 'x' in b and 'y' in b:
+                inp, tgt = b['x'], b['y']
+            elif 'input_ids' in b and 'targets' in b:
+                inp, tgt = b['input_ids'], b['targets']
+            else:
+                raise ValueError("DualModeProvider.sample_batch must return (input,target) or (x,y) or (input_ids,targets)")
+            if not (isinstance(inp, torch.Tensor) and isinstance(tgt, torch.Tensor)):
+                raise TypeError("Both input and target must be tensors")
+            tensors = {'input': inp, 'target': tgt}
+            meta = {k: v for k, v in b.items() if not isinstance(v, torch.Tensor)}
+            return tensors, meta
+
         batches_out = []
         for _ in range(self.batches_per_file):
             b = self.sample_batch(split, rng)
-            tensors = {k: v for k, v in b.items() if isinstance(v, torch.Tensor)}
-            meta = {k: v for k, v in b.items() if not isinstance(v, torch.Tensor)}
-            # Ensure mode is present in per-batch metadata
+            tensors, meta = _normalize(b)
             if 'model_mode' not in meta:
                 raise ValueError("DualModeProvider.sample_batch must set 'model_mode'")
             batches_out.append({"tensors": tensors, "metadata": meta})
