@@ -333,15 +333,25 @@ class DatasetConsumer:
             batch_tensors[k] = _to_device(batch_tensors[k])
 
         # Add batch-level metadata (e.g., model_mode) if available
-        # Extract metadata for the current batch slice
+        # Extract metadata for the current batch index (not sample index)
         if metadata:
-            # Check if model_mode is in metadata (list of values per batch)
             if 'model_mode' in metadata:
                 model_modes = metadata['model_mode']
-                if isinstance(model_modes, list) and len(model_modes) > start_idx:
-                    # Get the model_mode for the first sample in this batch
-                    # (all samples in a batch should have the same mode)
-                    batch_tensors['_model_mode'] = model_modes[start_idx]
+                # Enforce per-batch model_mode list with strict validation
+                if not isinstance(model_modes, list):
+                    raise TypeError("metadata['model_mode'] must be a list of length num_batches")
+                num_batches = int(metadata.get('num_batches', -1))
+                if num_batches <= 0 or len(model_modes) != num_batches:
+                    raise ValueError(
+                        f"Invalid metadata['model_mode']: expected list length == num_batches ({num_batches}), got {len(model_modes)}"
+                    )
+                # current_batch_idx was incremented above; use previous index for this batch
+                batch_idx = max(self._current_batch_idx[split] - 1, 0)
+                if batch_idx >= num_batches:
+                    raise IndexError(
+                        f"Batch index out of range: batch_idx={batch_idx}, num_batches={num_batches}"
+                    )
+                batch_tensors['_model_mode'] = model_modes[batch_idx]
 
         return batch_tensors
 
