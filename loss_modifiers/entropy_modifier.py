@@ -192,7 +192,7 @@ class EntropyModifier(BaseLossModifier):
         return entropy_per_token
     
     def supports_mode(self, mode: ModelMode) -> bool:
-        return mode in (ModelMode.LANGUAGE_MODEL, ModelMode.TOKEN_CLASSIFIER)
+        return mode == ModelMode.LANGUAGE_MODEL
 
     def modify_loss(
         self,

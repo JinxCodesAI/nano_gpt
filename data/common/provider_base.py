@@ -52,11 +52,12 @@ class DataProviderBase:
         """Return required metadata dict; must include training_type and batch_schema.
         This method must be implemented by subclasses.
         """
-        raise NotImplementedError
+        raise RuntimeError("Subclasses must implement build_meta() and include required keys.")
 
     def sample_batch(self, split: str, rng: torch.Generator) -> Dict[str, torch.Tensor]:
         """Return a dict of tensors for one batch, each shaped [batch_size, ...]."""
-        raise NotImplementedError
+        raise RuntimeError("Subclasses must implement sample_batch(split, rng) and return tensor dicts shaped [batch_size, ...].")
+
 
     # ---- shared data loading helpers ----
     def _load_input_text(self, filename: str = 'input.txt') -> str:
@@ -115,52 +116,63 @@ class DataProviderBase:
             print(f"Wrote meta to {self.meta_path}")
 
     def produce_one_file(self, split: str, seq: int) -> None:
+        """Write array-of-batches format with strict input/target tensors per batch.
+
+        File layout:
+          {
+            'batches': [ {'tensors': {'input': Tensor, 'target': Tensor}, 'metadata': {...}}, ... ],
+            'metadata': { file-level }
+          }
+        """
         rng = torch.Generator()
-        # derive deterministic seed per split/seq
         per_seed = (self.seed * 1000003) ^ (hash(split) & 0xFFFFFFFF) ^ seq
         rng.manual_seed(per_seed)
 
-        # collect batches
-        batches = [self.sample_batch(split, rng) for _ in range(self.batches_per_file)]
-        # concatenate along batch dimension
-        tensor_keys = [k for k in batches[0].keys() if isinstance(batches[0][k], torch.Tensor)]
-        tensors: Dict[str, torch.Tensor] = {}
-        for k in tensor_keys:
-            tensors[k] = torch.cat([b[k] for b in batches], dim=0)
-            
-        # collect non-tensor metadata from batches
-        batch_metadata = {}
-        for k in batches[0].keys():
-            if k not in tensor_keys and k not in batch_metadata:
-                # Collect all values for this key across batches
-                values = []
-                for batch in batches:
-                    if k in batch:
-                        if isinstance(batch[k], list):
-                            values.extend(batch[k])
-                        else:
-                            values.append(batch[k])
-                batch_metadata[k] = values
-        metadata = {
-            "batch_size": self.batch_size,
-            "num_batches": self.batches_per_file,
-            "file_idx": seq,
-            "split": split,
-            "produced_at": int(time.time() * 1000),
+        def _normalize_to_input_target(b: Dict) -> tuple[Dict[str, torch.Tensor], Dict]:
+            # Map known schemas to unified names
+            if 'input' in b and 'target' in b:
+                inp, tgt = b['input'], b['target']
+            elif 'x' in b and 'y' in b:
+                inp, tgt = b['x'], b['y']
+            elif 'input_ids' in b and 'targets' in b:
+                inp, tgt = b['input_ids'], b['targets']
+            else:
+                raise ValueError("sample_batch must return either (input, target) or (x, y) or (input_ids, targets)")
+            if not (isinstance(inp, torch.Tensor) and isinstance(tgt, torch.Tensor)):
+                raise TypeError("Both input and target must be tensors")
+            if inp.shape[0] != self.batch_size or tgt.shape[0] != self.batch_size:
+                raise ValueError(f"Batch tensors must have batch dimension {self.batch_size}, got {inp.shape[0]} and {tgt.shape[0]}")
+            tensors = {'input': inp, 'target': tgt}
+            meta = {k: v for k, v in b.items() if not isinstance(v, torch.Tensor)}
+            return tensors, meta
+
+        batches_out = []
+        for _ in range(self.batches_per_file):
+            b = self.sample_batch(split, rng)
+            tensors, meta = _normalize_to_input_target(b)
+            # Enforce explicit model mode in batch metadata
+            if 'model_mode' not in meta:
+                raise ValueError("sample_batch must include 'model_mode' in metadata (e.g., 'language_model' or 'sequence_scorer')")
+            batches_out.append({'tensors': tensors, 'metadata': meta})
+
+        file_meta = {
+            'batch_size': self.batch_size,
+            'num_batches': self.batches_per_file,
+            'file_idx': seq,
+            'split': split,
+            'produced_at': int(time.time() * 1000),
         }
-        # Add batch-specific metadata
-        metadata.update(batch_metadata)
-        # write atomic
-        d = self.train_dir if split == "train" else self.val_dir
-        ts = metadata["produced_at"]
+
+        d = self.train_dir if split == 'train' else self.val_dir
+        ts = file_meta['produced_at']
         tmp_name = f".tmp-{ts}-{seq:06d}.pt"
         final_name = f"{ts}-{seq:06d}-{self.batches_per_file}.pt"
         tmp_path = os.path.join(d, tmp_name)
         final_path = os.path.join(d, final_name)
-        torch.save({"tensors": tensors, "metadata": metadata}, tmp_path)
+        torch.save({'batches': batches_out, 'metadata': file_meta}, tmp_path)
         os.replace(tmp_path, final_path)
         if self.verbose:
-            print(f"[provider] produced: {final_path}")
+            print(f"[provider] produced (array-of-batches): {final_path}")
 
     def run(self, splits: Iterable[str] = ("train", "val")) -> None:
         self.ensure_dirs()

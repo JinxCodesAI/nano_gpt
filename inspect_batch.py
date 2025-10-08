@@ -10,6 +10,7 @@ import os
 import pickle
 import torch
 from pathlib import Path
+from core.batch import Batch, unpack_batch
 
 
 def load_meta(data_dir):
@@ -83,27 +84,41 @@ def analyze_batch_file(dataset_name, batch_file_path):
     try:
         batch_data = torch.load(full_batch_path, map_location='cpu')
         print("BATCH FILE STRUCTURE:")
-        for key, value in batch_data.items():
-            if isinstance(value, torch.Tensor):
-                print(f"  {key}: {value.dtype} {list(value.shape)}")
-            elif isinstance(value, dict):
-                print(f"  {key}: dict with keys {list(value.keys())}")
-            else:
-                print(f"  {key}: {type(value)} = {value}")
+        if isinstance(batch_data, dict) and 'batches' in batch_data:
+            print(f"  batches: list[{len(batch_data['batches'])}] of per-batch entries")
+            print(f"  metadata: dict with keys {list(batch_data.get('metadata', {}).keys())}")
+        else:
+            for key, value in batch_data.items():
+                if isinstance(value, torch.Tensor):
+                    print(f"  {key}: {value.dtype} {list(value.shape)}")
+                elif isinstance(value, dict):
+                    print(f"  {key}: dict with keys {list(value.keys())}")
+                else:
+                    print(f"  {key}: {type(value)} = {value}")
         print()
     except Exception as e:
         print(f"Error loading batch file: {e}")
         return
-    
-    # Extract tensors (check both direct and nested structure)
-    if 'tensors' in batch_data:
-        tensors = batch_data['tensors']
-        x_tensor = tensors.get('x', None)
-        y_tensor = tensors.get('y', None)
+
+    # Extract tensors (handle new array-of-batches format first)
+    if isinstance(batch_data, dict) and 'batches' in batch_data:
+        batches = batch_data.get('batches', [])
+        if not batches:
+            print("Error: 'batches' list is empty")
+            return
+        entry = batches[0]
+        if not isinstance(entry, dict) or 'tensors' not in entry:
+            print("Error: batch entry missing 'tensors'")
+            return
+        x_tensor, y_tensor = unpack_batch(entry['tensors'])
+        print(f"Using batch entry 0/{len(batches)-1}")
     else:
-        x_tensor = batch_data.get('x', None)
-        y_tensor = batch_data.get('y', None)
-    
+        # Legacy single-entry files
+        if 'tensors' in batch_data:
+            x_tensor, y_tensor = unpack_batch(batch_data['tensors'])
+        else:
+            x_tensor, y_tensor = unpack_batch(batch_data)
+
     if x_tensor is None or y_tensor is None:
         print("Error: Could not find 'x' or 'y' tensors in batch file")
         print("Available keys:", list(batch_data.keys()))
@@ -118,72 +133,97 @@ def analyze_batch_file(dataset_name, batch_file_path):
     print()
     
     # Analyze a few examples
-    num_examples = min(100, 100)
+    num_examples = min(100, batch_size)
     print(f"EXAMPLE ROWS (first {num_examples}):")
     print()
-    
-    for i in range(num_examples):
-        x_tokens = x_tensor[i].tolist()
-        y_tokens = y_tensor[i].tolist()
-        
-        # Decode tokens
-        x_decoded = decode_tokens(x_tokens, itos)
-        
-        # For y tokens, show original tokens for masked positions, ignore_index elsewhere
-        y_decoded_parts = []
-        masked_positions = []
-        for j, (x_tok, y_tok) in enumerate(zip(x_tokens, y_tokens)):
-            if y_tok != ignore_index:
-                y_decoded_parts.append(itos.get(y_tok, f'<UNK:{y_tok}>'))
-                masked_positions.append(j)
-            else:
-                y_decoded_parts.append('_')
-        
-        print(f"Example {i+1}:")
-        print(f"  Input (x):  {repr(x_decoded)}")
-        print(f"  Target (y): {''.join(y_decoded_parts)}")
-        print(f"  Masked positions: {masked_positions}")
-        
-        # Show token-by-token breakdown for first few positions
-        print("  Token breakdown (first 20 positions):")
-        for j in range(min(20, seq_len)):
-            x_tok = x_tokens[j]
-            y_tok = y_tokens[j]
-            x_char = itos.get(x_tok, f'<UNK:{x_tok}>')
-            y_char = itos.get(y_tok, f'<UNK:{y_tok}>') if y_tok != ignore_index else '<IGN>'
-            mask_indicator = '*' if y_tok != ignore_index else ' '
-            print(f"    {j:2d}: x={x_tok:3d}('{x_char}') y={y_tok:4d}('{y_char}') {mask_indicator}")
-        print()
-    
-    # Statistics
-    total_tokens = batch_size * seq_len
-    masked_tokens = (y_tensor != ignore_index).sum().item()
-    mask_percentage = (masked_tokens / total_tokens) * 100
-    
-    print("STATISTICS:")
-    print(f"  Total tokens: {total_tokens}")
-    print(f"  Masked tokens: {masked_tokens}")
-    print(f"  Mask percentage: {mask_percentage:.2f}%")
-    
-    # Analyze mask token usage in input
-    if mask_token_id is not None:
-        mask_token_count = (x_tensor == mask_token_id).sum().item()
-        mask_token_percentage = (mask_token_count / masked_tokens) * 100 if masked_tokens > 0 else 0
-        print(f"  [MASK] tokens in input: {mask_token_count} ({mask_token_percentage:.1f}% of masked positions)")
-    
-    # Check for vocabulary coverage
-    unique_x_tokens = set(x_tensor.flatten().tolist())
-    unique_y_tokens = set(y_tensor[y_tensor != ignore_index].tolist())
-    print(f"  Unique tokens in x: {len(unique_x_tokens)}")
-    print(f"  Unique tokens in y: {len(unique_y_tokens)}")
-    
-    out_of_vocab_x = [tok for tok in unique_x_tokens if tok not in itos]
-    out_of_vocab_y = [tok for tok in unique_y_tokens if tok not in itos]
-    
-    if out_of_vocab_x:
-        print(f"  WARNING: Out-of-vocab tokens in x: {out_of_vocab_x}")
-    if out_of_vocab_y:
-        print(f"  WARNING: Out-of-vocab tokens in y: {out_of_vocab_y}")
+
+    is_lm = (y_tensor.dim() == 2 and y_tensor.shape[1] == seq_len)
+
+    if is_lm:
+        # LANGUAGE_MODEL view: per-token targets with ignore_index
+        for i in range(num_examples):
+            x_tokens = x_tensor[i].tolist()
+            y_tokens = y_tensor[i].tolist()
+
+            x_decoded = decode_tokens(x_tokens, itos)
+
+            y_decoded_parts = []
+            masked_positions = []
+            for j, (x_tok, y_tok) in enumerate(zip(x_tokens, y_tokens)):
+                if y_tok != ignore_index:
+                    y_decoded_parts.append(itos.get(y_tok, f'<UNK:{y_tok}>'))
+                    masked_positions.append(j)
+                else:
+                    y_decoded_parts.append('_')
+
+            print(f"Example {i+1}:")
+            print(f"  Input (x):  {repr(x_decoded)}")
+            print(f"  Target (y): {''.join(y_decoded_parts)}")
+            print(f"  Masked positions: {masked_positions}")
+
+            print("  Token breakdown (first 20 positions):")
+            for j in range(min(20, seq_len)):
+                x_tok = x_tokens[j]
+                y_tok = y_tokens[j]
+                x_char = itos.get(x_tok, f'<UNK:{x_tok}>')
+                y_char = itos.get(y_tok, f'<UNK:{y_tok}>') if y_tok != ignore_index else '<IGN>'
+                mask_indicator = '*' if y_tok != ignore_index else ' '
+                print(f"    {j:2d}: x={x_tok:3d}('{x_char}') y={y_tok:4d}('{y_char}') {mask_indicator}")
+            print()
+
+        # Statistics
+        total_tokens = batch_size * seq_len
+        masked_tokens = (y_tensor != ignore_index).sum().item()
+        mask_percentage = (masked_tokens / max(total_tokens, 1)) * 100
+
+        print("STATISTICS:")
+        print(f"  Total tokens: {total_tokens}")
+        print(f"  Masked tokens: {masked_tokens}")
+        print(f"  Mask percentage: {mask_percentage:.2f}%")
+
+        # Analyze mask token usage in input
+        if mask_token_id is not None:
+            mask_token_count = (x_tensor == mask_token_id).sum().item()
+            mask_token_percentage = (mask_token_count / masked_tokens) * 100 if masked_tokens > 0 else 0
+            print(f"  [MASK] tokens in input: {mask_token_count} ({mask_token_percentage:.1f}% of masked positions)")
+
+        # Check for vocabulary coverage
+        unique_x_tokens = set(x_tensor.flatten().tolist())
+        unique_y_tokens = set(y_tensor[y_tensor != ignore_index].tolist())
+        print(f"  Unique tokens in x: {len(unique_x_tokens)}")
+        print(f"  Unique tokens in y: {len(unique_y_tokens)}")
+
+        out_of_vocab_x = [tok for tok in unique_x_tokens if tok not in itos]
+        out_of_vocab_y = [tok for tok in unique_y_tokens if tok not in itos]
+
+        if out_of_vocab_x:
+            print(f"  WARNING: Out-of-vocab tokens in x: {out_of_vocab_x}")
+        if out_of_vocab_y:
+            print(f"  WARNING: Out-of-vocab tokens in y: {out_of_vocab_y}")
+
+    else:
+        # SEQUENCE_SCORER / scalar targets view
+        for i in range(num_examples):
+            x_tokens = x_tensor[i].tolist()
+            x_decoded = decode_tokens(x_tokens, itos)
+            try:
+                y_val = float(y_tensor[i].item())
+            except Exception:
+                y_val = y_tensor[i]
+
+            print(f"Example {i+1}:")
+            print(f"  Input (x):  {repr(x_decoded)}")
+            print(f"  Target (y scalar): {y_val:.6f}" if isinstance(y_val, float) else f"  Target (y): {y_val}")
+            print()
+
+        # Statistics for scalar targets
+        try:
+            y_flat = y_tensor.view(-1).to(torch.float32)
+            print("STATISTICS:")
+            print(f"  Targets min/mean/max: {y_flat.min().item():.6f} / {y_flat.mean().item():.6f} / {y_flat.max().item():.6f}")
+        except Exception:
+            print("STATISTICS:")
+            print(f"  Targets shape: {tuple(y_tensor.shape)}")
 
 
 def main():

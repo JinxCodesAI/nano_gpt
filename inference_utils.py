@@ -39,10 +39,22 @@ def load_model_checkpoint(checkpoint_path: str, device: str = 'cuda', dtype: str
         model_args['attention_type'] = 'causal'
     if 'position_encoding' not in model_args:
         model_args['position_encoding'] = 'absolute'
-    
+
+    # Filter out deprecated config fields (for backward compatibility with old checkpoints)
+    deprecated_fields = {'mode', 'num_token_classes', 'binary_classification'}
+    old_mode = model_args.get('mode', None)
+    filtered_model_args = {k: v for k, v in model_args.items() if k not in deprecated_fields}
+
     # Create model
-    gptconf = GPTConfig(**model_args)
+    gptconf = GPTConfig(**filtered_model_args)
     model = GPT(gptconf)
+
+    # Set mode based on old config if present
+    if old_mode:
+        if old_mode == 'sequence_scorer' or old_mode == ModelMode.SEQUENCE_SCORER:
+            model.set_mode(ModelMode.SEQUENCE_SCORER)
+        elif old_mode == 'language_model' or old_mode == ModelMode.LANGUAGE_MODEL:
+            model.set_mode(ModelMode.LANGUAGE_MODEL)
     
     # Load weights
     state_dict = checkpoint['model']
@@ -50,8 +62,21 @@ def load_model_checkpoint(checkpoint_path: str, device: str = 'cuda', dtype: str
     for k, v in list(state_dict.items()):
         if k.startswith(unwanted_prefix):
             state_dict[k[len(unwanted_prefix):]] = state_dict.pop(k)
-    
-    model.load_state_dict(state_dict)
+
+    # Handle old checkpoints with single head (backward compatibility)
+    has_lm_head = any(k.startswith('lm_head.') for k in state_dict.keys())
+    has_sequence_head = any(k.startswith('sequence_head.') for k in state_dict.keys())
+
+    if not has_lm_head and has_sequence_head:
+        if 'transformer.wte.weight' in state_dict:
+            state_dict['lm_head.weight'] = state_dict['transformer.wte.weight'].clone()
+    elif has_lm_head and not has_sequence_head:
+        n_embd = state_dict['transformer.wte.weight'].shape[1]
+        state_dict['sequence_head.base_predictor.weight'] = torch.randn(1, n_embd) * 0.01
+        state_dict['sequence_head.base_predictor.bias'] = torch.zeros(1)
+        state_dict['sequence_head.log_temperature'] = torch.zeros(1)
+
+    model.load_state_dict(state_dict, strict=False)
     model.eval()
     model.to(device)
     

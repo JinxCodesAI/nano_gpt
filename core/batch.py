@@ -10,13 +10,16 @@ Batch = Dict[str, torch.Tensor]
 
 def unpack_batch(b: Batch) -> Tuple[torch.Tensor, torch.Tensor]:
     """
-    Normalize batch dict to (X, Y).
+    Normalize batch dict to (X, Y) with unified naming first.
 
-    Expects dict with keys {x|input_ids, y|targets}.
+    Accepted keys:
+    - unified: input, target
+    - legacy LM: x, y
+    - legacy SS: input_ids, targets
     """
     if not isinstance(b, dict):
         raise TypeError("Batch must be a dict[str, Tensor]")
-    X = b.get('x', b.get('input_ids'))
-    Y = b.get('y', b.get('targets'))
+    X = b.get('input', b.get('x', b.get('input_ids')))
+    Y = b.get('target', b.get('y', b.get('targets')))
     return X, Y
 

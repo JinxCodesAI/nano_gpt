@@ -95,18 +95,42 @@ class SequenceScoringJudgeWeightModifier(BaseLossModifier):
         if 'model' not in ckpt or 'model_args' not in ckpt:
             raise ValueError("Judge checkpoint must contain 'model' and 'model_args'")
         model_args = dict(ckpt['model_args'])
-        # Enforce SEQUENCE_SCORER
-        mode = ModelMode(model_args.get('mode', 'sequence_scorer'))
-        if mode != ModelMode.SEQUENCE_SCORER:
-            raise ValueError(f"Judge checkpoint mode must be SEQUENCE_SCORER, got {mode}")
+
+        # Check old mode (for validation)
+        old_mode = model_args.get('mode', 'sequence_scorer')
+        if old_mode not in ['sequence_scorer', ModelMode.SEQUENCE_SCORER]:
+            raise ValueError(f"Judge checkpoint mode must be SEQUENCE_SCORER, got {old_mode}")
+
         # Do NOT chain-load judge's original pretrain; we have full weights here
         model_args['init_from_checkpoint'] = None
         # The judge is used only for inference inside the modifier: don't freeze
         model_args['freeze_transformer'] = False
-        gptconf = GPTConfig(**model_args)
+
+        # Filter out deprecated config fields
+        deprecated_fields = {'mode', 'num_token_classes', 'binary_classification'}
+        filtered_model_args = {k: v for k, v in model_args.items() if k not in deprecated_fields}
+
+        gptconf = GPTConfig(**filtered_model_args)
         judge = GPT(gptconf)
+
+        # Set to SEQUENCE_SCORER mode
+        judge.set_mode(ModelMode.SEQUENCE_SCORER)
         state_dict = self._cleanup_state_dict_keys(ckpt['model'])
-        judge.load_state_dict(state_dict)
+
+        # Handle old checkpoints with single head (backward compatibility)
+        has_lm_head = any(k.startswith('lm_head.') for k in state_dict.keys())
+        has_sequence_head = any(k.startswith('sequence_head.') for k in state_dict.keys())
+
+        if not has_lm_head and has_sequence_head:
+            if 'transformer.wte.weight' in state_dict:
+                state_dict['lm_head.weight'] = state_dict['transformer.wte.weight'].clone()
+        elif has_lm_head and not has_sequence_head:
+            n_embd = state_dict['transformer.wte.weight'].shape[1]
+            state_dict['sequence_head.base_predictor.weight'] = torch.randn(1, n_embd).to(self.device) * 0.01
+            state_dict['sequence_head.base_predictor.bias'] = torch.zeros(1).to(self.device)
+            state_dict['sequence_head.log_temperature'] = torch.zeros(1).to(self.device)
+
+        judge.load_state_dict(state_dict, strict=False)
         judge.to(self.device)
         # dtype cast of parameters (floating point only) and buffers in-place
         for p in judge.parameters():

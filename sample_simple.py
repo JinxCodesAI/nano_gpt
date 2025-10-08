@@ -64,8 +64,25 @@ def load_model_from_checkpoint(checkpoint_path: str, device: str, compile_model:
         print(f"Ignoring training-only init_from_checkpoint: {model_args['init_from_checkpoint']}")
         model_args['init_from_checkpoint'] = None
 
-    gptconf = GPTConfig(**model_args)
+    # Filter out deprecated config fields (for backward compatibility with old checkpoints)
+    deprecated_fields = {'mode', 'num_token_classes', 'binary_classification'}
+    filtered_model_args = {k: v for k, v in model_args.items() if k not in deprecated_fields}
+
+    # Store the old mode if present (we'll set it after model creation)
+    old_mode = model_args.get('mode', None)
+
+    gptconf = GPTConfig(**filtered_model_args)
     model = GPT(gptconf)
+
+    # Set mode based on old config if present
+    if old_mode:
+        if old_mode == 'sequence_scorer' or old_mode == ModelMode.SEQUENCE_SCORER:
+            model.set_mode(ModelMode.SEQUENCE_SCORER)
+        elif old_mode == 'language_model' or old_mode == ModelMode.LANGUAGE_MODEL:
+            model.set_mode(ModelMode.LANGUAGE_MODEL)
+        # token_classifier is deprecated, default to LANGUAGE_MODEL
+        elif old_mode == 'token_classifier':
+            model.set_mode(ModelMode.LANGUAGE_MODEL)
 
     state_dict = checkpoint['model']
     unwanted_prefix = '_orig_mod.'
@@ -73,7 +90,23 @@ def load_model_from_checkpoint(checkpoint_path: str, device: str, compile_model:
         if k.startswith(unwanted_prefix):
             state_dict[k[len(unwanted_prefix):]] = state_dict.pop(k)
 
-    model.load_state_dict(state_dict)
+    # Handle old checkpoints with single head (backward compatibility)
+    # New models have both lm_head and sequence_head, old models had only one
+    has_lm_head = any(k.startswith('lm_head.') for k in state_dict.keys())
+    has_sequence_head = any(k.startswith('sequence_head.') for k in state_dict.keys())
+
+    if not has_lm_head and has_sequence_head:
+        # Old SEQUENCE_SCORER checkpoint - initialize lm_head from wte (weight tying)
+        if 'transformer.wte.weight' in state_dict:
+            state_dict['lm_head.weight'] = state_dict['transformer.wte.weight'].clone()
+    elif has_lm_head and not has_sequence_head:
+        # Old LANGUAGE_MODEL checkpoint - initialize sequence_head with small random weights
+        n_embd = state_dict['transformer.wte.weight'].shape[1]
+        state_dict['sequence_head.base_predictor.weight'] = torch.randn(1, n_embd) * 0.01
+        state_dict['sequence_head.base_predictor.bias'] = torch.zeros(1)
+        state_dict['sequence_head.log_temperature'] = torch.zeros(1)
+
+    model.load_state_dict(state_dict, strict=False)
     model.eval()
     model.to(device)
 
@@ -373,8 +406,8 @@ def main():
     # Load main model
     main_ckpt = os.path.join(args.out_dir, args.checkpoint_name)
     model, checkpoint = load_model_from_checkpoint(main_ckpt, args.device, compile_model=False)
-    if getattr(model.config, 'mode', None) != ModelMode.LANGUAGE_MODEL:
-        raise ValueError('This script supports LANGUAGE_MODEL checkpoints only')
+    # Ensure model is in LANGUAGE_MODEL mode (dual-mode models default to this)
+    model.set_mode(ModelMode.LANGUAGE_MODEL)
     if not getattr(model.config, 'add_critic_head', False):
         raise ValueError('Model must have critic head enabled (add_critic_head=True)')
 
@@ -407,8 +440,8 @@ def main():
         if not os.path.exists(judge_ckpt):
             raise FileNotFoundError(f"Judge checkpoint not found: {judge_ckpt}")
         judge_model, _ = load_model_from_checkpoint(judge_ckpt, args.device, compile_model=False)
-        if getattr(judge_model.config, 'mode', None) != ModelMode.SEQUENCE_SCORER:
-            raise ValueError('Judge model must be configured with mode=SEQUENCE_SCORER')
+        # Set judge model to SEQUENCE_SCORER mode
+        judge_model.set_mode(ModelMode.SEQUENCE_SCORER)
 
     # Parse masking ratios if provided
     masking_ratios = None

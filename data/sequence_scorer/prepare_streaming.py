@@ -25,7 +25,8 @@ class SequenceScorerProvider(DataProviderBase):
         cfg = kwargs.pop('config', {}) or {}
         # Extract sequence scorer specific config
         self.mlm_checkpoint_path = cfg.get('mlm_checkpoint_path')
-        self.cls_token_id = cfg.get('cls_token_id', 0)
+        # CLS token will be set from MLM vocab (should be at base_vocab_size + 2)
+        self.cls_token_id = None  # Will be set in _load_text_data
 
         # Stage-based configuration (optional)
         self.use_all_stages_for_training = cfg.get('use_all_stages_for_training', None)
@@ -85,7 +86,7 @@ class SequenceScorerProvider(DataProviderBase):
     def _validate_stage_config(self):
         if self.use_all_stages_for_training is not None:
             if not self.use_all_stages_for_training:
-                raise NotImplementedError("use_all_stages_for_training=False is not yet implemented")
+                raise ValueError("Unsupported config: use_all_stages_for_training=False. Set it to True or omit stage settings.")
             if not self.unmasking_stages:
                 raise ValueError("unmasking_stages must be provided when use_all_stages_for_training=True")
             if not self.validation_stages:
@@ -157,22 +158,39 @@ class SequenceScorerProvider(DataProviderBase):
         # Use vocabulary from MLM model meta to ensure compatibility
         self.stoi = dict(self.mlm_engine.stoi)
         self.itos = dict(self.mlm_engine.itos)
-        self.base_vocab_size = int(self.mlm_engine.vocab_size)
+
+        # Get special token IDs from MLM vocab
         self.mask_token_id = int(self.mlm_engine.mask_token_id)
 
-        # Add PAD token exactly like CharDiffusion does (after MASK token)
-        self.pad_token_id = self.base_vocab_size + 1
-        self.stoi['[PAD]'] = self.pad_token_id
-        self.itos[self.pad_token_id] = '[PAD]'
+        # PAD should be in MLM vocab
+        if '[PAD]' not in self.stoi:
+            raise ValueError("MLM checkpoint missing [PAD] token - please regenerate char_diffusion data")
+        self.pad_token_id = self.stoi['[PAD]']
 
-        # Ensure [CLS] token exists in vocab mapping and extend vocab_size if needed
-        if self.cls_token_id not in self.itos:
-            self.itos[self.cls_token_id] = '[CLS]'
+        # CLS token: add if missing (backward compatibility with old checkpoints)
         if '[CLS]' not in self.stoi:
+            # Old checkpoint without CLS - add it at the end
+            mlm_vocab_size = int(self.mlm_engine.vocab_size)
+            self.cls_token_id = mlm_vocab_size  # Add after all existing tokens
             self.stoi['[CLS]'] = self.cls_token_id
+            self.itos[self.cls_token_id] = '[CLS]'
+            self.vocab_size = mlm_vocab_size + 1  # Extended vocab
 
-        # Final vocab size includes all tokens
-        self.vocab_size = max(self.pad_token_id + 1, int(self.cls_token_id) + 1)
+            if self.verbose:
+                print(f"{self._log_prefix()} WARNING: MLM checkpoint missing [CLS] token")
+                print(f"  Adding [CLS] at position {self.cls_token_id}")
+                print(f"  Extended vocab_size: {self.vocab_size}")
+        else:
+            # New checkpoint with CLS already present
+            self.cls_token_id = self.stoi['[CLS]']
+            self.vocab_size = int(self.mlm_engine.vocab_size)
+
+        if self.verbose:
+            print(f"{self._log_prefix()} Vocabulary loaded from MLM:")
+            print(f"  vocab_size: {self.vocab_size}")
+            print(f"  mask_token_id: {self.mask_token_id}")
+            print(f"  pad_token_id: {self.pad_token_id}")
+            print(f"  cls_token_id: {self.cls_token_id}")
 
         if self.enable_line_aligned_sequences:
             # Use line-aligned sequence generation
@@ -203,7 +221,8 @@ class SequenceScorerProvider(DataProviderBase):
 
     def sample_batch(self, split: str, rng) -> Dict[str, torch.Tensor]:
         if self.use_all_stages_for_training:
-            raise NotImplementedError("Stage-based sampling requires file-level generation")
+            # In stage-based mode file generation is done in produce_one_file; fall back to default per-batch sampling here.
+            return self._sample_default_batch(split, rng)
         return self._sample_default_batch(split, rng)
 
     def _sample_default_batch(self, split: str, rng) -> Dict[str, torch.Tensor]:
@@ -256,7 +275,7 @@ class SequenceScorerProvider(DataProviderBase):
             raw_targets = torch.tensor(actual_synth_list, dtype=torch.float32)
             targets = sequence_scorer_target_transform(raw_targets)
 
-            return {"input_ids": input_ids, "targets": targets, "masking_strategy": ["random"] * self.batch_size, "masking_ratio": [float(x) for x in raw_targets.tolist()]}
+            return {"input_ids": input_ids, "targets": targets, "masking_strategy": ["random"] * self.batch_size, "masking_ratio": [float(x) for x in raw_targets.tolist()], "model_mode": "sequence_scorer"}
         else:
             # Original implementation
             ids = self.train_ids if split == "train" else self.val_ids
@@ -285,138 +304,17 @@ class SequenceScorerProvider(DataProviderBase):
             # Apply non-linear transformation to targets
             raw_targets = actual_synth.float().cpu()
             targets = sequence_scorer_target_transform(raw_targets)
-            return {"input_ids": input_ids, "targets": targets, "masking_strategy": ["random"] * self.batch_size, "masking_ratio": [float(x) for x in raw_targets.tolist()]}
+            return {"input_ids": input_ids, "targets": targets, "masking_strategy": ["random"] * self.batch_size, "masking_ratio": [float(x) for x in raw_targets.tolist()], "model_mode": "sequence_scorer"}
 
     def produce_one_file(self, split: str, seq: int) -> None:
-        """Override to handle stage-based generation at file level.
+        """Write unified array-of-batches format.
 
-        - If stage-based is enabled: delegate to stage-based producer
-        - Else: for validation split only, generate base batches and append ~10% extra
-          unmodified (zero-target) samples on top of existing data. For train, fall back
-          to base implementation.
+        Supports both default and stage-based generation.
         """
         if self.use_all_stages_for_training:
-            self._produce_stage_based_file(split, seq)
-            return
-
-        # Default path (no stages)
-        if split != "val":
-            # Train split unchanged: use base implementation
-            super().produce_one_file(split, seq)
-            return
-
-        # Validation split augmentation: create base batches then append extra zero-target samples
-        import time
-        rng = torch.Generator()
-        per_seed = (self.seed * 1000003) ^ (hash(split) & 0xFFFFFFFF) ^ seq
-        rng.manual_seed(per_seed)
-
-        # Collect base batches using provider's sampling (unchanged behavior)
-        batches = [self.sample_batch(split, rng) for _ in range(self.batches_per_file)]
-
-        # Concatenate tensors across batches
-        tensor_keys = [k for k in batches[0].keys() if isinstance(batches[0][k], torch.Tensor)]
-        tensors = {}
-        for k in tensor_keys:
-            tensors[k] = torch.cat([b[k] for b in batches], dim=0)
-
-        # Collect non-tensor metadata from batches (compatible with base implementation)
-        batch_metadata = {}
-        for k in batches[0].keys():
-            if k not in tensor_keys and k not in batch_metadata:
-                values = []
-                for batch in batches:
-                    if k in batch:
-                        if isinstance(batch[k], list):
-                            values.extend(batch[k])
-                        else:
-                            values.append(batch[k])
-                batch_metadata[k] = values
-
-        # Compute number of extra zero-target samples (~10% of base), floor per user instruction
-        first_key = next(iter(tensors))
-        base_total = int(tensors[first_key].shape[0])
-        extra_count = int(base_total * 0.10)
-
-        # Start with base masking_strategy and masking_ratio if present, else empty
-        masking_strategy_list = list(batch_metadata.get('masking_strategy', []))
-        masking_ratio_list = list(batch_metadata.get('masking_ratio', []))
-
-        if extra_count > 0:
-            # Build extra ORIGINAL (unmasked, uncorrupted) sequences from validation ids
-            ids = self.val_ids
-            max_start_idx = len(ids) - (self.block_size - 1)
-            if max_start_idx > 0:
-                ix = torch.randint(0, max_start_idx, (extra_count,), generator=rng).tolist()
-                original_sequences = [ids[i : i + (self.block_size - 1)] for i in ix]
-                original_text = torch.tensor(original_sequences, dtype=torch.long)
-                input_ids_extra = add_cls_token(original_text, self.cls_token_id, self.block_size, self.pad_token_id)
-                # Apply transformation to zero ratios (unmodified sequences)
-                raw_targets_extra = torch.zeros(extra_count, dtype=torch.float32)
-                targets_extra = sequence_scorer_target_transform(raw_targets_extra)
-
-                # Align extras to base tensor devices before concatenation
-                if 'input_ids' in tensors and 'targets' in tensors:
-                    dev_inputs = tensors['input_ids'].device
-                    dev_targets = tensors['targets'].device
-                    input_ids_extra = input_ids_extra.to(dev_inputs)
-                    targets_extra = targets_extra.to(dev_targets)
-                    tensors['input_ids'] = torch.cat([tensors['input_ids'], input_ids_extra], dim=0)
-                    tensors['targets'] = torch.cat([tensors['targets'].to(torch.float32), targets_extra], dim=0)
-                else:
-                    # Fallback for legacy x/y schema
-                    dev_inputs = tensors['x'].device
-                    dev_targets = tensors['y'].device
-                    input_ids_extra = input_ids_extra.to(dev_inputs)
-                    targets_extra = targets_extra.to(dev_targets)
-                    tensors['x'] = torch.cat([tensors['x'], input_ids_extra], dim=0)
-                    tensors['y'] = torch.cat([tensors['y'].to(torch.float32), targets_extra], dim=0)
-
-                # Extend masking strategy and ratio for the extras
-                masking_strategy_list.extend(['original'] * extra_count)
-                masking_ratio_list.extend([0.0] * extra_count)
-
-        # If we augmented validation, reshuffle combined tensors to interleave extras
-        if split == "val":
-            key_inputs = 'input_ids' if 'input_ids' in tensors else 'x'
-            key_targets = 'targets' if 'targets' in tensors else 'y'
-            total = tensors[key_inputs].shape[0]
-            perm_cpu = torch.randperm(total, generator=rng)
-            perm_inputs = perm_cpu.to(tensors[key_inputs].device)
-            perm_targets = perm_cpu.to(tensors[key_targets].device)
-            tensors[key_inputs] = tensors[key_inputs][perm_inputs]
-            tensors[key_targets] = tensors[key_targets][perm_targets]
-            # Apply same permutation to masking strategy/ratio if available and lengths match
-            if len(masking_strategy_list) == total:
-                masking_strategy_list = [masking_strategy_list[i] for i in perm_cpu.tolist()]
-            if len(masking_ratio_list) == total:
-                masking_ratio_list = [float(masking_ratio_list[i]) for i in perm_cpu.tolist()]
-
-        # Assemble metadata and write file atomically (parity with base)
-        metadata = {
-            "batch_size": self.batch_size,
-            "num_batches": self.batches_per_file,
-            "file_idx": seq,
-            "split": split,
-            "produced_at": int(time.time() * 1000),
-        }
-        # Add batch-specific metadata
-        metadata.update(batch_metadata)
-        if masking_strategy_list:
-            metadata['masking_strategy'] = masking_strategy_list
-        if masking_ratio_list:
-            metadata['masking_ratio'] = masking_ratio_list
-
-        d = self.train_dir if split == "train" else self.val_dir
-        ts = metadata["produced_at"]
-        tmp_name = f".tmp-{ts}-{seq:06d}.pt"
-        final_name = f"{ts}-{seq:06d}-{self.batches_per_file}.pt"
-        tmp_path = os.path.join(d, tmp_name)
-        final_path = os.path.join(d, final_name)
-        torch.save({"tensors": tensors, "metadata": metadata}, tmp_path)
-        os.replace(tmp_path, final_path)
-        if self.verbose:
-            print(f"{self._log_prefix()} produced (val augmented) file: {final_path}")
+            return self._produce_stage_based_file(split, seq)
+        # Default path (no stages): use base implementation which writes array-of-batches
+        super().produce_one_file(split, seq)
 
     def _produce_stage_based_file(self, split: str, seq: int) -> None:
         import time
@@ -552,101 +450,94 @@ class SequenceScorerProvider(DataProviderBase):
 
         if all_inputs:
             combined_inputs = torch.cat(all_inputs, dim=0)
-            # all_targets may be list of tensors; concatenate then cast
             combined_targets = torch.cat([t if torch.is_tensor(t) else torch.tensor(t, dtype=torch.float32) for t in all_targets], dim=0).to(torch.float32)
             total_samples = combined_inputs.shape[0]
             shuffle_indices = torch.randperm(total_samples, generator=rng)
-            shuffled_inputs = combined_inputs[shuffle_indices]
-            shuffled_targets = combined_targets[shuffle_indices]
-            shuffled_stage_info = [all_stage_info[i] for i in shuffle_indices.tolist()]
-            # Masking ratio follows the same shuffle
+            inputs = combined_inputs[shuffle_indices]
+            targets = combined_targets[shuffle_indices]
+            stage_info = [all_stage_info[i] for i in shuffle_indices.tolist()]
             combined_masking_ratio = all_masking_ratio
-            shuffled_masking_ratio = [float(combined_masking_ratio[i]) for i in shuffle_indices.tolist()]
+            masking_ratio = [float(combined_masking_ratio[i]) for i in shuffle_indices.tolist()]
 
-            # Validation split augmentation: append ~10% extra original (zero-target) samples on top
+            # Optional: append ~10% zero-target extras for val, then reshuffle
             if split == "val":
-                extra_count = int(shuffled_inputs.shape[0] * 0.10)
-                if extra_count > 0:
-                    # Get validation ids for extra samples
+                extra = int(inputs.shape[0] * 0.10)
+                if extra > 0:
                     val_ids = self.val_ids
-                    max_start_idx_extra = len(val_ids) - (self.block_size - 1)
-                    if max_start_idx_extra > 0:
-                        ix_extra = torch.randint(0, max_start_idx_extra, (extra_count,), generator=rng).tolist()
-                        original_sequences_extra = [val_ids[i : i + (self.block_size - 1)] for i in ix_extra]
-                        original_text_extra = torch.tensor(original_sequences_extra, dtype=torch.long)
-                        input_ids_extra = add_cls_token(original_text_extra, self.cls_token_id, self.block_size, self.pad_token_id)
-                        # Apply transformation to zero ratios (unmodified sequences)
-                        raw_targets_extra = torch.zeros(extra_count, dtype=torch.float32)
+                    max_start_idx = len(val_ids) - (self.block_size - 1)
+                    if max_start_idx > 0:
+                        ix = torch.randint(0, max_start_idx, (extra,), generator=rng).tolist()
+                        original_sequences = [val_ids[i : i + (self.block_size - 1)] for i in ix]
+                        original_text = torch.tensor(original_sequences, dtype=torch.long)
+                        input_ids_extra = add_cls_token(original_text, self.cls_token_id, self.block_size, self.pad_token_id)
+                        raw_targets_extra = torch.zeros(extra, dtype=torch.float32)
                         targets_extra = self._transform_ratio_to_target(raw_targets_extra)
-                        # Align devices before concatenation
-                        input_ids_extra = input_ids_extra.to(shuffled_inputs.device)
-                        targets_extra = targets_extra.to(shuffled_targets.device)
-                        # Append to tensors
-                        shuffled_inputs = torch.cat([shuffled_inputs, input_ids_extra], dim=0)
-                        shuffled_targets = torch.cat([shuffled_targets, targets_extra], dim=0)
-                        shuffled_stage_info.extend([{"extra_zero": True}] * extra_count)
-                        # Append masking_ratio zeros for extras
-                        shuffled_masking_ratio.extend([0.0] * extra_count)
+                        input_ids_extra = input_ids_extra.to(inputs.device)
+                        targets_extra = targets_extra.to(targets.device)
+                        inputs = torch.cat([inputs, input_ids_extra], dim=0)
+                        targets = torch.cat([targets, targets_extra], dim=0)
+                        stage_info.extend([{"extra_zero": True}] * extra)
+                        masking_ratio.extend([0.0] * extra)
+                # reshuffle after extras
+                total = inputs.shape[0]
+                perm = torch.randperm(total, generator=rng)
+                inputs = inputs[perm]
+                targets = targets[perm]
+                stage_info = [stage_info[i] for i in perm.tolist()]
+                masking_ratio = [float(masking_ratio[i]) for i in perm.tolist()]
 
-            # After augmentation, reshuffle to interleave extras with base samples
-            if split == "val":
-                total = shuffled_inputs.shape[0]
-                perm_cpu = torch.randperm(total, generator=rng)
-                perm_inputs = perm_cpu.to(shuffled_inputs.device)
-                perm_targets = perm_cpu.to(shuffled_targets.device)
-                shuffled_inputs = shuffled_inputs[perm_inputs]
-                shuffled_targets = shuffled_targets[perm_targets]
-                # stage_info is Python list; use CPU indices directly
-                shuffled_stage_info = [shuffled_stage_info[i] for i in perm_cpu.tolist()]
-                # masking_ratio follows same reshuffle
-                shuffled_masking_ratio = [float(shuffled_masking_ratio[i]) for i in perm_cpu.tolist()]
+            # Build batches_out
+            batches_out = []
+            total_needed = self.batches_per_file * self.batch_size
+            # truncate or pad with last samples to exactly total_needed
+            if inputs.shape[0] < total_needed:
+                # simple wrap-around to fill
+                reps = (total_needed + inputs.shape[0] - 1) // inputs.shape[0]
+                inputs = inputs.repeat((reps, 1))[:total_needed]
+                targets = targets.repeat(reps)[:total_needed]
+                stage_info = (stage_info * reps)[:total_needed]
+                masking_ratio = (masking_ratio * reps)[:total_needed]
+            else:
+                inputs = inputs[:total_needed]
+                targets = targets[:total_needed]
+                stage_info = stage_info[:total_needed]
+                masking_ratio = masking_ratio[:total_needed]
 
-            tensors = {"input_ids": shuffled_inputs, "targets": shuffled_targets}
+            for i in range(self.batches_per_file):
+                s = i * self.batch_size
+                e = s + self.batch_size
+                tens = {"input": inputs[s:e], "target": targets[s:e]}
+                meta = {
+                    "stage_info": stage_info[s:e],
+                    "masking_ratio": masking_ratio[s:e],
+                    "model_mode": "sequence_scorer",
+                }
+                batches_out.append({"tensors": tens, "metadata": meta})
 
-            # Derive masking_strategy from stage_info and extras
-            def _map_stage_type(cfg: Dict[str, Any]) -> str:
-                t = cfg.get('type') if isinstance(cfg, dict) else None
-                if t == 'line':
-                    return 'lines'
-                if t in ('random', 'sticky', 'span'):
-                    return t
-                # Extras or unknown -> original
-                return 'original'
-
-            masking_strategy = [_map_stage_type(cfg) for cfg in shuffled_stage_info]
-
-            # Validation split augmentation: append extras already added above
-            # reshuffle for val already applied below
-
-            # Assemble metadata first
-            metadata = {
+            file_meta = {
                 "batch_size": self.batch_size,
                 "num_batches": self.batches_per_file,
                 "file_idx": seq,
                 "split": split,
                 "produced_at": int(time.time() * 1000),
-                "stage_info": shuffled_stage_info,
                 "stage_distribution": stage_distribution,
-                "masking_strategy": masking_strategy,
-                "masking_ratio": shuffled_masking_ratio,
             }
 
             d = self.train_dir if split == "train" else self.val_dir
-            ts = metadata["produced_at"]
+            ts = file_meta["produced_at"]
             tmp_name = f".tmp-{ts}-{seq:06d}.pt"
             final_name = f"{ts}-{seq:06d}-{self.batches_per_file}.pt"
             tmp_path = os.path.join(d, tmp_name)
             final_path = os.path.join(d, final_name)
-            torch.save({"tensors": tensors, "metadata": metadata}, tmp_path)
+            torch.save({"batches": batches_out, "metadata": file_meta}, tmp_path)
             os.replace(tmp_path, final_path)
             if self.verbose:
-                print(f"{self._log_prefix()} produced stage-based file: {final_path}")
-                # Print aggregate timing as average per-batch and unmasking share
                 total_ms = total_stage_time * 1000.0
                 avg_per_batch_ms = total_ms / max(self.batches_per_file, 1)
                 mask_ms = total_mask_time * 1000.0
                 unmask_ms = max(total_ms - mask_ms, 0.0)
                 pct_unmask = (unmask_ms / max(total_ms, 1e-6)) * 100.0
+                print(f"{self._log_prefix()} produced stage-based file: {final_path}")
                 print(f"{self._log_prefix()} avg batch gen time: {avg_per_batch_ms:.2f} ms ({self.batches_per_file} batches), unmasking {pct_unmask:.1f}%")
         else:
             super().produce_one_file(split, seq)

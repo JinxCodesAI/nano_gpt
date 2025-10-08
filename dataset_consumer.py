@@ -53,6 +53,8 @@ class DatasetConsumer:
         self._current_batch_idx: Dict[str, int] = {"train": 0, "val": 0}
         self._loaded_data: Dict[str, Optional[Dict[str, torch.Tensor]]] = {"train": None, "val": None}
         self._loaded_metadata: Dict[str, Optional[Dict]] = {"train": None, "val": None}
+        # When provider writes array-of-batches, this holds the list for current file
+        self._loaded_batches: Dict[str, Optional[List[Dict]]] = {"train": None, "val": None}
 
         # meta
         self._meta_path = os.path.join(self.data_dir, "meta.pkl")
@@ -129,25 +131,12 @@ class DatasetConsumer:
             data = torch.load(path, map_location="cpu")
         except Exception as e:
             raise RuntimeError(f"DatasetConsumer failed to load batch file for split={split}: {path}. {type(e).__name__}: {e}") from e
-        # normalize data dict
-        tensors: Dict[str, torch.Tensor] = {}
-        metadata: Dict = data.get("metadata", {})
-        if "x" in data and "y" in data:
-            tensors = {"x": data["x"], "y": data["y"]}
-        elif "tensors" in data:
-            tensors = data["tensors"]
-        else:
-            # allow only tensors besides metadata
-            for k, v in data.items():
-                if k == "metadata":
-                    continue
-                if isinstance(v, torch.Tensor):
-                    tensors[k] = v
-
-        # Filter out samples with zero supervised targets
-        tensors, metadata = self._filter_zero_supervision_samples(tensors, metadata)
-
-        return tensors, metadata
+        # Require array-of-batches format
+        if isinstance(data, dict) and 'batches' in data:
+            self._loaded_batches[split] = data.get('batches', [])
+            metadata: Dict = data.get('metadata', {})
+            return {}, metadata
+        raise ValueError(f"DatasetConsumer expected 'batches' format in file {path}. Regenerate data with unified array-of-batches format.")
 
     def _filter_zero_supervision_samples(self, tensors: Dict[str, torch.Tensor], metadata: Dict) -> tuple[Dict[str, torch.Tensor], Dict]:
         """Filter out samples that have zero supervised targets (all targets == ignore_index)."""
@@ -224,6 +213,7 @@ class DatasetConsumer:
             self._current_file_idx[split] = 0
         self._loaded_data[split] = None
         self._loaded_metadata[split] = None
+        self._loaded_batches[split] = None
         self._current_batch_idx[split] = 0
 
     def _ensure_data_available(self, split: str) -> None:
@@ -254,84 +244,60 @@ class DatasetConsumer:
         """
         self._ensure_data_available(split)
 
-        # Load current file if needed
-        if self._loaded_data[split] is None:
+        # Load current file if needed (array-of-batches format only)
+        if self._loaded_batches.get(split) is None:
             # choose file index; in queue mode pick the first available
             if self._mode == "queue":
                 if split == "train":
-                    # In training, always pick the first available file (queue semantics)
                     self._current_file_idx[split] = 0
                 else:
-                    # In validation, preserve current index for circular reuse
                     if self._current_file_idx[split] >= len(self._split_files[split]):
                         self._current_file_idx[split] = 0
-            tensors, metadata = self._load_file(split, self._current_file_idx[split])
-            self._loaded_data[split] = tensors
+            _, metadata = self._load_file(split, self._current_file_idx[split])
             self._loaded_metadata[split] = metadata
             self._current_batch_idx[split] = 0
 
-        tensors = self._loaded_data[split]
-        assert tensors is not None
-        # derive total samples in this file from first tensor
-        first_key = next(iter(tensors))
-        total_samples = tensors[first_key].shape[0]
+        # If file uses array-of-batches format, serve one batch entry at a time
+        if self._loaded_batches.get(split) is not None:
+            batches_list = self._loaded_batches[split] or []
+            idx = self._current_batch_idx[split]
+            if idx >= len(batches_list):
+                # advance to next file
+                if self._mode == "queue":
+                    path = self._split_files[split][self._current_file_idx[split]]
+                    self._maybe_delete_consumed(split, path)
+                    self._split_files[split] = self._list_available_files(split)
+                self._advance_to_next_file(split)
+                self._ensure_data_available(split)
+                tensors, metadata = self._load_file(split, self._current_file_idx[split])
+                self._loaded_data[split] = tensors if tensors else {}
+                self._loaded_metadata[split] = metadata
+                batches_list = self._loaded_batches[split] or []
+                idx = 0
 
-        start_idx = self._current_batch_idx[split] * self.batch_size
-        end_idx = min(start_idx + self.batch_size, total_samples)
+            entry = batches_list[idx]
+            entry_tensors = dict(entry.get('tensors', {}))
+            entry_meta = dict(entry.get('metadata', {}))
 
-        # if consumed all samples, advance file
-        if start_idx >= total_samples:
-            # in queue mode: delete the file we just finished
-            if self._mode == "queue":
-                path = self._split_files[split][self._current_file_idx[split]]
-                self._maybe_delete_consumed(split, path)
-                # refresh file list for queue mode to get new arrivals
-                self._split_files[split] = self._list_available_files(split)
-            # advance to next file
-            self._advance_to_next_file(split)
-            # ensure availability again (may block)
-            self._ensure_data_available(split)
-            # load new file
-            tensors, metadata = self._load_file(split, self._current_file_idx[split])
-            self._loaded_data[split] = tensors
-            self._loaded_metadata[split] = metadata
-            self._current_batch_idx[split] = 0
-            # recompute indices
-            first_key = next(iter(tensors))
-            total_samples = tensors[first_key].shape[0]
-            start_idx = 0
-            end_idx = min(self.batch_size, total_samples)
+            # move to device
+            def _to_device(t: torch.Tensor) -> torch.Tensor:
+                if self.device_type == "cuda":
+                    return t.pin_memory().to(device, non_blocking=True)
+                return t.to(device)
+            for k in list(entry_tensors.keys()):
+                entry_tensors[k] = _to_device(entry_tensors[k])
 
-        # slice per field
-        batch_tensors: Dict[str, torch.Tensor] = {}
-        for k, v in tensors.items():
-            batch_tensors[k] = v[start_idx:end_idx]
+            # attach mode (provider must set it in per-batch metadata)
+            mm = entry_meta.get('model_mode', None)
+            if mm is not None:
+                entry_tensors['_model_mode'] = mm
 
-        cur_bs = next(iter(batch_tensors.values())).shape[0]
-        if 0 < cur_bs < self.batch_size:
-            need = self.batch_size - cur_bs
+            # advance
+            self._current_batch_idx[split] += 1
+            return entry_tensors
 
-            def _repeat_to_fill(t: torch.Tensor, need: int) -> torch.Tensor:
-                p = t.shape[0]
-                reps = (need + p - 1) // p
-                return t.repeat((reps,) + (1,) * (t.dim() - 1))[:need]
-
-            for k, v in list(batch_tensors.items()):
-                batch_tensors[k] = torch.cat([v, _repeat_to_fill(v, need)], dim=0)
-
-        # advance
-        self._current_batch_idx[split] += 1
-
-        # move to device
-        def _to_device(t: torch.Tensor) -> torch.Tensor:
-            if self.device_type == "cuda":
-                return t.pin_memory().to(device, non_blocking=True)
-            return t.to(device)
-
-        for k in list(batch_tensors.keys()):
-            batch_tensors[k] = _to_device(batch_tensors[k])
-        
-        return batch_tensors
+        # If we reach here, no batches are loaded which indicates a logic or format error
+        raise RuntimeError(f"No 'batches' loaded for split={split}. Expected unified array-of-batches format.")
 
     def reset_state(self, split: Optional[str] = None) -> None:
         splits = [split] if split else ["train", "val"]
