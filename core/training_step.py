@@ -132,19 +132,15 @@ class TrainingStep:
                 # Convert string to ModelMode enum
                 if mode_str == 'language_model' or mode_str == ModelMode.LANGUAGE_MODEL:
                     raw_model.set_mode(ModelMode.LANGUAGE_MODEL)
-                    print(f"[DEBUG] Batch mode: language_model, switched model to LANGUAGE_MODEL")
                 elif mode_str == 'sequence_scorer' or mode_str == ModelMode.SEQUENCE_SCORER:
                     raw_model.set_mode(ModelMode.SEQUENCE_SCORER)
-                    print(f"[DEBUG] Batch mode: sequence_scorer, switched model to SEQUENCE_SCORER")
                 # If mode_str is already a ModelMode enum, use it directly
                 elif isinstance(mode_str, ModelMode):
                     raw_model.set_mode(mode_str)
-                    print(f"[DEBUG] Batch mode: {mode_str}, switched model to {mode_str}")
             else:
                 print(f"[DEBUG] No _model_mode in batch, current model mode: {raw_model.get_mode()}")
 
             X, Y = unpack_batch(batch)
-            print(f"[DEBUG] Batch shapes: X={X.shape}, Y={Y.shape}, Y.dtype={Y.dtype}")
 
             with self.ctx:
                 # Delegate to model forward; model handles critic internally when enabled
