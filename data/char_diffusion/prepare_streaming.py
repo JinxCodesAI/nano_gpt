@@ -168,6 +168,9 @@ class CharDiffusionProvider(DataProviderBase):
             self.train_builder = None
             self.val_builder = None
 
+    def default_model_mode(self) -> str:
+        return 'language_model'
+
 
         if self.enable_line_aligned_sequences and self.newline_token_id is None:
             raise ValueError("enable_line_aligned_sequences=True requires '\n' to be in the vocabulary")
@@ -524,7 +527,7 @@ class CharDiffusionProvider(DataProviderBase):
                 s = i * self.batch_size
                 e = s + self.batch_size
                 tens = {"input": x[s:e], "target": y[s:e]}
-                meta = {"stage_info": stage_info[s:e]}
+                meta = {"stage_info": stage_info[s:e], "model_mode": "language_model"}
                 batches_out.append({"tensors": tens, "metadata": meta})
 
             file_meta = {

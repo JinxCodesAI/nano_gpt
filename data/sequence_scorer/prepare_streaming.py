@@ -80,6 +80,9 @@ class SequenceScorerProvider(DataProviderBase):
                     print(f"  train_lines: {len(self.train_builder.lines_ids)}")
                     print(f"  val_lines: {len(self.val_builder.lines_ids)}")
                     print(f"  train_valid_starts: {self.train_builder.valid_starts.numel()}")
+    def default_model_mode(self) -> str:
+        return 'sequence_scorer'
+
                     print(f"  val_valid_starts: {self.val_builder.valid_starts.numel()}")
 
 
@@ -510,6 +513,7 @@ class SequenceScorerProvider(DataProviderBase):
                 meta = {
                     "stage_info": stage_info[s:e],
                     "masking_ratio": masking_ratio[s:e],
+                    "model_mode": "sequence_scorer",
                 }
                 batches_out.append({"tensors": tens, "metadata": meta})
 

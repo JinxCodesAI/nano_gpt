@@ -58,6 +58,13 @@ class DataProviderBase:
         """Return a dict of tensors for one batch, each shaped [batch_size, ...]."""
         raise RuntimeError("Subclasses must implement sample_batch(split, rng) and return tensor dicts shaped [batch_size, ...].")
 
+    def default_model_mode(self) -> Optional[str]:
+        """Optional per-provider fixed model mode.
+        Subclasses can override to return 'language_model' or 'sequence_scorer'.
+        Default None means no automatic mode injection.
+        """
+        return None
+
     # ---- shared data loading helpers ----
     def _load_input_text(self, filename: str = 'input.txt') -> str:
         """Load text data from input file in data_dir."""
@@ -149,6 +156,10 @@ class DataProviderBase:
         for _ in range(self.batches_per_file):
             b = self.sample_batch(split, rng)
             tensors, meta = _normalize_to_input_target(b)
+            # Inject fixed model mode when subclass defines it and batch didn't specify one
+            mm = self.default_model_mode()
+            if 'model_mode' not in meta and mm is not None:
+                meta['model_mode'] = mm
             batches_out.append({'tensors': tensors, 'metadata': meta})
 
         file_meta = {
