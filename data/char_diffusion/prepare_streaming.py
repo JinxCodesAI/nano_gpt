@@ -468,6 +468,10 @@ class CharDiffusionProvider(DataProviderBase):
         """Generate an entire file with stage-based sampling using simplified line-aligned approach."""
         import time
 
+        # Ensure stage distribution is initialized (defensive in case __init__ path was altered)
+        if not hasattr(self, 'train_stage_distribution') or not hasattr(self, 'val_stage_distribution'):
+            self._initialize_stage_distribution()
+
         rng = torch.Generator()
         per_seed = (self.seed * 1000003) ^ (hash(split) & 0xFFFFFFFF) ^ seq
         rng.manual_seed(per_seed)
@@ -475,6 +479,8 @@ class CharDiffusionProvider(DataProviderBase):
         # Use the same logic as _sample_stage_based_batch but for file-level generation
         # Get stage distribution for this split
         stage_distribution = self.train_stage_distribution if split == "train" else self.val_stage_distribution
+        if stage_distribution is None:
+            raise ValueError("Stage-based generation requested but stage_distribution is None. Check use_all_stages_for_training and stages config.")
 
         all_x = []
         all_y = []
