@@ -244,8 +244,8 @@ class DatasetConsumer:
         """
         self._ensure_data_available(split)
 
-        # Load current file if needed
-        if self._loaded_data[split] is None and self._loaded_batches.get(split) is None:
+        # Load current file if needed (array-of-batches format only)
+        if self._loaded_batches.get(split) is None:
             # choose file index; in queue mode pick the first available
             if self._mode == "queue":
                 if split == "train":
@@ -253,8 +253,7 @@ class DatasetConsumer:
                 else:
                     if self._current_file_idx[split] >= len(self._split_files[split]):
                         self._current_file_idx[split] = 0
-            tensors, metadata = self._load_file(split, self._current_file_idx[split])
-            self._loaded_data[split] = tensors if tensors else {}
+            _, metadata = self._load_file(split, self._current_file_idx[split])
             self._loaded_metadata[split] = metadata
             self._current_batch_idx[split] = 0
 
@@ -297,80 +296,8 @@ class DatasetConsumer:
             self._current_batch_idx[split] += 1
             return entry_tensors
 
-        tensors = self._loaded_data[split]
-        metadata = self._loaded_metadata[split]
-        assert tensors is not None and len(tensors) > 0
-        # derive total samples in this file from first tensor
-        first_key = next(iter(tensors))
-        total_samples = tensors[first_key].shape[0]
-
-        start_idx = self._current_batch_idx[split] * self.batch_size
-        end_idx = min(start_idx + self.batch_size, total_samples)
-
-        # if consumed all samples, advance file
-        if start_idx >= total_samples:
-            # in queue mode: delete the file we just finished
-            if self._mode == "queue":
-                path = self._split_files[split][self._current_file_idx[split]]
-                self._maybe_delete_consumed(split, path)
-                # refresh file list for queue mode to get new arrivals
-                self._split_files[split] = self._list_available_files(split)
-            # advance to next file
-            self._advance_to_next_file(split)
-            # ensure availability again (may block)
-            self._ensure_data_available(split)
-            # load new file
-            tensors, metadata = self._load_file(split, self._current_file_idx[split])
-            self._loaded_data[split] = tensors
-            self._loaded_metadata[split] = metadata
-            self._current_batch_idx[split] = 0
-            # recompute indices
-            first_key = next(iter(tensors))
-            total_samples = tensors[first_key].shape[0]
-            start_idx = 0
-            end_idx = min(self.batch_size, total_samples)
-
-        # slice per field
-        batch_tensors: Dict[str, torch.Tensor] = {}
-        for k, v in tensors.items():
-            batch_tensors[k] = v[start_idx:end_idx]
-
-        cur_bs = next(iter(batch_tensors.values())).shape[0]
-        if 0 < cur_bs < self.batch_size:
-            need = self.batch_size - cur_bs
-
-            def _repeat_to_fill(t: torch.Tensor, need: int) -> torch.Tensor:
-                p = t.shape[0]
-                reps = (need + p - 1) // p
-                return t.repeat((reps,) + (1,) * (t.dim() - 1))[:need]
-
-            for k, v in list(batch_tensors.items()):
-                batch_tensors[k] = torch.cat([v, _repeat_to_fill(v, need)], dim=0)
-
-        # advance
-        self._current_batch_idx[split] += 1
-
-        # move to device
-        def _to_device(t: torch.Tensor) -> torch.Tensor:
-            if self.device_type == "cuda":
-                return t.pin_memory().to(device, non_blocking=True)
-            return t.to(device)
-
-        for k in list(batch_tensors.keys()):
-            batch_tensors[k] = _to_device(batch_tensors[k])
-
-        # Add batch-level metadata (e.g., model_mode) if available
-        # Extract metadata for the current batch slice
-        if metadata:
-            # Check if model_mode is in metadata (list of values per batch)
-            if 'model_mode' in metadata:
-                model_modes = metadata['model_mode']
-                if isinstance(model_modes, list) and len(model_modes) > start_idx:
-                    # Get the model_mode for the first sample in this batch
-                    # (all samples in a batch should have the same mode)
-                    batch_tensors['_model_mode'] = model_modes[start_idx]
-
-        return batch_tensors
+        # If we reach here, no batches are loaded which indicates a logic or format error
+        raise RuntimeError(f"No 'batches' loaded for split={split}. Expected unified array-of-batches format.")
 
     def reset_state(self, split: Optional[str] = None) -> None:
         splits = [split] if split else ["train", "val"]
