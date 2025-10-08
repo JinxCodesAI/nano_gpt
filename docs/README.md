@@ -32,6 +32,10 @@ drive the diffusion roadmap.
   error detection for iterative re-masking.
 - [Critic Review](./research/critic_review.md) – external feedback and risk
   assessment.
+- [GRPO Design Notes](./research/grpo.md) &
+  [Implementation Plan v2](./research/grpo_v2.md) – historical planning memos
+  for the reinforcement fine-tuning stack (see the guide above for the
+  maintained implementation).
 - [Hierarchical U-Net Transformer](./research/unet_transformer.md) – discrete
   diffusion architecture for long-form coherence.
 - [Variable Length Line Study](./research/sep_varlen_lines_report.md) – dataset
