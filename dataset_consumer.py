@@ -131,31 +131,12 @@ class DatasetConsumer:
             data = torch.load(path, map_location="cpu")
         except Exception as e:
             raise RuntimeError(f"DatasetConsumer failed to load batch file for split={split}: {path}. {type(e).__name__}: {e}") from e
-        # If provider wrote an array of batches, store and return empty tensors
+        # Require array-of-batches format
         if isinstance(data, dict) and 'batches' in data:
             self._loaded_batches[split] = data.get('batches', [])
             metadata: Dict = data.get('metadata', {})
             return {}, metadata
-
-        # normalize data dict (aggregated tensors format)
-        tensors: Dict[str, torch.Tensor] = {}
-        metadata: Dict = data.get("metadata", {})
-        if "x" in data and "y" in data:
-            tensors = {"x": data["x"], "y": data["y"]}
-        elif "tensors" in data:
-            tensors = data["tensors"]
-        else:
-            # allow only tensors besides metadata
-            for k, v in data.items():
-                if k == "metadata":
-                    continue
-                if isinstance(v, torch.Tensor):
-                    tensors[k] = v
-
-        # Filter out samples with zero supervised targets
-        tensors, metadata = self._filter_zero_supervision_samples(tensors, metadata)
-
-        return tensors, metadata
+        raise ValueError(f"DatasetConsumer expected 'batches' format in file {path}. Regenerate data with unified array-of-batches format.")
 
     def _filter_zero_supervision_samples(self, tensors: Dict[str, torch.Tensor], metadata: Dict) -> tuple[Dict[str, torch.Tensor], Dict]:
         """Filter out samples that have zero supervised targets (all targets == ignore_index)."""

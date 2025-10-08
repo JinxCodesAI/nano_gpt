@@ -306,135 +306,14 @@ class SequenceScorerProvider(DataProviderBase):
             return {"input_ids": input_ids, "targets": targets, "masking_strategy": ["random"] * self.batch_size, "masking_ratio": [float(x) for x in raw_targets.tolist()]}
 
     def produce_one_file(self, split: str, seq: int) -> None:
-        """Override to handle stage-based generation at file level.
+        """Write unified array-of-batches format.
 
-        - If stage-based is enabled: delegate to stage-based producer
-        - Else: for validation split only, generate base batches and append ~10% extra
-          unmodified (zero-target) samples on top of existing data. For train, fall back
-          to base implementation.
+        Stage-based generation will be reworked separately to fit the same format.
         """
         if self.use_all_stages_for_training:
-            self._produce_stage_based_file(split, seq)
-            return
-
-        # Default path (no stages)
-        if split != "val":
-            # Train split unchanged: use base implementation
-            super().produce_one_file(split, seq)
-            return
-
-        # Validation split augmentation: create base batches then append extra zero-target samples
-        import time
-        rng = torch.Generator()
-        per_seed = (self.seed * 1000003) ^ (hash(split) & 0xFFFFFFFF) ^ seq
-        rng.manual_seed(per_seed)
-
-        # Collect base batches using provider's sampling (unchanged behavior)
-        batches = [self.sample_batch(split, rng) for _ in range(self.batches_per_file)]
-
-        # Concatenate tensors across batches
-        tensor_keys = [k for k in batches[0].keys() if isinstance(batches[0][k], torch.Tensor)]
-        tensors = {}
-        for k in tensor_keys:
-            tensors[k] = torch.cat([b[k] for b in batches], dim=0)
-
-        # Collect non-tensor metadata from batches (compatible with base implementation)
-        batch_metadata = {}
-        for k in batches[0].keys():
-            if k not in tensor_keys and k not in batch_metadata:
-                values = []
-                for batch in batches:
-                    if k in batch:
-                        if isinstance(batch[k], list):
-                            values.extend(batch[k])
-                        else:
-                            values.append(batch[k])
-                batch_metadata[k] = values
-
-        # Compute number of extra zero-target samples (~10% of base), floor per user instruction
-        first_key = next(iter(tensors))
-        base_total = int(tensors[first_key].shape[0])
-        extra_count = int(base_total * 0.10)
-
-        # Start with base masking_strategy and masking_ratio if present, else empty
-        masking_strategy_list = list(batch_metadata.get('masking_strategy', []))
-        masking_ratio_list = list(batch_metadata.get('masking_ratio', []))
-
-        if extra_count > 0:
-            # Build extra ORIGINAL (unmasked, uncorrupted) sequences from validation ids
-            ids = self.val_ids
-            max_start_idx = len(ids) - (self.block_size - 1)
-            if max_start_idx > 0:
-                ix = torch.randint(0, max_start_idx, (extra_count,), generator=rng).tolist()
-                original_sequences = [ids[i : i + (self.block_size - 1)] for i in ix]
-                original_text = torch.tensor(original_sequences, dtype=torch.long)
-                input_ids_extra = add_cls_token(original_text, self.cls_token_id, self.block_size, self.pad_token_id)
-                # Apply transformation to zero ratios (unmodified sequences)
-                raw_targets_extra = torch.zeros(extra_count, dtype=torch.float32)
-                targets_extra = sequence_scorer_target_transform(raw_targets_extra)
-
-                # Align extras to base tensor devices before concatenation
-                if 'input_ids' in tensors and 'targets' in tensors:
-                    dev_inputs = tensors['input_ids'].device
-                    dev_targets = tensors['targets'].device
-                    input_ids_extra = input_ids_extra.to(dev_inputs)
-                    targets_extra = targets_extra.to(dev_targets)
-                    tensors['input_ids'] = torch.cat([tensors['input_ids'], input_ids_extra], dim=0)
-                    tensors['targets'] = torch.cat([tensors['targets'].to(torch.float32), targets_extra], dim=0)
-                else:
-                    # Fallback for legacy x/y schema
-                    dev_inputs = tensors['x'].device
-                    dev_targets = tensors['y'].device
-                    input_ids_extra = input_ids_extra.to(dev_inputs)
-                    targets_extra = targets_extra.to(dev_targets)
-                    tensors['x'] = torch.cat([tensors['x'], input_ids_extra], dim=0)
-                    tensors['y'] = torch.cat([tensors['y'].to(torch.float32), targets_extra], dim=0)
-
-                # Extend masking strategy and ratio for the extras
-                masking_strategy_list.extend(['original'] * extra_count)
-                masking_ratio_list.extend([0.0] * extra_count)
-
-        # If we augmented validation, reshuffle combined tensors to interleave extras
-        if split == "val":
-            key_inputs = 'input_ids' if 'input_ids' in tensors else 'x'
-            key_targets = 'targets' if 'targets' in tensors else 'y'
-            total = tensors[key_inputs].shape[0]
-            perm_cpu = torch.randperm(total, generator=rng)
-            perm_inputs = perm_cpu.to(tensors[key_inputs].device)
-            perm_targets = perm_cpu.to(tensors[key_targets].device)
-            tensors[key_inputs] = tensors[key_inputs][perm_inputs]
-            tensors[key_targets] = tensors[key_targets][perm_targets]
-            # Apply same permutation to masking strategy/ratio if available and lengths match
-            if len(masking_strategy_list) == total:
-                masking_strategy_list = [masking_strategy_list[i] for i in perm_cpu.tolist()]
-            if len(masking_ratio_list) == total:
-                masking_ratio_list = [float(masking_ratio_list[i]) for i in perm_cpu.tolist()]
-
-        # Assemble metadata and write file atomically (parity with base)
-        metadata = {
-            "batch_size": self.batch_size,
-            "num_batches": self.batches_per_file,
-            "file_idx": seq,
-            "split": split,
-            "produced_at": int(time.time() * 1000),
-        }
-        # Add batch-specific metadata
-        metadata.update(batch_metadata)
-        if masking_strategy_list:
-            metadata['masking_strategy'] = masking_strategy_list
-        if masking_ratio_list:
-            metadata['masking_ratio'] = masking_ratio_list
-
-        d = self.train_dir if split == "train" else self.val_dir
-        ts = metadata["produced_at"]
-        tmp_name = f".tmp-{ts}-{seq:06d}.pt"
-        final_name = f"{ts}-{seq:06d}-{self.batches_per_file}.pt"
-        tmp_path = os.path.join(d, tmp_name)
-        final_path = os.path.join(d, final_name)
-        torch.save({"tensors": tensors, "metadata": metadata}, tmp_path)
-        os.replace(tmp_path, final_path)
-        if self.verbose:
-            print(f"{self._log_prefix()} produced (val augmented) file: {final_path}")
+            raise NotImplementedError("Stage-based file generation must be adapted to array-of-batches format")
+        # Default path (no stages): use base implementation which writes array-of-batches
+        super().produce_one_file(split, seq)
 
     def _produce_stage_based_file(self, split: str, seq: int) -> None:
         import time
