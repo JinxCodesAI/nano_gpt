@@ -159,20 +159,31 @@ class SequenceScorerProvider(DataProviderBase):
         self.stoi = dict(self.mlm_engine.stoi)
         self.itos = dict(self.mlm_engine.itos)
 
-        # Get special token IDs from MLM vocab (should match char_diffusion)
+        # Get special token IDs from MLM vocab
         self.mask_token_id = int(self.mlm_engine.mask_token_id)
 
-        # PAD and CLS should already be in MLM vocab (char_diffusion adds them)
+        # PAD should be in MLM vocab
         if '[PAD]' not in self.stoi:
             raise ValueError("MLM checkpoint missing [PAD] token - please regenerate char_diffusion data")
-        if '[CLS]' not in self.stoi:
-            raise ValueError("MLM checkpoint missing [CLS] token - please regenerate char_diffusion data")
-
         self.pad_token_id = self.stoi['[PAD]']
-        self.cls_token_id = self.stoi['[CLS]']
 
-        # Vocab size should match MLM exactly (base + MASK + PAD + CLS)
-        self.vocab_size = int(self.mlm_engine.vocab_size)
+        # CLS token: add if missing (backward compatibility with old checkpoints)
+        if '[CLS]' not in self.stoi:
+            # Old checkpoint without CLS - add it at the end
+            mlm_vocab_size = int(self.mlm_engine.vocab_size)
+            self.cls_token_id = mlm_vocab_size  # Add after all existing tokens
+            self.stoi['[CLS]'] = self.cls_token_id
+            self.itos[self.cls_token_id] = '[CLS]'
+            self.vocab_size = mlm_vocab_size + 1  # Extended vocab
+
+            if self.verbose:
+                print(f"{self._log_prefix()} WARNING: MLM checkpoint missing [CLS] token")
+                print(f"  Adding [CLS] at position {self.cls_token_id}")
+                print(f"  Extended vocab_size: {self.vocab_size}")
+        else:
+            # New checkpoint with CLS already present
+            self.cls_token_id = self.stoi['[CLS]']
+            self.vocab_size = int(self.mlm_engine.vocab_size)
 
         if self.verbose:
             print(f"{self._log_prefix()} Vocabulary loaded from MLM:")
