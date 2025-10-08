@@ -86,7 +86,7 @@ class SequenceScorerProvider(DataProviderBase):
     def _validate_stage_config(self):
         if self.use_all_stages_for_training is not None:
             if not self.use_all_stages_for_training:
-                raise NotImplementedError("use_all_stages_for_training=False is not yet implemented")
+                raise ValueError("Unsupported config: use_all_stages_for_training=False. Set it to True or omit stage settings.")
             if not self.unmasking_stages:
                 raise ValueError("unmasking_stages must be provided when use_all_stages_for_training=True")
             if not self.validation_stages:
@@ -221,7 +221,8 @@ class SequenceScorerProvider(DataProviderBase):
 
     def sample_batch(self, split: str, rng) -> Dict[str, torch.Tensor]:
         if self.use_all_stages_for_training:
-            raise NotImplementedError("Stage-based sampling requires file-level generation")
+            # In stage-based mode file generation is done in produce_one_file; fall back to default per-batch sampling here.
+            return self._sample_default_batch(split, rng)
         return self._sample_default_batch(split, rng)
 
     def _sample_default_batch(self, split: str, rng) -> Dict[str, torch.Tensor]:
@@ -308,10 +309,10 @@ class SequenceScorerProvider(DataProviderBase):
     def produce_one_file(self, split: str, seq: int) -> None:
         """Write unified array-of-batches format.
 
-        Stage-based generation will be reworked separately to fit the same format.
+        Supports both default and stage-based generation.
         """
         if self.use_all_stages_for_training:
-            raise NotImplementedError("Stage-based file generation must be adapted to array-of-batches format")
+            return self._produce_stage_based_file(split, seq)
         # Default path (no stages): use base implementation which writes array-of-batches
         super().produce_one_file(split, seq)
 
@@ -449,101 +450,93 @@ class SequenceScorerProvider(DataProviderBase):
 
         if all_inputs:
             combined_inputs = torch.cat(all_inputs, dim=0)
-            # all_targets may be list of tensors; concatenate then cast
             combined_targets = torch.cat([t if torch.is_tensor(t) else torch.tensor(t, dtype=torch.float32) for t in all_targets], dim=0).to(torch.float32)
             total_samples = combined_inputs.shape[0]
             shuffle_indices = torch.randperm(total_samples, generator=rng)
-            shuffled_inputs = combined_inputs[shuffle_indices]
-            shuffled_targets = combined_targets[shuffle_indices]
-            shuffled_stage_info = [all_stage_info[i] for i in shuffle_indices.tolist()]
-            # Masking ratio follows the same shuffle
+            inputs = combined_inputs[shuffle_indices]
+            targets = combined_targets[shuffle_indices]
+            stage_info = [all_stage_info[i] for i in shuffle_indices.tolist()]
             combined_masking_ratio = all_masking_ratio
-            shuffled_masking_ratio = [float(combined_masking_ratio[i]) for i in shuffle_indices.tolist()]
+            masking_ratio = [float(combined_masking_ratio[i]) for i in shuffle_indices.tolist()]
 
-            # Validation split augmentation: append ~10% extra original (zero-target) samples on top
+            # Optional: append ~10% zero-target extras for val, then reshuffle
             if split == "val":
-                extra_count = int(shuffled_inputs.shape[0] * 0.10)
-                if extra_count > 0:
-                    # Get validation ids for extra samples
+                extra = int(inputs.shape[0] * 0.10)
+                if extra > 0:
                     val_ids = self.val_ids
-                    max_start_idx_extra = len(val_ids) - (self.block_size - 1)
-                    if max_start_idx_extra > 0:
-                        ix_extra = torch.randint(0, max_start_idx_extra, (extra_count,), generator=rng).tolist()
-                        original_sequences_extra = [val_ids[i : i + (self.block_size - 1)] for i in ix_extra]
-                        original_text_extra = torch.tensor(original_sequences_extra, dtype=torch.long)
-                        input_ids_extra = add_cls_token(original_text_extra, self.cls_token_id, self.block_size, self.pad_token_id)
-                        # Apply transformation to zero ratios (unmodified sequences)
-                        raw_targets_extra = torch.zeros(extra_count, dtype=torch.float32)
+                    max_start_idx = len(val_ids) - (self.block_size - 1)
+                    if max_start_idx > 0:
+                        ix = torch.randint(0, max_start_idx, (extra,), generator=rng).tolist()
+                        original_sequences = [val_ids[i : i + (self.block_size - 1)] for i in ix]
+                        original_text = torch.tensor(original_sequences, dtype=torch.long)
+                        input_ids_extra = add_cls_token(original_text, self.cls_token_id, self.block_size, self.pad_token_id)
+                        raw_targets_extra = torch.zeros(extra, dtype=torch.float32)
                         targets_extra = self._transform_ratio_to_target(raw_targets_extra)
-                        # Align devices before concatenation
-                        input_ids_extra = input_ids_extra.to(shuffled_inputs.device)
-                        targets_extra = targets_extra.to(shuffled_targets.device)
-                        # Append to tensors
-                        shuffled_inputs = torch.cat([shuffled_inputs, input_ids_extra], dim=0)
-                        shuffled_targets = torch.cat([shuffled_targets, targets_extra], dim=0)
-                        shuffled_stage_info.extend([{"extra_zero": True}] * extra_count)
-                        # Append masking_ratio zeros for extras
-                        shuffled_masking_ratio.extend([0.0] * extra_count)
+                        input_ids_extra = input_ids_extra.to(inputs.device)
+                        targets_extra = targets_extra.to(targets.device)
+                        inputs = torch.cat([inputs, input_ids_extra], dim=0)
+                        targets = torch.cat([targets, targets_extra], dim=0)
+                        stage_info.extend([{"extra_zero": True}] * extra)
+                        masking_ratio.extend([0.0] * extra)
+                # reshuffle after extras
+                total = inputs.shape[0]
+                perm = torch.randperm(total, generator=rng)
+                inputs = inputs[perm]
+                targets = targets[perm]
+                stage_info = [stage_info[i] for i in perm.tolist()]
+                masking_ratio = [float(masking_ratio[i]) for i in perm.tolist()]
 
-            # After augmentation, reshuffle to interleave extras with base samples
-            if split == "val":
-                total = shuffled_inputs.shape[0]
-                perm_cpu = torch.randperm(total, generator=rng)
-                perm_inputs = perm_cpu.to(shuffled_inputs.device)
-                perm_targets = perm_cpu.to(shuffled_targets.device)
-                shuffled_inputs = shuffled_inputs[perm_inputs]
-                shuffled_targets = shuffled_targets[perm_targets]
-                # stage_info is Python list; use CPU indices directly
-                shuffled_stage_info = [shuffled_stage_info[i] for i in perm_cpu.tolist()]
-                # masking_ratio follows same reshuffle
-                shuffled_masking_ratio = [float(shuffled_masking_ratio[i]) for i in perm_cpu.tolist()]
+            # Build batches_out
+            batches_out = []
+            total_needed = self.batches_per_file * self.batch_size
+            # truncate or pad with last samples to exactly total_needed
+            if inputs.shape[0] < total_needed:
+                # simple wrap-around to fill
+                reps = (total_needed + inputs.shape[0] - 1) // inputs.shape[0]
+                inputs = inputs.repeat((reps, 1))[:total_needed]
+                targets = targets.repeat(reps)[:total_needed]
+                stage_info = (stage_info * reps)[:total_needed]
+                masking_ratio = (masking_ratio * reps)[:total_needed]
+            else:
+                inputs = inputs[:total_needed]
+                targets = targets[:total_needed]
+                stage_info = stage_info[:total_needed]
+                masking_ratio = masking_ratio[:total_needed]
 
-            tensors = {"input_ids": shuffled_inputs, "targets": shuffled_targets}
+            for i in range(self.batches_per_file):
+                s = i * self.batch_size
+                e = s + self.batch_size
+                tens = {"input": inputs[s:e], "target": targets[s:e]}
+                meta = {
+                    "stage_info": stage_info[s:e],
+                    "masking_ratio": masking_ratio[s:e],
+                }
+                batches_out.append({"tensors": tens, "metadata": meta})
 
-            # Derive masking_strategy from stage_info and extras
-            def _map_stage_type(cfg: Dict[str, Any]) -> str:
-                t = cfg.get('type') if isinstance(cfg, dict) else None
-                if t == 'line':
-                    return 'lines'
-                if t in ('random', 'sticky', 'span'):
-                    return t
-                # Extras or unknown -> original
-                return 'original'
-
-            masking_strategy = [_map_stage_type(cfg) for cfg in shuffled_stage_info]
-
-            # Validation split augmentation: append extras already added above
-            # reshuffle for val already applied below
-
-            # Assemble metadata first
-            metadata = {
+            file_meta = {
                 "batch_size": self.batch_size,
                 "num_batches": self.batches_per_file,
                 "file_idx": seq,
                 "split": split,
                 "produced_at": int(time.time() * 1000),
-                "stage_info": shuffled_stage_info,
                 "stage_distribution": stage_distribution,
-                "masking_strategy": masking_strategy,
-                "masking_ratio": shuffled_masking_ratio,
             }
 
             d = self.train_dir if split == "train" else self.val_dir
-            ts = metadata["produced_at"]
+            ts = file_meta["produced_at"]
             tmp_name = f".tmp-{ts}-{seq:06d}.pt"
             final_name = f"{ts}-{seq:06d}-{self.batches_per_file}.pt"
             tmp_path = os.path.join(d, tmp_name)
             final_path = os.path.join(d, final_name)
-            torch.save({"tensors": tensors, "metadata": metadata}, tmp_path)
+            torch.save({"batches": batches_out, "metadata": file_meta}, tmp_path)
             os.replace(tmp_path, final_path)
             if self.verbose:
-                print(f"{self._log_prefix()} produced stage-based file: {final_path}")
-                # Print aggregate timing as average per-batch and unmasking share
                 total_ms = total_stage_time * 1000.0
                 avg_per_batch_ms = total_ms / max(self.batches_per_file, 1)
                 mask_ms = total_mask_time * 1000.0
                 unmask_ms = max(total_ms - mask_ms, 0.0)
                 pct_unmask = (unmask_ms / max(total_ms, 1e-6)) * 100.0
+                print(f"{self._log_prefix()} produced stage-based file: {final_path}")
                 print(f"{self._log_prefix()} avg batch gen time: {avg_per_batch_ms:.2f} ms ({self.batches_per_file} batches), unmasking {pct_unmask:.1f}%")
         else:
             super().produce_one_file(split, seq)

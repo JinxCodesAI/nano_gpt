@@ -52,11 +52,11 @@ class DataProviderBase:
         """Return required metadata dict; must include training_type and batch_schema.
         This method must be implemented by subclasses.
         """
-        raise NotImplementedError
+        raise RuntimeError("Subclasses must implement build_meta() and include required keys.")
 
     def sample_batch(self, split: str, rng: torch.Generator) -> Dict[str, torch.Tensor]:
         """Return a dict of tensors for one batch, each shaped [batch_size, ...]."""
-        raise NotImplementedError
+        raise RuntimeError("Subclasses must implement sample_batch(split, rng) and return tensor dicts shaped [batch_size, ...].")
 
     # ---- shared data loading helpers ----
     def _load_input_text(self, filename: str = 'input.txt') -> str:

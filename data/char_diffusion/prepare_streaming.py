@@ -214,7 +214,7 @@ class CharDiffusionProvider(DataProviderBase):
         """Validate stage configuration and raise exceptions for unsupported options."""
         if self.use_all_stages_for_training is not None:
             if not self.use_all_stages_for_training:
-                raise NotImplementedError("use_all_stages_for_training=False is not yet implemented")
+                raise ValueError("Unsupported config: use_all_stages_for_training=False. Set it to True or omit stage settings.")
 
             if not self.unmasking_stages:
                 raise ValueError("unmasking_stages must be provided when use_all_stages_for_training=True")
@@ -285,10 +285,9 @@ class CharDiffusionProvider(DataProviderBase):
     def sample_batch(self, split: str, rng) -> Dict[str, Any]:
         """Sample a batch with stage-aware masking or default BERT-style masking."""
         if self._stages_enabled:
-            # For stage-based generation, we need to generate all samples for the file at once
-            # This method will be called by the base class for each batch, but we need to
-            # coordinate across all batches in the file. We'll handle this differently.
-            raise NotImplementedError("Stage-based sampling requires file-level generation")
+            # In stage-based mode file generation is done in produce_one_file; fall back to default per-batch sampling
+            # here to avoid NotImplemented paths being hit by any callers expecting a batch.
+            return self._sample_default_batch(split, rng)
         else:
             return self._sample_default_batch(split, rng)
 
@@ -401,8 +400,8 @@ class CharDiffusionProvider(DataProviderBase):
             builder = self.train_builder if split == "train" else self.val_builder
             return builder.build_variable_length_sequences(count, self.block_size, rng)
         else:
-            # Fallback (should not be reached in normal operation)
-            raise NotImplementedError("Non-line-aligned mode not supported in this method")
+            # Unsupported configuration for this provider method
+            raise ValueError("Non-line-aligned mode not supported in _build_line_aligned_variable_length; enable line-aligned sequences.")
 
     def _apply_masking_and_pad(self, x: torch.Tensor, content_lengths: torch.Tensor,
                               mask_probability: float, mask_token_id: int, base_vocab_size: int, rng) -> tuple[torch.Tensor, torch.Tensor]:
@@ -503,66 +502,48 @@ class CharDiffusionProvider(DataProviderBase):
             total_samples = combined_x.shape[0]
             shuffle_indices = torch.randperm(total_samples, generator=rng)
 
-            shuffled_x = combined_x[shuffle_indices]
-            shuffled_y = combined_y[shuffle_indices]
-            shuffled_stage_info = [all_stage_info[i] for i in shuffle_indices.tolist()]
+            x = combined_x[shuffle_indices]
+            y = combined_y[shuffle_indices]
+            stage_info = [all_stage_info[i] for i in shuffle_indices.tolist()]
 
-            tensors = {
-                "x": shuffled_x,
-                "y": shuffled_y,
-            }
+            # Build batches_out in unified array-of-batches format
+            batches_out = []
+            total_needed = self.batches_per_file * self.batch_size
+            # truncate or wrap to exactly total_needed samples
+            if x.shape[0] < total_needed:
+                reps = (total_needed + x.shape[0] - 1) // x.shape[0]
+                x = x.repeat((reps, 1))[:total_needed]
+                y = y.repeat((reps, 1))[:total_needed]
+                stage_info = (stage_info * reps)[:total_needed]
+            else:
+                x = x[:total_needed]
+                y = y[:total_needed]
+                stage_info = stage_info[:total_needed]
 
-            metadata = {
-                "batch_size": total_samples,
-                "block_size": self.block_size,
-                "stage_info": shuffled_stage_info,
-            }
+            for i in range(self.batches_per_file):
+                s = i * self.batch_size
+                e = s + self.batch_size
+                tens = {"input": x[s:e], "target": y[s:e]}
+                meta = {"stage_info": stage_info[s:e]}
+                batches_out.append({"tensors": tens, "metadata": meta})
 
-            # Write atomic (following base class pattern)
-            d = self.train_dir if split == "train" else self.val_dir
-            ts = int(time.time() * 1000)
-            tmp_name = f".tmp-{ts}-{seq:06d}.pt"
-            final_name = f"{ts}-{seq:06d}-{total_samples}.pt"
-            tmp_path = os.path.join(d, tmp_name)
-            final_path = os.path.join(d, final_name)
-            torch.save({"tensors": tensors, "metadata": metadata}, tmp_path)
-            os.replace(tmp_path, final_path)
-            if self.verbose:
-                print(f"[provider] produced stage-based file: {final_path}")
-
-        if all_x:
-            combined_x = torch.cat(all_x, dim=0)
-            combined_y = torch.cat(all_y, dim=0)
-
-            total_samples = combined_x.shape[0]
-            shuffle_indices = torch.randperm(total_samples, generator=rng)
-
-            shuffled_x = combined_x[shuffle_indices]
-            shuffled_y = combined_y[shuffle_indices]
-            shuffled_stage_info = [all_stage_info[i] for i in shuffle_indices.tolist()]
-
-            tensors = {
-                "x": shuffled_x,
-                "y": shuffled_y,
-            }
-
-            metadata = {
+            file_meta = {
                 "batch_size": self.batch_size,
                 "num_batches": self.batches_per_file,
                 "file_idx": seq,
                 "split": split,
                 "produced_at": int(time.time() * 1000),
-                "stage_info": shuffled_stage_info,
                 "stage_distribution": stage_distribution,
             }
 
+            # Write atomic (following base class pattern)
             d = self.train_dir if split == "train" else self.val_dir
-            ts = metadata["produced_at"]
+            ts = file_meta["produced_at"]
             tmp_name = f".tmp-{ts}-{seq:06d}.pt"
             final_name = f"{ts}-{seq:06d}-{self.batches_per_file}.pt"
             tmp_path = os.path.join(d, tmp_name)
             final_path = os.path.join(d, final_name)
-            torch.save({"tensors": tensors, "metadata": metadata}, tmp_path)
+            torch.save({"batches": batches_out, "metadata": file_meta}, tmp_path)
             os.replace(tmp_path, final_path)
             if self.verbose:
                 print(f"[provider] produced stage-based file: {final_path}")
