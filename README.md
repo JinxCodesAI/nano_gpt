@@ -6,6 +6,8 @@ project keeps the small, hackable ethos of nanoGPT while layering on the
 infrastructure required to explore discrete diffusion, multi-head models,
 and streaming data pipelines.
 
+> **Attribution**: This work builds on [Andrej Karpathy's nanoGPT](https://github.com/karpathy/nanoGPT) project, extending the original minimal GPT implementation with diffusion and reinforcement fine-tuning research tooling.
+
 ## Highlights
 
 - **Diffusion-first training loop** – `train.py` and the configs under
@@ -80,8 +82,8 @@ and streaming data pipelines.
 
 All documentation has been reorganised. Start with
 [docs/README.md](docs/README.md) for a full index. Highlights include the
-datasets guide, loss modifier handbook, sampler head walkthrough, and the
-research notes covering critic design, GRPO experiments, and the
+datasets guide, loss modifier handbook, sampler head walkthrough, the GRPO
+fine-tuning pipeline guide, and research notes on critic design alongside the
 Hierarchical U-Net Transformer proposal.
 
 ## Repository Layout
