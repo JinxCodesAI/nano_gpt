@@ -647,9 +647,12 @@ class GPT(nn.Module):
         x = self._encode_tokens(idx, attention_mask=attention_mask)
 
         # Mode-specific output and loss computation based on current runtime mode
+        print(f"[DEBUG] Model.forward: current_mode={self._current_mode}, idx.shape={idx.shape}, targets.shape={targets.shape if targets is not None else None}, targets.dtype={targets.dtype if targets is not None else None}")
         if self._current_mode == ModelMode.SEQUENCE_SCORER:
+            print(f"[DEBUG] Using SEQUENCE_SCORER forward path")
             out = self._forward_sequence_scorer(x, targets, loss_modifiers)
         else:  # LANGUAGE_MODEL
+            print(f"[DEBUG] Using LANGUAGE_MODEL forward path")
             out = self._forward_language_model(x, targets, loss_modifiers, idx=idx)
 
         # Record forward timing if a global timer is registered
