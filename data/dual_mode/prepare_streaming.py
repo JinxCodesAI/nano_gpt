@@ -43,28 +43,33 @@ class DualModeProvider(DataProviderBase):
         self.alternation_frequency = cfg.get('alternation_frequency', 1)
         
         super().__init__(*args, **kwargs)
-        
+
         # Initialize sub-providers for each mode
+        # Each sub-provider uses its own data directory and loads its own vocab/meta
         self._init_language_model_provider(cfg)
         self._init_sequence_scorer_provider(cfg)
-        
+
         # Batch counter for alternation
         self._batch_counter = 0
-        
+
         if self.verbose:
             print(f"[dual_mode] DualModeProvider initialized:")
             print(f"  mode_distribution: {self.mode_distribution}")
             print(f"  alternation_frequency: {self.alternation_frequency}")
             print(f"  vocab_size: {self.vocab_size}")
-    
+
     def _init_language_model_provider(self, cfg: Dict) -> None:
         """Initialize char_diffusion provider for LANGUAGE_MODEL batches."""
         from data.char_diffusion.prepare_streaming import CharDiffusionProvider
-        
-        # Create a sub-provider instance (reuse same data_dir, batch_size, etc.)
-        # We'll call its sample_batch method directly
+        import os
+
+        # Use char_diffusion's own data directory
+        char_diffusion_dir = os.path.join(os.path.dirname(self.data_dir), 'char_diffusion')
+
+        # Create a sub-provider instance
+        # We'll call its sample_batch method directly (not run() method)
         self.lm_provider = CharDiffusionProvider(
-            data_dir=self.data_dir,
+            data_dir=char_diffusion_dir,
             batch_size=self.batch_size,
             block_size=self.block_size,
             target_size=self.target_size,
@@ -86,10 +91,14 @@ class DualModeProvider(DataProviderBase):
     def _init_sequence_scorer_provider(self, cfg: Dict) -> None:
         """Initialize sequence_scorer provider for SEQUENCE_SCORER batches."""
         from data.sequence_scorer.prepare_streaming import SequenceScorerProvider
-        
+        import os
+
+        # Use sequence_scorer's own data directory
+        sequence_scorer_dir = os.path.join(os.path.dirname(self.data_dir), 'sequence_scorer')
+
         # Create a sub-provider instance
         self.ss_provider = SequenceScorerProvider(
-            data_dir=self.data_dir,
+            data_dir=sequence_scorer_dir,
             batch_size=self.batch_size,
             block_size=self.block_size,
             target_size=self.target_size,
