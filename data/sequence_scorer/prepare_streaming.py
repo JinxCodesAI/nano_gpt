@@ -160,19 +160,25 @@ class SequenceScorerProvider(DataProviderBase):
         self.base_vocab_size = int(self.mlm_engine.vocab_size)
         self.mask_token_id = int(self.mlm_engine.mask_token_id)
 
-        # Add PAD token exactly like CharDiffusion does (after MASK token)
-        self.pad_token_id = self.base_vocab_size + 1
-        self.stoi['[PAD]'] = self.pad_token_id
-        self.itos[self.pad_token_id] = '[PAD]'
+        # Check if PAD token already exists in MLM vocab
+        if '[PAD]' in self.stoi:
+            self.pad_token_id = self.stoi['[PAD]']
+        else:
+            # Add PAD token exactly like CharDiffusion does (after MASK token)
+            self.pad_token_id = self.base_vocab_size + 1
+            self.stoi['[PAD]'] = self.pad_token_id
+            self.itos[self.pad_token_id] = '[PAD]'
 
-        # Ensure [CLS] token exists in vocab mapping and extend vocab_size if needed
+        # Ensure [CLS] token exists in vocab mapping
+        # Use the configured cls_token_id (default 0)
         if self.cls_token_id not in self.itos:
             self.itos[self.cls_token_id] = '[CLS]'
         if '[CLS]' not in self.stoi:
             self.stoi['[CLS]'] = self.cls_token_id
 
-        # Final vocab size includes all tokens
-        self.vocab_size = max(self.pad_token_id + 1, int(self.cls_token_id) + 1)
+        # Final vocab size is the MLM vocab size (which already includes MASK and PAD)
+        # We just ensure CLS is mapped correctly (usually to an existing token like 0)
+        self.vocab_size = self.base_vocab_size
 
         if self.enable_line_aligned_sequences:
             # Use line-aligned sequence generation
