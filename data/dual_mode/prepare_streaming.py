@@ -200,28 +200,58 @@ class DualModeProvider(DataProviderBase):
     
     def sample_batch(self, split: str, rng: torch.Generator) -> Dict[str, Any]:
         """
-        Sample one batch, alternating between LANGUAGE_MODEL and SEQUENCE_SCORER modes.
-
-        Returns a dict with tensors and metadata including 'model_mode'.
-        Batch keys vary by mode (x/y for language_model, input_ids/targets for sequence_scorer).
+        Sample one batch, alternating between LANGUAGE_MODEL and SEQUENCE_SCORER.
+        Returns dict with batch tensors and metadata field 'model_mode'.
         """
-        # Determine mode for this batch
         mode = self._determine_mode_for_batch()
-
-        # Generate batch from appropriate provider
         if mode == 'language_model':
-            # Get batch from char_diffusion provider (keys: x, y, attention_mask)
-            print(f"[dual_mode] Sampling language_model batch")
             batch = self.lm_provider.sample_batch(split, rng)
         else:
-            # Get batch from sequence_scorer provider (keys: input_ids, targets)
-            print(f"[dual_mode] Sampling sequence_scorer batch")
             batch = self.ss_provider.sample_batch(split, rng)
-
-        # Add model_mode metadata to batch
         batch['model_mode'] = mode
-
         return batch
+
+    def produce_one_file(self, split: str, seq: int) -> None:
+        """Override base behavior to write an array of heterogenous batches.
+        The file layout is:
+          {
+            'batches': [ {'tensors': {...}, 'metadata': {...}}, ... ],
+            'metadata': { file-level }
+          }
+        This avoids concatenation/union across schemas.
+        """
+        import time
+        rng = torch.Generator()
+        per_seed = (self.seed * 1000003) ^ (hash(split) & 0xFFFFFFFF) ^ seq
+        rng.manual_seed(per_seed)
+
+        batches_out = []
+        for _ in range(self.batches_per_file):
+            b = self.sample_batch(split, rng)
+            tensors = {k: v for k, v in b.items() if isinstance(v, torch.Tensor)}
+            meta = {k: v for k, v in b.items() if not isinstance(v, torch.Tensor)}
+            # Ensure mode is present in per-batch metadata
+            if 'model_mode' not in meta:
+                raise ValueError("DualModeProvider.sample_batch must set 'model_mode'")
+            batches_out.append({"tensors": tensors, "metadata": meta})
+
+        file_meta = {
+            "batch_size": self.batch_size,
+            "num_batches": self.batches_per_file,
+            "file_idx": seq,
+            "split": split,
+            "produced_at": int(time.time() * 1000),
+        }
+        d = self.train_dir if split == "train" else self.val_dir
+        ts = file_meta["produced_at"]
+        tmp_name = f".tmp-{ts}-{seq:06d}.pt"
+        final_name = f"{ts}-{seq:06d}-{self.batches_per_file}.pt"
+        tmp_path = os.path.join(d, tmp_name)
+        final_path = os.path.join(d, final_name)
+        torch.save({"batches": batches_out, "metadata": file_meta}, tmp_path)
+        os.replace(tmp_path, final_path)
+        if self.verbose:
+            print(f"[dual_mode] produced file with {len(batches_out)} batches: {final_path}")
 
 
 # Export as Provider for prepare.py discovery

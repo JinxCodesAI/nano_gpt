@@ -53,6 +53,8 @@ class DatasetConsumer:
         self._current_batch_idx: Dict[str, int] = {"train": 0, "val": 0}
         self._loaded_data: Dict[str, Optional[Dict[str, torch.Tensor]]] = {"train": None, "val": None}
         self._loaded_metadata: Dict[str, Optional[Dict]] = {"train": None, "val": None}
+        # When provider writes array-of-batches, this holds the list for current file
+        self._loaded_batches: Dict[str, Optional[List[Dict]]] = {"train": None, "val": None}
 
         # meta
         self._meta_path = os.path.join(self.data_dir, "meta.pkl")
@@ -129,7 +131,13 @@ class DatasetConsumer:
             data = torch.load(path, map_location="cpu")
         except Exception as e:
             raise RuntimeError(f"DatasetConsumer failed to load batch file for split={split}: {path}. {type(e).__name__}: {e}") from e
-        # normalize data dict
+        # If provider wrote an array of batches, store and return empty tensors
+        if isinstance(data, dict) and 'batches' in data:
+            self._loaded_batches[split] = data.get('batches', [])
+            metadata: Dict = data.get('metadata', {})
+            return {}, metadata
+
+        # normalize data dict (aggregated tensors format)
         tensors: Dict[str, torch.Tensor] = {}
         metadata: Dict = data.get("metadata", {})
         if "x" in data and "y" in data:
@@ -224,6 +232,7 @@ class DatasetConsumer:
             self._current_file_idx[split] = 0
         self._loaded_data[split] = None
         self._loaded_metadata[split] = None
+        self._loaded_batches[split] = None
         self._current_batch_idx[split] = 0
 
     def _ensure_data_available(self, split: str) -> None:
@@ -255,104 +264,105 @@ class DatasetConsumer:
         self._ensure_data_available(split)
 
         # Load current file if needed
-        if self._loaded_data[split] is None:
+        if self._loaded_data[split] is None and self._loaded_batches.get(split) is None:
             # choose file index; in queue mode pick the first available
             if self._mode == "queue":
                 if split == "train":
-                    # In training, always pick the first available file (queue semantics)
                     self._current_file_idx[split] = 0
                 else:
-                    # In validation, preserve current index for circular reuse
                     if self._current_file_idx[split] >= len(self._split_files[split]):
                         self._current_file_idx[split] = 0
+            tensors, metadata = self._load_file(split, self._current_file_idx[split])
+            self._loaded_data[split] = tensors if tensors else {}
+            self._loaded_metadata[split] = metadata
+            self._current_batch_idx[split] = 0
+
+        # If file uses array-of-batches format, serve one batch entry at a time
+        if self._loaded_batches.get(split) is not None:
+            batches_list = self._loaded_batches[split] or []
+            idx = self._current_batch_idx[split]
+            if idx >= len(batches_list):
+                # advance to next file
+                if self._mode == "queue":
+                    path = self._split_files[split][self._current_file_idx[split]]
+                    self._maybe_delete_consumed(split, path)
+                    self._split_files[split] = self._list_available_files(split)
+                self._advance_to_next_file(split)
+                self._ensure_data_available(split)
+                tensors, metadata = self._load_file(split, self._current_file_idx[split])
+                self._loaded_data[split] = tensors if tensors else {}
+                self._loaded_metadata[split] = metadata
+                batches_list = self._loaded_batches[split] or []
+                idx = 0
+
+            entry = batches_list[idx]
+            entry_tensors = dict(entry.get('tensors', {}))
+            entry_meta = dict(entry.get('metadata', {}))
+
+            # move to device
+            def _to_device(t: torch.Tensor) -> torch.Tensor:
+                if self.device_type == "cuda":
+                    return t.pin_memory().to(device, non_blocking=True)
+                return t.to(device)
+            for k in list(entry_tensors.keys()):
+                entry_tensors[k] = _to_device(entry_tensors[k])
+
+            # attach mode if present
+            mm = entry_meta.get('model_mode', None)
+            if mm is not None:
+                entry_tensors['_model_mode'] = mm
+
+            # advance
+            self._current_batch_idx[split] += 1
+            return entry_tensors
+
+        tensors = self._loaded_data[split]
+        metadata = self._loaded_metadata[split]
+        assert tensors is not None and len(tensors) > 0
+        # derive total samples in this file from first tensor
+        first_key = next(iter(tensors))
+        total_samples = tensors[first_key].shape[0]
+
+        start_idx = self._current_batch_idx[split] * self.batch_size
+        end_idx = min(start_idx + self.batch_size, total_samples)
+
+        # if consumed all samples, advance file
+        if start_idx >= total_samples:
+            # in queue mode: delete the file we just finished
+            if self._mode == "queue":
+                path = self._split_files[split][self._current_file_idx[split]]
+                self._maybe_delete_consumed(split, path)
+                # refresh file list for queue mode to get new arrivals
+                self._split_files[split] = self._list_available_files(split)
+            # advance to next file
+            self._advance_to_next_file(split)
+            # ensure availability again (may block)
+            self._ensure_data_available(split)
+            # load new file
             tensors, metadata = self._load_file(split, self._current_file_idx[split])
             self._loaded_data[split] = tensors
             self._loaded_metadata[split] = metadata
             self._current_batch_idx[split] = 0
-
-        tensors = self._loaded_data[split]
-        metadata = self._loaded_metadata[split]
-        assert tensors is not None
-
-        # Determine per-batch mode if provided
-        modes_list = None
-        num_batches_meta = None
-        cur_batch_idx = self._current_batch_idx[split]
-        if metadata and 'model_mode' in metadata and isinstance(metadata['model_mode'], list):
-            modes_list = metadata['model_mode']
-            # Prefer explicit num_batches when present
-            num_batches_meta = int(metadata.get('num_batches', len(modes_list)))
-            if len(modes_list) != num_batches_meta:
-                # If lengths mismatch, fail fast to avoid silent corruption
-                raise ValueError(f"metadata['model_mode'] length {len(modes_list)} != num_batches {num_batches_meta}")
-            if cur_batch_idx >= num_batches_meta:
-                # Current file consumed, advance to next
-                if self._mode == "queue":
-                    path = self._split_files[split][self._current_file_idx[split]]
-                    self._maybe_delete_consumed(split, path)
-                    self._split_files[split] = self._list_available_files(split)
-                self._advance_to_next_file(split)
-                self._ensure_data_available(split)
-                tensors, metadata = self._load_file(split, self._current_file_idx[split])
-                self._loaded_data[split] = tensors
-                self._loaded_metadata[split] = metadata
-                self._current_batch_idx[split] = 0
-                cur_batch_idx = 0
-                modes_list = metadata.get('model_mode') if metadata else None
-
-        # Compute slicing indices
-        batch_tensors: Dict[str, torch.Tensor] = {}
-        if modes_list is not None:
-            # Slice only keys relevant to current batch mode using per-mode index
-            cur_mode = modes_list[cur_batch_idx]
-            prev_same_mode = sum(1 for i in range(cur_batch_idx) if modes_list[i] == cur_mode)
-            start_idx = prev_same_mode * self.batch_size
-            end_idx = start_idx + self.batch_size
-            # Keys by mode
-            LM_KEYS = {"x", "y", "attention_mask"}
-            SS_KEYS = {"input_ids", "targets"}
-            mode_keys = LM_KEYS if cur_mode == 'language_model' else SS_KEYS
-            for k in mode_keys:
-                if k in tensors:
-                    v = tensors[k]
-                    if start_idx >= v.shape[0]:
-                        raise IndexError(f"Start {start_idx} out of range for key '{k}' with total {v.shape[0]}; check provider collation")
-                    batch_tensors[k] = v[start_idx:min(end_idx, v.shape[0])]
-        else:
-            # Legacy single-schema slicing: use first tensor to derive indices
+            # recompute indices
             first_key = next(iter(tensors))
             total_samples = tensors[first_key].shape[0]
-            start_idx = cur_batch_idx * self.batch_size
-            end_idx = min(start_idx + self.batch_size, total_samples)
-            if start_idx >= total_samples:
-                if self._mode == "queue":
-                    path = self._split_files[split][self._current_file_idx[split]]
-                    self._maybe_delete_consumed(split, path)
-                    self._split_files[split] = self._list_available_files(split)
-                self._advance_to_next_file(split)
-                self._ensure_data_available(split)
-                tensors, metadata = self._load_file(split, self._current_file_idx[split])
-                self._loaded_data[split] = tensors
-                self._loaded_metadata[split] = metadata
-                self._current_batch_idx[split] = 0
-                start_idx = 0
-                first_key = next(iter(tensors))
-                total_samples = tensors[first_key].shape[0]
-                end_idx = min(self.batch_size, total_samples)
-            for k, v in tensors.items():
-                batch_tensors[k] = v[start_idx:end_idx]
+            start_idx = 0
+            end_idx = min(self.batch_size, total_samples)
 
-        # Pad to full batch if needed
-        if batch_tensors:
-            cur_bs = next(iter(batch_tensors.values())).shape[0]
-        else:
-            cur_bs = 0
+        # slice per field
+        batch_tensors: Dict[str, torch.Tensor] = {}
+        for k, v in tensors.items():
+            batch_tensors[k] = v[start_idx:end_idx]
+
+        cur_bs = next(iter(batch_tensors.values())).shape[0]
         if 0 < cur_bs < self.batch_size:
             need = self.batch_size - cur_bs
+
             def _repeat_to_fill(t: torch.Tensor, need: int) -> torch.Tensor:
                 p = t.shape[0]
                 reps = (need + p - 1) // p
                 return t.repeat((reps,) + (1,) * (t.dim() - 1))[:need]
+
             for k, v in list(batch_tensors.items()):
                 batch_tensors[k] = torch.cat([v, _repeat_to_fill(v, need)], dim=0)
 
@@ -364,12 +374,20 @@ class DatasetConsumer:
             if self.device_type == "cuda":
                 return t.pin_memory().to(device, non_blocking=True)
             return t.to(device)
+
         for k in list(batch_tensors.keys()):
             batch_tensors[k] = _to_device(batch_tensors[k])
 
-        # Attach _model_mode if available
-        if modes_list is not None:
-            batch_tensors['_model_mode'] = modes_list[self._current_batch_idx[split] - 1]
+        # Add batch-level metadata (e.g., model_mode) if available
+        # Extract metadata for the current batch slice
+        if metadata:
+            # Check if model_mode is in metadata (list of values per batch)
+            if 'model_mode' in metadata:
+                model_modes = metadata['model_mode']
+                if isinstance(model_modes, list) and len(model_modes) > start_idx:
+                    # Get the model_mode for the first sample in this batch
+                    # (all samples in a batch should have the same mode)
+                    batch_tensors['_model_mode'] = model_modes[start_idx]
 
         return batch_tensors
 
