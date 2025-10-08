@@ -17,8 +17,8 @@ eval_iters = 10
 log_interval = 10
 
 # MLM model for synthetic text generation
-mlm_checkpoint_path = 'out-char-diffusion/7250_1.77_pad_no_entropy.pt'  # adjust to your MLM checkpoint
-init_from_checkpoint = 'out-char-diffusion/7250_1.77_pad_no_entropy.pt'
+mlm_checkpoint_path = 'out-char-diffusion/1.69_MLM_8500.pt'  # adjust to your MLM checkpoint
+init_from_checkpoint = 'out-char-diffusion/1.69_MLM_8500.pt'
 freeze_transformer = True
 unfreeze_at_iteration = 500
 cls_token_id = 66

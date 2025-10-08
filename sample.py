@@ -12,6 +12,7 @@ from collections import Counter
 from enum import Enum
 
 import torch
+import torch.nn.functional as F
 from model import GPTConfig, GPT, ModelMode
 from sample_utils import (
     linear_remasking_schedule, nucleus_sample, apply_remasking,
@@ -33,21 +34,21 @@ generation_start_wall_time = None
 # Model loading
 init_from = 'resume'  # 'resume' to load from checkpoint
 out_dir = 'out-char-diffusion'
-checkpoint_name = '7250_1.77_pad_no_entropy.pt'  # Main model checkpoint
+checkpoint_name = '1.69_MLM_8500.pt'  # Main model checkpoint
 
 # Generation parameters
 num_samples = 16  # Number of samples to generate
 sequence_length = 1024  # Total length of generated sequence
 max_new_tokens = 100  # For regular sampling (non-diffusion)
-seed = 1
+seed = -1
 device = 'cuda'
 dtype = 'float16'  # Use float16 for RTX 2060 compatibility
 compile = False  # Use PyTorch 2.0 compilation (disabled due to triton issues)
 
 # Sampling method
-sampling_method = 'diffusion'  # 'diffusion' or 'standard'
+sampling_method = 'diffusion'  # 'diffusion' or 'multinomial' 
 
-seed_text = "Be or not to be, that is the question."
+seed_text = "\nWell, sir; what did this gentleman to her?\n"
 
 class SeedPlacement(Enum):
     PREFIX = 'prefix'
@@ -57,14 +58,16 @@ class SeedPlacement(Enum):
 seed_placement = SeedPlacement.RANDOM_PLACEMENT
 
 
-# Diffusion parameters (only used if sampling_method='diffusion')
+# Sampling parameters (used by both diffusion and multinomial)
 temperature = 0.8  # Temperature for sampling
+iterations = 15  # Number of iterations (demasking for diffusion, resampling for multinomial)
+
+# Diffusion-specific parameters (only used if sampling_method='diffusion')
 top_p = 1.0  # Nucleus sampling parameter (1.0 = disabled)
-diffusion_iterations = 15  # Number of demasking iterations
 start_ratio = 0.95  # Initial ratio of tokens to remask (95%)
 end_ratio = 0.05   # Final ratio of tokens to remask (5%)
 
-# Remasking parameters
+# Remasking parameters (diffusion only)
 randomness_strength = 0.2  # Balance between random (1.0) and model-guided (0.0) remasking
 intelligent_remasking = True  # Enable self-confidence based remasking when no remasking model
 
@@ -76,24 +79,19 @@ class QualityMetric(Enum):
 
 quality_metric = QualityMetric.JUDGE
 # Judge (sequence scorer) checkpoint name (relative to out_dir); required if quality_metric == QualityMetric.JUDGE
-judge_checkpoint_name = 'padded_judge_0.0155.pt'# 'scoring_p90_0.0096_epoch_3.pt'
+judge_checkpoint_name =  'padded_judge_0.0155.pt'# 'scoring_p90_0.0096_epoch_3.pt'
 
-# Schedule parameters
+# Schedule parameters (diffusion only)
 schedule_type = 'linear'  # 'linear' or 'custom'
-masking_ratios = None  # For custom schedule: list of ratios for each iteration
+masking_ratios = None # For custom schedule: list of ratios for each iteration
 
 # Logging parameters
 use_verbose_logging = True  # Print detailed progress
 log_debug = False  # Enable detailed debug logging
 show_progress = True  # Show basic progress information
 
-# Standard sampling parameters (only used if sampling_method='standard')
-start_text = ""  # Starting text for standard sampling
 # Ensure remasking_model is defined (optional component); defaults to None for inference
 remasking_model = None
-
-std_temperature = 0.8
-top_k = 200  # Top-k sampling
 
 # -----------------------------------------------------------------------------
 exec(open('configurator.py').read()) # overrides from command line or config file
@@ -102,12 +100,12 @@ if seed == -1:
     seed = int.from_bytes(os.urandom(4), byteorder='little')
 
 # Validation
-if sampling_method not in ['diffusion', 'standard']:
-    raise ValueError(f"sampling_method must be 'diffusion' or 'standard', got '{sampling_method}'")
+if sampling_method not in ['diffusion', 'multinomial']:
+    raise ValueError(f"sampling_method must be 'diffusion' or 'multinomial', got '{sampling_method}'")
 
 if schedule_type == 'custom' and masking_ratios is not None:
-    diffusion_iterations = len(masking_ratios)
-    print(f"Using custom schedule with {diffusion_iterations} iterations")
+    iterations = len(masking_ratios)
+    print(f"Using custom schedule with {iterations} iterations")
 
 # Set random seed
 torch.manual_seed(seed)
@@ -269,8 +267,57 @@ def load_vocabulary(checkpoint, fallback_dataset='shakespeare_char'):
 # Diffusion generation functions
 # -----------------------------------------------------------------------------
 
-def log_iteration_progress(iteration, total_iterations, tokens, mask_token_id, decode_fn):
-    """Log progress during diffusion iterations"""
+def apply_seed_text(tokens, seed_ids, placement, batch_size, total_length, device, verbose=False):
+    """
+    Apply seed text to tokens and create protected mask
+
+    Args:
+        tokens: Token tensor to modify (batch_size, total_length)
+        seed_ids: List of seed token IDs
+        placement: SeedPlacement enum (PREFIX or RANDOM_PLACEMENT)
+        batch_size: Batch size
+        total_length: Sequence length
+        device: Device to use
+        verbose: Enable verbose logging
+
+    Returns:
+        tuple: (modified_tokens, protected_mask)
+    """
+    protected_mask = torch.zeros((batch_size, total_length), dtype=torch.bool, device=device)
+
+    if seed_ids is not None and len(seed_ids) > 0:
+        seed_len = min(len(seed_ids), total_length)
+        # Determine placement start index
+        if placement == SeedPlacement.RANDOM_PLACEMENT:
+            max_start = total_length - seed_len
+            if max_start >= 0:
+                start_idx = int(torch.randint(0, max_start + 1, (1,), device=device).item())
+            else:
+                start_idx = 0
+                seed_len = total_length
+        else:
+            start_idx = 0
+        seed_tensor = torch.tensor(seed_ids[:seed_len], dtype=torch.long, device=device)
+        tokens[:, start_idx:start_idx+seed_len] = seed_tensor.unsqueeze(0)
+        protected_mask[:, start_idx:start_idx+seed_len] = True
+        if verbose:
+            print(f"DEBUG: Applied seed length: {seed_len} at index: {start_idx}")
+
+    return tokens, protected_mask
+
+def log_iteration_progress(iteration, total_iterations, tokens, mask_token_id, decode_fn,
+                          previous_tokens=None, mode='diffusion'):
+    """Log progress during generation iterations
+
+    Args:
+        iteration: Current iteration number
+        total_iterations: Total number of iterations
+        tokens: Current token tensor
+        mask_token_id: ID of mask token
+        decode_fn: Function to decode tokens to text
+        previous_tokens: Previous iteration tokens (for multinomial mode to track changes)
+        mode: 'diffusion' or 'multinomial' - determines what to log
+    """
     if not show_progress:
         return
 
@@ -278,11 +325,22 @@ def log_iteration_progress(iteration, total_iterations, tokens, mask_token_id, d
     if not torch.is_tensor(tokens):
         raise TypeError(f"tokens must be a torch.Tensor, got {type(tokens)}")
 
-    masked_count = (tokens == mask_token_id).sum().item()
-    total_tokens = tokens.numel()
-    masked_ratio = masked_count / total_tokens
-
-    print(f"Iteration {iteration+1}/{total_iterations}: {masked_count}/{total_tokens} tokens masked ({masked_ratio:.1%})")
+    if mode == 'diffusion':
+        masked_count = (tokens == mask_token_id).sum().item()
+        total_tokens = tokens.numel()
+        masked_ratio = masked_count / total_tokens
+        print(f"Iteration {iteration+1}/{total_iterations}: {masked_count}/{total_tokens} tokens masked ({masked_ratio:.1%})")
+    elif mode == 'multinomial':
+        if previous_tokens is not None:
+            # Calculate how many tokens changed from previous iteration
+            changed_count = (tokens != previous_tokens).sum().item()
+            total_tokens = tokens.numel()
+            changed_ratio = changed_count / total_tokens
+            print(f"Iteration {iteration+1}/{total_iterations}: {changed_count}/{total_tokens} tokens changed ({changed_ratio:.1%})")
+        else:
+            # First iteration - all tokens are being generated
+            total_tokens = tokens.numel()
+            print(f"Iteration {iteration+1}/{total_iterations}: {total_tokens}/{total_tokens} tokens initialized (100.0%)")
 
     if iteration == 0 or iteration == total_iterations - 1:
         # Show sample for first and last iterations
@@ -302,24 +360,15 @@ def diffusion_generate(model, batch_size, total_length, iterations, mask_token_i
     tokens = torch.full((batch_size, total_length), mask_token_id, dtype=torch.long, device=device)
 
     # Apply seed text (never to be masked) if provided
-    protected_mask = torch.zeros((batch_size, total_length), dtype=torch.bool, device=device)
-    if seed_ids is not None and len(seed_ids) > 0:
-        seed_len = min(len(seed_ids), total_length)
-        # Determine placement start index
-        if placement == SeedPlacement.RANDOM_PLACEMENT:
-            max_start = total_length - seed_len
-            if max_start >= 0:
-                start_idx = int(torch.randint(0, max_start + 1, (1,), device=device).item())
-            else:
-                start_idx = 0
-                seed_len = total_length
-        else:
-            start_idx = 0
-        seed_tensor = torch.tensor(seed_ids[:seed_len], dtype=torch.long, device=device)
-        tokens[:, start_idx:start_idx+seed_len] = seed_tensor.unsqueeze(0)
-        protected_mask[:, start_idx:start_idx+seed_len] = True
-        if verbose:
-            print(f"DEBUG: Applied seed length: {seed_len} at index: {start_idx}")
+    tokens, protected_mask = apply_seed_text(
+        tokens=tokens,
+        seed_ids=seed_ids,
+        placement=placement,
+        batch_size=batch_size,
+        total_length=total_length,
+        device=device,
+        verbose=verbose
+    )
 
     # Debug: Check initial token setup
     if verbose:
@@ -409,26 +458,111 @@ def diffusion_generate(model, batch_size, total_length, iterations, mask_token_i
 
     return tokens
 
-def standard_generate(model, start_ids, max_new_tokens, temperature=1.0, top_k=None):
+def multinomial_generate(model, batch_size, total_length, iterations, mask_token_id, vocab_size,
+                        decode_fn, temperature=0.8, verbose=False, seed_ids=None,
+                        placement=SeedPlacement.PREFIX, pad_token_id=None, base_vocab_size=None):
     """
-    Standard autoregressive generation (batched across num_samples)
+    Generate text using multinomial sampling with iterative full-sequence resampling
+
+    Unlike diffusion which only updates masked positions and applies remasking,
+    multinomial sampling:
+    1. Starts with fully masked sentence
+    2. Runs model and applies softmax
+    3. Samples from softmax and replaces ALL tokens (not just masked ones)
+    4. Repeats for specified iterations without any remasking step
+
+    Args:
+        model: The language model
+        batch_size: Number of samples to generate
+        total_length: Length of sequences to generate
+        iterations: Number of resampling iterations
+        mask_token_id: ID of mask token
+        vocab_size: Full vocabulary size
+        decode_fn: Function to decode tokens to text
+        temperature: Sampling temperature
+        verbose: Enable verbose logging
+        seed_ids: Optional seed text token IDs (protected from changes)
+        placement: Seed placement mode
+        pad_token_id: ID of pad token (excluded from sampling)
+        base_vocab_size: Base vocabulary size (exclude special tokens)
+
+    Returns:
+        Generated tokens (batch_size, total_length)
     """
-    model.eval()
+    # Start with all positions masked
+    tokens = torch.full((batch_size, total_length), mask_token_id, dtype=torch.long, device=device)
 
-    # Build initial batch
-    if start_ids:
-        idx = torch.tensor([start_ids] * num_samples, dtype=torch.long, device=device)
-    else:
-        # If no start text, randomize the first token per sample
-        idx = torch.randint(0, vocab_size, (num_samples, 1), device=device)
+    # Apply seed text (never to be changed) if provided
+    tokens, protected_mask = apply_seed_text(
+        tokens=tokens,
+        seed_ids=seed_ids,
+        placement=placement,
+        batch_size=batch_size,
+        total_length=total_length,
+        device=device,
+        verbose=verbose
+    )
 
-    # Single batched generate call
-    all_generated = model.generate(idx, max_new_tokens, temperature=temperature, top_k=top_k)
-    return all_generated
+    # Mark the wall-clock start of generation
+    global generation_start_wall_time
+    generation_start_wall_time = time.time()
 
-# -----------------------------------------------------------------------------
-# Main execution
-# -----------------------------------------------------------------------------
+    if verbose or show_progress:
+        print(f"Starting multinomial generation:")
+        print(f"  - Samples: {batch_size}")
+        print(f"  - Length: {total_length}")
+        print(f"  - Iterations: {iterations}")
+        print(f"  - Temperature: {temperature}")
+        print("=" * 60)
+
+    previous_tokens = None
+
+    for iteration in range(iterations):
+        if verbose or show_progress:
+            log_iteration_progress(iteration, iterations, tokens, mask_token_id, decode_fn,
+                                 previous_tokens=previous_tokens, mode='multinomial')
+
+        # Store previous tokens for change tracking
+        previous_tokens = tokens.clone()
+
+        # Step 1: Run model forward pass
+        _t = get_global_timer()
+        _cm = _t.measure('predict_and_sample') if _t is not None else nullcontext()
+        with _cm:
+            # Get logits for all positions
+            dummy_targets = torch.zeros_like(tokens)
+            with torch.no_grad():
+                logits, _ = model(tokens, targets=dummy_targets)
+
+            # Apply temperature scaling
+            if temperature != 1.0:
+                logits = logits / temperature
+
+            # Exclude special tokens from sampling
+            logits[:, :, mask_token_id] = float('-inf')
+            if pad_token_id is not None:
+                logits[:, :, pad_token_id] = float('-inf')
+            if base_vocab_size is not None and logits.shape[-1] > base_vocab_size:
+                logits[:, :, base_vocab_size:] = float('-inf')
+            if vocab_size is not None and logits.shape[-1] > vocab_size:
+                logits = logits[:, :, :vocab_size]
+
+            # Sample from softmax for all positions using torch.multinomial
+            probs = F.softmax(logits, dim=-1)  # (batch_size, seq_len, vocab_size)
+
+            # Reshape for multinomial sampling
+            batch_size_actual, seq_len, vocab_size_actual = probs.shape
+            probs_flat = probs.view(-1, vocab_size_actual)  # (batch_size * seq_len, vocab_size)
+            sampled_flat = torch.multinomial(probs_flat, num_samples=1).squeeze(-1)  # (batch_size * seq_len,)
+            sampled_tokens = sampled_flat.view(batch_size_actual, seq_len)  # (batch_size, seq_len)
+
+            # Update tokens, but preserve protected (seed) positions
+            new_tokens = tokens.clone()
+            new_tokens[~protected_mask] = sampled_tokens[~protected_mask]
+
+        tokens = new_tokens
+
+    return tokens
 
 # Load main model
 main_checkpoint_path = os.path.join(out_dir, checkpoint_name)
@@ -531,19 +665,16 @@ print(f"Samples: {num_samples}")
 print(f"Device: {device} ({dtype})")
 print(f"Seed: {seed}")
 
-if sampling_method == 'diffusion':
-    print(f"Sequence length: {sequence_length}")
-    print(f"Iterations: {diffusion_iterations}")
-    print(f"Schedule: {schedule_type} ({start_ratio:.1%} → {end_ratio:.1%})")
-    print(f"Temperature: {temperature}, Top-p: {top_p}")
-else:
-    print(f"Max new tokens: {max_new_tokens}")
-    print(f"Temperature: {std_temperature}, Top-k: {top_k}")
-    # Informational: Critic-guided remasking will be used if available (no external remasking model)
-    if sampling_method == 'diffusion' and remasking_model is None and getattr(getattr(model, 'config', object()), 'add_critic_head', False):
-        print("Critic-guided remasking: enabled (using model's critic head)")
+print(f"Sequence length: {sequence_length}")
+print(f"Iterations: {iterations}")
+print(f"Temperature: {temperature}")
 
-    print(f"Start text: '{start_text}'")
+if sampling_method == 'diffusion':
+    print(f"Schedule: {schedule_type} ({start_ratio:.1%} → {end_ratio:.1%})")
+    print(f"Top-p: {top_p}")
+    # Informational: Critic-guided remasking will be used if available (no external remasking model)
+    if remasking_model is None and getattr(getattr(model, 'config', object()), 'add_critic_head', False):
+        print("Critic-guided remasking: enabled (using model's critic head)")
 
 print(f"{'='*60}")
 
@@ -563,7 +694,7 @@ with torch.no_grad():
                 model=model,
                 batch_size=num_samples,
                 total_length=sequence_length,
-                iterations=diffusion_iterations,
+                iterations=iterations,
                 mask_token_id=mask_token_id,
                 vocab_size=vocab_size,  # Full vocab size (includes mask token)
                 decode_fn=decode,
@@ -572,62 +703,69 @@ with torch.no_grad():
                 seed_ids=seed_ids,
                 placement=seed_placement
             )
-            _end_wall = time.time()
-            # Calculate quality metric
-            metric = quality_metric
-            confidence_scores = None
-            judge_scores = None
-            if metric == QualityMetric.SELF:
-                print("\nCalculating self-confidence scores...")
-                _t = get_global_timer()
-                _cm = _t.measure('self_conf_eval') if _t is not None else nullcontext()
-                with _cm:
-                    confidence_scores = calculate_selfconfidence_ratio(
-                        model=model,
-                        tokens=generated_tokens,
-                        mask_token_id=mask_token_id,
-                        device=device,
-                        ctx=ctx
-                    )
-            elif metric == QualityMetric.JUDGE:
-                if judge_model is None:
-                    raise ValueError("quality_metric 'Judge' requires a valid judge model to be loaded")
-                print("\nEvaluating quality with Judge model...")
-                _judge_start = time.time()
-                _t = get_global_timer()
-                _cm = _t.measure('judge_eval') if _t is not None else nullcontext()
-                with _cm:
-                    judge_scores = calculate_judge_scores(
-                        judge_model=judge_model,
-                        tokens=generated_tokens,
-                        device=device,
-                        ctx=ctx
-                    )
-                judge_time = time.time() - _judge_start
-                # Compute judge token throughput: batch_size * effective sequence length (with CLS if used)
-                judge_seq_len = int(generated_tokens.size(1))
-                cls_id = getattr(judge_model.config, 'cls_token_id', None)
-                if cls_id is not None:
-                    judge_seq_len += 1
-                max_t = getattr(judge_model.config, 'block_size', judge_seq_len)
-                judge_tokens_per_sample = int(min(judge_seq_len, max_t))
-                judge_tokens_total = int(num_samples * judge_tokens_per_sample)
-                judge_tokens_per_sec = (judge_tokens_total / judge_time) if judge_time > 0 else float('inf')
-            else:
-                # No quality metric requested
-                pass
-
-        else:
-            # Standard generation
-            start_ids = [stoi[c] for c in start_text if c in stoi] if start_text else []
-            generated_tokens = standard_generate(
+        elif sampling_method == 'multinomial':
+            # Multinomial generation
+            generated_tokens = multinomial_generate(
                 model=model,
-                start_ids=start_ids,
-                max_new_tokens=max_new_tokens,
-                temperature=std_temperature,
-                top_k=top_k
+                batch_size=num_samples,
+                total_length=sequence_length,
+                iterations=iterations,
+                mask_token_id=mask_token_id,
+                vocab_size=vocab_size,
+                decode_fn=decode,
+                temperature=temperature,
+                verbose=use_verbose_logging,
+                seed_ids=seed_ids,
+                placement=seed_placement,
+                pad_token_id=pad_token_id,
+                base_vocab_size=base_vocab_size
             )
-            _end_wall = time.time()
+        _end_wall = time.time()
+
+        # Calculate quality metric (for both diffusion and multinomial)
+        metric = quality_metric
+        confidence_scores = None
+        judge_scores = None
+        if metric == QualityMetric.SELF:
+            print("\nCalculating self-confidence scores...")
+            _t = get_global_timer()
+            _cm = _t.measure('self_conf_eval') if _t is not None else nullcontext()
+            with _cm:
+                confidence_scores = calculate_selfconfidence_ratio(
+                    model=model,
+                    tokens=generated_tokens,
+                    mask_token_id=mask_token_id,
+                    device=device,
+                    ctx=ctx
+                )
+        elif metric == QualityMetric.JUDGE:
+            if judge_model is None:
+                raise ValueError("quality_metric 'Judge' requires a valid judge model to be loaded")
+            print("\nEvaluating quality with Judge model...")
+            _judge_start = time.time()
+            _t = get_global_timer()
+            _cm = _t.measure('judge_eval') if _t is not None else nullcontext()
+            with _cm:
+                judge_scores = calculate_judge_scores(
+                    judge_model=judge_model,
+                    tokens=generated_tokens,
+                    device=device,
+                    ctx=ctx
+                )
+            judge_time = time.time() - _judge_start
+            # Compute judge token throughput: batch_size * effective sequence length (with CLS if used)
+            judge_seq_len = int(generated_tokens.size(1))
+            cls_id = getattr(judge_model.config, 'cls_token_id', None)
+            if cls_id is not None:
+                judge_seq_len += 1
+            max_t = getattr(judge_model.config, 'block_size', judge_seq_len)
+            judge_tokens_per_sample = int(min(judge_seq_len, max_t))
+            judge_tokens_total = int(num_samples * judge_tokens_per_sample)
+            judge_tokens_per_sec = (judge_tokens_total / judge_time) if judge_time > 0 else float('inf')
+        else:
+            # No quality metric requested
+            pass
+
 
 generation_time = time.time() - start_time
 
@@ -666,34 +804,35 @@ print(f"{'='*60}")
 for i in range(num_samples):
     print(f"\n{'─'*40}")
     print(f"SAMPLE {i+1}/{num_samples}")
-    if sampling_method == 'diffusion':
-        metric = quality_metric
-        if metric == QualityMetric.SELF and 'confidence_scores' in locals() and confidence_scores is not None:
-            confidence = confidence_scores[i]
-            raw_prob = math.exp(confidence) if confidence > -100 else 0.0
-            print(f"Self-confidence: {confidence:.4f} (prob: {raw_prob:.6f})")
-        elif metric == QualityMetric.JUDGE and 'judge_scores' in locals() and judge_scores is not None:
-            score = float(judge_scores[i].item()) if hasattr(judge_scores, 'shape') else float(judge_scores[i])
-            print(f"Quality score (Judge): {score:.4f}")
-        # Critic token score percentiles (if computed)
-        if 'critic_percentiles' in locals() and critic_percentiles is not None:
-            p10, p50, p90 = [float(x) for x in critic_percentiles[i].tolist()]
-            print(f"Critic probabilities p10/median/p90: {p10:.4f} / {p50:.4f} / {p90:.4f}")
+
+    # Display quality metrics (for both diffusion and multinomial)
+    metric = quality_metric
+    if metric == QualityMetric.SELF and 'confidence_scores' in locals() and confidence_scores is not None:
+        confidence = confidence_scores[i]
+        raw_prob = math.exp(confidence) if confidence > -100 else 0.0
+        print(f"Self-confidence: {confidence:.4f} (prob: {raw_prob:.6f})")
+    elif metric == QualityMetric.JUDGE and 'judge_scores' in locals() and judge_scores is not None:
+        score = float(judge_scores[i].item()) if hasattr(judge_scores, 'shape') else float(judge_scores[i])
+        print(f"Quality score (Judge): {score:.4f}")
+
+    # Critic token score percentiles (if computed, diffusion only)
+    if sampling_method == 'diffusion' and 'critic_percentiles' in locals() and critic_percentiles is not None:
+        p10, p50, p90 = [float(x) for x in critic_percentiles[i].tolist()]
+        print(f"Critic probabilities p10/median/p90: {p10:.4f} / {p50:.4f} / {p90:.4f}")
 
     print(f"{'─'*40}")
 
     sample_text = decode(generated_tokens[i])
     print(sample_text)
 
-    # Show some statistics
-    if sampling_method == 'diffusion':
-        char_counts = Counter(sample_text)
-        total_chars = len(sample_text)
+    # Show some statistics (for both methods)
+    char_counts = Counter(sample_text)
+    total_chars = len(sample_text)
 
-        # Show most common characters
-        top_chars = char_counts.most_common(5)
-        char_stats = [f"'{c}': {count}" for c, count in top_chars]
-        print(f"\nStats: {total_chars} chars, most common: {', '.join(char_stats)}")
+    # Show most common characters
+    top_chars = char_counts.most_common(5)
+    char_stats = [f"'{c}': {count}" for c, count in top_chars]
+    print(f"\nStats: {total_chars} chars, most common: {', '.join(char_stats)}")
 
 # Performance summary based on full wall time from generation start to this point
 
@@ -701,7 +840,7 @@ if generation_start_wall_time is not None:
     _full_time = _end_wall - generation_start_wall_time
 else:
     _full_time = _end_wall - start_time
-_tokens_per_sample = sequence_length if sampling_method == 'diffusion' else max_new_tokens
+_tokens_per_sample = sequence_length  # Both diffusion and multinomial use sequence_length
 _total_tokens = num_samples * _tokens_per_sample
 _time_per_sample = _full_time / max(1, num_samples)
 _tokens_per_sec = (_total_tokens / _full_time) if _full_time > 0 else float('inf')
