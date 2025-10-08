@@ -25,7 +25,8 @@ class SequenceScorerProvider(DataProviderBase):
         cfg = kwargs.pop('config', {}) or {}
         # Extract sequence scorer specific config
         self.mlm_checkpoint_path = cfg.get('mlm_checkpoint_path')
-        self.cls_token_id = cfg.get('cls_token_id', 0)
+        # CLS token will be set from MLM vocab (should be at base_vocab_size + 2)
+        self.cls_token_id = None  # Will be set in _load_text_data
 
         # Stage-based configuration (optional)
         self.use_all_stages_for_training = cfg.get('use_all_stages_for_training', None)
@@ -157,28 +158,28 @@ class SequenceScorerProvider(DataProviderBase):
         # Use vocabulary from MLM model meta to ensure compatibility
         self.stoi = dict(self.mlm_engine.stoi)
         self.itos = dict(self.mlm_engine.itos)
-        self.base_vocab_size = int(self.mlm_engine.vocab_size)
+
+        # Get special token IDs from MLM vocab (should match char_diffusion)
         self.mask_token_id = int(self.mlm_engine.mask_token_id)
 
-        # Check if PAD token already exists in MLM vocab
-        if '[PAD]' in self.stoi:
-            self.pad_token_id = self.stoi['[PAD]']
-        else:
-            # Add PAD token exactly like CharDiffusion does (after MASK token)
-            self.pad_token_id = self.base_vocab_size + 1
-            self.stoi['[PAD]'] = self.pad_token_id
-            self.itos[self.pad_token_id] = '[PAD]'
-
-        # Ensure [CLS] token exists in vocab mapping
-        # Use the configured cls_token_id (default 0)
-        if self.cls_token_id not in self.itos:
-            self.itos[self.cls_token_id] = '[CLS]'
+        # PAD and CLS should already be in MLM vocab (char_diffusion adds them)
+        if '[PAD]' not in self.stoi:
+            raise ValueError("MLM checkpoint missing [PAD] token - please regenerate char_diffusion data")
         if '[CLS]' not in self.stoi:
-            self.stoi['[CLS]'] = self.cls_token_id
+            raise ValueError("MLM checkpoint missing [CLS] token - please regenerate char_diffusion data")
 
-        # Final vocab size is the MLM vocab size (which already includes MASK and PAD)
-        # We just ensure CLS is mapped correctly (usually to an existing token like 0)
-        self.vocab_size = self.base_vocab_size
+        self.pad_token_id = self.stoi['[PAD]']
+        self.cls_token_id = self.stoi['[CLS]']
+
+        # Vocab size should match MLM exactly (base + MASK + PAD + CLS)
+        self.vocab_size = int(self.mlm_engine.vocab_size)
+
+        if self.verbose:
+            print(f"{self._log_prefix()} Vocabulary loaded from MLM:")
+            print(f"  vocab_size: {self.vocab_size}")
+            print(f"  mask_token_id: {self.mask_token_id}")
+            print(f"  pad_token_id: {self.pad_token_id}")
+            print(f"  cls_token_id: {self.cls_token_id}")
 
         if self.enable_line_aligned_sequences:
             # Use line-aligned sequence generation

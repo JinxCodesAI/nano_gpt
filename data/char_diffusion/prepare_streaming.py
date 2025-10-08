@@ -113,14 +113,19 @@ class CharDiffusionProvider(DataProviderBase):
         # Create base vocabulary using shared method
         self.base_vocab_size, self.stoi, self.itos = self._create_char_vocab(data)
 
-        # Special tokens
-        self.mask_token_id = self.base_vocab_size
-        self.pad_token_id = self.base_vocab_size + 1
+        # Special tokens (consistent order for dual-mode compatibility)
+        self.mask_token_id = self.base_vocab_size      # e.g., 65
+        self.pad_token_id = self.base_vocab_size + 1   # e.g., 66
+        self.cls_token_id = self.base_vocab_size + 2   # e.g., 67 (for dual-mode with sequence_scorer)
+
         self.stoi['[MASK]'] = self.mask_token_id
         self.itos[self.mask_token_id] = '[MASK]'
         self.stoi['[PAD]'] = self.pad_token_id
         self.itos[self.pad_token_id] = '[PAD]'
-        self.vocab_size = self.base_vocab_size + 2
+        self.stoi['[CLS]'] = self.cls_token_id
+        self.itos[self.cls_token_id] = '[CLS]'
+
+        self.vocab_size = self.base_vocab_size + 3  # base + MASK + PAD + CLS
         self.newline_token_id = self.stoi.get('\n', None)
 
         # Create train/val splits using shared method
@@ -265,6 +270,7 @@ class CharDiffusionProvider(DataProviderBase):
             "vocab_size": self.vocab_size,
             "mask_token_id": self.mask_token_id,
             "pad_token_id": self.pad_token_id,
+            "cls_token_id": self.cls_token_id,  # For dual-mode compatibility
             "mask_probability": self.mask_probability,
             "ignore_index": self.ignore_index,
             "stoi": self.stoi,

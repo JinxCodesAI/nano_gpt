@@ -35,8 +35,8 @@ attention_type = 'bidirectional'  # Required for both modes
 position_encoding = 'absolute'
 
 # Sequence scorer configuration
-cls_token_id = 0  # CLS token for sequence scoring
-mlm_checkpoint_path = 'out/char_diffusion/ckpt.pt'  # Path to MLM model for unmasking
+cls_token_id = None  # Will be set from vocabulary (base_vocab_size + 2)
+mlm_checkpoint_path = 'out-char-diffusion/ckpt.pt'  # Path to MLM model for unmasking
 
 # Char diffusion (LANGUAGE_MODEL) configuration
 mask_probability = 0.15

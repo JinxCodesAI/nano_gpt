@@ -221,9 +221,15 @@ logger.log_info(f"found vocab_size = {meta_vocab_size} (from consumer.meta); eff
 # attach dataset meta to config to inform checkpoint naming (contains training_type)
 config['meta'] = meta
 
-# Critic-related token ids from dataset meta (if provided)
+# Special token ids from dataset meta (if provided)
 meta_mask_token_id = meta.get('mask_token_id', None)
 meta_pad_token_id = meta.get('pad_token_id', None)
+meta_cls_token_id = meta.get('cls_token_id', None)
+
+# Use cls_token_id from meta if not provided in config
+if cls_token_id is None and meta_cls_token_id is not None:
+    cls_token_id = meta_cls_token_id
+    logger.log_info(f"Using cls_token_id from meta: {cls_token_id}")
 
 # provide config to checkpoint manager early so it can resolve training_type-based paths
 checkpoint_manager.set_metadata(model_args={}, config=config)
