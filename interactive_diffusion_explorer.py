@@ -490,41 +490,38 @@ class DiffusionExplorer:
             print(f"📂 Loading: {batch_file}")
             print(f"📂 Full path: {full_path}")
 
-            batch_data = torch.load(full_path, map_location='cpu')
+            container = torch.load(full_path, map_location='cpu')
 
-            # Log additional batch information if available
-            if 'metadata' in batch_data:
-                metadata = batch_data['metadata']
-                self.file_metadata = metadata
-                print(f"📋 Batch metadata found:")
-                for key, value in metadata.items():
-                    if key not in ['tensors', 'stage_info', 'masking_strategy', 'masking_ratio']:  # Skip tensor data and verbose/long lists
-                        print(f"     {key}: {value}")
-                # Show stage info summary if present
-                if 'stage_info' in metadata:
-                    stage_info = metadata['stage_info']
-                    if isinstance(stage_info, list):
-                        print(f"     stage_info: {len(stage_info)} samples with stage configurations")
-                    else:
-                        print(f"     stage_info: {stage_info}")
-                # Show masking strategy summary if present
-                if 'masking_strategy' in metadata and isinstance(metadata['masking_strategy'], list):
-                    print(f"     masking_strategy: {len(metadata['masking_strategy'])} per-sample labels")
-                # Show masking ratio summary if present
-                if 'masking_ratio' in metadata and isinstance(metadata['masking_ratio'], list):
-                    print(f"     masking_ratio: {len(metadata['masking_ratio'])} per-sample floats")
+            # File-level metadata
+            self.file_metadata = container.get('metadata', {}) if isinstance(container, dict) else {}
 
-            # Check for generation info
-            if 'generation_info' in batch_data:
-                gen_info = batch_data['generation_info']
-                print(f"⚙️ Generation info: {gen_info}")
-
-            # List all keys in batch data for debugging
-            print(f"🔍 Available keys in batch: {list(batch_data.keys())}")
+            # New unified format: array of batches
+            selected_entry = None
+            if isinstance(container, dict) and 'batches' in container:
+                batches = container.get('batches', [])
+                print(f"📋 Detected array-of-batches format with {len(batches)} entries")
+                # choose batch index
+                idx = 0
+                if self.interactive and len(batches) > 1:
+                    try:
+                        idx_str = input(f"Select batch index [0..{len(batches)-1}] (default 0): ").strip()
+                        if idx_str:
+                            idx = max(0, min(len(batches)-1, int(idx_str)))
+                    except Exception:
+                        idx = 0
+                selected_entry = batches[idx]
+                print(f"📦 Selected batch entry: {idx}")
+                tensors = selected_entry.get('tensors', {})
+                batch_meta = selected_entry.get('metadata', {})
+            else:
+                # Legacy single-entry format
+                print(f"ℹ️ Legacy single-entry format detected")
+                tensors = container.get('tensors', container if isinstance(container, dict) else {})
+                batch_meta = {}
 
             # Extract tensors using schema/meta to support multiple dataset types
-            input_name = self.input_field or 'x'
-            target_name = self.target_field or 'y'
+            input_name = self.input_field or 'input'
+            target_name = self.target_field or 'target'
 
             def _get_tensor(container, name):
                 if isinstance(container, dict):
@@ -538,28 +535,27 @@ class DiffusionExplorer:
                         return v
                 return None
 
-            tensors = batch_data.get('tensors', batch_data)
-            x_tensor = _pick_from(tensors, [input_name, 'x', 'input_ids'])
-            y_tensor = _pick_from(tensors, [target_name, 'y', 'targets'])
+            x_tensor = _pick_from(tensors, [input_name, 'input', 'x', 'input_ids'])
+            y_tensor = _pick_from(tensors, [target_name, 'target', 'y', 'targets'])
             attn_tensor = _pick_from(tensors, ['attention_mask', 'attn', 'mask'])
 
             if x_tensor is None or y_tensor is None:
-                print("❌ Could not find required tensors in batch file per schema")
-                print("Available top-level keys:", list(batch_data.keys()))
-                if isinstance(tensors, dict):
-                    print("Tensors keys:", list(tensors.keys()))
+                print("❌ Could not find required tensors in batch entry per schema")
+                print("Available tensor keys:", list(tensors.keys()) if isinstance(tensors, dict) else type(tensors))
                 print(f"Expected input: {input_name}, target: {target_name}")
                 self.wait_for_key()
                 return False
 
+            # Store current batch and its metadata
             batch_dict = {'input': x_tensor, 'target': y_tensor, 'input_name': input_name, 'target_name': target_name}
             if attn_tensor is not None:
                 batch_dict['attention_mask'] = attn_tensor
             self.current_batch = batch_dict
             self.current_sample_idx = 0
+            self.batch_metadata = batch_meta
 
             batch_size, seq_len = x_tensor.shape
-            print(f"✅ Batch file loaded:")
+            print(f"✅ Batch loaded:")
             print(f"   • Batch size: {batch_size}")
             print(f"   • Sequence length: {seq_len}")
             # Attention mask stats if present
@@ -567,7 +563,7 @@ class DiffusionExplorer:
                 total_ones = int(attn_tensor.sum().item())
                 total_elems = int(attn_tensor.numel())
                 total_zeros = total_elems - total_ones
-                print(f" attention_mask: ones={total_ones}, zeros={total_zeros} (visible avg per sample: {total_ones/max(batch_size,1):.1f})")
+                print(f"   • attention_mask: ones={total_ones}, zeros={total_zeros} (visible avg per sample: {total_ones/max(batch_size,1):.1f})")
 
             # Show statistics depending on target shape
             ignore_index = -100
@@ -694,10 +690,13 @@ class DiffusionExplorer:
             print(f"📊 Current sample: {self.current_sample_idx + 1}/{batch_size} (sequence length: {seq_len_display})")
             # Display masking strategy per sample, if present in metadata
             try:
-                if isinstance(self.file_metadata, dict) and 'masking_strategy' in self.file_metadata:
-                    ms = self.file_metadata['masking_strategy']
-                    if isinstance(ms, list) and len(ms) > self.current_sample_idx:
-                        print(f"   • Masking: {ms[self.current_sample_idx]}")
+                # Prefer per-batch metadata if present
+                meta_src = getattr(self, 'batch_metadata', None)
+                if not isinstance(meta_src, dict) or 'masking_strategy' not in meta_src:
+                    meta_src = self.file_metadata if isinstance(self.file_metadata, dict) else {}
+                ms = meta_src.get('masking_strategy')
+                if isinstance(ms, list) and len(ms) > self.current_sample_idx:
+                    print(f"   • Masking: {ms[self.current_sample_idx]}")
             except Exception:
                 pass
             if attn is not None:
@@ -737,10 +736,12 @@ class DiffusionExplorer:
                 target_val = y_tensor[self.current_sample_idx].item() if y_tensor.dim() == 1 else y_tensor[self.current_sample_idx].squeeze().item()
                 ratio_txt = ""
                 try:
-                    if isinstance(self.file_metadata, dict) and 'masking_ratio' in self.file_metadata:
-                        mr = self.file_metadata['masking_ratio']
-                        if isinstance(mr, list) and len(mr) > self.current_sample_idx:
-                            ratio_txt = f" Masking ratio {float(mr[self.current_sample_idx]):.2f}"
+                    meta_src = getattr(self, 'batch_metadata', None)
+                    if not isinstance(meta_src, dict) or 'masking_ratio' not in meta_src:
+                        meta_src = self.file_metadata if isinstance(self.file_metadata, dict) else {}
+                    mr = meta_src.get('masking_ratio')
+                    if isinstance(mr, list) and len(mr) > self.current_sample_idx:
+                        ratio_txt = f" Masking ratio {float(mr[self.current_sample_idx]):.2f}"
                 except Exception:
                     pass
                 print(f"🎯 Target ({self.current_batch['target_name']}): {target_val:.4f}{ratio_txt}")

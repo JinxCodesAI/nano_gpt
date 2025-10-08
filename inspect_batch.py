@@ -10,6 +10,7 @@ import os
 import pickle
 import torch
 from pathlib import Path
+from core.batch import Batch, unpack_batch
 
 
 def load_meta(data_dir):
@@ -83,27 +84,41 @@ def analyze_batch_file(dataset_name, batch_file_path):
     try:
         batch_data = torch.load(full_batch_path, map_location='cpu')
         print("BATCH FILE STRUCTURE:")
-        for key, value in batch_data.items():
-            if isinstance(value, torch.Tensor):
-                print(f"  {key}: {value.dtype} {list(value.shape)}")
-            elif isinstance(value, dict):
-                print(f"  {key}: dict with keys {list(value.keys())}")
-            else:
-                print(f"  {key}: {type(value)} = {value}")
+        if isinstance(batch_data, dict) and 'batches' in batch_data:
+            print(f"  batches: list[{len(batch_data['batches'])}] of per-batch entries")
+            print(f"  metadata: dict with keys {list(batch_data.get('metadata', {}).keys())}")
+        else:
+            for key, value in batch_data.items():
+                if isinstance(value, torch.Tensor):
+                    print(f"  {key}: {value.dtype} {list(value.shape)}")
+                elif isinstance(value, dict):
+                    print(f"  {key}: dict with keys {list(value.keys())}")
+                else:
+                    print(f"  {key}: {type(value)} = {value}")
         print()
     except Exception as e:
         print(f"Error loading batch file: {e}")
         return
-    
-    # Extract tensors (check both direct and nested structure)
-    if 'tensors' in batch_data:
-        tensors = batch_data['tensors']
-        x_tensor = tensors.get('x', None)
-        y_tensor = tensors.get('y', None)
+
+    # Extract tensors (handle new array-of-batches format first)
+    if isinstance(batch_data, dict) and 'batches' in batch_data:
+        batches = batch_data.get('batches', [])
+        if not batches:
+            print("Error: 'batches' list is empty")
+            return
+        entry = batches[0]
+        if not isinstance(entry, dict) or 'tensors' not in entry:
+            print("Error: batch entry missing 'tensors'")
+            return
+        x_tensor, y_tensor = unpack_batch(entry['tensors'])
+        print(f"Using batch entry 0/{len(batches)-1}")
     else:
-        x_tensor = batch_data.get('x', None)
-        y_tensor = batch_data.get('y', None)
-    
+        # Legacy single-entry files
+        if 'tensors' in batch_data:
+            x_tensor, y_tensor = unpack_batch(batch_data['tensors'])
+        else:
+            x_tensor, y_tensor = unpack_batch(batch_data)
+
     if x_tensor is None or y_tensor is None:
         print("Error: Could not find 'x' or 'y' tensors in batch file")
         print("Available keys:", list(batch_data.keys()))
