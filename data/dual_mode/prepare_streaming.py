@@ -196,9 +196,11 @@ class DualModeProvider(DataProviderBase):
         # Generate batch from appropriate provider
         if mode == 'language_model':
             # Get batch from char_diffusion provider (keys: x, y, attention_mask)
+            print(f"[dual_mode] Sampling language_model batch")
             batch = self.lm_provider.sample_batch(split, rng)
         else:
             # Get batch from sequence_scorer provider (keys: input_ids, targets)
+            print(f"[dual_mode] Sampling sequence_scorer batch")
             batch = self.ss_provider.sample_batch(split, rng)
 
         # Add model_mode metadata to batch

@@ -13,8 +13,8 @@ target_size = 256
 
 # Dual-mode specific configuration
 mode_distribution = {
-    'language_model': 0.5,      # 50% language model batches
-    'sequence_scorer': 0.5,     # 50% sequence scorer batches
+    'language_model': 0.8,      # 80% language model batches
+    'sequence_scorer': 0.2,     # 20% sequence scorer batches
 }
 alternation_frequency = 1  # Alternate every batch
 
