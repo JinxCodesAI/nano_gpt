@@ -1,4 +1,10 @@
 # GRPO Training Implementation Plan v2
+
+> **Status:** The full GRPO training pipeline now lives in the
+> [`grpo/`](../../grpo/README.md) package. This document is retained as a
+> historical design memo that explains the reasoning behind the current
+> implementation.
+
 ## Maximizing Code Reuse from Existing Codebase
 
 ---

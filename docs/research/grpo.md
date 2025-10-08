@@ -1,4 +1,10 @@
-Here is a detailed, step-by-step implementation plan in Markdown format, explaining what to do, why it's necessary, and how to do it within your existing codebase.
+> **Status:** Superseded by the production implementation described in
+> [`grpo/README.md`](../../grpo/README.md). This memo documents the initial
+> plan that shaped the current pipeline.
+
+Here is a detailed, step-by-step implementation plan in Markdown format,
+explaining what to do, why it's necessary, and how to do it within your
+existing codebase.
 
 ### **Phase 0: Conceptual Overview & Goal**
 
