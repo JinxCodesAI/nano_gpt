@@ -287,7 +287,7 @@ class DatasetConsumer:
             for k in list(entry_tensors.keys()):
                 entry_tensors[k] = _to_device(entry_tensors[k])
 
-            # attach mode if present
+            # attach mode (provider must set it in per-batch metadata)
             mm = entry_meta.get('model_mode', None)
             if mm is not None:
                 entry_tensors['_model_mode'] = mm

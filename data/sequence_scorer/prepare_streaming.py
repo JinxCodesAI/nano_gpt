@@ -82,8 +82,6 @@ class SequenceScorerProvider(DataProviderBase):
                     print(f"  train_valid_starts: {self.train_builder.valid_starts.numel()}")
                     print(f"  val_valid_starts: {self.val_builder.valid_starts.numel()}")
 
-        def default_model_mode(self) -> str:
-            return 'sequence_scorer'
 
     def _validate_stage_config(self):
         if self.use_all_stages_for_training is not None:
@@ -277,7 +275,7 @@ class SequenceScorerProvider(DataProviderBase):
             raw_targets = torch.tensor(actual_synth_list, dtype=torch.float32)
             targets = sequence_scorer_target_transform(raw_targets)
 
-            return {"input_ids": input_ids, "targets": targets, "masking_strategy": ["random"] * self.batch_size, "masking_ratio": [float(x) for x in raw_targets.tolist()]}
+            return {"input_ids": input_ids, "targets": targets, "masking_strategy": ["random"] * self.batch_size, "masking_ratio": [float(x) for x in raw_targets.tolist()], "model_mode": "sequence_scorer"}
         else:
             # Original implementation
             ids = self.train_ids if split == "train" else self.val_ids
@@ -306,7 +304,7 @@ class SequenceScorerProvider(DataProviderBase):
             # Apply non-linear transformation to targets
             raw_targets = actual_synth.float().cpu()
             targets = sequence_scorer_target_transform(raw_targets)
-            return {"input_ids": input_ids, "targets": targets, "masking_strategy": ["random"] * self.batch_size, "masking_ratio": [float(x) for x in raw_targets.tolist()]}
+            return {"input_ids": input_ids, "targets": targets, "masking_strategy": ["random"] * self.batch_size, "masking_ratio": [float(x) for x in raw_targets.tolist()], "model_mode": "sequence_scorer"}
 
     def produce_one_file(self, split: str, seq: int) -> None:
         """Write unified array-of-batches format.

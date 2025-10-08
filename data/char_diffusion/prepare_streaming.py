@@ -168,9 +168,6 @@ class CharDiffusionProvider(DataProviderBase):
             self.train_builder = None
             self.val_builder = None
 
-    def default_model_mode(self) -> str:
-        return 'language_model'
-
 
         if self.enable_line_aligned_sequences and self.newline_token_id is None:
             raise ValueError("enable_line_aligned_sequences=True requires '\n' to be in the vocabulary")
@@ -308,6 +305,7 @@ class CharDiffusionProvider(DataProviderBase):
             return {
                 "x": corrupted_x,
                 "y": labels,
+                "model_mode": "language_model",
             }
         else:
             # Legacy fixed-window sampling
@@ -324,6 +322,7 @@ class CharDiffusionProvider(DataProviderBase):
             return {
                 "x": corrupted_x,
                 "y": labels,
+                "model_mode": "language_model",
             }
 
     def _sample_stage_based_batch(self, split: str, rng) -> Dict[str, Any]:
