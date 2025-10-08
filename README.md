@@ -82,8 +82,8 @@ and streaming data pipelines.
 
 All documentation has been reorganised. Start with
 [docs/README.md](docs/README.md) for a full index. Highlights include the
-datasets guide, loss modifier handbook, sampler head walkthrough, and the
-research notes covering critic design, GRPO experiments, and the
+datasets guide, loss modifier handbook, sampler head walkthrough, the GRPO
+fine-tuning pipeline guide, and research notes on critic design alongside the
 Hierarchical U-Net Transformer proposal.
 
 ## Repository Layout

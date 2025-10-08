@@ -13,8 +13,9 @@ Practical, task-focused walk-throughs for day-to-day development.
   contracts, and how `prepare.py` coordinates with `DatasetConsumer`.
 - [Loss Modifiers](./guides/loss_modifiers.md) – entropy weighting, label
   smoothing, mask-ratio compensation, and judge-assisted weighting.
-- [GRPO Training](../grpo/README.md) – production reinforcement loop for
-  judge-guided refinement with group-relative policy optimisation.
+- [GRPO Fine-Tuning Pipeline](./guides/grpo_pipeline.md) – end-to-end tour of
+  the reinforcement loop implemented under `grpo/`, including config surfaces
+  and runtime expectations.
 - [Multi-mode Usage](./guides/multi_mode_usage.md) – configuring language
   modeling, token classification, and sequence scoring within a single GPT
   implementation.
@@ -31,10 +32,6 @@ drive the diffusion roadmap.
   error detection for iterative re-masking.
 - [Critic Review](./research/critic_review.md) – external feedback and risk
   assessment.
-- [GRPO Design Notes](./research/grpo.md) &
-  [Implementation Plan v2](./research/grpo_v2.md) – historical planning memos
-  for the reinforcement fine-tuning stack (see the guide above for the
-  maintained implementation).
 - [Hierarchical U-Net Transformer](./research/unet_transformer.md) – discrete
   diffusion architecture for long-form coherence.
 - [Variable Length Line Study](./research/sep_varlen_lines_report.md) – dataset
@@ -45,6 +42,10 @@ drive the diffusion roadmap.
 Historical scratch files, early experiments, and other artefacts that may be
 useful for context but are not actively maintained.
 
+- [GRPO design memos](./archive/grpo_design_notes.md) and the
+  [v2 implementation plan](./archive/grpo_implementation_plan_v2.md) – retained
+  for historical context; both documents now live in the archive because the
+  production implementation ships in `grpo/`.
 - [Raw notes and prototypes](./archive/raw_notes/) – includes exploratory error
   logs, early improvement proposals, and prototype scripts.
 

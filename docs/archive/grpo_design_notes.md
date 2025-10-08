@@ -1,6 +1,7 @@
-> **Status:** Superseded by the production implementation described in
-> [`grpo/README.md`](../../grpo/README.md). This memo documents the initial
-> plan that shaped the current pipeline.
+> **Status:** Archived design memo. Superseded by the production
+> implementation described in [`grpo/README.md`](../../grpo/README.md). This
+> document remains for historical context and explains the initial plan that
+> shaped the current pipeline.
 
 Here is a detailed, step-by-step implementation plan in Markdown format,
 explaining what to do, why it's necessary, and how to do it within your
