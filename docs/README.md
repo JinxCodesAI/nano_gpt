@@ -13,6 +13,8 @@ Practical, task-focused walk-throughs for day-to-day development.
   contracts, and how `prepare.py` coordinates with `DatasetConsumer`.
 - [Loss Modifiers](./guides/loss_modifiers.md) – entropy weighting, label
   smoothing, mask-ratio compensation, and judge-assisted weighting.
+- [GRPO Training](../grpo/README.md) – production reinforcement loop for
+  judge-guided refinement with group-relative policy optimisation.
 - [Multi-mode Usage](./guides/multi_mode_usage.md) – configuring language
   modeling, token classification, and sequence scoring within a single GPT
   implementation.
@@ -29,9 +31,10 @@ drive the diffusion roadmap.
   error detection for iterative re-masking.
 - [Critic Review](./research/critic_review.md) – external feedback and risk
   assessment.
-- [GRPO Prototypes](./research/grpo.md) &
-  [Follow-up Experiments](./research/grpo_v2.md) – reinforcement-style
-  optimization ideas.
+- [GRPO Design Notes](./research/grpo.md) &
+  [Implementation Plan v2](./research/grpo_v2.md) – historical planning memos
+  for the reinforcement fine-tuning stack (see the guide above for the
+  maintained implementation).
 - [Hierarchical U-Net Transformer](./research/unet_transformer.md) – discrete
   diffusion architecture for long-form coherence.
 - [Variable Length Line Study](./research/sep_varlen_lines_report.md) – dataset

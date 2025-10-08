@@ -12,6 +12,9 @@ and streaming data pipelines.
   `config/train_char_diffusion*.py` run iterative unmasking experiments on
   top of the GPT backbone, including critic-guided refinement and optional
   sampler heads.【F:train.py†L1-L29】【F:config/train_char_diffusion.py†L1-L65】
+- **GRPO fine-tuning pipeline** – the `grpo/` package provides a
+  reinforcement-style training loop with group-relative rewards, KL control,
+  and dedicated orchestration via `train_grpo.py`.【F:grpo/train_grpo.py†L1-L120】
 - **Streaming data pipeline** – `prepare.py`, `dataset_consumer.py`, and
   the dataset providers in `data/` coordinate background batch generation
   with strong metadata contracts so training can begin before the full
