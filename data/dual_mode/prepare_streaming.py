@@ -100,6 +100,7 @@ class DualModeProvider(DataProviderBase):
         self.itos = self.lm_provider.itos
         self.mask_token_id = self.lm_provider.mask_token_id
         self.pad_token_id = getattr(self.lm_provider, 'pad_token_id', None)
+        self.cls_token_id = getattr(self.lm_provider, 'cls_token_id', None)
     
     def _init_sequence_scorer_provider(self, cfg: Dict) -> None:
         """Initialize sequence_scorer provider for SEQUENCE_SCORER batches."""
