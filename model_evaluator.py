@@ -1,53 +1,59 @@
 #!/usr/bin/env python3
-"""Model evaluator for diffusion checkpoints.
+"""Interactive sticky-mask model evaluator.
 
-This script generates sticky-masked samples, evaluates multiple models with a
-multinomial warmup followed by confidence-driven remasking, and reports token
-match ratios. Results can optionally be inspected through a lightweight
-interactive console viewer inspired by ``interactive_diffusion_explorer``.
+This script mirrors the console workflow of ``interactive_diffusion_explorer.py``.
+Run ``python model_evaluator.py`` and follow the menu prompts to:
+
+* Pick checkpoints interactively from ``out-char-diffusion`` (or another
+  directory).
+* Configure the sticky masking grid and generation parameters.
+* Build a shared pool of sticky masked samples.
+* Evaluate every selected model with a multinomial warm-up followed by
+  confidence-guided remasking.
+* Inspect per-model generations in a console viewer and compare scores.
+
+The evaluation procedure is:
+1. Generate sticky samples with varying ``p1``/``p2`` and mask ratios.
+2. Mark every originally unmasked position as protected (never re-mask).
+3. Perform multinomial warm-up iterations without altering protected tokens.
+4. Run a linear schedule of confidence-based remasking iterations.
+5. Compare each model's final output against the original targets across the
+   initially masked positions to compute match ratios.
 """
 
 from __future__ import annotations
 
-import argparse
-import itertools
-import math
-import pickle
+import os
 import sys
+import textwrap
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Dict, List, Optional, Sequence, Tuple
 
 import torch
-import torch.nn.functional as F
+from contextlib import nullcontext
 
 from model import GPT, GPTConfig, ModelMode
-from sample_utils import (
-    linear_remasking_schedule,
-    predict_and_sample_tokens,
-)
+from sample_utils import predict_and_sample_tokens, apply_remasking_step
 
-# Utilities for masking
+# Sticky masking utilities live with the dataset helpers
 sys.path.append('data/char_diffusion')
 from masking_utils import apply_target_driven_sticky_masking_cpu  # noqa: E402
 
 
-DEVICE = 'cuda' if torch.cuda.is_available() else 'cpu'
-DTYPE = 'float16' if DEVICE == 'cuda' else 'float32'
+# ---------------------------------------------------------------------------
+# Dataclasses
+# ---------------------------------------------------------------------------
 
 
-@dataclass(frozen=True)
+@dataclass
 class StickyConfig:
     target_ratio: float
     p1: float
     p2: float
 
-    def to_dict(self) -> Dict[str, float]:
-        return {
-            'target_ratio': float(self.target_ratio),
-            'p1': float(self.p1),
-            'p2': float(self.p2),
-        }
+    def format_brief(self) -> str:
+        return f"ratio={self.target_ratio:.2f} | p1={self.p1:.2f} | p2={self.p2:.2f}"
 
 
 @dataclass
@@ -55,10 +61,10 @@ class EvaluationSample:
     sample_id: str
     base_index: int
     sticky: StickyConfig
-    original_tokens: torch.Tensor
-    masked_tokens: torch.Tensor
-    protected_mask: torch.Tensor
-    mask_positions: torch.Tensor
+    original_tokens: torch.Tensor  # (1, seq_len)
+    masked_tokens: torch.Tensor  # (1, seq_len)
+    protected_mask: torch.Tensor  # (1, seq_len) bool
+    mask_positions: torch.Tensor  # (1, seq_len) bool
 
 
 @dataclass
@@ -67,23 +73,79 @@ class SampleResult:
     score: float
     correct: int
     total: int
-    final_tokens: torch.Tensor
-    stage1_tokens: torch.Tensor
+    warmup_tokens: torch.Tensor  # (1, seq_len)
+    final_tokens: torch.Tensor  # (1, seq_len)
 
 
-def load_checkpoint_model(checkpoint_path: Path, *, device: str = DEVICE) -> Tuple[GPT, Dict]:
-    """Load a GPT model from checkpoint."""
-    checkpoint = torch.load(checkpoint_path, map_location=device, weights_only=False)
+@dataclass
+class ModelInfo:
+    path: Path
+    name: str
+    checkpoint: Optional[Dict] = None
+    model: Optional[GPT] = None
+    stoi: Optional[Dict[str, int]] = None
+    itos: Optional[List[str]] = None
+    vocab_size: Optional[int] = None
+    mask_token_id: Optional[int] = None
+    pad_token_id: Optional[int] = None
+    base_vocab_size: Optional[int] = None
+    dataset_name: Optional[str] = None
+    dataset_text: Optional[str] = None
+    block_size: Optional[int] = None
+    meta: Optional[Dict] = None
+
+
+# ---------------------------------------------------------------------------
+# Console helpers
+# ---------------------------------------------------------------------------
+
+
+def clear_screen() -> None:
+    os.system('cls' if os.name == 'nt' else 'clear')
+
+
+def print_header(title: str) -> None:
+    clear_screen()
+    print("=" * 80)
+    print(f" {title.center(76)} ")
+    print("=" * 80)
+    print()
+
+
+def wait_for_key(prompt: str = "Press Enter to continue...") -> None:
+    try:
+        input(prompt)
+    except EOFError:
+        pass
+
+
+# ---------------------------------------------------------------------------
+# Filesystem helpers
+# ---------------------------------------------------------------------------
+
+
+def list_checkpoints(directory: Path) -> List[Path]:
+    if not directory.exists():
+        return []
+    paths = [p for p in directory.iterdir() if p.suffix in {'.pt', '.pth'} and p.is_file()]
+    paths.sort()
+    return paths
+
+
+def resolve_dataset_name(checkpoint: Dict, fallback: str = 'shakespeare_char') -> str:
+    config = checkpoint.get('config') or {}
+    dataset = config.get('dataset') or checkpoint.get('dataset')
+    return dataset or fallback
+
+
+def load_checkpoint(path: Path, device: str) -> Tuple[GPT, Dict]:
+    checkpoint = torch.load(path, map_location=device, weights_only=False)
     if 'model_args' not in checkpoint:
-        raise ValueError(f"Checkpoint {checkpoint_path} is missing 'model_args'")
+        raise ValueError(f"Checkpoint missing 'model_args': {path}")
 
     model_args = checkpoint['model_args'].copy()
-
-    # Backward compatibility: default attention/position settings
     model_args.setdefault('attention_type', 'causal')
     model_args.setdefault('position_encoding', 'absolute')
-
-    # Prevent cascading initializations during inference
     if model_args.get('init_from_checkpoint'):
         model_args['init_from_checkpoint'] = None
 
@@ -93,10 +155,9 @@ def load_checkpoint_model(checkpoint_path: Path, *, device: str = DEVICE) -> Tup
     config = GPTConfig(**filtered_args)
     model = GPT(config)
 
-    # Restore original model mode when present
-    old_mode = model_args.get('mode')
-    if old_mode:
-        if old_mode in (ModelMode.SEQUENCE_SCORER, 'sequence_scorer'):
+    original_mode = model_args.get('mode')
+    if original_mode:
+        if original_mode in (ModelMode.SEQUENCE_SCORER, 'sequence_scorer'):
             model.set_mode(ModelMode.SEQUENCE_SCORER)
         else:
             model.set_mode(ModelMode.LANGUAGE_MODEL)
@@ -106,597 +167,696 @@ def load_checkpoint_model(checkpoint_path: Path, *, device: str = DEVICE) -> Tup
     for key in list(state_dict.keys()):
         if key.startswith(unwanted_prefix):
             state_dict[key[len(unwanted_prefix):]] = state_dict.pop(key)
-    model.load_state_dict(state_dict, strict=True)
 
+    model.load_state_dict(state_dict, strict=False)
     model.eval()
     model.to(device)
-
     return model, checkpoint
 
 
-def resolve_dataset_name(checkpoint: Dict, fallback: str = 'shakespeare_char') -> str:
-    """Resolve dataset name from checkpoint metadata."""
-    config = checkpoint.get('config') or {}
-    dataset = config.get('dataset') or checkpoint.get('dataset')
-    if not dataset:
-        dataset = fallback
-    return dataset
-
-
-def load_meta(dataset_name: str) -> Dict:
+def load_meta(dataset_name: str, checkpoint: Dict) -> Dict:
     meta_path = Path('data') / dataset_name / 'meta.pkl'
-    if not meta_path.exists():
-        raise FileNotFoundError(f"meta.pkl not found at {meta_path}")
-    with meta_path.open('rb') as handle:
-        meta = pickle.load(handle)
-    return meta
+    if meta_path.exists():
+        with meta_path.open('rb') as handle:
+            return torch.load(handle, weights_only=False)  # type: ignore[arg-type]
+    meta_from_checkpoint = checkpoint.get('meta')
+    if meta_from_checkpoint:
+        return meta_from_checkpoint
+    raise FileNotFoundError(
+        f"Could not locate meta.pkl for dataset '{dataset_name}'. "
+        "Run prepare.py to generate dataset metadata."
+    )
 
 
-def infer_field_names(meta: Dict) -> Tuple[Optional[str], Optional[str]]:
-    """Infer input/target tensor names from dataset metadata."""
-    schema = meta.get('batch_schema') or []
-    input_name: Optional[str] = None
-    target_name: Optional[str] = None
-
-    for field in schema:
-        if not isinstance(field, dict):
-            continue
-        role = (field.get('role') or '').lower()
-        name = field.get('name')
-        if role == 'input' and input_name is None:
-            input_name = name
-        elif role == 'target' and target_name is None:
-            target_name = name
-
-    # Fallbacks by common naming conventions
-    if input_name is None:
-        for candidate in ['x', 'input', 'input_ids']:
-            if candidate in meta.get('tensor_names', []):
-                input_name = candidate
-                break
-    if target_name is None:
-        for candidate in ['targets', 'y', 'target', 'labels']:
-            if candidate in meta.get('tensor_names', []):
-                target_name = candidate
-                break
-
-    return input_name, target_name
-
-
-def decode_tokens(token_ids: Sequence[int], itos: Sequence[str], mask_token_id: int, pad_token_id: Optional[int]) -> str:
+def decode_tokens(tokens: torch.Tensor, itos: Sequence[str], mask_token_id: int,
+                  pad_token_id: Optional[int] = None, mask_char: str = '□') -> str:
+    if tokens.ndim == 2 and tokens.size(0) == 1:
+        tokens = tokens[0]
     pieces: List[str] = []
-    for tid in token_ids:
-        if tid == mask_token_id:
-            pieces.append('[MASK]')
-        elif pad_token_id is not None and tid == pad_token_id:
+    for token in tokens.tolist():
+        if token == mask_token_id:
+            pieces.append(mask_char)
+        elif pad_token_id is not None and token == pad_token_id:
             pieces.append('[PAD]')
-        elif 0 <= tid < len(itos):
-            pieces.append(itos[tid])
+        elif 0 <= token < len(itos):
+            pieces.append(itos[token])
         else:
             pieces.append('[UNK]')
     return ''.join(pieces)
 
 
-def load_batch_samples(
-    dataset_name: str,
-    batch_file: Optional[str],
-    *,
-    input_name: Optional[str],
-    target_name: Optional[str],
-    limit: Optional[int] = None,
-) -> Tuple[List[torch.Tensor], Dict[str, torch.Tensor]]:
-    """Load original token sequences from a dataset batch file."""
-    data_root = Path('data') / dataset_name / 'queue'
-    if not data_root.exists():
-        raise FileNotFoundError(f"Dataset queue directory not found: {data_root}")
-
-    if batch_file is None:
-        candidates = sorted(data_root.rglob('*.pt'))
-        if not candidates:
-            raise FileNotFoundError(f"No .pt batch files found inside {data_root}")
-        batch_path = candidates[0]
-    else:
-        batch_path = data_root / batch_file
-        if not batch_path.exists():
-            raise FileNotFoundError(f"Specified batch file not found: {batch_path}")
-
-    container = torch.load(batch_path, map_location='cpu')
-    if isinstance(container, dict) and 'batches' in container:
-        batches = container.get('batches', [])
-        if not batches:
-            raise ValueError(f"Batch container {batch_path} contains no entries")
-        entry = batches[0]
-        tensors = entry.get('tensors', {})
-    elif isinstance(container, dict):
-        tensors = container.get('tensors', container)
-    else:
-        raise ValueError(f"Unsupported batch file format: {batch_path}")
-
-    tensor_keys = list(tensors.keys())
-    input_candidates = [input_name, 'x', 'input', 'input_ids']
-    target_candidates = [target_name, 'targets', 'y', 'target', 'labels']
-
-    input_key = next((cand for cand in input_candidates if cand and cand in tensors), None)
-    if input_key is None:
-        raise KeyError(f"Could not determine input tensor key from candidates {input_candidates} in {tensor_keys}")
-
-    target_key = next((cand for cand in target_candidates if cand and cand in tensors), None)
-    if target_key is None:
-        raise KeyError(f"Could not determine target tensor key from candidates {target_candidates} in {tensor_keys}")
-
-    x_tensor = tensors[input_key]
-    y_tensor = tensors[target_key]
-    if x_tensor.ndim != 2 or y_tensor.ndim != 2:
-        raise ValueError('Evaluator expects MLM-style batches with 2D input/target tensors')
-    if x_tensor.shape != y_tensor.shape:
-        raise ValueError('Input and target tensors must share the same shape')
-
-    ignore_index = -100
-    originals: List[torch.Tensor] = []
-    for idx in range(x_tensor.shape[0]):
-        x_row = x_tensor[idx].clone()
-        y_row = y_tensor[idx]
-        mask = y_row != ignore_index
-        x_row[mask] = y_row[mask]
-        originals.append(x_row)
-        if limit is not None and len(originals) >= limit:
-            break
-
-    return originals, {'input': x_tensor, 'target': y_tensor}
-
-
-def build_sticky_samples(
-    base_samples: Sequence[torch.Tensor],
-    sticky_configs: Sequence[StickyConfig],
-    *,
-    mask_token_id: int,
-    vocab_size: int,
-    base_vocab_size: Optional[int],
-    pad_token_id: Optional[int],
-    max_per_base: Optional[int] = None,
-    seed: int = 1234,
-) -> List[EvaluationSample]:
-    """Create sticky-masked evaluation samples from base sequences."""
-    results: List[EvaluationSample] = []
-    vocab_for_random = base_vocab_size if base_vocab_size is not None else vocab_size - 1
-    rng_seed = seed
-
-    for base_idx, original in enumerate(base_samples):
-        seq_len = original.shape[0]
-        if pad_token_id is not None:
-            pad_positions = (original == pad_token_id).nonzero(as_tuple=True)[0]
-            content_len = pad_positions[0].item() if pad_positions.numel() > 0 else seq_len
-        else:
-            content_len = seq_len
-
-        if content_len == 0:
+def encode_segment(segment: str, stoi: Dict[str, int]) -> torch.Tensor:
+    ids: List[int] = []
+    for ch in segment:
+        if ch not in stoi:
             continue
+        ids.append(int(stoi[ch]))
+    if not ids:
+        raise ValueError("Segment contains no encodable characters")
+    return torch.tensor(ids, dtype=torch.long).unsqueeze(0)
 
-        content = original[:content_len].unsqueeze(0)
-        for config_idx, sticky in enumerate(sticky_configs):
-            if max_per_base is not None and config_idx >= max_per_base:
-                break
 
-            rng = torch.Generator(device='cpu')
-            rng.manual_seed(rng_seed)
-            rng_seed += 1
+def ensure_text(dataset_name: str, info: ModelInfo) -> str:
+    if info.dataset_text:
+        return info.dataset_text
+    folder = Path('data') / dataset_name
+    for candidate in ['input.txt', 'train.txt', 'text.txt']:
+        file_path = folder / candidate
+        if file_path.exists():
+            info.dataset_text = file_path.read_text(encoding='utf-8')
+            return info.dataset_text
+    raise FileNotFoundError(
+        f"Unable to locate text corpus for dataset '{dataset_name}'. Place an input.txt in data/{dataset_name}."
+    )
+# ---------------------------------------------------------------------------
+# Core evaluator class
+# ---------------------------------------------------------------------------
 
-            masked_content, mask = apply_target_driven_sticky_masking_cpu(
-                content,
-                sticky.target_ratio,
-                sticky.p1,
-                sticky.p2,
-                mask_token_id,
-                vocab_for_random,
-                rng,
-            )
 
-            mask_row = mask[0]
-            if mask_row.sum().item() == 0:
+class ModelEvaluatorApp:
+    def __init__(self) -> None:
+        self.device = 'cuda' if torch.cuda.is_available() else 'cpu'
+        self.ptdtype = torch.float16 if self.device == 'cuda' else torch.float32
+        self.ctx = nullcontext() if self.device == 'cpu' else torch.amp.autocast(
+            device_type=self.device, dtype=self.ptdtype
+        )
+
+        self.model_dir = Path('out-char-diffusion')
+        self.model_cache: Dict[Path, ModelInfo] = {}
+        self.selected_models: List[ModelInfo] = []
+
+        self.sample_settings: Dict[str, float] = {
+            'num_base_samples': 3,
+            'sequence_length': 256,
+            'warmup_iterations': 4,
+            'remask_iterations': 6,
+            'temperature': 0.8,
+            'top_p': 1.0,
+            'start_ratio': 0.60,
+            'end_ratio': 0.05,
+            'randomness_strength': 0.10,
+            'seed': float(torch.randint(0, 2**31 - 1, (1,)).item()),
+        }
+
+        self.sticky_grid: List[StickyConfig] = [
+            StickyConfig(0.30, 0.05, 0.50),
+            StickyConfig(0.40, 0.08, 0.60),
+            StickyConfig(0.50, 0.10, 0.70),
+        ]
+
+        self.samples: List[EvaluationSample] = []
+        self.results: Dict[str, Dict[str, SampleResult]] = {}
+
+    # ------------------------------------------------------------------
+    # Model loading helpers
+    # ------------------------------------------------------------------
+
+    def available_checkpoints(self) -> List[Path]:
+        return list_checkpoints(self.model_dir)
+
+    def ensure_checkpoint(self, info: ModelInfo) -> None:
+        if info.checkpoint is None:
+            _, checkpoint = load_checkpoint(info.path, device='cpu')
+            info.checkpoint = checkpoint
+
+    def ensure_metadata(self, info: ModelInfo) -> None:
+        if info.stoi is not None and info.itos is not None:
+            return
+        self.ensure_checkpoint(info)
+        assert info.checkpoint is not None
+        dataset_name = resolve_dataset_name(info.checkpoint)
+        meta = load_meta(dataset_name, info.checkpoint)
+        stoi = meta.get('stoi')
+        itos = meta.get('itos')
+        if stoi is None or itos is None:
+            raise ValueError(f"Metadata for dataset '{dataset_name}' is missing stoi/itos mappings")
+        vocab_size = int(meta.get('vocab_size', len(itos)))
+        mask_token_id = int(meta.get('mask_token_id', vocab_size - 1))
+        pad_token_id = meta.get('pad_token_id')
+        base_vocab_size = meta.get('base_vocab_size')
+        block_size = meta.get('block_size') or info.checkpoint['model_args'].get('block_size')
+
+        info.meta = meta
+        info.dataset_name = dataset_name
+        info.stoi = stoi
+        info.itos = itos
+        info.vocab_size = vocab_size
+        info.mask_token_id = mask_token_id
+        info.pad_token_id = int(pad_token_id) if pad_token_id is not None else None
+        info.base_vocab_size = int(base_vocab_size) if base_vocab_size is not None else None
+        info.block_size = int(block_size) if block_size is not None else None
+
+    def ensure_model_loaded(self, info: ModelInfo) -> GPT:
+        if info.model is not None:
+            return info.model
+        model, checkpoint = load_checkpoint(info.path, self.device)
+        info.model = model
+        info.checkpoint = checkpoint
+        self.ensure_metadata(info)
+        return model
+
+    # ------------------------------------------------------------------
+    # Sample configuration menus
+    # ------------------------------------------------------------------
+
+    def configure_sample_settings(self) -> None:
+        while True:
+            print_header("Configure Sample Settings")
+            print("Current settings:\n")
+            print(f"1. Base samples       : {int(self.sample_settings['num_base_samples'])}")
+            print(f"2. Sequence length    : {int(self.sample_settings['sequence_length'])}")
+            print(f"3. Warm-up iterations : {int(self.sample_settings['warmup_iterations'])}")
+            print(f"4. Remask iterations  : {int(self.sample_settings['remask_iterations'])}")
+            print(f"5. Temperature        : {self.sample_settings['temperature']:.2f}")
+            print(f"6. Top-p              : {self.sample_settings['top_p']:.2f}")
+            print(f"7. Start ratio        : {self.sample_settings['start_ratio']:.2f}")
+            print(f"8. End ratio          : {self.sample_settings['end_ratio']:.2f}")
+            print(f"9. Randomness         : {self.sample_settings['randomness_strength']:.2f}")
+            print(f"10. RNG seed         : {int(self.sample_settings['seed'])}")
+            print()
+            print("Enter a number to edit, or press Enter to return.")
+            choice = input("Selection: ").strip()
+            if not choice:
+                return
+            if not choice.isdigit():
+                wait_for_key("Please enter a valid option.")
                 continue
+            idx = int(choice)
+            keys = [
+                'num_base_samples',
+                'sequence_length',
+                'warmup_iterations',
+                'remask_iterations',
+                'temperature',
+                'top_p',
+                'start_ratio',
+                'end_ratio',
+                'randomness_strength',
+                'seed',
+            ]
+            if idx < 1 or idx > len(keys):
+                wait_for_key("Option out of range.")
+                continue
+            key = keys[idx - 1]
+            current = self.sample_settings[key]
+            new_value = input(f"New value for {key.replace('_', ' ')} (current {current}): ").strip()
+            if not new_value:
+                continue
+            try:
+                if key in {'num_base_samples', 'sequence_length', 'warmup_iterations', 'remask_iterations', 'seed'}:
+                    self.sample_settings[key] = max(0, int(new_value))
+                else:
+                    self.sample_settings[key] = float(new_value)
+            except ValueError:
+                wait_for_key("Invalid numeric input.")
+                continue
+            if key == 'start_ratio' and self.sample_settings['start_ratio'] < self.sample_settings['end_ratio']:
+                self.sample_settings['start_ratio'] = self.sample_settings['end_ratio']
+            wait_for_key("Updated.")
 
-            masked_full = original.clone()
-            protected = torch.ones_like(original, dtype=torch.bool)
-            mask_full = torch.zeros_like(original, dtype=torch.bool)
+    def configure_sticky_grid(self) -> None:
+        while True:
+            print_header("Configure Sticky Masking Grid")
+            if not self.sticky_grid:
+                print("No sticky configurations defined yet.\n")
+            else:
+                print("Current configurations:\n")
+                for idx, cfg in enumerate(self.sticky_grid, 1):
+                    print(f" {idx}. {cfg.format_brief()}")
+                print()
+            print("Options:\n  1. Add configuration\n  2. Remove configuration\n  0. Return")
+            choice = input("Selection: ").strip()
+            if choice in {'0', ''}:
+                return
+            if choice == '1':
+                try:
+                    ratio = float(input("Target mask ratio (0-1): ").strip())
+                    p1 = float(input("p1 probability (0-1): ").strip())
+                    p2 = float(input("p2 probability (0-1): ").strip())
+                except ValueError:
+                    wait_for_key("Invalid numeric input.")
+                    continue
+                self.sticky_grid.append(StickyConfig(ratio, p1, p2))
+                wait_for_key("Configuration added.")
+            elif choice == '2':
+                if not self.sticky_grid:
+                    wait_for_key("Nothing to remove.")
+                    continue
+                idx_str = input("Enter the number to remove: ").strip()
+                if not idx_str.isdigit():
+                    wait_for_key("Please enter a valid index.")
+                    continue
+                idx = int(idx_str)
+                if idx < 1 or idx > len(self.sticky_grid):
+                    wait_for_key("Index out of range.")
+                    continue
+                del self.sticky_grid[idx - 1]
+                wait_for_key("Removed.")
+            else:
+                wait_for_key("Unknown option.")
 
-            masked_full[:content_len] = masked_content[0]
-            mask_full[:content_len] = mask_row
-            protected &= ~mask_full
+    # ------------------------------------------------------------------
+    # Sample generation
+    # ------------------------------------------------------------------
 
-            if pad_token_id is not None:
-                pad_mask = original == pad_token_id
-                protected |= pad_mask
-                mask_full &= ~pad_mask
+    def build_samples(self) -> None:
+        if not self.selected_models:
+            wait_for_key("Select at least one model first.")
+            return
 
-            sample_id = f"base{base_idx:03d}_cfg{config_idx:02d}"
-            results.append(
-                EvaluationSample(
+        primary = self.selected_models[0]
+        self.ensure_metadata(primary)
+        assert primary.stoi is not None
+        assert primary.itos is not None
+        assert primary.mask_token_id is not None
+        assert primary.vocab_size is not None
+
+        dataset_text = ensure_text(primary.dataset_name or 'dataset', primary)
+        seq_len = int(self.sample_settings['sequence_length'])
+        if primary.block_size is not None:
+            seq_len = min(seq_len, primary.block_size)
+        if seq_len <= 0:
+            wait_for_key("Sequence length must be positive.")
+            return
+        if len(dataset_text) < seq_len:
+            wait_for_key("Dataset text shorter than requested sequence length.")
+            return
+        if not self.sticky_grid:
+            wait_for_key("Define at least one sticky configuration.")
+            return
+
+        num_base = max(1, int(self.sample_settings['num_base_samples']))
+        rng = torch.Generator()
+        rng.manual_seed(int(self.sample_settings['seed']))
+
+        self.samples = []
+        self.results.clear()
+
+        for base_idx in range(num_base):
+            start_idx = int(torch.randint(0, len(dataset_text) - seq_len, (1,), generator=rng).item())
+            segment = dataset_text[start_idx:start_idx + seq_len]
+            try:
+                base_tokens = encode_segment(segment, primary.stoi)
+            except ValueError:
+                continue
+            if base_tokens.size(1) < seq_len:
+                pad_value = base_tokens[0, -1].item()
+                pad_needed = seq_len - base_tokens.size(1)
+                padding = torch.full((1, pad_needed), pad_value, dtype=torch.long)
+                base_tokens = torch.cat([base_tokens, padding], dim=1)
+            elif base_tokens.size(1) > seq_len:
+                base_tokens = base_tokens[:, :seq_len]
+
+            for cfg_idx, sticky in enumerate(self.sticky_grid):
+                batch_tokens = base_tokens.clone()
+                masked, mask = apply_target_driven_sticky_masking_cpu(
+                    batch_tokens,
+                    float(sticky.target_ratio),
+                    float(sticky.p1),
+                    float(sticky.p2),
+                    int(primary.mask_token_id),
+                    int(primary.vocab_size),
+                    rng,
+                )
+                masked = masked.clone()
+                masked[mask] = int(primary.mask_token_id)
+
+                protected_mask = (~mask).to(torch.bool)
+
+                sample_id = f"S{base_idx + 1:02d}-C{cfg_idx + 1:02d}"
+                sample = EvaluationSample(
                     sample_id=sample_id,
                     base_index=base_idx,
                     sticky=sticky,
-                    original_tokens=original.clone(),
-                    masked_tokens=masked_full,
-                    protected_mask=protected,
-                    mask_positions=mask_full,
+                    original_tokens=batch_tokens.clone(),
+                    masked_tokens=masked.to(torch.long),
+                    protected_mask=protected_mask.to(torch.bool),
+                    mask_positions=mask.to(torch.bool),
                 )
+                self.samples.append(sample)
+
+        wait_for_key(f"Built {len(self.samples)} evaluation samples.")
+    # ------------------------------------------------------------------
+    # Evaluation internals
+    # ------------------------------------------------------------------
+
+    def multinomial_warmup(self, info: ModelInfo, sample: EvaluationSample) -> torch.Tensor:
+        assert info.model is not None
+        assert info.mask_token_id is not None
+        tokens = sample.masked_tokens.to(self.device)
+        protected = sample.protected_mask.to(self.device)
+        original = sample.original_tokens.to(self.device)
+
+        iterations = max(0, int(self.sample_settings['warmup_iterations']))
+        temperature = float(self.sample_settings['temperature'])
+        top_p = float(self.sample_settings['top_p'])
+
+        current = tokens.clone()
+        for _ in range(iterations):
+            prediction_tokens, _ = predict_and_sample_tokens(
+                model=info.model,
+                tokens=current,
+                mask_token_id=int(info.mask_token_id),
+                temperature=temperature,
+                top_p=top_p,
+                vocab_size=info.vocab_size,
+                device=self.device,
+                return_logits=True,
+                pad_token_id=info.pad_token_id,
+                base_vocab_size=info.base_vocab_size,
             )
-    return results
+            if protected.any():
+                prediction_tokens = torch.where(protected, original, prediction_tokens)
+            current = prediction_tokens
+        return current
 
+    def confidence_refine(self, info: ModelInfo, sample: EvaluationSample, initial_tokens: torch.Tensor) -> torch.Tensor:
+        assert info.model is not None
+        assert info.mask_token_id is not None
+        iterations = max(0, int(self.sample_settings['remask_iterations']))
+        if iterations == 0:
+            return initial_tokens
 
-def multinomial_warmup(
-    model: GPT,
-    tokens: torch.Tensor,
-    protected_mask: torch.Tensor,
-    *,
-    iterations: int,
-    temperature: float,
-    mask_token_id: int,
-    pad_token_id: Optional[int],
-    base_vocab_size: Optional[int],
-) -> torch.Tensor:
-    """Iteratively refine tokens using multinomial sampling while preserving protected positions."""
-    current = tokens.clone()
-    for _ in range(iterations):
-        dummy = torch.zeros_like(current)
-        with torch.no_grad():
-            logits, _ = model(current, targets=dummy)
-        if temperature != 1.0:
-            logits = logits / temperature
-        logits[:, :, mask_token_id] = float('-inf')
-        if pad_token_id is not None:
-            logits[:, :, pad_token_id] = float('-inf')
-        if base_vocab_size is not None and logits.shape[-1] > base_vocab_size:
-            logits[:, :, base_vocab_size:] = float('-inf')
+        temperature = float(self.sample_settings['temperature'])
+        top_p = float(self.sample_settings['top_p'])
+        start_ratio = float(self.sample_settings['start_ratio'])
+        end_ratio = float(self.sample_settings['end_ratio'])
+        randomness = float(self.sample_settings['randomness_strength'])
 
-        probs = F.softmax(logits, dim=-1)
-        flat = probs.view(-1, probs.shape[-1])
-        sampled = torch.multinomial(flat, num_samples=1).view_as(current)
-        current = current.clone()
-        current[~protected_mask] = sampled[~protected_mask]
-    return current
+        protected = sample.protected_mask.to(self.device)
+        original = sample.original_tokens.to(self.device)
 
+        current = initial_tokens.clone()
+        for iteration in range(iterations):
+            prediction_tokens, logits = predict_and_sample_tokens(
+                model=info.model,
+                tokens=current,
+                mask_token_id=int(info.mask_token_id),
+                temperature=temperature,
+                top_p=top_p,
+                vocab_size=info.vocab_size,
+                device=self.device,
+                return_logits=True,
+                pad_token_id=info.pad_token_id,
+                base_vocab_size=info.base_vocab_size,
+            )
+            if protected.any():
+                prediction_tokens = torch.where(protected, original, prediction_tokens)
 
-def confidence_remasking(
-    model: GPT,
-    tokens: torch.Tensor,
-    original_tokens: torch.Tensor,
-    protected_mask: torch.Tensor,
-    *,
-    iterations: int,
-    start_ratio: float,
-    end_ratio: float,
-    mask_token_id: int,
-    pad_token_id: Optional[int],
-    base_vocab_size: Optional[int],
-    temperature: float,
-    top_p: float,
-) -> torch.Tensor:
-    """Run linear-schedule confidence-based remasking iterations."""
-    current = tokens.clone()
-    model_device = next(model.parameters()).device
-    device_type = model_device.type
-    for iteration in range(iterations):
-        mask_ratio = linear_remasking_schedule(iteration, iterations, start_ratio, end_ratio)
-        dummy = torch.zeros_like(current)
-        with torch.no_grad():
-            logits, _ = model(current, targets=dummy)
-        probs = F.softmax(logits, dim=-1)
-        taken = probs.gather(-1, current.unsqueeze(-1)).squeeze(-1)
-        uncertainty = 1.0 - taken
+            current = prediction_tokens
+            if iteration >= iterations - 1:
+                break
 
-        candidate_mask = ~protected_mask
-        candidate_mask &= (current != mask_token_id)
-        total_candidates = int(candidate_mask.sum().item())
-        if total_candidates == 0:
-            break
+            remask_result = apply_remasking_step(
+                tokens=current,
+                prediction_tokens=prediction_tokens,
+                iteration=iteration,
+                iterations=iterations,
+                schedule_type='linear',
+                masking_ratios=None,
+                start_ratio=start_ratio,
+                end_ratio=end_ratio,
+                remasking_model=None,
+                randomness_strength=randomness,
+                mask_token_id=int(info.mask_token_id),
+                device=self.device,
+                base_model=info.model,
+                intelligent_remasking=True,
+                verbose=False,
+                logits_from_predict=logits,
+                protected_mask=protected,
+            )
+            if isinstance(remask_result, tuple):
+                remasked_tokens = remask_result[0]
+                if remasked_tokens is None:
+                    break
+                current = remasked_tokens
+            elif isinstance(remask_result, torch.Tensor):
+                current = remask_result
+        return current
 
-        k = max(1, int(math.ceil(total_candidates * mask_ratio)))
-        flat_uncertainty = uncertainty.masked_fill(~candidate_mask, float('-inf')).view(-1)
-        if (flat_uncertainty == float('-inf')).all():
-            break
-        top_values, top_indices = torch.topk(flat_uncertainty, k=min(k, total_candidates), largest=True)
-        # Handle cases where additional -inf entries were selected
-        valid_mask = top_values > float('-inf')
-        if not valid_mask.any():
-            break
-        chosen_indices = top_indices[valid_mask]
+    def evaluate(self) -> None:
+        if not self.samples:
+            wait_for_key("Generate samples first.")
+            return
+        if not self.selected_models:
+            wait_for_key("Select models before evaluating.")
+            return
 
-        remask = torch.zeros_like(current, dtype=torch.bool)
-        remask.view(-1)[chosen_indices] = True
-        remask &= candidate_mask
-        if not remask.any():
-            continue
+        print_header("Evaluating Models")
+        print("Loading models...")
+        for info in self.selected_models:
+            self.ensure_model_loaded(info)
+        print("Models loaded. Beginning evaluation...\n")
+        wait_for_key("Press Enter to start.")
 
-        remasked_tokens = current.clone()
-        remasked_tokens[remask] = mask_token_id
+        self.results = {sample.sample_id: {} for sample in self.samples}
 
-        prediction_tokens, _ = predict_and_sample_tokens(
-            model=model,
-            tokens=remasked_tokens,
-            mask_token_id=mask_token_id,
-            temperature=temperature,
-            top_p=top_p,
-            vocab_size=model.config.vocab_size,
-            device=device_type,
-            return_logits=True,
-            pad_token_id=pad_token_id,
-            base_vocab_size=base_vocab_size,
-        )
-        current = prediction_tokens
-        current[protected_mask] = original_tokens[protected_mask]
+        for sample in self.samples:
+            print_header(f"Evaluating {sample.sample_id}")
+            for info in self.selected_models:
+                assert info.model is not None
+                assert info.mask_token_id is not None
 
-    return current
+                with torch.no_grad():
+                    warmup_tokens = self.multinomial_warmup(info, sample)
+                    refined_tokens = self.confidence_refine(info, sample, warmup_tokens)
 
+                final_cpu = refined_tokens.detach().cpu()
+                warmup_cpu = warmup_tokens.detach().cpu()
 
-def evaluate_model(
-    model: GPT,
-    samples: Sequence[EvaluationSample],
-    *,
-    multinomial_iterations: int,
-    multinomial_temperature: float,
-    remask_iterations: int,
-    remask_start: float,
-    remask_end: float,
-    temperature: float,
-    top_p: float,
-    mask_token_id: int,
-    pad_token_id: Optional[int],
-    base_vocab_size: Optional[int],
-) -> Dict[str, SampleResult]:
-    """Evaluate a model across samples and return per-sample results."""
-    results: Dict[str, SampleResult] = {}
-    model_device = next(model.parameters()).device
+                mask_positions = sample.mask_positions
+                original = sample.original_tokens
+                correct = int((final_cpu == original)[mask_positions].sum().item())
+                total = int(mask_positions.sum().item())
+                score = float(correct / total) if total > 0 else 0.0
 
-    for sample in samples:
-        original = sample.original_tokens.unsqueeze(0).to(model_device)
-        masked = sample.masked_tokens.unsqueeze(0).to(model_device)
-        protected = sample.protected_mask.unsqueeze(0).to(model_device)
+                self.results[sample.sample_id][info.name] = SampleResult(
+                    model_name=info.name,
+                    score=score,
+                    correct=correct,
+                    total=total,
+                    warmup_tokens=warmup_cpu,
+                    final_tokens=final_cpu,
+                )
+            print(f"Completed {sample.sample_id}.")
+            wait_for_key("Continue to next sample...")
+        wait_for_key("Evaluation finished.")
 
-        stage1_input = masked.clone()
-        stage1_input[protected] = original[protected]
-        stage1_tokens = multinomial_warmup(
-            model,
-            stage1_input,
-            protected,
-            iterations=multinomial_iterations,
-            temperature=multinomial_temperature,
-            mask_token_id=mask_token_id,
-            pad_token_id=pad_token_id,
-            base_vocab_size=base_vocab_size,
-        )
-        stage1_tokens[protected] = original[protected]
+    # ------------------------------------------------------------------
+    # Viewing helpers
+    # ------------------------------------------------------------------
 
-        refined_tokens = confidence_remasking(
-            model,
-            stage1_tokens,
-            original,
-            protected,
-            iterations=remask_iterations,
-            start_ratio=remask_start,
-            end_ratio=remask_end,
-            mask_token_id=mask_token_id,
-            pad_token_id=pad_token_id,
-            base_vocab_size=base_vocab_size,
-            temperature=temperature,
-            top_p=top_p,
-        )
-
-        mask_positions = sample.mask_positions.unsqueeze(0).to(model_device)
-        total = int(mask_positions.sum().item())
-        if total == 0:
-            score = float('nan')
-            correct = 0
-        else:
-            correct = int((refined_tokens[mask_positions] == original[mask_positions]).sum().item())
-            score = correct / total if total > 0 else float('nan')
-
-        results[sample.sample_id] = SampleResult(
-            model_name='unknown',
-            score=score,
-            correct=correct,
-            total=total,
-            final_tokens=refined_tokens.squeeze(0).cpu(),
-            stage1_tokens=stage1_tokens.squeeze(0).cpu(),
-        )
-    return results
-
-
-def summarize_results(
-    all_results: Dict[str, Dict[str, SampleResult]],
-    samples: Sequence[EvaluationSample],
-    model_labels: Sequence[str],
-) -> None:
-    """Print a summary table of scores for each sample and model."""
-    header = ['Sample', 'Target', 'p1', 'p2'] + list(model_labels)
-    print('\n' + '-' * 80)
-    print(' | '.join(f"{h:>12}" for h in header))
-    print('-' * 80)
-    for sample in samples:
-        row = [
-            sample.sample_id,
-            f"{sample.sticky.target_ratio:.2f}",
-            f"{sample.sticky.p1:.2f}",
-            f"{sample.sticky.p2:.2f}",
-        ]
-        for label in model_labels:
-            result = all_results.get(label, {}).get(sample.sample_id)
-            if result is None or math.isnan(result.score):
-                row.append('   n/a   ')
-            else:
-                row.append(f"{result.score:6.2%}")
-        print(' | '.join(f"{cell:>12}" for cell in row))
-    print('-' * 80)
-
-
-def interactive_viewer(
-    samples: Sequence[EvaluationSample],
-    all_results: Dict[str, Dict[str, SampleResult]],
-    *,
-    model_labels: Sequence[str],
-    itos: Sequence[str],
-    mask_token_id: int,
-    pad_token_id: Optional[int],
-) -> None:
-    """Simple interactive console viewer for per-sample outputs."""
-    decode = lambda ids: decode_tokens(ids, itos, mask_token_id, pad_token_id)
-    index_map = {sample.sample_id: idx for idx, sample in enumerate(samples)}
-    sample_ids = [sample.sample_id for sample in samples]
-    if not sample_ids:
-        print('No samples available for interactive view.')
-        return
-
-    current = 0
-    while True:
-        sample = samples[current]
-        print('\n' + '=' * 80)
-        print(f"Sample {current + 1}/{len(samples)} :: {sample.sample_id}")
-        print(f"  Sticky params -> target={sample.sticky.target_ratio:.3f}, p1={sample.sticky.p1:.3f}, p2={sample.sticky.p2:.3f}")
-        print('-' * 80)
-        print('Original :', repr(decode(sample.original_tokens.tolist())))
-        print('Masked   :', repr(decode(sample.masked_tokens.tolist())))
-        for label in model_labels:
-            result = all_results.get(label, {}).get(sample.sample_id)
-            if result is None:
+    def view_samples(self) -> None:
+        if not self.samples:
+            wait_for_key("No samples available. Generate them first.")
+            return
+        primary = self.selected_models[0] if self.selected_models else None
+        if primary is None or primary.itos is None or primary.mask_token_id is None:
+            wait_for_key("Select at least one model to enable decoding.")
+            return
+        while True:
+            print_header("Sample Browser")
+            for idx, sample in enumerate(self.samples, 1):
+                cfg = sample.sticky
+                print(f" {idx}. {sample.sample_id} | {cfg.format_brief()}")
+            print("\nEnter sample number to inspect, or press Enter to return.")
+            choice = input("Selection: ").strip()
+            if not choice:
+                return
+            if not choice.isdigit():
+                wait_for_key("Please enter a valid index.")
                 continue
-            print('-' * 80)
-            print(f"Model: {label}")
-            if math.isnan(result.score):
-                score_text = 'n/a'
-            else:
-                score_text = f"{result.score * 100:.2f}%"
-            print(f"  Score : {score_text} ({result.correct}/{result.total})")
-            print('  Stage1:', repr(decode(result.stage1_tokens.tolist())))
-            print('  Final :', repr(decode(result.final_tokens.tolist())))
-        print('=' * 80)
-        cmd = input("[N]ext, [P]revious, [Q]uit, or enter sample id: ").strip().lower()
-        if cmd == 'q':
-            break
-        elif cmd == 'n' or cmd == '':
-            current = (current + 1) % len(samples)
-        elif cmd == 'p':
-            current = (current - 1) % len(samples)
-        elif cmd in index_map:
-            current = index_map[cmd]
-        else:
-            try:
-                idx = int(cmd)
-                if 1 <= idx <= len(samples):
-                    current = idx - 1
-            except ValueError:
+            idx = int(choice)
+            if idx < 1 or idx > len(self.samples):
+                wait_for_key("Index out of range.")
                 continue
+            self.show_sample_detail(self.samples[idx - 1], primary)
 
+    def show_sample_detail(self, sample: EvaluationSample, primary: ModelInfo) -> None:
+        assert primary.itos is not None
+        assert primary.mask_token_id is not None
+        print_header(f"Sample {sample.sample_id}")
+        print(f"Sticky config: {sample.sticky.format_brief()}")
+        print(f"Masked tokens: {int(sample.mask_positions.sum().item())}\n")
 
-def parse_args(argv: Optional[Sequence[str]] = None) -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description='Evaluate multiple diffusion models on sticky-masked samples.')
-    parser.add_argument('--models', nargs='+', required=True, help='Paths to model checkpoints (.pt/.pth)')
-    parser.add_argument('--dataset-name', default=None, help='Dataset name (defaults to checkpoint metadata)')
-    parser.add_argument('--batch-file', default=None, help='Relative path inside dataset queue directory')
-    parser.add_argument('--num-base-samples', type=int, default=4, help='Number of base samples to draw from batch file')
-    parser.add_argument('--p1-values', nargs='+', type=float, default=[0.1, 0.3], help='Sticky p1 probabilities')
-    parser.add_argument('--p2-values', nargs='+', type=float, default=[0.5, 0.7], help='Sticky p2 probabilities')
-    parser.add_argument('--target-ratios', nargs='+', type=float, default=[0.3, 0.5], help='Target mask ratios')
-    parser.add_argument('--multinomial-iterations', type=int, default=3, help='Warmup multinomial iterations')
-    parser.add_argument('--multinomial-temperature', type=float, default=0.8, help='Temperature for multinomial warmup')
-    parser.add_argument('--remask-iterations', type=int, default=5, help='Number of confidence remasking iterations')
-    parser.add_argument('--remask-start', type=float, default=0.6, help='Starting ratio for linear remasking schedule')
-    parser.add_argument('--remask-end', type=float, default=0.1, help='Final ratio for linear remasking schedule')
-    parser.add_argument('--temperature', type=float, default=0.8, help='Sampling temperature during remasking')
-    parser.add_argument('--top-p', type=float, default=1.0, help='Top-p for sampling during remasking')
-    parser.add_argument('--interactive', action='store_true', help='Launch interactive viewer after evaluation')
-    return parser.parse_args(argv)
-
-
-def main(argv: Optional[Sequence[str]] = None) -> int:
-    args = parse_args(argv)
-
-    model_paths = [Path(p) for p in args.models]
-    if not model_paths:
-        raise ValueError('No model checkpoints provided')
-
-    loaded_models: Dict[str, GPT] = {}
-    checkpoints: Dict[str, Dict] = {}
-
-    dataset_name = args.dataset_name
-    for path in model_paths:
-        model, checkpoint = load_checkpoint_model(path)
-        label = path.stem
-        loaded_models[label] = model
-        checkpoints[label] = checkpoint
-        if dataset_name is None:
-            dataset_name = resolve_dataset_name(checkpoint)
-
-    if dataset_name is None:
-        raise RuntimeError('Unable to determine dataset name; provide --dataset-name explicitly')
-
-    meta = load_meta(dataset_name)
-    stoi = meta.get('stoi')
-    itos = meta.get('itos')
-    if itos is None:
-        raise ValueError('Vocabulary (itos) missing from dataset metadata; cannot decode tokens')
-    vocab_size = meta.get('vocab_size', loaded_models[next(iter(loaded_models))].config.vocab_size)
-    mask_token_id = meta.get('mask_token_id', vocab_size - 1)
-    pad_token_id = meta.get('pad_token_id')
-    base_vocab_size = meta.get('base_vocab_size')
-
-    input_name, target_name = infer_field_names(meta)
-
-    base_samples, _ = load_batch_samples(
-        dataset_name,
-        args.batch_file,
-        input_name=input_name,
-        target_name=target_name,
-        limit=args.num_base_samples,
-    )
-
-    sticky_configs = [StickyConfig(tr, p1, p2) for tr, p1, p2 in itertools.product(args.target_ratios, args.p1_values, args.p2_values)]
-    eval_samples = build_sticky_samples(
-        base_samples,
-        sticky_configs,
-        mask_token_id=mask_token_id,
-        vocab_size=vocab_size,
-        base_vocab_size=base_vocab_size,
-        pad_token_id=pad_token_id,
-    )
-
-    if not eval_samples:
-        print('No evaluation samples generated; adjust sticky parameters or dataset.')
-        return 1
-
-    all_results: Dict[str, Dict[str, SampleResult]] = {}
-    for label, model in loaded_models.items():
-        sample_results = evaluate_model(
-            model,
-            eval_samples,
-            multinomial_iterations=args.multinomial_iterations,
-            multinomial_temperature=args.multinomial_temperature,
-            remask_iterations=args.remask_iterations,
-            remask_start=args.remask_start,
-            remask_end=args.remask_end,
-            temperature=args.temperature,
-            top_p=args.top_p,
-            mask_token_id=mask_token_id,
-            pad_token_id=pad_token_id,
-            base_vocab_size=base_vocab_size,
+        original_text = decode_tokens(
+            sample.original_tokens, primary.itos, primary.mask_token_id, primary.pad_token_id, mask_char='□'
         )
-        # Attach model label to results
-        for res in sample_results.values():
-            res.model_name = label
-        all_results[label] = sample_results
-
-    summarize_results(all_results, eval_samples, list(loaded_models.keys()))
-
-    if args.interactive:
-        interactive_viewer(
-            eval_samples,
-            all_results,
-            model_labels=list(loaded_models.keys()),
-            itos=itos,
-            mask_token_id=mask_token_id,
-            pad_token_id=pad_token_id,
+        masked_text = decode_tokens(
+            sample.masked_tokens, primary.itos, primary.mask_token_id, primary.pad_token_id, mask_char='■'
         )
 
-    return 0
+        print("Original snippet:\n")
+        print(textwrap.fill(original_text, width=78))
+        print("\nSticky-masked snippet:\n")
+        print(textwrap.fill(masked_text, width=78))
+
+        if sample.sample_id in self.results:
+            print("\nModel results:\n")
+            per_sample = self.results[sample.sample_id]
+            for model_name, result in per_sample.items():
+                warmup = decode_tokens(result.warmup_tokens, primary.itos, primary.mask_token_id, primary.pad_token_id, mask_char='■')
+                final = decode_tokens(result.final_tokens, primary.itos, primary.mask_token_id, primary.pad_token_id, mask_char='■')
+                print(f"{model_name} — score {result.score:.3f} ({result.correct}/{result.total})")
+                print("  After warm-up:")
+                print("    " + textwrap.fill(warmup, width=74).replace('\n', '\n    '))
+                print("  Final:")
+                print("    " + textwrap.fill(final, width=74).replace('\n', '\n    '))
+                print()
+        wait_for_key()
+
+    def view_results_summary(self) -> None:
+        if not self.results:
+            wait_for_key("No results yet. Run evaluation first.")
+            return
+        print_header("Evaluation Summary")
+        model_names = [info.name for info in self.selected_models]
+        header = "Sample".ljust(12) + ''.join(name.ljust(18) for name in model_names)
+        print(header)
+        print("-" * len(header))
+        for sample in self.samples:
+            row = sample.sample_id.ljust(12)
+            for name in model_names:
+                result = self.results.get(sample.sample_id, {}).get(name)
+                row += (f"{result.score:.3f}" if result else "-").ljust(18)
+            print(row)
+        wait_for_key()
+    # ------------------------------------------------------------------
+    # Model selection
+    # ------------------------------------------------------------------
+
+    def select_models(self) -> None:
+        while True:
+            checkpoints = self.available_checkpoints()
+            print_header("Select Models")
+            print(f"Model directory: {self.model_dir}\n")
+            if not checkpoints:
+                print("No checkpoints found.\n")
+                print("Options:\n  1. Change directory\n  0. Return")
+                choice = input("Selection: ").strip()
+                if choice == '1':
+                    self.change_model_directory()
+                    continue
+                return
+
+            for idx, path in enumerate(checkpoints, 1):
+                print(f" {idx}. {path.name}")
+            print("\nEnter numbers separated by commas to select models.")
+            print("Type 'a' for all, 'd' to change directory, or press Enter to cancel.")
+            raw = input("Selection: ").strip()
+            if not raw:
+                return
+            if raw.lower() == 'd':
+                self.change_model_directory()
+                continue
+            if raw.lower() == 'a':
+                indices = list(range(1, len(checkpoints) + 1))
+            else:
+                parts = [p.strip() for p in raw.split(',') if p.strip()]
+                indices = []
+                valid = True
+                for part in parts:
+                    if part.isdigit():
+                        indices.append(int(part))
+                    else:
+                        valid = False
+                        break
+                if not valid:
+                    wait_for_key("Invalid selection format.")
+                    continue
+            selected: List[ModelInfo] = []
+            for idx in indices:
+                if idx < 1 or idx > len(checkpoints):
+                    continue
+                path = checkpoints[idx - 1]
+                if path not in self.model_cache:
+                    self.model_cache[path] = ModelInfo(path=path, name=path.name)
+                selected.append(self.model_cache[path])
+            if not selected:
+                wait_for_key("No valid selections.")
+                continue
+            self.selected_models = selected
+            wait_for_key(f"Selected {len(self.selected_models)} model(s).")
+            return
+
+    def change_model_directory(self) -> None:
+        new_dir = input("Enter new model directory path: ").strip()
+        if not new_dir:
+            return
+        candidate = Path(new_dir).expanduser()
+        if not candidate.exists() or not candidate.is_dir():
+            wait_for_key("Directory not found.")
+            return
+        self.model_dir = candidate
+        wait_for_key(f"Model directory updated to {self.model_dir}.")
+
+    # ------------------------------------------------------------------
+    # Main menu
+    # ------------------------------------------------------------------
+
+    def main_menu(self) -> None:
+        while True:
+            print_header("Sticky Mask Model Evaluator")
+            if self.selected_models:
+                model_list = ', '.join(info.name for info in self.selected_models)
+                print(f"Selected models: {model_list}\n")
+            else:
+                print("No models selected yet.\n")
+
+            print("Main Menu:")
+            print(" 1. Select models")
+            print(" 2. Configure sample settings")
+            print(" 3. Configure sticky masking grid")
+            print(" 4. Generate samples")
+            print(" 5. View samples")
+            print(" 6. Run evaluation")
+            print(" 7. View results summary")
+            print(" 8. Change model directory")
+            print(" 0. Exit")
+
+            choice = input("Selection: ").strip()
+            if choice == '1':
+                self.select_models()
+            elif choice == '2':
+                self.configure_sample_settings()
+            elif choice == '3':
+                self.configure_sticky_grid()
+            elif choice == '4':
+                self.build_samples()
+            elif choice == '5':
+                self.view_samples()
+            elif choice == '6':
+                self.evaluate()
+            elif choice == '7':
+                self.view_results_summary()
+            elif choice == '8':
+                self.change_model_directory()
+            elif choice == '0':
+                print_header("Goodbye!")
+                print("Thank you for using the Sticky Mask Model Evaluator.")
+                wait_for_key()
+                return
+            else:
+                wait_for_key("Unknown option.")
+
+
+# ---------------------------------------------------------------------------
+# Entry point
+# ---------------------------------------------------------------------------
+
+
+def main() -> None:
+    app = ModelEvaluatorApp()
+    try:
+        app.main_menu()
+    except KeyboardInterrupt:
+        print("\nInterrupted by user. Goodbye!")
+    except Exception as exc:  # pragma: no cover - interactive tool
+        print(f"\nUnexpected error: {exc}")
+        import traceback
+        traceback.print_exc()
 
 
 if __name__ == '__main__':
-    raise SystemExit(main())
+    main()
