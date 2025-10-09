@@ -712,9 +712,26 @@ class ModelEvaluatorApp:
             return
         while True:
             print_header("Sample Browser")
+            has_results = bool(self.results)
+            primary_name = primary.name if primary is not None else None
             for idx, sample in enumerate(self.samples, 1):
                 cfg = sample.sticky
-                print(f" {idx}. {sample.sample_id} | {cfg.format_brief()}")
+                line = f" {idx}. {sample.sample_id} | {cfg.format_brief()}"
+                if has_results and sample.sample_id in self.results and primary_name in self.results[sample.sample_id]:
+                    res = self.results[sample.sample_id][primary_name]
+                    # Compute Stage1 score from warmup_tokens
+                    wt = res.warmup_tokens
+                    ot = sample.original_tokens
+                    mp = sample.mask_positions
+                    try:
+                        s1_correct = int((wt == ot)[mp].sum().item())
+                        s1_total = int(mp.sum().item())
+                        s1_score = float(s1_correct / s1_total) if s1_total > 0 else 0.0
+                        line += f" | s1={s1_score:.2f} | final={res.score:.2f}"
+                    except Exception:
+                        # Be conservative; if shapes misalign, skip scores in browser list
+                        pass
+                print(line)
             print("\nEnter sample number to inspect, or press Enter to return.")
             choice = input("Selection: ").strip()
             if not choice:
@@ -793,7 +810,11 @@ class ModelEvaluatorApp:
                     else:
                         f_parts.append(piece)
                 final_colored = ''.join(f_parts)
-                print(f"{model_name} — score {result.score:.3f} ({result.correct}/{result.total})")
+                # Stage1 score from warmup_tokens
+                s1_correct = int((result.warmup_tokens == sample.original_tokens)[sample.mask_positions].sum().item())
+                s1_total = int(sample.mask_positions.sum().item())
+                s1_score = float(s1_correct / s1_total) if s1_total > 0 else 0.0
+                print(f"{model_name} — score {result.score:.3f} ({result.correct}/{result.total}), s1 {s1_score:.3f}")
                 print("  Stage1:")
                 for _line in stage1_colored.splitlines():
                     print('    ' + _line)
@@ -803,22 +824,6 @@ class ModelEvaluatorApp:
                 print()
         wait_for_key()
 
-    def view_results_summary(self) -> None:
-        if not self.results:
-            wait_for_key("No results yet. Run evaluation first.")
-            return
-        print_header("Evaluation Summary")
-        model_names = [info.name for info in self.selected_models]
-        header = "Sample".ljust(12) + ''.join(name.ljust(18) for name in model_names)
-        print(header)
-        print("-" * len(header))
-        for sample in self.samples:
-            row = sample.sample_id.ljust(12)
-            for name in model_names:
-                result = self.results.get(sample.sample_id, {}).get(name)
-                row += (f"{result.score:.3f}" if result else "-").ljust(18)
-            print(row)
-        wait_for_key()
     # ------------------------------------------------------------------
     # Model selection
     # ------------------------------------------------------------------
@@ -908,8 +913,7 @@ class ModelEvaluatorApp:
             print(" 4. Generate samples")
             print(" 5. View samples")
             print(" 6. Run evaluation")
-            print(" 7. View results summary")
-            print(" 8. Change model directory")
+            print(" 7. Change model directory")
             print(" 0. Exit")
 
             choice = input("Selection: ").strip()
@@ -926,8 +930,6 @@ class ModelEvaluatorApp:
             elif choice == '6':
                 self.evaluate()
             elif choice == '7':
-                self.view_results_summary()
-            elif choice == '8':
                 self.change_model_directory()
             elif choice == '0':
                 print_header("Goodbye!")
