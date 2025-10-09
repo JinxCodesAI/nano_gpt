@@ -183,6 +183,32 @@ alternation_frequency = 1  # Switch every batch
 - More efficient than training separate models
 - Flexible task mixing during training
 
+### Example: `char_diffusion_sticky_rounds`
+
+`char_diffusion_sticky_rounds` reuses the Shakespeare corpus and vocabulary from
+`char_diffusion` but changes how corruption is applied. Instead of sampling a
+single masked view, the provider performs iterative "sticky" masking:
+
+- Each unmasked base sequence spawns `max_rounds` successive diffusion steps.
+- Sticky probabilities `sticky_p1_probability` (no masked neighbours) and
+  `sticky_p2_probability` (at least one neighbour masked) govern how the mask
+  expands at every step.
+- Targets are always the original characters at masked positions, matching the
+  `char_diffusion` training objective.
+
+Configuration tips:
+
+- The provider automatically samples enough base sequences to fill the requested
+  `batch_size`, trimming the final base sequence to the required size when it is
+  not divisible by `max_rounds`.
+- The dataset automatically reads `input.txt` from `data/char_diffusion`, so no
+  additional text asset is required. Use `source_data_dir` if you need to point
+  to a different corpus that shares the same vocabulary.
+
+This dataset is useful when you want the model to observe multiple iterations
+of a sticky masking process within a single batch file, providing a smoother
+curriculum across diffusion steps.
+
 ### Troubleshooting
 - Consumer error: "Queue directory not found" -> run prepare.py with the same config.
 - Device moves: DatasetConsumer uses pinned memory and non_blocking transfers on CUDA.
