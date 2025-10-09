@@ -70,6 +70,11 @@ dropout = 0.0 # for pretraining 0 is good, for finetuning try 0.1+
 bias = False # do we use bias inside LayerNorm and Linear layers?
 attention_type = 'causal' # 'causal' for autoregressive, 'bidirectional' for BERT-style
 position_encoding = 'absolute' # 'absolute' or 'rotary'
+# hierarchical guidance / plan encoder configuration
+use_guidance = True
+plan_tokens = 16
+plan_encoder_depth_factor = 0.5
+cond_dropout_prob = 0.1
 # adamw optimizer
 learning_rate = 6e-4 # max learning rate
 max_iters = 600000 # total number of training iterations
@@ -241,6 +246,10 @@ checkpoint_manager.set_metadata(model_args={}, config=config)
 model_args = dict(n_layer=n_layer, n_head=n_head, n_embd=n_embd, block_size=block_size,
                   bias=bias, vocab_size=None, dropout=dropout, attention_type=attention_type,
                   position_encoding=position_encoding,
+                  use_guidance=use_guidance,
+                  plan_tokens=plan_tokens,
+                  plan_encoder_depth_factor=plan_encoder_depth_factor,
+                  cond_dropout_prob=cond_dropout_prob,
                   # multi-mode parameters (mode is set after model creation)
                   cls_token_id=cls_token_id,
                   freeze_transformer=freeze_transformer,
@@ -276,6 +285,9 @@ elif init_from == 'resume':
     # the rest of the attributes (e.g. dropout) can stay as desired from command line
     for k in ['n_layer', 'n_head', 'n_embd', 'block_size', 'bias', 'vocab_size']:
         model_args[k] = checkpoint_model_args[k]
+    for k in ['use_guidance', 'plan_tokens', 'plan_encoder_depth_factor', 'cond_dropout_prob']:
+        if k in checkpoint_model_args:
+            model_args[k] = checkpoint_model_args[k]
     # create the model
     gptconf = GPTConfig(**model_args)
     model = GPT(gptconf, logger=logger)
