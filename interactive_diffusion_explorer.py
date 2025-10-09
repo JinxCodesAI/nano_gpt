@@ -14,7 +14,7 @@ from contextlib import nullcontext
 from typing import Dict, Any, List, Tuple, Optional
 
 import torch
-from model import GPTConfig, GPT
+from model import GPTConfig, GPT, ModelMode
 
 # Import utilities from existing files
 sys.path.append('data/char_diffusion')
@@ -89,7 +89,10 @@ class DiffusionExplorer:
                 fd = sys.stdin.fileno()
                 old_settings = termios.tcgetattr(fd)
                 try:
-                    tty.cbreak(fd)
+                    if hasattr(tty, 'setcbreak'):
+                        tty.setcbreak(fd)
+                    else:
+                        tty.setraw(fd)
                     return sys.stdin.read(1)
                 finally:
                     termios.tcsetattr(fd, termios.TCSADRAIN, old_settings)
