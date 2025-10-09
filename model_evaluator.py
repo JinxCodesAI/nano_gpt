@@ -810,7 +810,11 @@ class ModelEvaluatorApp:
                     else:
                         f_parts.append(piece)
                 final_colored = ''.join(f_parts)
-                print(f"{model_name} — score {result.score:.3f} ({result.correct}/{result.total})")
+                # Stage1 score from warmup_tokens
+                s1_correct = int((result.warmup_tokens == sample.original_tokens)[sample.mask_positions].sum().item())
+                s1_total = int(sample.mask_positions.sum().item())
+                s1_score = float(s1_correct / s1_total) if s1_total > 0 else 0.0
+                print(f"{model_name} — score {result.score:.3f} ({result.correct}/{result.total}), s1 {s1_score:.3f}")
                 print("  Stage1:")
                 for _line in stage1_colored.splitlines():
                     print('    ' + _line)
@@ -820,22 +824,6 @@ class ModelEvaluatorApp:
                 print()
         wait_for_key()
 
-    def view_results_summary(self) -> None:
-        if not self.results:
-            wait_for_key("No results yet. Run evaluation first.")
-            return
-        print_header("Evaluation Summary")
-        model_names = [info.name for info in self.selected_models]
-        header = "Sample".ljust(12) + ''.join(name.ljust(18) for name in model_names)
-        print(header)
-        print("-" * len(header))
-        for sample in self.samples:
-            row = sample.sample_id.ljust(12)
-            for name in model_names:
-                result = self.results.get(sample.sample_id, {}).get(name)
-                row += (f"{result.score:.3f}" if result else "-").ljust(18)
-            print(row)
-        wait_for_key()
     # ------------------------------------------------------------------
     # Model selection
     # ------------------------------------------------------------------
@@ -925,8 +913,7 @@ class ModelEvaluatorApp:
             print(" 4. Generate samples")
             print(" 5. View samples")
             print(" 6. Run evaluation")
-            print(" 7. View results summary")
-            print(" 8. Change model directory")
+            print(" 7. Change model directory")
             print(" 0. Exit")
 
             choice = input("Selection: ").strip()
@@ -943,8 +930,6 @@ class ModelEvaluatorApp:
             elif choice == '6':
                 self.evaluate()
             elif choice == '7':
-                self.view_results_summary()
-            elif choice == '8':
                 self.change_model_directory()
             elif choice == '0':
                 print_header("Goodbye!")
