@@ -249,8 +249,7 @@ class ModelEvaluatorApp:
         self.sample_settings: Dict[str, float] = {
             'num_base_samples': 3,
             'sequence_length': 256,
-            'warmup_iterations': 4,
-            'remask_iterations': 6,
+            'iterations': 6,
             'temperature': 0.8,
             'top_p': 1.0,
             'start_ratio': 0.60,
@@ -326,14 +325,13 @@ class ModelEvaluatorApp:
             print("Current settings:\n")
             print(f"1. Base samples       : {int(self.sample_settings['num_base_samples'])}")
             print(f"2. Sequence length    : {int(self.sample_settings['sequence_length'])}")
-            print(f"3. Warm-up iterations : {int(self.sample_settings['warmup_iterations'])}")
-            print(f"4. Remask iterations  : {int(self.sample_settings['remask_iterations'])}")
-            print(f"5. Temperature        : {self.sample_settings['temperature']:.2f}")
-            print(f"6. Top-p              : {self.sample_settings['top_p']:.2f}")
-            print(f"7. Start ratio        : {self.sample_settings['start_ratio']:.2f}")
-            print(f"8. End ratio          : {self.sample_settings['end_ratio']:.2f}")
-            print(f"9. Randomness         : {self.sample_settings['randomness_strength']:.2f}")
-            print(f"10. RNG seed         : {int(self.sample_settings['seed'])}")
+            print(f"3. Iterations         : {int(self.sample_settings['iterations'])}")
+            print(f"4. Temperature        : {self.sample_settings['temperature']:.2f}")
+            print(f"5. Top-p              : {self.sample_settings['top_p']:.2f}")
+            print(f"6. Start ratio        : {self.sample_settings['start_ratio']:.2f}")
+            print(f"7. End ratio          : {self.sample_settings['end_ratio']:.2f}")
+            print(f"8. Randomness         : {self.sample_settings['randomness_strength']:.2f}")
+            print(f"9. RNG seed           : {int(self.sample_settings['seed'])}")
             print()
             print("Enter a number to edit, or press Enter to return.")
             choice = input("Selection: ").strip()
@@ -346,8 +344,7 @@ class ModelEvaluatorApp:
             keys = [
                 'num_base_samples',
                 'sequence_length',
-                'warmup_iterations',
-                'remask_iterations',
+                'iterations',
                 'temperature',
                 'top_p',
                 'start_ratio',
@@ -364,7 +361,7 @@ class ModelEvaluatorApp:
             if not new_value:
                 continue
             try:
-                if key in {'num_base_samples', 'sequence_length', 'warmup_iterations', 'remask_iterations', 'seed'}:
+                if key in {'num_base_samples', 'sequence_length', 'iterations', 'seed'}:
                     self.sample_settings[key] = max(0, int(new_value))
                 else:
                     self.sample_settings[key] = float(new_value)
@@ -620,11 +617,71 @@ class ModelEvaluatorApp:
                 assert info.mask_token_id is not None
 
                 with torch.no_grad():
-                    warmup_tokens = self.multinomial_warmup(info, sample)
-                    refined_tokens = self.confidence_refine(info, sample, warmup_tokens)
+                    assert info.model is not None and info.mask_token_id is not None
+                    current = sample.masked_tokens.to(self.device)
+                    protected = sample.protected_mask.to(self.device)
+                    original = sample.original_tokens.to(self.device)
+
+                    iterations = max(1, int(self.sample_settings['iterations']))
+                    temperature = float(self.sample_settings['temperature'])
+                    top_p = float(self.sample_settings['top_p'])
+                    start_ratio = float(self.sample_settings['start_ratio'])
+                    end_ratio = float(self.sample_settings['end_ratio'])
+                    randomness = float(self.sample_settings['randomness_strength'])
+
+                    warmup_tokens = None
+                    for it in range(iterations):
+                        prediction_tokens, logits = predict_and_sample_tokens(
+                            model=info.model,
+                            tokens=current,
+                            mask_token_id=int(info.mask_token_id),
+                            temperature=temperature,
+                            top_p=top_p,
+                            vocab_size=info.vocab_size,
+                            device=self.device,
+                            return_logits=True,
+                            pad_token_id=info.pad_token_id,
+                            base_vocab_size=info.base_vocab_size,
+                        )
+                        if protected.any():
+                            prediction_tokens = torch.where(protected, original, prediction_tokens)
+                        if it == 0:
+                            warmup_tokens = prediction_tokens.clone()
+                        # if not last iteration, prepare next current by remasking
+                        if it < iterations - 1:
+                            remask_result = apply_remasking_step(
+                                tokens=current,
+                                prediction_tokens=prediction_tokens,
+                                iteration=it,
+                                iterations=iterations,
+                                schedule_type='linear',
+                                masking_ratios=None,
+                                start_ratio=start_ratio,
+                                end_ratio=end_ratio,
+                                remasking_model=None,
+                                randomness_strength=randomness,
+                                mask_token_id=int(info.mask_token_id),
+                                device=self.device,
+                                base_model=info.model,
+                                intelligent_remasking=True,
+                                verbose=False,
+                                logits_from_predict=logits,
+                                protected_mask=protected,
+                            )
+                            if isinstance(remask_result, tuple):
+                                nxt = remask_result[0]
+                                current = prediction_tokens if nxt is None else nxt
+                            elif isinstance(remask_result, torch.Tensor):
+                                current = remask_result
+                            else:
+                                current = prediction_tokens
+                        else:
+                            current = prediction_tokens
+
+                    refined_tokens = current
 
                 final_cpu = refined_tokens.detach().cpu()
-                warmup_cpu = warmup_tokens.detach().cpu()
+                warmup_cpu = warmup_tokens.detach().cpu() if warmup_tokens is not None else refined_tokens.detach().cpu()
 
                 mask_positions = sample.mask_positions
                 original = sample.original_tokens
@@ -655,9 +712,26 @@ class ModelEvaluatorApp:
             return
         while True:
             print_header("Sample Browser")
+            has_results = bool(self.results)
+            primary_name = primary.name if primary is not None else None
             for idx, sample in enumerate(self.samples, 1):
                 cfg = sample.sticky
-                print(f" {idx}. {sample.sample_id} | {cfg.format_brief()}")
+                line = f" {idx}. {sample.sample_id} | {cfg.format_brief()}"
+                if has_results and sample.sample_id in self.results and primary_name in self.results[sample.sample_id]:
+                    res = self.results[sample.sample_id][primary_name]
+                    # Compute Stage1 score from warmup_tokens
+                    wt = res.warmup_tokens
+                    ot = sample.original_tokens
+                    mp = sample.mask_positions
+                    try:
+                        s1_correct = int((wt == ot)[mp].sum().item())
+                        s1_total = int(mp.sum().item())
+                        s1_score = float(s1_correct / s1_total) if s1_total > 0 else 0.0
+                        line += f" | s1={s1_score:.2f} | final={res.score:.2f}"
+                    except Exception:
+                        # Be conservative; if shapes misalign, skip scores in browser list
+                        pass
+                print(line)
             print("\nEnter sample number to inspect, or press Enter to return.")
             choice = input("Selection: ").strip()
             if not choice:
