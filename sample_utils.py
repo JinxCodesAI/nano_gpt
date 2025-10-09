@@ -107,7 +107,15 @@ top_p=1.0, vocab_size=None,
     mask_positions = (tokens == mask_token_id)
 
     if not mask_positions.any():
-        return tokens, tokens.clone()
+        # No masked positions to sample, but we may still need logits (e.g., for intelligent remasking)
+        dummy_targets = torch.zeros_like(tokens)
+        grad_context = torch.no_grad() if no_grad else nullcontext()
+        with grad_context:
+            logits, _ = model(tokens, targets=dummy_targets)
+        if return_logits:
+            return tokens, logits
+        else:
+            return tokens
 
     # Forward pass through the model
     # Pass dummy targets to get logits for all positions (not just the last one)
@@ -596,11 +604,6 @@ def apply_remasking_step(tokens, prediction_tokens, iteration, iterations, sched
                 protected_mask=protected_mask,
             )
         # Use logits from main forward, batched
-        if not torch.is_floating_point(logits_from_predict):
-            # Ensure logits are floating point for softmax; caller should pass logits, not token ids
-            # Cast to float to proceed; shapes are validated below
-            logits_from_predict = logits_from_predict.float()
-        logits_from_predict = logits_from_predict.to(prediction_tokens.device)
         probs = F.softmax(logits_from_predict, dim=-1)
         p_taken = probs.gather(-1, prediction_tokens.unsqueeze(-1)).squeeze(-1)
         uncertainty = 1.0 - p_taken  # uncertainty (0-1, higher = more uncertain)
