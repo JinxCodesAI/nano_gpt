@@ -10,6 +10,7 @@ https://github.com/huggingface/transformers/blob/main/src/transformers/models/gp
 
 import math
 import inspect
+import dataclasses
 from dataclasses import dataclass
 from enum import Enum
 
@@ -298,6 +299,55 @@ class ScaledSigmoidHead(nn.Module):
         return torch.sigmoid(scaled_logits)
 
 
+class CrossAttention(nn.Module):
+
+    def __init__(self, config):
+        super().__init__()
+        assert config.n_embd % config.n_head == 0
+        self.n_head = config.n_head
+        self.n_embd = config.n_embd
+        self.q = nn.Linear(config.n_embd, config.n_embd, bias=config.bias)
+        self.k = nn.Linear(config.n_embd, config.n_embd, bias=config.bias)
+        self.v = nn.Linear(config.n_embd, config.n_embd, bias=config.bias)
+        self.proj = nn.Linear(config.n_embd, config.n_embd, bias=config.bias)
+        self.dropout = nn.Dropout(config.dropout)
+        self.flash = hasattr(torch.nn.functional, 'scaled_dot_product_attention')
+
+    def forward(self, x, kv, kv_mask=None):
+        if kv is None:
+            return x
+
+        B, T, C = x.shape
+        H = self.n_head
+        D = C // H
+
+        q = self.q(x).view(B, T, H, D).transpose(1, 2)
+        k = self.k(kv).view(B, kv.size(1), H, D).transpose(1, 2)
+        v = self.v(kv).view(B, kv.size(1), H, D).transpose(1, 2)
+
+        if self.flash:
+            attn_mask = None
+            if kv_mask is not None:
+                attn_mask = (kv_mask == 0)[:, None, None, :]
+            y = torch.nn.functional.scaled_dot_product_attention(
+                q,
+                k,
+                v,
+                attn_mask=attn_mask,
+                dropout_p=self.dropout.p if self.training else 0.0,
+                is_causal=False,
+            )
+        else:
+            att = (q @ k.transpose(-2, -1)) / math.sqrt(D)
+            if kv_mask is not None:
+                att = att.masked_fill((kv_mask == 0)[:, None, None, :], float('-inf'))
+            att = torch.softmax(att, dim=-1)
+            y = att @ v
+
+        y = y.transpose(1, 2).contiguous().view(B, T, C)
+        return self.proj(self.dropout(y))
+
+
 class Block(nn.Module):
 
     def __init__(self, config):
@@ -315,13 +365,94 @@ class Block(nn.Module):
             # Note: These messages occur during model init, before logger is available
             print("Using causal attention")
 
+        self.cross = CrossAttention(config)
+        self.ln_cross = LayerNorm(config.n_embd, bias=config.bias)
+
         self.ln_2 = LayerNorm(config.n_embd, bias=config.bias)
         self.mlp = MLP(config)
 
-    def forward(self, x, attention_mask=None):
+    def forward(self, x, attention_mask=None, guidance_h=None, guidance_mask=None):
         x = x + self.attn(self.ln_1(x), attention_mask=attention_mask)
+        if guidance_h is not None:
+            x = x + self.cross(self.ln_cross(x), guidance_h, kv_mask=guidance_mask)
         x = x + self.mlp(self.ln_2(x))
         return x
+
+
+class PlanEncoder(nn.Module):
+
+    def __init__(
+        self,
+        config,
+        K=None,
+        depth_factor=None,
+        token_embedding=None,
+        position_embedding=None,
+    ):
+        super().__init__()
+        self.K = int(K if K is not None else getattr(config, 'plan_tokens', 16))
+        if self.K <= 0:
+            raise ValueError("PlanEncoder requires K > 0 plan tokens")
+
+        self.plan_emb = nn.Parameter(torch.randn(self.K, config.n_embd) * 0.02)
+
+        self.wte = token_embedding if token_embedding is not None else nn.Embedding(config.vocab_size, config.n_embd)
+
+        position_encoding = getattr(config, 'position_encoding', 'absolute')
+        if position_embedding is not None:
+            self.wpe = position_embedding
+        elif position_encoding == 'absolute':
+            self.wpe = nn.Embedding(config.block_size, config.n_embd)
+        else:
+            self.wpe = None
+
+        depth_factor = depth_factor if depth_factor is not None else getattr(config, 'plan_encoder_depth_factor', 0.5)
+        if isinstance(depth_factor, int):
+            depth = max(1, int(depth_factor))
+        else:
+            depth = max(1, int(round(config.n_layer * float(depth_factor))))
+
+        enc_cfg = dataclasses.replace(config, attention_type='bidirectional', n_layer=depth)
+
+        self.ln_in = LayerNorm(enc_cfg.n_embd, bias=enc_cfg.bias)
+        self.layers = nn.ModuleList([Block(enc_cfg) for _ in range(depth)])
+        self.ln_out = LayerNorm(enc_cfg.n_embd, bias=enc_cfg.bias)
+
+    def embed(self, idx):
+        tok = self.wte(idx)
+        if self.wpe is not None:
+            positions = torch.arange(idx.size(1), device=idx.device, dtype=torch.long)
+            tok = tok + self.wpe(positions)
+        return tok
+
+    def forward(self, src_emb_or_idx, src_mask=None, already_embedded=False, return_mask=False):
+        if already_embedded:
+            src = src_emb_or_idx
+        else:
+            src = self.embed(src_emb_or_idx)
+
+        B = src.size(0)
+        plan = self.plan_emb.unsqueeze(0).expand(B, -1, -1)
+        x = torch.cat([plan, src], dim=1)
+
+        if src_mask is not None:
+            plan_mask = torch.ones(B, self.K, dtype=src_mask.dtype, device=src_mask.device)
+            attention_mask = torch.cat([plan_mask, src_mask], dim=1)
+        else:
+            attention_mask = None
+            plan_mask = None
+
+        x = self.ln_in(x)
+        for block in self.layers:
+            x = block(x, attention_mask=attention_mask)
+        x = self.ln_out(x)
+        plan_states = x[:, : self.K, :]
+
+        if return_mask:
+            if plan_mask is None:
+                plan_mask = torch.ones(B, self.K, device=x.device, dtype=torch.long)
+            return plan_states, plan_mask
+        return plan_states
 
 @dataclass
 class GPTConfig:
@@ -335,6 +466,10 @@ class GPTConfig:
     ignore_index: int = -100 # Standard PyTorch ignore index for loss computation
     attention_type: str = 'causal' # 'causal' for autoregressive, 'bidirectional' for BERT-style
     position_encoding: str = 'absolute' # 'absolute' or 'rotary'
+    use_guidance: bool = True
+    plan_tokens: int = 16
+    plan_encoder_depth_factor: float = 0.5
+    cond_dropout_prob: float = 0.1
 
     # Dual-mode support: model has both heads, mode is switchable at runtime
     cls_token_id: int = None  # For sequence scoring mode
@@ -384,9 +519,22 @@ class GPT(nn.Module):
 
         self.transformer = nn.ModuleDict(transformer_components)
 
+        self.plan_encoder = None
+        if getattr(self.config, 'use_guidance', False):
+            depth_factor = getattr(self.config, 'plan_encoder_depth_factor', 0.5)
+            position_embedding = self.transformer['wpe'] if 'wpe' in self.transformer else None
+            self.plan_encoder = PlanEncoder(
+                self.config,
+                K=getattr(self.config, 'plan_tokens', 16),
+                depth_factor=depth_factor,
+                token_embedding=self.transformer.wte,
+                position_embedding=position_embedding,
+            )
+            self._log_info(f"Plan encoder enabled (K={self.plan_encoder.K}, depth_factor={depth_factor})")
+
         # Main head
         self.lm_head = nn.Linear(config.n_embd, config.vocab_size, bias=False)
-        self.transformer.wte.weight = self.lm_head.weight 
+        self.transformer.wte.weight = self.lm_head.weight
         
         # Sequence scoring head
         self.sequence_head = ScaledSigmoidHead(config.n_embd)
@@ -594,7 +742,7 @@ class GPT(nn.Module):
         elif isinstance(module, nn.Embedding):
             torch.nn.init.normal_(module.weight, mean=0.0, std=0.02)
 
-    def _encode_tokens(self, idx, attention_mask=None):
+    def _encode_tokens(self, idx, attention_mask=None, guidance_h=None, guidance_mask=None):
         """Encode input token ids through the transformer trunk up to ln_f.
         Returns hidden states of shape (B, T, n_embd).
         """
@@ -621,11 +769,19 @@ class GPT(nn.Module):
             x = self.transformer.drop(tok_emb)
 
         for block in self.transformer.h:
-            x = block(x, attention_mask=attention_mask)
+            x = block(x, attention_mask=attention_mask, guidance_h=guidance_h, guidance_mask=guidance_mask)
         x = self.transformer.ln_f(x)
         return x
 
-    def forward(self, idx, targets=None, attention_mask=None, loss_modifiers=None):
+    def forward(
+        self,
+        idx,
+        targets=None,
+        attention_mask=None,
+        loss_modifiers=None,
+        guidance_h=None,
+        guidance_mask=None,
+    ):
         # Optional global timing start
         _timer = None
         try:
@@ -644,7 +800,12 @@ class GPT(nn.Module):
         assert t <= self.config.block_size, f"Cannot forward sequence of length {t}, block size is only {self.config.block_size}"
 
         # Encode through transformer trunk
-        x = self._encode_tokens(idx, attention_mask=attention_mask)
+        x = self._encode_tokens(
+            idx,
+            attention_mask=attention_mask,
+            guidance_h=guidance_h,
+            guidance_mask=guidance_mask,
+        )
 
         # Mode-specific output and loss computation based on current runtime mode
         #print(f"[DEBUG] Model.forward: current_mode={self._current_mode}, idx.shape={idx.shape}, targets.shape={targets.shape if targets is not None else None}, targets.dtype={targets.dtype if targets is not None else None}")
