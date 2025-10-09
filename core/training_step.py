@@ -8,7 +8,7 @@ next batches inside the micro-step loop).
 """
 
 from typing import Tuple, Optional, Any
-from core.batch import Batch, unpack_batch
+from core.batch import Batch, unpack_batch, resolve_attention_mask
 from core.guidance import prepare_guidance
 import torch
 from torch.nn import functional as F
@@ -142,9 +142,7 @@ class TrainingStep:
                 print(f"[DEBUG] No _model_mode in batch, current model mode: {raw_model.get_mode()}")
 
             X, Y = unpack_batch(batch)
-            attention_mask = batch.get('attention_mask')
-            if attention_mask is not None:
-                attention_mask = attention_mask.to(X.device)
+            attention_mask = resolve_attention_mask(batch, X, Y, raw_model.config)
 
             guidance_h, guidance_mask = prepare_guidance(
                 raw_model,

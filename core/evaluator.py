@@ -7,7 +7,7 @@ logic extracted from the original estimate_loss() function in train.py.
 
 import torch
 from model import ModelMode
-from core.batch import Batch, unpack_batch
+from core.batch import Batch, unpack_batch, resolve_attention_mask
 from core.guidance import prepare_guidance
 
 from typing import Dict
@@ -121,9 +121,7 @@ class Evaluator:
                             raw_model.set_mode(mode_str)
 
                     X, Y = unpack_batch(batch)
-                    attention_mask = batch.get('attention_mask')
-                    if attention_mask is not None:
-                        attention_mask = attention_mask.to(X.device)
+                    attention_mask = resolve_attention_mask(batch, X, Y, raw_model.config)
 
                     guidance_h, guidance_mask = prepare_guidance(
                         raw_model,
