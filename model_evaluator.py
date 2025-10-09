@@ -546,6 +546,16 @@ def interactive_viewer(
         return
 
     current = 0
+    # Helper to decode a single token id into a printable piece (no coloring)
+    def _decode_piece(tid: int) -> str:
+        if tid == mask_token_id:
+            return '[MASK]'
+        if pad_token_id is not None and tid == pad_token_id:
+            return '[PAD]'
+        if 0 <= tid < len(itos):
+            return itos[tid]
+        return '[UNK]'
+
     while True:
         sample = samples[current]
         print('\n' + '=' * 80)
@@ -565,8 +575,55 @@ def interactive_viewer(
             else:
                 score_text = f"{result.score * 100:.2f}%"
             print(f"  Score : {score_text} ({result.correct}/{result.total})")
-            print('  Stage1:', repr(decode(result.stage1_tokens.tolist())))
-            print('  Final :', repr(decode(result.final_tokens.tolist())))
+            # Colorize stage1: green for correct predictions on masked positions, red for incorrect; original (unmasked) stays default color
+            stage1_ids = result.stage1_tokens.tolist()
+            orig_ids = sample.original_tokens.tolist()
+            mask_flags = sample.mask_positions.tolist()
+            colored_parts_s1 = []
+            for i, tid in enumerate(stage1_ids):
+                piece = _decode_piece(tid)
+                if i < len(mask_flags) and mask_flags[i]:
+                    if i < len(orig_ids) and tid == orig_ids[i]:
+                        colored_parts_s1.append('\x1b[32m' + piece + '\x1b[0m')  # green
+                    else:
+                        colored_parts_s1.append('\x1b[38;5;208m' + piece + '\x1b[0m')  # orange
+                else:
+                    colored_parts_s1.append(piece)
+            stage1_colored = ''.join(colored_parts_s1)
+            print('  Stage1:')
+            for _line in stage1_colored.splitlines():
+                print('    ' + _line)
+            # Colorize final (masked-only):
+            # - Yellow: Final correct but Stage1 incorrect (improved)
+            # - Green : Final correct and Stage1 correct
+            # - Red   : Final incorrect and Stage1 correct (regression)
+            # - Orange: Final incorrect and Stage1 incorrect (still wrong)
+            # - Default color for unmasked positions
+            final_ids = result.final_tokens.tolist()
+            # reuse orig_ids and mask_flags; stage1_ids from above
+            colored_parts = []
+            for i, tid in enumerate(final_ids):
+                piece = _decode_piece(tid)
+                if i < len(mask_flags) and mask_flags[i]:
+                    is_final_correct = (i < len(orig_ids) and tid == orig_ids[i])
+                    if is_final_correct:
+                        was_stage1_correct = (i < len(stage1_ids) and stage1_ids[i] == orig_ids[i])
+                        if was_stage1_correct:
+                            colored_parts.append('\x1b[32m' + piece + '\x1b[0m')  # green
+                        else:
+                            colored_parts.append('\x1b[33m' + piece + '\x1b[0m')  # yellow (improved)
+                    else:
+                        was_stage1_correct = (i < len(stage1_ids) and stage1_ids[i] == orig_ids[i])
+                        if was_stage1_correct:
+                            colored_parts.append('\x1b[31m' + piece + '\x1b[0m')  # red (regression)
+                        else:
+                            colored_parts.append('\x1b[38;5;208m' + piece + '\x1b[0m')  # orange (still wrong)
+                else:
+                    colored_parts.append(piece)
+            final_colored = ''.join(colored_parts)
+            print('  Final :')
+            for _line in final_colored.splitlines():
+                print('    ' + _line)
         print('=' * 80)
         cmd = input("[N]ext, [P]revious, [Q]uit, or enter sample id: ").strip().lower()
         if cmd == 'q':
@@ -594,11 +651,11 @@ def parse_args(argv: Optional[Sequence[str]] = None) -> argparse.Namespace:
     parser.add_argument('--num-base-samples', type=int, default=4, help='Number of base samples to draw from batch file')
     parser.add_argument('--p1-values', nargs='+', type=float, default=[0.1, 0.3], help='Sticky p1 probabilities')
     parser.add_argument('--p2-values', nargs='+', type=float, default=[0.5, 0.7], help='Sticky p2 probabilities')
-    parser.add_argument('--target-ratios', nargs='+', type=float, default=[0.3, 0.5], help='Target mask ratios')
+    parser.add_argument('--target-ratios', nargs='+', type=float, default=[0.3, 0.5, 0.7], help='Target mask ratios')
     parser.add_argument('--multinomial-iterations', type=int, default=3, help='Warmup multinomial iterations')
     parser.add_argument('--multinomial-temperature', type=float, default=0.8, help='Temperature for multinomial warmup')
     parser.add_argument('--remask-iterations', type=int, default=5, help='Number of confidence remasking iterations')
-    parser.add_argument('--remask-start', type=float, default=0.6, help='Starting ratio for linear remasking schedule')
+    parser.add_argument('--remask-start', type=float, default=0.9, help='Starting ratio for linear remasking schedule')
     parser.add_argument('--remask-end', type=float, default=0.1, help='Final ratio for linear remasking schedule')
     parser.add_argument('--temperature', type=float, default=0.8, help='Sampling temperature during remasking')
     parser.add_argument('--top-p', type=float, default=1.0, help='Top-p for sampling during remasking')
