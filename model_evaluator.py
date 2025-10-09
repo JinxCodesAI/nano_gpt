@@ -26,6 +26,7 @@ from __future__ import annotations
 import os
 import sys
 import textwrap
+import pickle
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Dict, List, Optional, Sequence, Tuple
@@ -178,7 +179,7 @@ def load_meta(dataset_name: str, checkpoint: Dict) -> Dict:
     meta_path = Path('data') / dataset_name / 'meta.pkl'
     if meta_path.exists():
         with meta_path.open('rb') as handle:
-            return torch.load(handle, weights_only=False)  # type: ignore[arg-type]
+            return pickle.load(handle)
     meta_from_checkpoint = checkpoint.get('meta')
     if meta_from_checkpoint:
         return meta_from_checkpoint
