@@ -742,13 +742,34 @@ class GPT(nn.Module):
         elif isinstance(module, nn.Embedding):
             torch.nn.init.normal_(module.weight, mean=0.0, std=0.02)
 
+    def _build_default_attention_mask(self, idx: torch.Tensor) -> torch.Tensor:
+        """Build a key-padding mask that follows the attention-mask spec."""
+        device = idx.device
+        mask = torch.ones_like(idx, dtype=torch.long, device=device)
+
+        pad_token_id = getattr(self.config, 'pad_token_id', None)
+        if pad_token_id is not None:
+            pad_id = int(pad_token_id)
+            mask = mask * (idx != pad_id).long()
+
+        mask_token_id = getattr(self.config, 'mask_token_id', None)
+        if mask_token_id is not None:
+            mask_id = int(mask_token_id)
+            mask = mask * (idx != mask_id).long()
+       
+        return mask
+      
     def _encode_tokens(self, idx, attention_mask=None, guidance_h=None, guidance_mask=None):
+      
         """Encode input token ids through the transformer trunk up to ln_f.
         Returns hidden states of shape (B, T, n_embd).
         """
         device = idx.device
         b, t = idx.size()
         assert t <= self.config.block_size, f"Cannot forward sequence of length {t}, block size is only {self.config.block_size}"
+
+        if attention_mask is None:
+            attention_mask = self._build_default_attention_mask(idx)
 
         tok_emb = self.transformer.wte(idx)
 
@@ -798,6 +819,10 @@ class GPT(nn.Module):
         device = idx.device
         b, t = idx.size()
         assert t <= self.config.block_size, f"Cannot forward sequence of length {t}, block size is only {self.config.block_size}"
+
+        # Build default attention mask when none provided
+        if attention_mask is None:
+            attention_mask = self._build_default_attention_mask(idx)
 
         # Encode through transformer trunk
         x = self._encode_tokens(
@@ -934,6 +959,9 @@ class GPT(nn.Module):
         device = idx.device
         b, t = idx.size()
         assert t <= self.config.block_size
+
+        if attention_mask is None:
+            attention_mask = self._build_default_attention_mask(idx)
         # Optional global timing start for critic_scores
         _timer = None
         try:
@@ -947,17 +975,7 @@ class GPT(nn.Module):
                 pass
         _t0 = time.perf_counter()
 
-        tok_emb = self.transformer.wte(idx)
-        if hasattr(self.transformer, 'wpe'):
-            pos = torch.arange(0, t, dtype=torch.long, device=device)
-            pos_emb = self.transformer.wpe(pos)
-            x = self.transformer.drop(tok_emb + pos_emb)
-        else:
-            x = self.transformer.drop(tok_emb)
-        for block in self.transformer.h:
-
-            x = block(x, attention_mask=attention_mask)
-        x = self.transformer.ln_f(x)
+        x = self._encode_tokens(idx, attention_mask=attention_mask)
         logits = self.critic_head(x).squeeze(-1)
         # Record timing if global timer
         try:

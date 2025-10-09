@@ -107,7 +107,15 @@ top_p=1.0, vocab_size=None,
     mask_positions = (tokens == mask_token_id)
 
     if not mask_positions.any():
-        return tokens, tokens.clone()
+        # No masked positions to sample, but we may still need logits (e.g., for intelligent remasking)
+        dummy_targets = torch.zeros_like(tokens)
+        grad_context = torch.no_grad() if no_grad else nullcontext()
+        with grad_context:
+            logits, _ = model(tokens, targets=dummy_targets)
+        if return_logits:
+            return tokens, logits
+        else:
+            return tokens
 
     # Forward pass through the model
     # Pass dummy targets to get logits for all positions (not just the last one)
