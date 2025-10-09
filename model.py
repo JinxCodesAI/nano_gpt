@@ -594,6 +594,68 @@ class GPT(nn.Module):
         elif isinstance(module, nn.Embedding):
             torch.nn.init.normal_(module.weight, mean=0.0, std=0.02)
 
+    def _build_default_attention_mask(self, idx: torch.Tensor) -> torch.Tensor:
+        """Build a key-padding mask that follows the attention-mask spec."""
+        device = idx.device
+        mask = torch.ones_like(idx, dtype=torch.long, device=device)
+
+        pad_token_id = getattr(self.config, 'pad_token_id', None)
+        if pad_token_id is not None:
+            pad_id = int(pad_token_id)
+            mask = mask * (idx != pad_id).long()
+
+        mask_token_id = getattr(self.config, 'mask_token_id', None)
+        if mask_token_id is not None:
+            block_mask_keys = getattr(self.config, 'block_mask_keys', None)
+            if block_mask_keys is None:
+                threshold = float(getattr(self.config, 'mask_token_ratio_threshold', 0.5))
+                threshold = max(0.0, min(1.0, threshold))
+                masked_positions = (idx == int(mask_token_id))
+                if masked_positions.numel() == 0:
+                    mask_ratio = 0.0
+                else:
+                    mask_ratio = float(masked_positions.float().mean().item())
+                block_mask_keys = mask_ratio >= threshold
+            else:
+                block_mask_keys = bool(block_mask_keys)
+
+            if block_mask_keys:
+                mask = mask * (idx != int(mask_token_id)).long()
+
+        always_keep_ids = []
+        cls_token_id = getattr(self.config, 'cls_token_id', None)
+        if cls_token_id is not None:
+            always_keep_ids.append(int(cls_token_id))
+
+        extra_keep = getattr(self.config, 'always_keep_token_ids', None)
+        if extra_keep:
+            try:
+                for token_id in extra_keep:
+                    if token_id is not None:
+                        always_keep_ids.append(int(token_id))
+            except TypeError:
+                always_keep_ids.append(int(extra_keep))
+
+        if always_keep_ids:
+            keep_mask = torch.zeros_like(mask, dtype=torch.bool, device=device)
+            for token_id in always_keep_ids:
+                keep_mask |= (idx == token_id)
+            mask = torch.where(keep_mask, torch.ones_like(mask), mask)
+
+        if (mask.sum(dim=1) == 0).any():
+            zero_batches = torch.nonzero(mask.sum(dim=1) == 0, as_tuple=False).squeeze(-1)
+            pad_id = int(pad_token_id) if pad_token_id is not None else None
+            for batch_idx in zero_batches.tolist():
+                if pad_id is not None:
+                    valid_positions = torch.nonzero(idx[batch_idx] != pad_id, as_tuple=False)
+                    if valid_positions.numel() > 0:
+                        first_idx = int(valid_positions[0].item())
+                        mask[batch_idx, first_idx] = 1
+                        continue
+                mask[batch_idx, 0] = 1
+
+        return mask
+
     def _encode_tokens(self, idx, attention_mask=None):
         """Encode input token ids through the transformer trunk up to ln_f.
         Returns hidden states of shape (B, T, n_embd).
@@ -601,6 +663,9 @@ class GPT(nn.Module):
         device = idx.device
         b, t = idx.size()
         assert t <= self.config.block_size, f"Cannot forward sequence of length {t}, block size is only {self.config.block_size}"
+
+        if attention_mask is None:
+            attention_mask = self._build_default_attention_mask(idx)
 
         tok_emb = self.transformer.wte(idx)
 
@@ -642,6 +707,10 @@ class GPT(nn.Module):
         device = idx.device
         b, t = idx.size()
         assert t <= self.config.block_size, f"Cannot forward sequence of length {t}, block size is only {self.config.block_size}"
+
+        # Build default attention mask when none provided
+        if attention_mask is None:
+            attention_mask = self._build_default_attention_mask(idx)
 
         # Encode through transformer trunk
         x = self._encode_tokens(idx, attention_mask=attention_mask)
@@ -773,6 +842,9 @@ class GPT(nn.Module):
         device = idx.device
         b, t = idx.size()
         assert t <= self.config.block_size
+
+        if attention_mask is None:
+            attention_mask = self._build_default_attention_mask(idx)
         # Optional global timing start for critic_scores
         _timer = None
         try:
@@ -786,17 +858,7 @@ class GPT(nn.Module):
                 pass
         _t0 = time.perf_counter()
 
-        tok_emb = self.transformer.wte(idx)
-        if hasattr(self.transformer, 'wpe'):
-            pos = torch.arange(0, t, dtype=torch.long, device=device)
-            pos_emb = self.transformer.wpe(pos)
-            x = self.transformer.drop(tok_emb + pos_emb)
-        else:
-            x = self.transformer.drop(tok_emb)
-        for block in self.transformer.h:
-
-            x = block(x, attention_mask=attention_mask)
-        x = self.transformer.ln_f(x)
+        x = self._encode_tokens(idx, attention_mask=attention_mask)
         logits = self.critic_head(x).squeeze(-1)
         # Record timing if global timer
         try:
