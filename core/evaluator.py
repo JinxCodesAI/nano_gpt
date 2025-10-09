@@ -8,6 +8,7 @@ logic extracted from the original estimate_loss() function in train.py.
 import torch
 from model import ModelMode
 from core.batch import Batch, unpack_batch
+from core.guidance import prepare_guidance
 
 from typing import Dict
 
@@ -120,8 +121,25 @@ class Evaluator:
                             raw_model.set_mode(mode_str)
 
                     X, Y = unpack_batch(batch)
+                    attention_mask = batch.get('attention_mask')
+                    if attention_mask is not None:
+                        attention_mask = attention_mask.to(X.device)
+
+                    guidance_h, guidance_mask = prepare_guidance(
+                        raw_model,
+                        batch,
+                        X,
+                        attention_mask,
+                    )
                     with self.ctx:
-                        logits, loss = self.model(X, Y, loss_modifiers=self.loss_modifier_pipeline)
+                        logits, loss = self.model(
+                            X,
+                            Y,
+                            attention_mask=attention_mask,
+                            loss_modifiers=self.loss_modifier_pipeline,
+                            guidance_h=guidance_h,
+                            guidance_mask=guidance_mask,
+                        )
 
                     # If LM with critic enabled, deblend alpha for reporting
                     alpha_eff = 0.0

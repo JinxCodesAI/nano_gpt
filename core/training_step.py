@@ -9,6 +9,7 @@ next batches inside the micro-step loop).
 
 from typing import Tuple, Optional, Any
 from core.batch import Batch, unpack_batch
+from core.guidance import prepare_guidance
 import torch
 from torch.nn import functional as F
 from model import ModelMode
@@ -141,6 +142,16 @@ class TrainingStep:
                 print(f"[DEBUG] No _model_mode in batch, current model mode: {raw_model.get_mode()}")
 
             X, Y = unpack_batch(batch)
+            attention_mask = batch.get('attention_mask')
+            if attention_mask is not None:
+                attention_mask = attention_mask.to(X.device)
+
+            guidance_h, guidance_mask = prepare_guidance(
+                raw_model,
+                batch,
+                X,
+                attention_mask,
+            )
 
             with self.ctx:
                 # Delegate to model forward; model handles critic internally when enabled
@@ -150,7 +161,14 @@ class TrainingStep:
                 except Exception:
                     pass
 
-                _logits, loss = self.model(X, Y, loss_modifiers=loss_modifiers)
+                _logits, loss = self.model(
+                    X,
+                    Y,
+                    attention_mask=attention_mask,
+                    loss_modifiers=loss_modifiers,
+                    guidance_h=guidance_h,
+                    guidance_mask=guidance_mask,
+                )
 
                 # Read loss components exposed by model (if available)
                 try:
