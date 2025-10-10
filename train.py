@@ -68,8 +68,6 @@ n_head = 12
 n_embd = 768
 dropout = 0.0 # for pretraining 0 is good, for finetuning try 0.1+
 bias = False # do we use bias inside LayerNorm and Linear layers?
-attention_type = 'causal' # 'causal' for autoregressive, 'bidirectional' for BERT-style
-position_encoding = 'absolute' # 'absolute' or 'rotary'
 # adamw optimizer
 learning_rate = 6e-4 # max learning rate
 max_iters = 600000 # total number of training iterations
@@ -239,8 +237,7 @@ checkpoint_manager.set_metadata(model_args={}, config=config)
 # Note: mode and num_token_classes are no longer part of GPTConfig (dual-mode architecture)
 # Model mode is set after creation using set_mode()
 model_args = dict(n_layer=n_layer, n_head=n_head, n_embd=n_embd, block_size=block_size,
-                  bias=bias, vocab_size=None, dropout=dropout, attention_type=attention_type,
-                  position_encoding=position_encoding,
+                  bias=bias, vocab_size=None, dropout=dropout,
                   # multi-mode parameters (mode is set after model creation)
                   cls_token_id=cls_token_id,
                   freeze_transformer=freeze_transformer,

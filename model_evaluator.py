@@ -145,12 +145,10 @@ def load_checkpoint(path: Path, device: str) -> Tuple[GPT, Dict]:
         raise ValueError(f"Checkpoint missing 'model_args': {path}")
 
     model_args = checkpoint['model_args'].copy()
-    model_args.setdefault('attention_type', 'causal')
-    model_args.setdefault('position_encoding', 'absolute')
     if model_args.get('init_from_checkpoint'):
         model_args['init_from_checkpoint'] = None
 
-    deprecated = {'mode', 'num_token_classes', 'binary_classification'}
+    deprecated = {'mode', 'num_token_classes', 'binary_classification', 'attention_type', 'position_encoding'}
     filtered_args = {k: v for k, v in model_args.items() if k not in deprecated}
 
     config = GPTConfig(**filtered_args)

@@ -37,8 +37,6 @@ dropout = 0.1
 n_layer = 6
 n_head = 6
 n_embd = 384
-attention_type = 'bidirectional'
-position_encoding = 'rotary'
 
 # Dataset- and masking-specific parameters
 mask_probability = 0.15

@@ -52,7 +52,6 @@ else:
 
 # Model mode configuration
 model_mode = 'sequence_scorer'
-attention_type = 'bidirectional'
 
 # BERT training typically uses lower learning rates
 learning_rate = 1e-5
@@ -67,7 +66,6 @@ n_layer = 6
 n_head = 6
 n_embd = 384
 dropout = 0.1
-position_encoding = 'rotary'
 dtype = 'float16'
 
 # Loss modifiers configuration (sequence scoring)

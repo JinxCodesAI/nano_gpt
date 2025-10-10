@@ -144,12 +144,6 @@ def load_model_from_checkpoint(checkpoint_path, device, compile_model=False):
         # Fallback for older checkpoints
         raise ValueError("Checkpoint missing 'model_args'. Please check checkpoint format.")
 
-    # Ensure backward compatibility
-    if 'attention_type' not in model_args:
-        model_args['attention_type'] = 'causal'
-    if 'position_encoding' not in model_args:
-        model_args['position_encoding'] = 'absolute'
-
     # Inference-time safety: do not chain-load any additional pretrained checkpoint
     # Some judge checkpoints may carry init_from_checkpoint used during training; disable it here
     if 'init_from_checkpoint' in model_args and model_args.get('init_from_checkpoint'):
@@ -158,7 +152,7 @@ def load_model_from_checkpoint(checkpoint_path, device, compile_model=False):
         model_args['init_from_checkpoint'] = None
 
     # Filter out deprecated config fields (for backward compatibility with old checkpoints)
-    deprecated_fields = {'mode', 'num_token_classes', 'binary_classification'}
+    deprecated_fields = {'mode', 'num_token_classes', 'binary_classification', 'attention_type', 'position_encoding'}
     filtered_model_args = {k: v for k, v in model_args.items() if k not in deprecated_fields}
 
     # Store the old mode if present (we'll set it after model creation)
@@ -168,8 +162,6 @@ def load_model_from_checkpoint(checkpoint_path, device, compile_model=False):
     print(f"Model config from checkpoint:")
     print(f"  - vocab_size: {filtered_model_args.get('vocab_size')}")
     print(f"  - block_size: {filtered_model_args.get('block_size')}")
-    print(f"  - attention_type: {filtered_model_args.get('attention_type')}")
-    print(f"  - position_encoding: {filtered_model_args.get('position_encoding')}")
     if old_mode:
         print(f"  - mode (deprecated): {old_mode} - will be set after model creation")
 

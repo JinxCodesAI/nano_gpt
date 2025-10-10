@@ -34,14 +34,8 @@ def load_model_checkpoint(checkpoint_path: str, device: str = 'cuda', dtype: str
     
     model_args = checkpoint['model_args']
     
-    # Ensure backward compatibility
-    if 'attention_type' not in model_args:
-        model_args['attention_type'] = 'causal'
-    if 'position_encoding' not in model_args:
-        model_args['position_encoding'] = 'absolute'
-
     # Filter out deprecated config fields (for backward compatibility with old checkpoints)
-    deprecated_fields = {'mode', 'num_token_classes', 'binary_classification'}
+    deprecated_fields = {'mode', 'num_token_classes', 'binary_classification', 'attention_type', 'position_encoding'}
     old_mode = model_args.get('mode', None)
     filtered_model_args = {k: v for k, v in model_args.items() if k not in deprecated_fields}
 
@@ -84,8 +78,6 @@ def load_model_checkpoint(checkpoint_path: str, device: str = 'cuda', dtype: str
     metadata = {
         'vocab_size': model_args.get('vocab_size'),
         'block_size': model_args.get('block_size'),
-        'attention_type': model_args.get('attention_type'),
-        'position_encoding': model_args.get('position_encoding'),
         'has_critic': model_args.get('add_critic_head', False) and hasattr(model, 'critic_head'),
         'mask_token_id': model_args.get('mask_token_id'),
         'pad_token_id': model_args.get('pad_token_id'),
