@@ -596,6 +596,7 @@ class GPT(nn.Module):
 
     
     def _build_default_attention_mask(self, idx: torch.Tensor) -> torch.Tensor:
+        
         """Build a key-padding mask that follows the attention-mask spec."""
         device = idx.device
         mask = torch.ones_like(idx, dtype=torch.long, device=device)
@@ -603,8 +604,13 @@ class GPT(nn.Module):
         pad_token_id = getattr(self.config, 'pad_token_id', None)
         if pad_token_id is not None:
             pad_id = int(pad_token_id)
-            mask = mask * (idx != pad_id).long()
+            mask = mask * (idx == pad_id).long()
        
+        mask_token_id = getattr(self.config, 'mask_token_id', None)
+        if mask_token_id is not None:
+            pad_id = int(mask_token_id)
+            mask = mask | mask * (idx == pad_id).long()
+
         return mask
 
 

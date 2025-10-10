@@ -93,7 +93,7 @@ entropy_modifier_verbose = True
 # Target smoothing config - MUST be after composition config loading
 target_smoothing_enabled = True
 target_smoothing_factor = 0.1                    # Smoothing strength (0.0 = no smoothing)
-target_smoothing_special_tokens = "65"             # Comma delimited Token IDs to exclude from smoothing
+target_smoothing_special_tokens = "65,66,67"             # Comma delimited Token IDs to exclude from smoothing
 target_smoothing_exclude_padding = True          # Exclude padding from loss
 target_smoothing_padding_token = -100            # Padding token ID
 
