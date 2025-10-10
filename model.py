@@ -604,11 +604,6 @@ class GPT(nn.Module):
         if pad_token_id is not None:
             pad_id = int(pad_token_id)
             mask = mask * (idx != pad_id).long()
-
-        mask_token_id = getattr(self.config, 'mask_token_id', None)
-        if mask_token_id is not None:
-            mask_id = int(mask_token_id)
-            mask = mask * (idx != mask_id).long()
        
         return mask
 
