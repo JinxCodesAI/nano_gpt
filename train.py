@@ -68,6 +68,13 @@ n_head = 12
 n_embd = 768
 dropout = 0.0 # for pretraining 0 is good, for finetuning try 0.1+
 bias = False # do we use bias inside LayerNorm and Linear layers?
+# LoRA / parameter sharing
+use_lora_attn = False
+use_lora_mlp = False
+lora_rank = 8
+lora_alpha = 16.0
+lora_dropout = 0.0
+share_main_matrices = False
 # hierarchical guidance / plan encoder configuration
 use_guidance = False
 plan_tokens = 16
@@ -247,6 +254,13 @@ model_args = dict(n_layer=n_layer, n_head=n_head, n_embd=n_embd, block_size=bloc
                   plan_tokens=plan_tokens,
                   plan_encoder_depth_factor=plan_encoder_depth_factor,
                   cond_dropout_prob=cond_dropout_prob,
+                  # LoRA / parameter sharing
+                  use_lora_attn=use_lora_attn,
+                  use_lora_mlp=use_lora_mlp,
+                  lora_rank=lora_rank,
+                  lora_alpha=lora_alpha,
+                  lora_dropout=lora_dropout,
+                  share_main_matrices=share_main_matrices,
                   # multi-mode parameters (mode is set after model creation)
                   cls_token_id=cls_token_id,
                   freeze_transformer=freeze_transformer,
@@ -282,7 +296,9 @@ elif init_from == 'resume':
     # the rest of the attributes (e.g. dropout) can stay as desired from command line
     for k in ['n_layer', 'n_head', 'n_embd', 'block_size', 'bias', 'vocab_size']:
         model_args[k] = checkpoint_model_args[k]
-    for k in ['use_guidance', 'plan_tokens', 'plan_encoder_depth_factor', 'cond_dropout_prob']:
+    for k in ['use_guidance', 'plan_tokens', 'plan_encoder_depth_factor', 'cond_dropout_prob',
+              'use_lora_attn', 'use_lora_mlp', 'lora_rank', 'lora_alpha', 'lora_dropout',
+              'share_main_matrices']:
         if k in checkpoint_model_args:
             model_args[k] = checkpoint_model_args[k]
     # create the model
