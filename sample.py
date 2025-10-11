@@ -34,7 +34,7 @@ generation_start_wall_time = None
 # Model loading
 init_from = 'resume'  # 'resume' to load from checkpoint
 out_dir = 'out-char-diffusion'
-checkpoint_name = '1.7048_7250_good_mask.pt'  # Main model checkpoint
+checkpoint_name = 'ckpt_MLM_7000.pt'  # Main model checkpoint
 
 # Generation parameters
 num_samples = 16  # Number of samples to generate
@@ -60,7 +60,7 @@ seed_placement = SeedPlacement.RANDOM_PLACEMENT
 
 # Sampling parameters (used by both diffusion and multinomial)
 temperature = 0.8  # Temperature for sampling
-iterations = 15  # Number of iterations (demasking for diffusion, resampling for multinomial)
+iterations = 25  # Number of iterations (demasking for diffusion, resampling for multinomial)
 
 # Diffusion-specific parameters (only used if sampling_method='diffusion')
 top_p = 1.0  # Nucleus sampling parameter (1.0 = disabled)
@@ -69,7 +69,7 @@ end_ratio = 0.05   # Final ratio of tokens to remask (5%)
 
 # Remasking parameters (diffusion only)
 randomness_strength = 0.2  # Balance between random (1.0) and model-guided (0.0) remasking
-intelligent_remasking = True  # Enable self-confidence based remasking when no remasking model
+intelligent_remasking = False  # Enable self-confidence based remasking when no remasking model
 
 # Quality metric configuration
 class QualityMetric(Enum):
