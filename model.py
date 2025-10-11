@@ -11,6 +11,7 @@ https://github.com/huggingface/transformers/blob/main/src/transformers/models/gp
 import math
 import inspect
 import dataclasses
+import copy
 from dataclasses import dataclass
 from enum import Enum
 
@@ -263,15 +264,20 @@ class Block(nn.Module):
         self.ln_1 = LayerNorm(config.n_embd, bias=config.bias)
         self.attn = BidirectionalSelfAttention(config)
 
-        self.cross = CrossAttention(config)
-        self.ln_cross = LayerNorm(config.n_embd, bias=config.bias)
+        self._use_guidance = bool(getattr(config, 'use_guidance', False))
+        if self._use_guidance:
+            self.cross = CrossAttention(config)
+            self.ln_cross = LayerNorm(config.n_embd, bias=config.bias)
+        else:
+            self.cross = None
+            self.ln_cross = None
 
         self.ln_2 = LayerNorm(config.n_embd, bias=config.bias)
         self.mlp = MLP(config)
 
     def forward(self, x, attention_mask=None, guidance_h=None, guidance_mask=None):
         x = x + self.attn(self.ln_1(x), attention_mask=attention_mask)
-        if guidance_h is not None:
+        if self.cross is not None and guidance_h is not None:
             x = x + self.cross(self.ln_cross(x), guidance_h, kv_mask=guidance_mask)
         x = x + self.mlp(self.ln_2(x))
         return x
@@ -310,7 +316,15 @@ class PlanEncoder(nn.Module):
         else:
             depth = max(1, int(round(config.n_layer * float(depth_factor))))
 
-        enc_cfg = dataclasses.replace(config, n_layer=depth)
+        enc_cfg_kwargs = dict(n_layer=depth)
+        if hasattr(config, 'use_guidance'):
+            enc_cfg_kwargs['use_guidance'] = False
+        if dataclasses.is_dataclass(config):
+            enc_cfg = dataclasses.replace(config, **enc_cfg_kwargs)
+        else:
+            enc_cfg = copy.copy(config)
+            for key, value in enc_cfg_kwargs.items():
+                setattr(enc_cfg, key, value)
 
         self.ln_in = LayerNorm(enc_cfg.n_embd, bias=enc_cfg.bias)
         self.layers = nn.ModuleList([Block(enc_cfg) for _ in range(depth)])
