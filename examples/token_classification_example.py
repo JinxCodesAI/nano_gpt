@@ -22,7 +22,6 @@ Example config/token_classifier_config.py content:
 
 # Token classification mode
 model_mode = 'token_classifier'
-attention_type = 'bidirectional'
 num_token_classes = 3  # Adjust for your task
 
 # Transfer learning settings  
@@ -61,7 +60,6 @@ def create_token_classifier_model():
         # Token classification specific
         mode=ModelMode.TOKEN_CLASSIFIER,
         num_token_classes=3,  # Adjust for your task
-        attention_type='bidirectional',  # Required for classification
         
         # Transfer learning
         init_from_checkpoint='checkpoints/pretrained_lm.pt',
@@ -146,7 +144,6 @@ if __name__ == "__main__":
     
     print(f"Model created in mode: {model.config.mode}")
     print(f"Number of classes: {model.config.num_token_classes}")
-    print(f"Attention type: {model.config.attention_type}")
     print(f"Frozen status: {model.get_frozen_status()}")
     
     # Example training step

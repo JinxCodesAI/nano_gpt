@@ -231,22 +231,14 @@ class DiffusionExplorer:
 
                 model_args = checkpoint['model_args']
 
-                # Ensure backward compatibility
-                if 'attention_type' not in model_args:
-                    model_args['attention_type'] = 'causal'
-                if 'position_encoding' not in model_args:
-                    model_args['position_encoding'] = 'absolute'
-
                 # Filter out deprecated config fields (for backward compatibility with old checkpoints)
-                deprecated_fields = {'mode', 'num_token_classes', 'binary_classification'}
+                deprecated_fields = {'mode', 'num_token_classes', 'binary_classification', 'attention_type', 'position_encoding'}
                 old_mode = model_args.get('mode', None)
                 filtered_model_args = {k: v for k, v in model_args.items() if k not in deprecated_fields}
 
                 print(f"🔧 Model configuration:")
                 print(f"   • vocab_size: {filtered_model_args.get('vocab_size')}")
                 print(f"   • block_size: {filtered_model_args.get('block_size')}")
-                print(f"   • attention_type: {filtered_model_args.get('attention_type')}")
-                print(f"   • position_encoding: {filtered_model_args.get('position_encoding')}")
 
                 # Create model
                 gptconf = GPTConfig(**filtered_model_args)

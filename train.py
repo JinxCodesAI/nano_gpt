@@ -68,8 +68,6 @@ n_head = 12
 n_embd = 768
 dropout = 0.0 # for pretraining 0 is good, for finetuning try 0.1+
 bias = False # do we use bias inside LayerNorm and Linear layers?
-attention_type = 'causal' # 'causal' for autoregressive, 'bidirectional' for BERT-style
-position_encoding = 'absolute' # 'absolute' or 'rotary'
 # hierarchical guidance / plan encoder configuration
 use_guidance = True
 plan_tokens = 16
@@ -244,8 +242,7 @@ checkpoint_manager.set_metadata(model_args={}, config=config)
 # Note: mode and num_token_classes are no longer part of GPTConfig (dual-mode architecture)
 # Model mode is set after creation using set_mode()
 model_args = dict(n_layer=n_layer, n_head=n_head, n_embd=n_embd, block_size=block_size,
-                  bias=bias, vocab_size=None, dropout=dropout, attention_type=attention_type,
-                  position_encoding=position_encoding,
+                  bias=bias, vocab_size=None, dropout=dropout, 
                   use_guidance=use_guidance,
                   plan_tokens=plan_tokens,
                   plan_encoder_depth_factor=plan_encoder_depth_factor,

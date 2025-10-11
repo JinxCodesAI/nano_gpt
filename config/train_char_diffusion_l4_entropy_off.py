@@ -11,7 +11,7 @@ always_save_checkpoint = False
 
 wandb_log = True # override via command line if you like
 wandb_project = 'char-diffusion'
-wandb_run_name = 'bert-char-no-entropy-critic'
+wandb_run_name = 'bert-char-no-entropy-modifier'
 
 dataset = 'char_diffusion'
 
@@ -41,8 +41,8 @@ else:
     unmasking_stages = None
     validation_stages = None
 
-gradient_accumulation_steps = 4
-batch_size = 8  # Slightly larger batch size for BERT training
+gradient_accumulation_steps = 1
+batch_size = 192  # Slightly larger batch size for BERT training
 block_size = 1024 # Context size for masking
 
 # BERT training typically uses lower learning rates
@@ -79,9 +79,6 @@ ignore_index = -100  # Default PyTorch ignore index
 # batch_size = 4
 # block_size = 128
 
-add_critic_head = True
-start_critic_iteration = 1000
-end_critic_iteration = 3000
 loss_modifiers_enabled = True
 
 entropy_modifier_enabled = False
@@ -94,7 +91,7 @@ entropy_modifier_verbose = True
 # Target smoothing config - MUST be after composition config loading
 target_smoothing_enabled = True
 target_smoothing_factor = 0.1                    # Smoothing strength (0.0 = no smoothing)
-target_smoothing_special_tokens = "65"             # Comma delimited Token IDs to exclude from smoothing
+target_smoothing_special_tokens = "65,66,67"             # Comma delimited Token IDs to exclude from smoothing
 target_smoothing_exclude_padding = True          # Exclude padding from loss
 target_smoothing_padding_token = -100            # Padding token ID
 

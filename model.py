@@ -95,95 +95,8 @@ class LayerNorm(nn.Module):
     def forward(self, input):
         return F.layer_norm(input, self.weight.shape, self.weight, self.bias, 1e-5)
 
-class CausalSelfAttention(nn.Module):
-    """Causal self-attention with optional flash attention and RoPE"""
-
-    def __init__(self, config):
-        super().__init__()
-        assert config.n_embd % config.n_head == 0
-        # key, query, value projections for all heads, but in a batch
-        self.c_attn = nn.Linear(config.n_embd, 3 * config.n_embd, bias=config.bias)
-        # output projection
-        self.c_proj = nn.Linear(config.n_embd, config.n_embd, bias=config.bias)
-        # regularization
-        self.attn_dropout = nn.Dropout(config.dropout)
-        self.resid_dropout = nn.Dropout(config.dropout)
-        self.n_head = config.n_head
-        self.n_embd = config.n_embd
-        self.dropout = config.dropout
-
-        # Rotary positional embeddings
-        self.head_dim = config.n_embd // config.n_head
-        position_encoding = getattr(config, 'position_encoding', 'absolute')
-        if position_encoding == 'rotary':
-            self.rotary_emb = RotaryPositionalEmbedding(
-                self.head_dim,
-                max_position_embeddings=config.block_size,
-                device=None  # Will be set when model is moved to device
-            )
-        else:
-            self.rotary_emb = None
-
-        # flash attention make GPU go brrrrr but support is only in PyTorch >= 2.0
-        self.flash = hasattr(torch.nn.functional, 'scaled_dot_product_attention')
-        if not self.flash:
-            # Note: This warning occurs during model init, before logger is available
-            print("WARNING: using slow attention. Flash Attention requires PyTorch >= 2.0")
-            # causal mask to ensure that attention is only applied to the left in the input sequence
-            self.register_buffer("bias", torch.tril(torch.ones(config.block_size, config.block_size))
-                                        .view(1, 1, config.block_size, config.block_size))
-
-    def forward(self, x, attention_mask=None):
-        B, T, C = x.size() # batch size, sequence length, embedding dimensionality (n_embd)
-
-        # calculate query, key, values for all heads in batch and move head forward to be the batch dim
-        q, k, v  = self.c_attn(x).split(self.n_embd, dim=2)
-        k = k.view(B, T, self.n_head, C // self.n_head).transpose(1, 2) # (B, nh, T, hs)
-        q = q.view(B, T, self.n_head, C // self.n_head).transpose(1, 2) # (B, nh, T, hs)
-        v = v.view(B, T, self.n_head, C // self.n_head).transpose(1, 2) # (B, nh, T, hs)
-
-        # Apply rotary positional embeddings if available
-        if self.rotary_emb is not None:
-            cos, sin = self.rotary_emb(v, seq_len=T)
-            position_ids = torch.arange(T, device=x.device).unsqueeze(0)
-            q, k = apply_rotary_pos_emb(q, k, cos, sin, position_ids)
-
-        # Build key padding mask for attention (mask out keys where attention_mask==0)
-        sdpa_attn_mask = None
-        if attention_mask is not None:
-            # Boolean mask where True indicates positions to mask out
-            key_padding = (attention_mask == 0)  # (B, T)
-            sdpa_attn_mask = key_padding[:, None, None, :]  # (B, 1, 1, T)
-
-        # causal self-attention; Self-attend: (B, nh, T, hs) x (B, nh, hs, T) -> (B, nh, T, T)
-        if self.flash:
-            # efficient attention using Flash Attention CUDA kernels
-            y = torch.nn.functional.scaled_dot_product_attention(
-                q, k, v,
-                attn_mask=sdpa_attn_mask,
-                dropout_p=self.dropout if self.training else 0,
-                is_causal=True,
-            )
-        else:
-            # manual implementation of attention
-            att = (q @ k.transpose(-2, -1)) * (1.0 / math.sqrt(k.size(-1)))
-            # causal mask
-            att = att.masked_fill(self.bias[:,:,:T,:T] == 0, float('-inf'))
-            # key padding mask
-            if attention_mask is not None:
-                key_padding = (attention_mask == 0).view(B, 1, 1, T)
-                att = att.masked_fill(key_padding, float('-inf'))
-            att = F.softmax(att, dim=-1)
-            att = self.attn_dropout(att)
-            y = att @ v # (B, nh, T, T) x (B, nh, T, hs) -> (B, nh, T, hs)
-        y = y.transpose(1, 2).contiguous().view(B, T, C) # re-assemble all head outputs side by side
-
-        # output projection
-        y = self.resid_dropout(self.c_proj(y))
-        return y
-
 class BidirectionalSelfAttention(nn.Module):
-    """Bidirectional self-attention with optional flash attention and RoPE"""
+    """Self-attention layer that always operates bidirectionally with RoPE."""
 
     def __init__(self, config):
         super().__init__()
@@ -201,15 +114,11 @@ class BidirectionalSelfAttention(nn.Module):
 
         # Rotary positional embeddings
         self.head_dim = config.n_embd // config.n_head
-        position_encoding = getattr(config, 'position_encoding', 'absolute')
-        if position_encoding == 'rotary':
-            self.rotary_emb = RotaryPositionalEmbedding(
-                self.head_dim,
-                max_position_embeddings=config.block_size,
-                device=None  # Will be set when model is moved to device
-            )
-        else:
-            self.rotary_emb = None
+        self.rotary_emb = RotaryPositionalEmbedding(
+            self.head_dim,
+            max_position_embeddings=config.block_size,
+            device=None  # Will be set when model is moved to device
+        )
 
         # flash attention make GPU go brrrrr but support is only in PyTorch >= 2.0
         self.flash = hasattr(torch.nn.functional, 'scaled_dot_product_attention')
@@ -226,11 +135,10 @@ class BidirectionalSelfAttention(nn.Module):
         q = q.view(B, T, self.n_head, C // self.n_head).transpose(1, 2) # (B, nh, T, hs)
         v = v.view(B, T, self.n_head, C // self.n_head).transpose(1, 2) # (B, nh, T, hs)
 
-        # Apply rotary positional embeddings if available
-        if self.rotary_emb is not None:
-            cos, sin = self.rotary_emb(v, seq_len=T)
-            position_ids = torch.arange(T, device=x.device).unsqueeze(0)
-            q, k = apply_rotary_pos_emb(q, k, cos, sin, position_ids)
+        # Apply rotary positional embeddings
+        cos, sin = self.rotary_emb(v, seq_len=T)
+        position_ids = torch.arange(T, device=x.device).unsqueeze(0)
+        q, k = apply_rotary_pos_emb(q, k, cos, sin, position_ids)
 
         # Build key padding mask for attention (mask out keys where attention_mask==0)
         sdpa_attn_mask = None
@@ -353,17 +261,7 @@ class Block(nn.Module):
     def __init__(self, config):
         super().__init__()
         self.ln_1 = LayerNorm(config.n_embd, bias=config.bias)
-
-        # Choose attention type based on config
-        attention_type = getattr(config, 'attention_type', 'causal')
-        if attention_type == 'bidirectional':
-            self.attn = BidirectionalSelfAttention(config)
-            # Note: These messages occur during model init, before logger is available
-            print("Using bidirectional attention")
-        else:
-            self.attn = CausalSelfAttention(config)
-            # Note: These messages occur during model init, before logger is available
-            print("Using causal attention")
+        self.attn = BidirectionalSelfAttention(config)
 
         self.cross = CrossAttention(config)
         self.ln_cross = LayerNorm(config.n_embd, bias=config.bias)
@@ -464,8 +362,6 @@ class GPTConfig:
     dropout: float = 0.0
     bias: bool = True # True: bias in Linears and LayerNorms, like GPT-2. False: a bit better and faster
     ignore_index: int = -100 # Standard PyTorch ignore index for loss computation
-    attention_type: str = 'causal' # 'causal' for autoregressive, 'bidirectional' for BERT-style
-    position_encoding: str = 'absolute' # 'absolute' or 'rotary'
     use_guidance: bool = True
     plan_tokens: int = 16
     plan_encoder_depth_factor: float = 0.5
@@ -502,7 +398,7 @@ class GPT(nn.Module):
         # Runtime mode switching (default: LANGUAGE_MODEL)
         self._current_mode = ModelMode.LANGUAGE_MODEL
 
-        # Create transformer components - conditionally include position embeddings
+        # Create transformer components. Rotary embeddings are applied inside attention.
         transformer_components = dict(
             wte = nn.Embedding(config.vocab_size, config.n_embd),
             drop = nn.Dropout(config.dropout),
@@ -510,12 +406,7 @@ class GPT(nn.Module):
             ln_f = LayerNorm(config.n_embd, bias=config.bias),
         )
 
-        # Only add absolute position embeddings if not using RoPE
-        if config.position_encoding == 'absolute':
-            transformer_components['wpe'] = nn.Embedding(config.block_size, config.n_embd)
-            self._log_info("Using absolute position embeddings")
-        else:
-            self._log_info("Using Rotary Position Embeddings (RoPE)")
+        self._log_info("Using Rotary Position Embeddings (RoPE)")
 
         self.transformer = nn.ModuleDict(transformer_components)
 
@@ -729,10 +620,7 @@ class GPT(nn.Module):
         The token embeddings would too, except due to the parameter sharing these
         params are actually used as weights in the final layer, so we include them.
         """
-        n_params = sum(p.numel() for p in self.parameters())
-        if non_embedding and hasattr(self.transformer, 'wpe'):
-            n_params -= self.transformer.wpe.weight.numel()
-        return n_params
+        return sum(p.numel() for p in self.parameters())
 
     def _init_weights(self, module):
         if isinstance(module, nn.Linear):
@@ -741,6 +629,24 @@ class GPT(nn.Module):
                 torch.nn.init.zeros_(module.bias)
         elif isinstance(module, nn.Embedding):
             torch.nn.init.normal_(module.weight, mean=0.0, std=0.02)
+    
+    def _build_default_attention_mask(self, idx: torch.Tensor) -> torch.Tensor:
+        
+        """Build a key-padding mask that follows the attention-mask spec."""
+        device = idx.device
+        mask = torch.ones_like(idx, dtype=torch.long, device=device)
+
+        pad_token_id = getattr(self.config, 'pad_token_id', None)
+        if pad_token_id is not None:
+            pad_id = int(pad_token_id)
+            mask = mask * (idx == pad_id).long()
+       
+        mask_token_id = getattr(self.config, 'mask_token_id', None)
+        if mask_token_id is not None:
+            pad_id = int(mask_token_id)
+            mask = mask | mask * (idx == pad_id).long()
+
+        return mask
 
     def _encode_tokens(self, idx, attention_mask=None, guidance_h=None, guidance_mask=None):
         """Encode input token ids through the transformer trunk up to ln_f.
@@ -749,6 +655,9 @@ class GPT(nn.Module):
         device = idx.device
         b, t = idx.size()
         assert t <= self.config.block_size, f"Cannot forward sequence of length {t}, block size is only {self.config.block_size}"
+
+        if attention_mask is None:
+            attention_mask = self._build_default_attention_mask(idx)
 
         tok_emb = self.transformer.wte(idx)
 
@@ -760,13 +669,7 @@ class GPT(nn.Module):
                 cls_mask = (idx == cls_id).unsqueeze(-1)  # (b, t, 1)
             tok_emb = torch.where(cls_mask, self.cls_embedding.view(1, 1, -1).expand_as(tok_emb), tok_emb)
 
-        # Add positional embeddings only if not using RoPE
-        if hasattr(self.transformer, 'wpe'):
-            pos = torch.arange(0, t, dtype=torch.long, device=device)  # (t)
-            pos_emb = self.transformer.wpe(pos)
-            x = self.transformer.drop(tok_emb + pos_emb)
-        else:
-            x = self.transformer.drop(tok_emb)
+        x = self.transformer.drop(tok_emb)
 
         for block in self.transformer.h:
             x = block(x, attention_mask=attention_mask, guidance_h=guidance_h, guidance_mask=guidance_mask)
@@ -798,6 +701,10 @@ class GPT(nn.Module):
         device = idx.device
         b, t = idx.size()
         assert t <= self.config.block_size, f"Cannot forward sequence of length {t}, block size is only {self.config.block_size}"
+
+        # Build default attention mask when none provided
+        if attention_mask is None:
+            attention_mask = self._build_default_attention_mask(idx)
 
         # Encode through transformer trunk
         x = self._encode_tokens(
@@ -934,6 +841,9 @@ class GPT(nn.Module):
         device = idx.device
         b, t = idx.size()
         assert t <= self.config.block_size
+
+        if attention_mask is None:
+            attention_mask = self._build_default_attention_mask(idx)
         # Optional global timing start for critic_scores
         _timer = None
         try:
@@ -947,17 +857,7 @@ class GPT(nn.Module):
                 pass
         _t0 = time.perf_counter()
 
-        tok_emb = self.transformer.wte(idx)
-        if hasattr(self.transformer, 'wpe'):
-            pos = torch.arange(0, t, dtype=torch.long, device=device)
-            pos_emb = self.transformer.wpe(pos)
-            x = self.transformer.drop(tok_emb + pos_emb)
-        else:
-            x = self.transformer.drop(tok_emb)
-        for block in self.transformer.h:
-
-            x = block(x, attention_mask=attention_mask)
-        x = self.transformer.ln_f(x)
+        x = self._encode_tokens(idx, attention_mask=attention_mask)
         logits = self.critic_head(x).squeeze(-1)
         # Record timing if global timer
         try:
@@ -999,14 +899,7 @@ class GPT(nn.Module):
         assert block_size <= self.config.block_size
         self.config.block_size = block_size
 
-        # Only crop position embeddings if they exist (not using RoPE)
-        if hasattr(self.transformer, 'wpe'):
-            self.transformer.wpe.weight = nn.Parameter(self.transformer.wpe.weight[:block_size])
-
         for block in self.transformer.h:
-            # Only causal attention has bias buffer
-            if hasattr(block.attn, 'bias'):
-                block.attn.bias = block.attn.bias[:,:,:block_size,:block_size]
             # Update RoPE max position embeddings if using RoPE
             if hasattr(block.attn, 'rotary_emb') and block.attn.rotary_emb is not None:
                 block.attn.rotary_emb.max_position_embeddings = block_size
@@ -1113,14 +1006,10 @@ class GPT(nn.Module):
         # Standard transformer FLOPS
         flops_per_token = 6*N + 12*L*H*Q*T
 
-        # Add RoPE overhead if using rotary position encoding
-        if getattr(cfg, 'position_encoding', 'absolute') == 'rotary':
-            # RoPE operations: 8 ops per head per sequence position (4 ops each for Q and K)
-            # Applied in forward and backward pass: 16 * L * H * Q * T
-            rope_flops_per_fwdbwd = 16 * L * H * Q * T
-            flops_per_fwdbwd = flops_per_token * T + rope_flops_per_fwdbwd
-        else:
-            flops_per_fwdbwd = flops_per_token * T
+        # Account for RoPE overhead (8 ops per head per sequence position for Q and K,
+        # applied in both forward and backward passes)
+        rope_flops_per_fwdbwd = 16 * L * H * Q * T
+        flops_per_fwdbwd = flops_per_token * T + rope_flops_per_fwdbwd
 
         flops_per_iter = flops_per_fwdbwd * fwdbwd_per_iter
         # express our flops throughput as ratio of A100 bfloat16 peak flops

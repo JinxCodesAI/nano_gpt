@@ -55,17 +55,12 @@ def load_model_from_checkpoint(checkpoint_path: str, device: str, compile_model:
         raise ValueError("Checkpoint missing 'model_args'. Please check checkpoint format.")
     model_args = checkpoint['model_args']
 
-    if 'attention_type' not in model_args:
-        model_args['attention_type'] = 'causal'
-    if 'position_encoding' not in model_args:
-        model_args['position_encoding'] = 'absolute'
-
     if 'init_from_checkpoint' in model_args and model_args.get('init_from_checkpoint'):
         print(f"Ignoring training-only init_from_checkpoint: {model_args['init_from_checkpoint']}")
         model_args['init_from_checkpoint'] = None
 
     # Filter out deprecated config fields (for backward compatibility with old checkpoints)
-    deprecated_fields = {'mode', 'num_token_classes', 'binary_classification'}
+    deprecated_fields = {'mode', 'num_token_classes', 'binary_classification', 'attention_type', 'position_encoding'}
     filtered_model_args = {k: v for k, v in model_args.items() if k not in deprecated_fields}
 
     # Store the old mode if present (we'll set it after model creation)

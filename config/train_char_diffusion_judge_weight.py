@@ -55,8 +55,6 @@ n_layer = 6
 n_head = 6
 n_embd = 384
 dropout = 0.1
-attention_type = 'bidirectional'  # Critical for BERT-style training
-position_encoding = 'rotary'
 dtype = 'float16'
 
 # Model mode for masked language modeling (BERT-style)

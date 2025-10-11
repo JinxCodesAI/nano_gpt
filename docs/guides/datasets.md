@@ -19,7 +19,7 @@ This guide explains how to add a new dataset to the streaming data pipeline and 
 - **model_mode (batch-level, optional)**: Each batch can specify its model_mode ('language_model' or 'sequence_scorer') in the batch metadata. The training loop switches the model to the appropriate mode before processing each batch. If not specified, defaults to LANGUAGE_MODEL.
 - **training_type (provider meta)**: A data/schema descriptor produced by your DataProvider (e.g., 'LM', 'MLM', 'SEQUENCE_SCORING', 'DUAL_MODE'). It helps consumers understand batch structure but does not directly control model mode.
 - **Config-level mode (DEPRECATED)**: The config-level model_mode field has been removed. Models default to LANGUAGE_MODEL and switch based on batch metadata.
-- When you want BERT-style masked language modeling, set attention_type = 'bidirectional' in your config. The provider can set meta['training_type'] = 'MLM' to describe the dataset.
+- The transformer trunk always operates with bidirectional attention and rotary position embeddings. For masked language modeling datasets, set meta['training_type'] = 'MLM' to describe the dataset.
 - For dual-mode training, use a provider that generates batches with different model_mode values (see data/dual_mode example).
 
 ### Step 1: Implement a Provider
@@ -182,6 +182,32 @@ alternation_frequency = 1  # Switch every batch
 - Shared representations across tasks
 - More efficient than training separate models
 - Flexible task mixing during training
+
+### Example: `char_diffusion_sticky_rounds`
+
+`char_diffusion_sticky_rounds` reuses the Shakespeare corpus and vocabulary from
+`char_diffusion` but changes how corruption is applied. Instead of sampling a
+single masked view, the provider performs iterative "sticky" masking:
+
+- Each unmasked base sequence spawns `max_rounds` successive diffusion steps.
+- Sticky probabilities `sticky_p1_probability` (no masked neighbours) and
+  `sticky_p2_probability` (at least one neighbour masked) govern how the mask
+  expands at every step.
+- Targets are always the original characters at masked positions, matching the
+  `char_diffusion` training objective.
+
+Configuration tips:
+
+- The provider automatically samples enough base sequences to fill the requested
+  `batch_size`, trimming the final base sequence to the required size when it is
+  not divisible by `max_rounds`.
+- The dataset automatically reads `input.txt` from `data/char_diffusion`, so no
+  additional text asset is required. Use `source_data_dir` if you need to point
+  to a different corpus that shares the same vocabulary.
+
+This dataset is useful when you want the model to observe multiple iterations
+of a sticky masking process within a single batch file, providing a smoother
+curriculum across diffusion steps.
 
 ### Troubleshooting
 - Consumer error: "Queue directory not found" -> run prepare.py with the same config.
