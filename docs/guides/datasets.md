@@ -19,7 +19,7 @@ This guide explains how to add a new dataset to the streaming data pipeline and 
 - **model_mode (batch-level, optional)**: Each batch can specify its model_mode ('language_model' or 'sequence_scorer') in the batch metadata. The training loop switches the model to the appropriate mode before processing each batch. If not specified, defaults to LANGUAGE_MODEL.
 - **training_type (provider meta)**: A data/schema descriptor produced by your DataProvider (e.g., 'LM', 'MLM', 'SEQUENCE_SCORING', 'DUAL_MODE'). It helps consumers understand batch structure but does not directly control model mode.
 - **Config-level mode (DEPRECATED)**: The config-level model_mode field has been removed. Models default to LANGUAGE_MODEL and switch based on batch metadata.
-- When you want BERT-style masked language modeling, set attention_type = 'bidirectional' in your config. The provider can set meta['training_type'] = 'MLM' to describe the dataset.
+- The transformer trunk always operates with bidirectional attention and rotary position embeddings. For masked language modeling datasets, set meta['training_type'] = 'MLM' to describe the dataset.
 - For dual-mode training, use a provider that generates batches with different model_mode values (see data/dual_mode example).
 
 ### Step 1: Implement a Provider

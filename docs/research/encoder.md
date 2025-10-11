@@ -77,8 +77,7 @@ class Block(nn.Module):
         super().__init__()
         self.ln_1 = LayerNorm(config.n_embd, bias=config.bias)
 
-        attention_type = getattr(config, 'attention_type', 'causal')
-        self.attn = BidirectionalSelfAttention(config) if attention_type == 'bidirectional' else CausalSelfAttention(config)
+        self.attn = BidirectionalSelfAttention(config)
 
         self.cross = CrossAttention(config)            # NEW
         self.ln_cross = LayerNorm(config.n_embd, bias=config.bias)  # NEW
@@ -112,10 +111,10 @@ class PlanEncoder(nn.Module):
 
         # Optionally tie embeddings with decoder to align token space
         self.wte = token_embedding if token_embedding is not None else nn.Embedding(config.vocab_size, config.n_embd)
-        self.wpe = position_embedding if position_embedding is not None else (nn.Embedding(config.block_size, config.n_embd) if config.position_encoding == 'absolute' else None)
+        self.wpe = position_embedding  # Rotary attention means decoder has no absolute WPE by default
 
         # A shallow bidirectional stack (half depth or fixed small number)
-        enc_cfg = dataclasses.replace(config, attention_type='bidirectional')
+        enc_cfg = dataclasses.replace(config)
         depth = max(1, enc_cfg.n_layer // 2)
         self.ln_in  = LayerNorm(enc_cfg.n_embd, bias=enc_cfg.bias)
         self.layers = nn.ModuleList([Block(enc_cfg) for _ in range(depth)])

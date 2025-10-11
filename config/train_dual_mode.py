@@ -30,9 +30,7 @@ n_embd = 384
 dropout = 0.1
 bias = False
 
-# Attention and position encoding
-attention_type = 'bidirectional'  # Required for both modes
-position_encoding = 'absolute'
+# Attention: bidirectional with rotary embeddings (fixed by architecture)
 
 # Sequence scorer configuration
 cls_token_id = None  # CLS token for sequence scoring

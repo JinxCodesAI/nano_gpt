@@ -2,7 +2,6 @@
 
 # Override default config for token classification
 model_mode = 'token_classifier'
-attention_type = 'bidirectional'  # Required for classification
 num_token_classes = 2  # Adjust as needed
 freeze_transformer = True  # Start with feature extraction
 unfreeze_at_iteration = 5000  # Unfreeze after warmup

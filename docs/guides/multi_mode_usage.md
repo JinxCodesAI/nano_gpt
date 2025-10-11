@@ -21,12 +21,12 @@ from model import GPT, GPTConfig, ModelMode
 config = GPTConfig(
     n_layer=12, n_head=12, n_embd=768,
     vocab_size=50304, block_size=1024,
-    
+
     # Classification specific
     mode=ModelMode.TOKEN_CLASSIFIER,
     num_token_classes=3,  # Adjust for your task
-    attention_type='bidirectional',  # Auto-set for classification
-    
+    # Attention is always bidirectional with rotary embeddings
+
     # Transfer learning (optional)
     init_from_checkpoint='path/to/pretrained/model.pt',
     freeze_transformer=True,
@@ -48,11 +48,11 @@ logits, loss = model(input_ids, targets)
 config = GPTConfig(
     n_layer=12, n_head=12, n_embd=768,
     vocab_size=50304, block_size=1024,
-    
+
     mode=ModelMode.SEQUENCE_SCORER,
     cls_token_id=101,  # [CLS] token ID from tokenizer
-    attention_type='bidirectional',
-    
+    # Attention is always bidirectional with rotary embeddings
+
     # Transfer learning
     init_from_checkpoint='path/to/pretrained/model.pt',
     freeze_transformer=True,
@@ -160,7 +160,7 @@ lr_dict = scheduler.get_lr(iter_num, is_frozen=True)
 | Parameter | Language Model | Token Classifier | Sequence Scorer |
 |-----------|---------------|------------------|-----------------|
 | `mode` | `ModelMode.LANGUAGE_MODEL` | `ModelMode.TOKEN_CLASSIFIER` | `ModelMode.SEQUENCE_SCORER` |
-| `attention_type` | `'causal'` | `'bidirectional'` (auto-set) | `'bidirectional'` (auto-set) |
+| Attention | Bidirectional (fixed) | Bidirectional (fixed) | Bidirectional (fixed) |
 | `num_token_classes` | N/A | Required (e.g., 3) | N/A |
 | `cls_token_id` | N/A | N/A | Required (e.g., 101) |
 
@@ -309,9 +309,9 @@ if scheduler.step(val_loss):
 
 ### Common Issues
 
-1. **Wrong Attention Type:**
-   - Classification modes auto-correct to bidirectional
-   - Warning message will be printed
+1. **Legacy Attention Settings:**
+   - Older configs that specify alternative attention types are ignored
+   - The architecture always runs bidirectional rotary attention
 
 2. **Loss Modifier Compatibility:**
    - Incompatible modifiers are automatically filtered
@@ -322,7 +322,7 @@ if scheduler.step(val_loss):
    - Mismatched architectures will show missing/unexpected keys
 
 4. **Memory Usage:**
-   - Bidirectional attention uses more memory than causal
+   - Bidirectional attention (fixed in this architecture) uses more memory than classic causal decoders
    - Consider reducing batch size for classification tasks
 
 ### Debugging
@@ -330,7 +330,6 @@ if scheduler.step(val_loss):
 ```python
 # Check model configuration
 print(f"Mode: {model.config.mode}")
-print(f"Attention: {model.config.attention_type}")  
 print(f"Frozen: {model.get_frozen_status()}")
 
 # Check loss modifier pipeline
