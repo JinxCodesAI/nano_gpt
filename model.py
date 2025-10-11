@@ -310,7 +310,7 @@ class PlanEncoder(nn.Module):
         else:
             depth = max(1, int(round(config.n_layer * float(depth_factor))))
 
-        enc_cfg = dataclasses.replace(config, attention_type='bidirectional', n_layer=depth)
+        enc_cfg = dataclasses.replace(config, n_layer=depth)
 
         self.ln_in = LayerNorm(enc_cfg.n_embd, bias=enc_cfg.bias)
         self.layers = nn.ModuleList([Block(enc_cfg) for _ in range(depth)])

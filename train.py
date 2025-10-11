@@ -69,7 +69,7 @@ n_embd = 768
 dropout = 0.0 # for pretraining 0 is good, for finetuning try 0.1+
 bias = False # do we use bias inside LayerNorm and Linear layers?
 # hierarchical guidance / plan encoder configuration
-use_guidance = True
+use_guidance = False
 plan_tokens = 16
 plan_encoder_depth_factor = 0.5
 cond_dropout_prob = 0.1
