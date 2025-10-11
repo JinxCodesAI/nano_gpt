@@ -34,7 +34,7 @@ generation_start_wall_time = None
 # Model loading
 init_from = 'resume'  # 'resume' to load from checkpoint
 out_dir = 'out-char-diffusion'
-checkpoint_name = '1.69_MLM_8500.pt'  # Main model checkpoint
+checkpoint_name = '1.7048_7250_good_mask.pt'  # Main model checkpoint
 
 # Generation parameters
 num_samples = 16  # Number of samples to generate

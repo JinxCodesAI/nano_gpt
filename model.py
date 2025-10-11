@@ -1045,3 +1045,56 @@ class GPT(nn.Module):
 
         return idx
 
+
+def custom_mask(b, h, q_idx, kv_idx):
+    W = 16  # local window size
+    M = 64  # prefix size (0..63 are specials)
+
+    # 1) Root is global both ways
+    if q_idx == 0 or kv_idx == 0:
+        return True
+
+    # 2) Always allow self to avoid corner cases for specials
+    if q_idx == kv_idx:
+        return True
+
+    # Helpers for parent mapping
+    def parent_L3_of_normal(q):   # q >= 64
+        return 4 + ((q - 64) // 16)          # in [4..63]
+    def parent_L2_of_normal(q):   # q >= 64
+        return 1 + ((q - 64) // 320)         # in [1..3]
+    def parent_L2_of_L3(q):       # q in [4..63]
+        return 1 + ((q - 4) // 20)           # in [1..3]
+
+    # 3) L2 query: see its children (L3 & normals) + root (handled above)
+    if 1 <= q_idx <= 3:
+        # children L3 under this L2
+        if 4 <= kv_idx <= 63:
+            return ((kv_idx - 4) // 20) == (q_idx - 1)
+        # children normals under this L2
+        if kv_idx >= 64:
+            return ((kv_idx - 64) // 320) == (q_idx - 1)
+        return False
+
+    # 4) L3 query: see its children (normals) + its parent L2 + root
+    if 4 <= q_idx <= 63:
+        # parent L2
+        if 1 <= kv_idx <= 3:
+            return kv_idx == parent_L2_of_L3(q_idx)
+        # children normals under this L3
+        if kv_idx >= 64:
+            return ((kv_idx - 64) // 16) == (q_idx - 4)
+        return False
+
+    # 5) Normal token: local window among normals + its parents (L3,L2) + root
+    if q_idx >= 64:
+        # local window ONLY over normals
+        in_window = (kv_idx >= max(64, q_idx - W)) and (kv_idx <= q_idx + W)
+        # upward summaries it contributes to
+        p3 = parent_L3_of_normal(q_idx)
+        p2 = parent_L2_of_normal(q_idx)
+        is_up = (kv_idx == p3) or (kv_idx == p2)
+        return in_window or is_up
+
+    # default
+    return False

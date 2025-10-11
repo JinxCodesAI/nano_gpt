@@ -59,6 +59,10 @@ n_head = 6
 n_embd = 384
 dropout = 0.1
 dtype = 'float16'
+use_guidance = True
+plan_tokens = 16
+plan_encoder_depth_factor = 0.5
+cond_dropout_prob = 0.1
 
 # Model mode for masked language modeling (BERT-style)
 model_mode = 'language_model'
