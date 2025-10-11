@@ -85,6 +85,29 @@ def apply_rotary_pos_emb(q, k, cos, sin, position_ids=None):
     k_embed = (k * cos) + (rotate_half(k) * sin)
     return q_embed, k_embed
 
+class LoRALinear(nn.Module):
+    def __init__(self, in_f, out_f, r=8, alpha=16.0, dropout=0.0, enabled=False):
+        super().__init__()
+        self.enabled = bool(enabled and r > 0)
+        if not self.enabled:
+            self.register_buffer("_dummy", torch.tensor(0.0), persistent=False)
+            return
+
+        self.r = int(r)
+        self.scaling = float(alpha) / float(self.r)
+        self.A = nn.Linear(in_f, self.r, bias=False)
+        self.B = nn.Linear(self.r, out_f, bias=False)
+        self.drop = nn.Dropout(dropout) if dropout and dropout > 0 else nn.Identity()
+
+        nn.init.kaiming_uniform_(self.A.weight, a=math.sqrt(5))
+        nn.init.zeros_(self.B.weight)
+
+    def forward(self, x):
+        if not self.enabled:
+            return 0.0
+        return self.B(self.A(self.drop(x))) * self.scaling
+
+
 class LayerNorm(nn.Module):
     """ LayerNorm but with an optional bias. PyTorch doesn't support simply bias=False """
 
@@ -113,6 +136,23 @@ class BidirectionalSelfAttention(nn.Module):
         self.n_embd = config.n_embd
         self.dropout = config.dropout
 
+        self.lora_qkv = LoRALinear(
+            config.n_embd,
+            3 * config.n_embd,
+            r=getattr(config, 'lora_rank', 0),
+            alpha=getattr(config, 'lora_alpha', 1.0),
+            dropout=getattr(config, 'lora_dropout', 0.0),
+            enabled=getattr(config, 'use_lora_attn', False),
+        )
+        self.lora_out = LoRALinear(
+            config.n_embd,
+            config.n_embd,
+            r=getattr(config, 'lora_rank', 0),
+            alpha=getattr(config, 'lora_alpha', 1.0),
+            dropout=getattr(config, 'lora_dropout', 0.0),
+            enabled=getattr(config, 'use_lora_attn', False),
+        )
+
         # Rotary positional embeddings
         self.head_dim = config.n_embd // config.n_head
         self.rotary_emb = RotaryPositionalEmbedding(
@@ -131,7 +171,10 @@ class BidirectionalSelfAttention(nn.Module):
         B, T, C = x.size() # batch size, sequence length, embedding dimensionality (n_embd)
 
         # calculate query, key, values for all heads in batch and move head forward to be the batch dim
-        q, k, v  = self.c_attn(x).split(self.n_embd, dim=2)
+        qkv = self.c_attn(x)
+        if self.lora_qkv.enabled:
+            qkv = qkv + self.lora_qkv(x)
+        q, k, v = qkv.split(self.n_embd, dim=2)
         k = k.view(B, T, self.n_head, C // self.n_head).transpose(1, 2) # (B, nh, T, hs)
         q = q.view(B, T, self.n_head, C // self.n_head).transpose(1, 2) # (B, nh, T, hs)
         v = v.view(B, T, self.n_head, C // self.n_head).transpose(1, 2) # (B, nh, T, hs)
@@ -169,7 +212,10 @@ class BidirectionalSelfAttention(nn.Module):
         y = y.transpose(1, 2).contiguous().view(B, T, C) # re-assemble all head outputs side by side
 
         # output projection
-        y = self.resid_dropout(self.c_proj(y))
+        proj = self.c_proj(y)
+        if self.lora_out.enabled:
+            proj = proj + self.lora_out(y)
+        y = self.resid_dropout(proj)
         return y
 
 class MLP(nn.Module):
@@ -181,11 +227,32 @@ class MLP(nn.Module):
         self.c_proj  = nn.Linear(4 * config.n_embd, config.n_embd, bias=config.bias)
         self.dropout = nn.Dropout(config.dropout)
 
+        self.lora_fc = LoRALinear(
+            config.n_embd,
+            4 * config.n_embd,
+            r=getattr(config, 'lora_rank', 0),
+            alpha=getattr(config, 'lora_alpha', 1.0),
+            dropout=getattr(config, 'lora_dropout', 0.0),
+            enabled=getattr(config, 'use_lora_mlp', False),
+        )
+        self.lora_proj = LoRALinear(
+            4 * config.n_embd,
+            config.n_embd,
+            r=getattr(config, 'lora_rank', 0),
+            alpha=getattr(config, 'lora_alpha', 1.0),
+            dropout=getattr(config, 'lora_dropout', 0.0),
+            enabled=getattr(config, 'use_lora_mlp', False),
+        )
+
     def forward(self, x):
-        x = self.c_fc(x)
-        x = self.gelu(x)
-        x = self.c_proj(x)
-        x = self.dropout(x)
+        fc = self.c_fc(x)
+        if self.lora_fc.enabled:
+            fc = fc + self.lora_fc(x)
+        x = self.gelu(fc)
+        proj = self.c_proj(x)
+        if self.lora_proj.enabled:
+            proj = proj + self.lora_proj(x)
+        x = self.dropout(proj)
         return x
 
 class ScaledSigmoidHead(nn.Module):
@@ -400,6 +467,16 @@ class GPTConfig:
     start_critic_iteration: int = 0
     end_critic_iteration: int = 0
 
+    # LoRA
+    use_lora_attn: bool = False
+    use_lora_mlp: bool = False
+    lora_rank: int = 8
+    lora_alpha: float = 16.0
+    lora_dropout: float = 0.0
+
+    # Cross-layer sharing
+    share_main_matrices: bool = False  # share attn/MLP projection matrices across blocks
+
 class GPT(nn.Module):
 
     def __init__(self, config, logger=None):
@@ -423,6 +500,18 @@ class GPT(nn.Module):
         self._log_info("Using Rotary Position Embeddings (RoPE)")
 
         self.transformer = nn.ModuleDict(transformer_components)
+
+        if getattr(self.config, 'share_main_matrices', False) and len(self.transformer.h) > 1:
+            base_block = self.transformer.h[0]
+            for blk in self.transformer.h[1:]:
+                blk.attn.c_attn.weight = base_block.attn.c_attn.weight
+                blk.attn.c_attn.bias = base_block.attn.c_attn.bias
+                blk.attn.c_proj.weight = base_block.attn.c_proj.weight
+                blk.attn.c_proj.bias = base_block.attn.c_proj.bias
+                blk.mlp.c_fc.weight = base_block.mlp.c_fc.weight
+                blk.mlp.c_fc.bias = base_block.mlp.c_fc.bias
+                blk.mlp.c_proj.weight = base_block.mlp.c_proj.weight
+                blk.mlp.c_proj.bias = base_block.mlp.c_proj.bias
 
         self.plan_encoder = None
         if getattr(self.config, 'use_guidance', False):
@@ -653,12 +742,12 @@ class GPT(nn.Module):
         pad_token_id = getattr(self.config, 'pad_token_id', None)
         if pad_token_id is not None:
             pad_id = int(pad_token_id)
-            mask = mask * (idx == pad_id).long()
-       
+            mask = mask * (idx != pad_id).long()
+
         mask_token_id = getattr(self.config, 'mask_token_id', None)
         if mask_token_id is not None:
-            pad_id = int(mask_token_id)
-            mask = mask | mask * (idx == pad_id).long()
+            mask_id = int(mask_token_id)
+            mask = mask * (idx != mask_id).long()
 
         return mask
 
