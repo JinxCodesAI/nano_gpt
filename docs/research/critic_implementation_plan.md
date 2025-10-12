@@ -26,7 +26,7 @@ This document targets a Python-proficient developer who is not deeply familiar w
     - freeze_transformer_weights()/unfreeze_transformer_weights(): transfer learning support
 - sample_utils.py
   - predict_and_sample_tokens(): fills masked positions using LM logits
-  - apply_remasking_step(): decides what to re-mask next; supports external remasking_model, “intelligent_remasking” (self-confidence), or random
+  - apply_remasking_step(): decides what to re-mask next; supports critic-guided selection, “intelligent_remasking” (self-confidence), or random
 - sample.py
   - diffusion_generate(): generation loop calling predict_and_sample_tokens() then apply_remasking_step()
   - Loads mask_token_id/pad_token_id from dataset meta.pkl
@@ -42,7 +42,7 @@ These are the only places we need to touch or reference for the critic extension
 ## High-Level Design
 - Multi-task extension of LANGUAGE_MODEL only. The Critic head shares the transformer trunk and predicts a single logit per token representing “error likelihood”.
 - Training (when enabled): LM loss is computed as today. Additionally, a second forward pass runs on a “filled” sequence (masked positions replaced by sampled tokens (multinomial sampling) drawn from the LM output) to compute a critic loss (BCEWithLogits). Final loss = LM loss (with existing loss modifiers applied) + alpha * critic_loss.
-- Inference: When enabled and no external remasking model is provided, re-masking selection can use critic scores instead of 1 - confidence. Randomness blending and protection masks remain as they are today.
+- Inference: When enabled, re-masking selection can use critic scores instead of 1 - confidence. Randomness blending and protection masks remain as they are today.
 
 ## Model Changes (model.py)
 1) GPTConfig additions
@@ -101,7 +101,7 @@ These config fields are saved in checkpoints via existing model_args flow and de
 
 ### Inference-time enabling
 
-- No changes required to sample.py CLI: if model.config.add_critic_head is True and no external remasking_model is provided, apply_remasking_step can automatically use the critic path.
+- No changes required to sample.py CLI: if model.config.add_critic_head is True, apply_remasking_step automatically uses the critic path.
 
 ## Code references for each change
 
@@ -113,7 +113,7 @@ These config fields are saved in checkpoints via existing model_args flow and de
   - GPT._forward_language_model(...): compute LM loss (with loss_modifiers), then, if add_critic_head and targets present, compute critic loss on filled sequences and add to total
 
 - sample_utils.py
-  - apply_remasking_step(...): add critic branch between remasking_model and intelligent_remasking
+  - apply_remasking_step(...): add critic branch ahead of intelligent_remasking
 
 - sample.py
   - diffusion_generate(...): unchanged logic; rely on apply_remasking_step precedence
@@ -141,8 +141,7 @@ Training by resuming from a baseline LM checkpoint (option 1):
 
 Sampling with critic guidance:
 
-- sample.py will detect critic availability via model.config.add_critic_head
-- Ensure no external remasking_model is passed to favor the critic branch
+- sample.py will detect critic availability via model.config.add_critic_head and route remasking through the critic branch automatically
 
 
 Notes:
@@ -151,7 +150,7 @@ Notes:
 
 ## Sampling/Inference Changes (sample_utils.py and sample.py)
 1) sample_utils.apply_remasking_step
-- Add an optional path to use critic scores when remasking_model is None and intelligent_remasking is False and the base model has add_critic_head=True
+- Add an optional path to use critic scores when intelligent_remasking is False and the base model has add_critic_head=True
 - Implementation sketch:
   - With torch.no_grad(), compute scores = model.critic_scores(prediction_tokens)
   - scores meaning: higher logit = higher error probability
@@ -159,7 +158,7 @@ Notes:
   - Blend with randomness_strength as today
   - Pick top-k (per row) indices to re-mask
   - Set those positions to mask_token_id
-- Precedence order becomes: remasking_model > critic_head > intelligent_remasking > random
+- Precedence order becomes: critic_head > intelligent_remasking > random
 
 2) sample.py integration
 - Detect availability of critic via getattr(model.config, 'add_critic_head', False)

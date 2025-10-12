@@ -90,9 +90,6 @@ use_verbose_logging = True  # Print detailed progress
 log_debug = False  # Enable detailed debug logging
 show_progress = True  # Show basic progress information
 
-# Ensure remasking_model is defined (optional component); defaults to None for inference
-remasking_model = None
-
 # -----------------------------------------------------------------------------
 exec(open('configurator.py').read()) # overrides from command line or config file
 
@@ -341,7 +338,7 @@ def log_iteration_progress(iteration, total_iterations, tokens, mask_token_id, d
         print(f"  Sample: {preview}")
 
 def diffusion_generate(model, batch_size, total_length, iterations, mask_token_id, vocab_size,
-                      decode_fn, remasking_model=None, verbose=False, seed_ids=None, placement=SeedPlacement.PREFIX):
+                      decode_fn, verbose=False, seed_ids=None, placement=SeedPlacement.PREFIX):
     """
     Generate text using diffusion-based iterative demasking
 
@@ -379,9 +376,7 @@ def diffusion_generate(model, batch_size, total_length, iterations, mask_token_i
         print(f"  - Length: {total_length}")
         print(f"  - Iterations: {iterations}")
         print(f"  - Temperature: {temperature}")
-        if remasking_model is not None:
-            print(f"  - Using remasking model")
-        elif getattr(getattr(model, 'config', object()), 'add_critic_head', False):
+        if getattr(getattr(model, 'config', object()), 'add_critic_head', False):
             print(f"  - Using critic-guided remasking")
         elif intelligent_remasking:
             print(f"  - Using intelligent self-remasking")
@@ -427,12 +422,11 @@ def diffusion_generate(model, batch_size, total_length, iterations, mask_token_i
                     masking_ratios=masking_ratios,
                     start_ratio=start_ratio,
                     end_ratio=end_ratio,
-                    remasking_model=remasking_model,
                     randomness_strength=randomness_strength,
                     mask_token_id=mask_token_id,
                     device=device,
                     base_model=model,
-                    intelligent_remasking=(False if (remasking_model is None and getattr(getattr(model, 'config', object()), 'add_critic_head', False)) else intelligent_remasking),
+                    intelligent_remasking=(False if getattr(getattr(model, 'config', object()), 'add_critic_head', False) else intelligent_remasking),
                     verbose=verbose and use_verbose_logging,
                     logits_from_predict=logits,
                     protected_mask=protected_mask
@@ -664,8 +658,8 @@ print(f"Temperature: {temperature}")
 if sampling_method == 'diffusion':
     print(f"Schedule: {schedule_type} ({start_ratio:.1%} → {end_ratio:.1%})")
     print(f"Top-p: {top_p}")
-    # Informational: Critic-guided remasking will be used if available (no external remasking model)
-    if remasking_model is None and getattr(getattr(model, 'config', object()), 'add_critic_head', False):
+    # Informational: Critic-guided remasking will be used if the model exposes the critic head
+    if getattr(getattr(model, 'config', object()), 'add_critic_head', False):
         print("Critic-guided remasking: enabled (using model's critic head)")
 
 print(f"{'='*60}")
@@ -690,7 +684,6 @@ with torch.no_grad():
                 mask_token_id=mask_token_id,
                 vocab_size=vocab_size,  # Full vocab size (includes mask token)
                 decode_fn=decode,
-                remasking_model=remasking_model,
                 verbose=use_verbose_logging,
                 seed_ids=seed_ids,
                 placement=seed_placement
