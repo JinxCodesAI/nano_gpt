@@ -8,10 +8,11 @@ log_interval = 10
 
 # save checkpoints when validation improves
 always_save_checkpoint = True
+compile = True
 
 wandb_log = True # override via command line if you like
 wandb_project = 'char-diffusion'
-wandb_run_name = 'bert-char-no-entropy-modifier+critic'
+wandb_run_name = 'vanila_no_modifiers'
 
 dataset = 'char_diffusion'
 
@@ -41,7 +42,7 @@ else:
     unmasking_stages = None
     validation_stages = None
 
-gradient_accumulation_steps = 4
+gradient_accumulation_steps = 2
 batch_size = 128  
 block_size = 1024 # Context size for masking
 
@@ -58,6 +59,10 @@ n_head = 6
 n_embd = 384
 dropout = 0.1
 dtype = 'float16'
+
+use_lora_attn = False
+use_lora_mlp = False
+share_main_matrices = False
 
 # Model mode for masked language modeling (BERT-style)
 model_mode = 'language_model'
@@ -82,7 +87,9 @@ add_critic_head = True
 start_critic_iteration = 1000
 end_critic_iteration = 3000
 critic_alpha = 0.5
-loss_modifiers_enabled = True
+
+loss_modifiers_enabled = False
+use_guidance = False
 
 entropy_modifier_enabled = False
 entropy_modifier_weight = 0.3

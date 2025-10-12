@@ -10,6 +10,8 @@ https://github.com/huggingface/transformers/blob/main/src/transformers/models/gp
 
 import math
 import inspect
+import dataclasses
+import copy
 from dataclasses import dataclass
 from enum import Enum
 
@@ -83,6 +85,29 @@ def apply_rotary_pos_emb(q, k, cos, sin, position_ids=None):
     k_embed = (k * cos) + (rotate_half(k) * sin)
     return q_embed, k_embed
 
+class LoRALinear(nn.Module):
+    def __init__(self, in_f, out_f, r=8, alpha=16.0, dropout=0.0, enabled=False):
+        super().__init__()
+        self.enabled = bool(enabled and r > 0)
+        if not self.enabled:
+            self.register_buffer("_dummy", torch.tensor(0.0), persistent=False)
+            return
+
+        self.r = int(r)
+        self.scaling = float(alpha) / float(self.r)
+        self.A = nn.Linear(in_f, self.r, bias=False)
+        self.B = nn.Linear(self.r, out_f, bias=False)
+        self.drop = nn.Dropout(dropout) if dropout and dropout > 0 else nn.Identity()
+
+        nn.init.kaiming_uniform_(self.A.weight, a=math.sqrt(5))
+        nn.init.zeros_(self.B.weight)
+
+    def forward(self, x):
+        if not self.enabled:
+            return 0.0
+        return self.B(self.A(self.drop(x))) * self.scaling
+
+
 class LayerNorm(nn.Module):
     """ LayerNorm but with an optional bias. PyTorch doesn't support simply bias=False """
 
@@ -111,6 +136,23 @@ class BidirectionalSelfAttention(nn.Module):
         self.n_embd = config.n_embd
         self.dropout = config.dropout
 
+        self.lora_qkv = LoRALinear(
+            config.n_embd,
+            3 * config.n_embd,
+            r=getattr(config, 'lora_rank', 0),
+            alpha=getattr(config, 'lora_alpha', 1.0),
+            dropout=getattr(config, 'lora_dropout', 0.0),
+            enabled=getattr(config, 'use_lora_attn', False),
+        )
+        self.lora_out = LoRALinear(
+            config.n_embd,
+            config.n_embd,
+            r=getattr(config, 'lora_rank', 0),
+            alpha=getattr(config, 'lora_alpha', 1.0),
+            dropout=getattr(config, 'lora_dropout', 0.0),
+            enabled=getattr(config, 'use_lora_attn', False),
+        )
+
         # Rotary positional embeddings
         self.head_dim = config.n_embd // config.n_head
         self.rotary_emb = RotaryPositionalEmbedding(
@@ -129,7 +171,10 @@ class BidirectionalSelfAttention(nn.Module):
         B, T, C = x.size() # batch size, sequence length, embedding dimensionality (n_embd)
 
         # calculate query, key, values for all heads in batch and move head forward to be the batch dim
-        q, k, v  = self.c_attn(x).split(self.n_embd, dim=2)
+        qkv = self.c_attn(x)
+        if self.lora_qkv.enabled:
+            qkv = qkv + self.lora_qkv(x)
+        q, k, v = qkv.split(self.n_embd, dim=2)
         k = k.view(B, T, self.n_head, C // self.n_head).transpose(1, 2) # (B, nh, T, hs)
         q = q.view(B, T, self.n_head, C // self.n_head).transpose(1, 2) # (B, nh, T, hs)
         v = v.view(B, T, self.n_head, C // self.n_head).transpose(1, 2) # (B, nh, T, hs)
@@ -167,7 +212,10 @@ class BidirectionalSelfAttention(nn.Module):
         y = y.transpose(1, 2).contiguous().view(B, T, C) # re-assemble all head outputs side by side
 
         # output projection
-        y = self.resid_dropout(self.c_proj(y))
+        proj = self.c_proj(y)
+        if self.lora_out.enabled:
+            proj = proj + self.lora_out(y)
+        y = self.resid_dropout(proj)
         return y
 
 class MLP(nn.Module):
@@ -179,11 +227,32 @@ class MLP(nn.Module):
         self.c_proj  = nn.Linear(4 * config.n_embd, config.n_embd, bias=config.bias)
         self.dropout = nn.Dropout(config.dropout)
 
+        self.lora_fc = LoRALinear(
+            config.n_embd,
+            4 * config.n_embd,
+            r=getattr(config, 'lora_rank', 0),
+            alpha=getattr(config, 'lora_alpha', 1.0),
+            dropout=getattr(config, 'lora_dropout', 0.0),
+            enabled=getattr(config, 'use_lora_mlp', False),
+        )
+        self.lora_proj = LoRALinear(
+            4 * config.n_embd,
+            config.n_embd,
+            r=getattr(config, 'lora_rank', 0),
+            alpha=getattr(config, 'lora_alpha', 1.0),
+            dropout=getattr(config, 'lora_dropout', 0.0),
+            enabled=getattr(config, 'use_lora_mlp', False),
+        )
+
     def forward(self, x):
-        x = self.c_fc(x)
-        x = self.gelu(x)
-        x = self.c_proj(x)
-        x = self.dropout(x)
+        fc = self.c_fc(x)
+        if self.lora_fc.enabled:
+            fc = fc + self.lora_fc(x)
+        x = self.gelu(fc)
+        proj = self.c_proj(x)
+        if self.lora_proj.enabled:
+            proj = proj + self.lora_proj(x)
+        x = self.dropout(proj)
         return x
 
 class ScaledSigmoidHead(nn.Module):
@@ -206,6 +275,55 @@ class ScaledSigmoidHead(nn.Module):
         return torch.sigmoid(scaled_logits)
 
 
+class CrossAttention(nn.Module):
+
+    def __init__(self, config):
+        super().__init__()
+        assert config.n_embd % config.n_head == 0
+        self.n_head = config.n_head
+        self.n_embd = config.n_embd
+        self.q = nn.Linear(config.n_embd, config.n_embd, bias=config.bias)
+        self.k = nn.Linear(config.n_embd, config.n_embd, bias=config.bias)
+        self.v = nn.Linear(config.n_embd, config.n_embd, bias=config.bias)
+        self.proj = nn.Linear(config.n_embd, config.n_embd, bias=config.bias)
+        self.dropout = nn.Dropout(config.dropout)
+        self.flash = hasattr(torch.nn.functional, 'scaled_dot_product_attention')
+
+    def forward(self, x, kv, kv_mask=None):
+        if kv is None:
+            return x
+
+        B, T, C = x.shape
+        H = self.n_head
+        D = C // H
+
+        q = self.q(x).view(B, T, H, D).transpose(1, 2)
+        k = self.k(kv).view(B, kv.size(1), H, D).transpose(1, 2)
+        v = self.v(kv).view(B, kv.size(1), H, D).transpose(1, 2)
+
+        if self.flash:
+            attn_mask = None
+            if kv_mask is not None:
+                attn_mask = (kv_mask == 0)[:, None, None, :]
+            y = torch.nn.functional.scaled_dot_product_attention(
+                q,
+                k,
+                v,
+                attn_mask=attn_mask,
+                dropout_p=self.dropout.p if self.training else 0.0,
+                is_causal=False,
+            )
+        else:
+            att = (q @ k.transpose(-2, -1)) / math.sqrt(D)
+            if kv_mask is not None:
+                att = att.masked_fill((kv_mask == 0)[:, None, None, :], float('-inf'))
+            att = torch.softmax(att, dim=-1)
+            y = att @ v
+
+        y = y.transpose(1, 2).contiguous().view(B, T, C)
+        return self.proj(self.dropout(y))
+
+
 class Block(nn.Module):
 
     def __init__(self, config):
@@ -213,13 +331,107 @@ class Block(nn.Module):
         self.ln_1 = LayerNorm(config.n_embd, bias=config.bias)
         self.attn = BidirectionalSelfAttention(config)
 
+        self._use_guidance = bool(getattr(config, 'use_guidance', False))
+        if self._use_guidance:
+            self.cross = CrossAttention(config)
+            self.ln_cross = LayerNorm(config.n_embd, bias=config.bias)
+        else:
+            self.cross = None
+            self.ln_cross = None
+
         self.ln_2 = LayerNorm(config.n_embd, bias=config.bias)
         self.mlp = MLP(config)
 
-    def forward(self, x, attention_mask=None):
+    def forward(self, x, attention_mask=None, guidance_h=None, guidance_mask=None):
         x = x + self.attn(self.ln_1(x), attention_mask=attention_mask)
+        if self.cross is not None and guidance_h is not None:
+            x = x + self.cross(self.ln_cross(x), guidance_h, kv_mask=guidance_mask)
         x = x + self.mlp(self.ln_2(x))
         return x
+
+
+class PlanEncoder(nn.Module):
+
+    def __init__(
+        self,
+        config,
+        K=None,
+        depth_factor=None,
+        token_embedding=None,
+        position_embedding=None,
+    ):
+        super().__init__()
+        self.K = int(K if K is not None else getattr(config, 'plan_tokens', 16))
+        if self.K <= 0:
+            raise ValueError("PlanEncoder requires K > 0 plan tokens")
+
+        self.plan_emb = nn.Parameter(torch.randn(self.K, config.n_embd) * 0.02)
+
+        self.wte = token_embedding if token_embedding is not None else nn.Embedding(config.vocab_size, config.n_embd)
+
+        position_encoding = getattr(config, 'position_encoding', 'absolute')
+        if position_embedding is not None:
+            self.wpe = position_embedding
+        elif position_encoding == 'absolute':
+            self.wpe = nn.Embedding(config.block_size, config.n_embd)
+        else:
+            self.wpe = None
+
+        depth_factor = depth_factor if depth_factor is not None else getattr(config, 'plan_encoder_depth_factor', 0.5)
+        if isinstance(depth_factor, int):
+            depth = max(1, int(depth_factor))
+        else:
+            depth = max(1, int(round(config.n_layer * float(depth_factor))))
+
+        enc_cfg_kwargs = dict(n_layer=depth)
+        if hasattr(config, 'use_guidance'):
+            enc_cfg_kwargs['use_guidance'] = False
+        if dataclasses.is_dataclass(config):
+            enc_cfg = dataclasses.replace(config, **enc_cfg_kwargs)
+        else:
+            enc_cfg = copy.copy(config)
+            for key, value in enc_cfg_kwargs.items():
+                setattr(enc_cfg, key, value)
+
+        self.ln_in = LayerNorm(enc_cfg.n_embd, bias=enc_cfg.bias)
+        self.layers = nn.ModuleList([Block(enc_cfg) for _ in range(depth)])
+        self.ln_out = LayerNorm(enc_cfg.n_embd, bias=enc_cfg.bias)
+
+    def embed(self, idx):
+        tok = self.wte(idx)
+        if self.wpe is not None:
+            positions = torch.arange(idx.size(1), device=idx.device, dtype=torch.long)
+            tok = tok + self.wpe(positions)
+        return tok
+
+    def forward(self, src_emb_or_idx, src_mask=None, already_embedded=False, return_mask=False):
+        if already_embedded:
+            src = src_emb_or_idx
+        else:
+            src = self.embed(src_emb_or_idx)
+
+        B = src.size(0)
+        plan = self.plan_emb.unsqueeze(0).expand(B, -1, -1)
+        x = torch.cat([plan, src], dim=1)
+
+        if src_mask is not None:
+            plan_mask = torch.ones(B, self.K, dtype=src_mask.dtype, device=src_mask.device)
+            attention_mask = torch.cat([plan_mask, src_mask], dim=1)
+        else:
+            attention_mask = None
+            plan_mask = None
+
+        x = self.ln_in(x)
+        for block in self.layers:
+            x = block(x, attention_mask=attention_mask)
+        x = self.ln_out(x)
+        plan_states = x[:, : self.K, :]
+
+        if return_mask:
+            if plan_mask is None:
+                plan_mask = torch.ones(B, self.K, device=x.device, dtype=torch.long)
+            return plan_states, plan_mask
+        return plan_states
 
 @dataclass
 class GPTConfig:
@@ -231,6 +443,10 @@ class GPTConfig:
     dropout: float = 0.0
     bias: bool = True # True: bias in Linears and LayerNorms, like GPT-2. False: a bit better and faster
     ignore_index: int = -100 # Standard PyTorch ignore index for loss computation
+    use_guidance: bool = True
+    plan_tokens: int = 16
+    plan_encoder_depth_factor: float = 0.5
+    cond_dropout_prob: float = 0.1
 
     # Dual-mode support: model has both heads, mode is switchable at runtime
     cls_token_id: int = None  # For sequence scoring mode
@@ -250,6 +466,16 @@ class GPTConfig:
     # Critic alpha warmup
     start_critic_iteration: int = 0
     end_critic_iteration: int = 0
+
+    # LoRA
+    use_lora_attn: bool = False
+    use_lora_mlp: bool = False
+    lora_rank: int = 8
+    lora_alpha: float = 16.0
+    lora_dropout: float = 0.0
+
+    # Cross-layer sharing
+    share_main_matrices: bool = False  # share attn/MLP projection matrices across blocks
 
 class GPT(nn.Module):
 
@@ -275,9 +501,34 @@ class GPT(nn.Module):
 
         self.transformer = nn.ModuleDict(transformer_components)
 
+        if getattr(self.config, 'share_main_matrices', False) and len(self.transformer.h) > 1:
+            base_block = self.transformer.h[0]
+            for blk in self.transformer.h[1:]:
+                blk.attn.c_attn.weight = base_block.attn.c_attn.weight
+                blk.attn.c_attn.bias = base_block.attn.c_attn.bias
+                blk.attn.c_proj.weight = base_block.attn.c_proj.weight
+                blk.attn.c_proj.bias = base_block.attn.c_proj.bias
+                blk.mlp.c_fc.weight = base_block.mlp.c_fc.weight
+                blk.mlp.c_fc.bias = base_block.mlp.c_fc.bias
+                blk.mlp.c_proj.weight = base_block.mlp.c_proj.weight
+                blk.mlp.c_proj.bias = base_block.mlp.c_proj.bias
+
+        self.plan_encoder = None
+        if getattr(self.config, 'use_guidance', False):
+            depth_factor = getattr(self.config, 'plan_encoder_depth_factor', 0.5)
+            position_embedding = self.transformer['wpe'] if 'wpe' in self.transformer else None
+            self.plan_encoder = PlanEncoder(
+                self.config,
+                K=getattr(self.config, 'plan_tokens', 16),
+                depth_factor=depth_factor,
+                token_embedding=self.transformer.wte,
+                position_embedding=position_embedding,
+            )
+            self._log_info(f"Plan encoder enabled (K={self.plan_encoder.K}, depth_factor={depth_factor})")
+
         # Main head
         self.lm_head = nn.Linear(config.n_embd, config.vocab_size, bias=False)
-        self.transformer.wte.weight = self.lm_head.weight 
+        self.transformer.wte.weight = self.lm_head.weight
         
         # Sequence scoring head
         self.sequence_head = ScaledSigmoidHead(config.n_embd)
@@ -481,28 +732,12 @@ class GPT(nn.Module):
                 torch.nn.init.zeros_(module.bias)
         elif isinstance(module, nn.Embedding):
             torch.nn.init.normal_(module.weight, mean=0.0, std=0.02)
-
     
     def _build_default_attention_mask(self, idx: torch.Tensor) -> torch.Tensor:
         
-        """Build a key-padding mask that follows the attention-mask spec."""
-        device = idx.device
-        mask = torch.ones_like(idx, dtype=torch.long, device=device)
+        return None
 
-        pad_token_id = getattr(self.config, 'pad_token_id', None)
-        if pad_token_id is not None:
-            pad_id = int(pad_token_id)
-            mask = mask * (idx == pad_id).long()
-       
-        mask_token_id = getattr(self.config, 'mask_token_id', None)
-        if mask_token_id is not None:
-            pad_id = int(mask_token_id)
-            mask = mask | mask * (idx == pad_id).long()
-
-        return mask
-
-
-    def _encode_tokens(self, idx, attention_mask=None):
+    def _encode_tokens(self, idx, attention_mask=None, guidance_h=None, guidance_mask=None):
         """Encode input token ids through the transformer trunk up to ln_f.
         Returns hidden states of shape (B, T, n_embd).
         """
@@ -526,11 +761,19 @@ class GPT(nn.Module):
         x = self.transformer.drop(tok_emb)
 
         for block in self.transformer.h:
-            x = block(x, attention_mask=attention_mask)
+            x = block(x, attention_mask=attention_mask, guidance_h=guidance_h, guidance_mask=guidance_mask)
         x = self.transformer.ln_f(x)
         return x
 
-    def forward(self, idx, targets=None, attention_mask=None, loss_modifiers=None):
+    def forward(
+        self,
+        idx,
+        targets=None,
+        attention_mask=None,
+        loss_modifiers=None,
+        guidance_h=None,
+        guidance_mask=None,
+    ):
         # Optional global timing start
         _timer = None
         try:
@@ -553,7 +796,12 @@ class GPT(nn.Module):
             attention_mask = self._build_default_attention_mask(idx)
 
         # Encode through transformer trunk
-        x = self._encode_tokens(idx, attention_mask=attention_mask)
+        x = self._encode_tokens(
+            idx,
+            attention_mask=attention_mask,
+            guidance_h=guidance_h,
+            guidance_mask=guidance_mask,
+        )
 
         # Mode-specific output and loss computation based on current runtime mode
         #print(f"[DEBUG] Model.forward: current_mode={self._current_mode}, idx.shape={idx.shape}, targets.shape={targets.shape if targets is not None else None}, targets.dtype={targets.dtype if targets is not None else None}")
@@ -886,3 +1134,56 @@ class GPT(nn.Module):
 
         return idx
 
+
+def custom_mask(b, h, q_idx, kv_idx):
+    W = 16  # local window size
+    M = 64  # prefix size (0..63 are specials)
+
+    # 1) Root is global both ways
+    if q_idx == 0 or kv_idx == 0:
+        return True
+
+    # 2) Always allow self to avoid corner cases for specials
+    if q_idx == kv_idx:
+        return True
+
+    # Helpers for parent mapping
+    def parent_L3_of_normal(q):   # q >= 64
+        return 4 + ((q - 64) // 16)          # in [4..63]
+    def parent_L2_of_normal(q):   # q >= 64
+        return 1 + ((q - 64) // 320)         # in [1..3]
+    def parent_L2_of_L3(q):       # q in [4..63]
+        return 1 + ((q - 4) // 20)           # in [1..3]
+
+    # 3) L2 query: see its children (L3 & normals) + root (handled above)
+    if 1 <= q_idx <= 3:
+        # children L3 under this L2
+        if 4 <= kv_idx <= 63:
+            return ((kv_idx - 4) // 20) == (q_idx - 1)
+        # children normals under this L2
+        if kv_idx >= 64:
+            return ((kv_idx - 64) // 320) == (q_idx - 1)
+        return False
+
+    # 4) L3 query: see its children (normals) + its parent L2 + root
+    if 4 <= q_idx <= 63:
+        # parent L2
+        if 1 <= kv_idx <= 3:
+            return kv_idx == parent_L2_of_L3(q_idx)
+        # children normals under this L3
+        if kv_idx >= 64:
+            return ((kv_idx - 64) // 16) == (q_idx - 4)
+        return False
+
+    # 5) Normal token: local window among normals + its parents (L3,L2) + root
+    if q_idx >= 64:
+        # local window ONLY over normals
+        in_window = (kv_idx >= max(64, q_idx - W)) and (kv_idx <= q_idx + W)
+        # upward summaries it contributes to
+        p3 = parent_L3_of_normal(q_idx)
+        p2 = parent_L2_of_normal(q_idx)
+        is_up = (kv_idx == p3) or (kv_idx == p2)
+        return in_window or is_up
+
+    # default
+    return False

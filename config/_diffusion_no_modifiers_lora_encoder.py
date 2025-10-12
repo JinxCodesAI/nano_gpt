@@ -7,11 +7,12 @@ eval_iters = 50
 log_interval = 10
 
 # save checkpoints when validation improves
-always_save_checkpoint = False
+always_save_checkpoint = True
+compile = True
 
 wandb_log = True # override via command line if you like
 wandb_project = 'char-diffusion'
-wandb_run_name = 'bert-char-no-entropy-modifier'
+wandb_run_name = 'lora_encoder_no_modifiers'
 
 dataset = 'char_diffusion'
 
@@ -42,16 +43,21 @@ else:
     validation_stages = None
 
 gradient_accumulation_steps = 4
-batch_size = 16  # Slightly larger batch size for BERT training
+batch_size = 64  # Slightly larger batch size for BERT training
 block_size = 1024 # Context size for masking
 
 # BERT training typically uses lower learning rates
-learning_rate = 5e-4
+learning_rate = 1e-3
 max_iters = 10000
 lr_decay_iters = 10000
-min_lr = 5e-5
+min_lr = 1e-4
 beta2 = 0.99
 warmup_iters = 500  # More warmup for BERT
+
+#with critic
+add_critic_head = True
+start_critic_iteration = 1000
+end_critic_iteration = 3000
 
 # Model architecture - bidirectional for BERT
 n_layer = 6
@@ -59,6 +65,13 @@ n_head = 6
 n_embd = 384
 dropout = 0.1
 dtype = 'float16'
+
+use_lora_attn = True
+use_lora_mlp = True
+lora_rank = 32
+lora_alpha = 64.0
+lora_dropout = 0.0
+share_main_matrices = True
 
 # Model mode for masked language modeling (BERT-style)
 model_mode = 'language_model'
@@ -80,6 +93,11 @@ ignore_index = -100  # Default PyTorch ignore index
 # block_size = 128
 
 loss_modifiers_enabled = False
+
+use_guidance = True
+plan_tokens = 16
+plan_encoder_depth_factor = 0.5
+cond_dropout_prob = 0.1
 
 entropy_modifier_enabled = False
 entropy_modifier_weight = 0.3

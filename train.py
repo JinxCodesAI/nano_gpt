@@ -58,7 +58,7 @@ wandb_run_name = 'run' # 'run' + str(time.time())
 # data
 dataset = 'openwebtext'
 gradient_accumulation_steps = 1 # used to simulate larger batch sizes
-batch_size = 12 # if gradient_accumulation_steps > 1, this is the micro-batch size
+batch_size = 1 # if gradient_accumulation_steps > 1, this is the micro-batch size
 block_size = 1024
 target_size = None # target sequence length, defaults to block_size if None
 vocab_size = None # vocab size of the tokenizer
@@ -68,6 +68,18 @@ n_head = 12
 n_embd = 768
 dropout = 0.0 # for pretraining 0 is good, for finetuning try 0.1+
 bias = False # do we use bias inside LayerNorm and Linear layers?
+# LoRA / parameter sharing
+use_lora_attn = False
+use_lora_mlp = False
+lora_rank = 8
+lora_alpha = 16.0
+lora_dropout = 0.0
+share_main_matrices = False
+# hierarchical guidance / plan encoder configuration
+use_guidance = False
+plan_tokens = 16
+plan_encoder_depth_factor = 0.5
+cond_dropout_prob = 0.1
 # adamw optimizer
 learning_rate = 6e-4 # max learning rate
 max_iters = 600000 # total number of training iterations
@@ -237,7 +249,18 @@ checkpoint_manager.set_metadata(model_args={}, config=config)
 # Note: mode and num_token_classes are no longer part of GPTConfig (dual-mode architecture)
 # Model mode is set after creation using set_mode()
 model_args = dict(n_layer=n_layer, n_head=n_head, n_embd=n_embd, block_size=block_size,
-                  bias=bias, vocab_size=None, dropout=dropout,
+                  bias=bias, vocab_size=None, dropout=dropout, 
+                  use_guidance=use_guidance,
+                  plan_tokens=plan_tokens,
+                  plan_encoder_depth_factor=plan_encoder_depth_factor,
+                  cond_dropout_prob=cond_dropout_prob,
+                  # LoRA / parameter sharing
+                  use_lora_attn=use_lora_attn,
+                  use_lora_mlp=use_lora_mlp,
+                  lora_rank=lora_rank,
+                  lora_alpha=lora_alpha,
+                  lora_dropout=lora_dropout,
+                  share_main_matrices=share_main_matrices,
                   # multi-mode parameters (mode is set after model creation)
                   cls_token_id=cls_token_id,
                   freeze_transformer=freeze_transformer,
@@ -273,6 +296,11 @@ elif init_from == 'resume':
     # the rest of the attributes (e.g. dropout) can stay as desired from command line
     for k in ['n_layer', 'n_head', 'n_embd', 'block_size', 'bias', 'vocab_size']:
         model_args[k] = checkpoint_model_args[k]
+    for k in ['use_guidance', 'plan_tokens', 'plan_encoder_depth_factor', 'cond_dropout_prob',
+              'use_lora_attn', 'use_lora_mlp', 'lora_rank', 'lora_alpha', 'lora_dropout',
+              'share_main_matrices']:
+        if k in checkpoint_model_args:
+            model_args[k] = checkpoint_model_args[k]
     # create the model
     gptconf = GPTConfig(**model_args)
     model = GPT(gptconf, logger=logger)
