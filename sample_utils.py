@@ -306,7 +306,7 @@ def calculate_judge_scores(judge_model, tokens, device='cuda', ctx=None):
 
 
 
-def apply_remasking(tokens, mask_ratio, mask_token_id, remasking_model=None,
+def apply_remasking(tokens, mask_ratio, mask_token_id,
                    randomness_strength=0.5, base_model=None, intelligent_remasking=False,
                    protected_mask=None):
     """
@@ -316,7 +316,6 @@ def apply_remasking(tokens, mask_ratio, mask_token_id, remasking_model=None,
         tokens: Current tokens (batch_size, seq_len)
         mask_ratio: Ratio of tokens to mask
         mask_token_id: ID of the mask token
-        remasking_model: Optional remasking model for intelligent selection
         randomness_strength: Balance between random and model-guided remasking
         base_model: Base model for intelligent remasking
         intelligent_remasking: Enable intelligent remasking with base model
@@ -352,13 +351,7 @@ def apply_remasking(tokens, mask_ratio, mask_token_id, remasking_model=None,
         # Determine which tokens to mask
         actual_num_to_mask = min(num_to_mask, len(unmaskable_indices))
 
-        if remasking_model is not None:
-            # Use remasking model for intelligent selection
-            positions_to_mask = _select_tokens_with_remasking_model(
-                tokens[batch_idx:batch_idx+1], unmaskable_indices, actual_num_to_mask,
-                remasking_model, randomness_strength, device
-            )
-        elif intelligent_remasking and base_model is not None:
+        if intelligent_remasking and base_model is not None:
             # Use base model for intelligent self-confidence based remasking
             positions_to_mask = _select_tokens_with_confidence(
                 tokens[batch_idx:batch_idx+1], unmaskable_indices, actual_num_to_mask,
@@ -373,28 +366,6 @@ def apply_remasking(tokens, mask_ratio, mask_token_id, remasking_model=None,
         remasked_tokens[batch_idx, positions_to_mask] = mask_token_id
 
     return remasked_tokens
-
-
-def _select_tokens_with_remasking_model(tokens, unmaskable_indices, num_to_mask,
-                                      remasking_model, randomness_strength, device):
-    """Select tokens to mask using a dedicated remasking model"""
-    with torch.no_grad():
-        logits, _ = remasking_model(tokens)
-
-        # Get confidence scores for unmaskable positions
-        confidence_scores = logits[0, unmaskable_indices, 1]  # Assuming binary classification
-
-        # Blend with random selection based on randomness_strength
-        if randomness_strength > 0:
-            random_scores = torch.rand(len(confidence_scores), device=device)
-            combined_scores = (1 - randomness_strength) * confidence_scores + randomness_strength * random_scores
-        else:
-            combined_scores = confidence_scores
-
-        # Select tokens with lowest confidence (most likely to be wrong)
-        _, selected_indices = torch.topk(combined_scores, num_to_mask, largest=False)
-
-        return unmaskable_indices[selected_indices]
 
 
 def _select_tokens_with_confidence(tokens, unmaskable_indices, num_to_mask,
@@ -428,7 +399,7 @@ def _select_tokens_with_confidence(tokens, unmaskable_indices, num_to_mask,
 
 
 def apply_remasking_step(tokens, prediction_tokens, iteration, iterations, schedule_type='linear',
-                        masking_ratios=None, start_ratio=0.9, end_ratio=0.1, remasking_model=None,
+                        masking_ratios=None, start_ratio=0.9, end_ratio=0.1,
                         randomness_strength=0.5, mask_token_id=None, device='cuda', base_model=None,
                         intelligent_remasking=False, verbose=False, logits_from_predict=None,
                         protected_mask=None, schedule_mode='ratio'):
@@ -444,7 +415,6 @@ def apply_remasking_step(tokens, prediction_tokens, iteration, iterations, sched
         masking_ratios: Custom masking ratios for each iteration
         start_ratio: Starting mask ratio for linear schedule
         end_ratio: Ending mask ratio for linear schedule
-        remasking_model: Optional remasking model
         randomness_strength: Randomness factor
         mask_token_id: Mask token ID
         device: Device
@@ -495,56 +465,7 @@ def apply_remasking_step(tokens, prediction_tokens, iteration, iterations, sched
         # For threshold mode, k will be determined dynamically
         k = None
 
-    if remasking_model is not None:
-        # Batched remasking model forward once
-        with torch.no_grad():
-            logits_r, _ = remasking_model(prediction_tokens)
-        # Assume binary: take class-1 confidence; fall back to last dim if shape ambiguous
-        if logits_r.dim() == 3 and logits_r.size(-1) > 1:
-            confidence = logits_r[:, :, 1]
-        else:
-            # Single logit per position; treat larger as more confident
-            confidence = logits_r.squeeze(-1)
-
-        if schedule_mode == 'threshold':
-            # Threshold mode: mask all tokens with low confidence (high wrongness)
-            # Convert confidence to wrongness probability
-            wrongness = 1.0 - torch.sigmoid(confidence)
-            # Invert mask_ratio: start_ratio=0.95 means threshold=0.05
-            threshold = 1.0 - mask_ratio
-            wrongness_masked = wrongness.masked_fill(~unmaskable, -float('inf'))
-            select = (wrongness_masked > threshold) & unmaskable
-
-            if not select.any():
-                return None, None, []  # Signal early termination
-
-            remasked_tokens = prediction_tokens.clone()
-            remasked_tokens[select] = mask_token_id
-            min_wrongness = wrongness[select].min().item() if select.any() else None
-            remasked_indices = select.nonzero(as_tuple=False).tolist()
-            return remasked_tokens, min_wrongness, remasked_indices
-        else:
-            # Ratio mode: mask top-k tokens
-            # Lower confidence => more likely to mask: score = -confidence
-            wrongness = 1.0 - torch.sigmoid(confidence)
-            scores = -confidence
-            scores = scores.masked_fill(~unmaskable, torch.finfo(scores.dtype).min)
-            if randomness_strength > 0:
-                scores = (1 - randomness_strength) * scores + randomness_strength * torch.rand_like(scores)
-
-            if k > 0:
-                topk_idx = scores.topk(k, dim=1, largest=True).indices
-                select = torch.zeros_like(scores, dtype=torch.bool)
-                select.scatter_(1, topk_idx, True)
-                select &= unmaskable
-                remasked_tokens = prediction_tokens.clone()
-                remasked_tokens[select] = mask_token_id
-                min_wrongness = wrongness[select].min().item() if select.any() else None
-                remasked_indices = select.nonzero(as_tuple=False).tolist()
-                return remasked_tokens, min_wrongness, remasked_indices
-            return prediction_tokens, None, []
-
-    # Critic-guided remasking path: precedence after remasking_model and before intelligent_remasking
+    # Critic-guided remasking path takes precedence over self-confidence heuristics
     if base_model is not None and getattr(getattr(base_model, 'config', object()), 'add_critic_head', False) and not intelligent_remasking:
         with torch.no_grad():
             critic_logits = base_model.critic_scores(prediction_tokens)
@@ -597,7 +518,6 @@ def apply_remasking_step(tokens, prediction_tokens, iteration, iterations, sched
                 tokens=prediction_tokens,
                 mask_ratio=mask_ratio,
                 mask_token_id=mask_token_id,
-                remasking_model=None,
                 randomness_strength=randomness_strength,
                 base_model=base_model,
                 intelligent_remasking=True,
@@ -652,7 +572,6 @@ def apply_remasking_step(tokens, prediction_tokens, iteration, iterations, sched
         tokens=prediction_tokens,
         mask_ratio=mask_ratio,
         mask_token_id=mask_token_id,
-        remasking_model=None,
         randomness_strength=randomness_strength,
         base_model=None,
         intelligent_remasking=False,

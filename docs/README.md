@@ -21,6 +21,8 @@ Practical, task-focused walk-throughs for day-to-day development.
   implementation.
 - [Sampler Head](./guides/sampler_head.md) – optional bidirectional sampler for
   coherent diffusion decoding.
+- [Sampling and Diffusion Generation](./guides/sampling.md) – running
+  `sample.py`, tuning iterative demasking, and extending remasking strategies.
 
 ## Research & Design Notes
 

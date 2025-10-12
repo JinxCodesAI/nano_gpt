@@ -259,7 +259,6 @@ def diffusion_generate(
                     masking_ratios=masking_ratios,
                     start_ratio=start_ratio,
                     end_ratio=end_ratio,
-                    remasking_model=None,
                     randomness_strength=randomness_strength,
                     mask_token_id=mask_token_id,
                     device=device,
