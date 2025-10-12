@@ -18,7 +18,7 @@ From the repository root:
 
 ```bash
 python critic_calibration.py <dataset_name> <checkpoint_path> <num_sequences> \
-  [--split train|val]
+  [--split train|val] [--verbose]
 ```
 
 Arguments:
@@ -30,6 +30,8 @@ Arguments:
   full batch item (not individual tokens). The script stops after processing the
   requested number of sequences.
 - `--split`: Optional dataset split to read from (`val` by default).
+- `--verbose`: Emit intermediate bucket probabilities every 100 processed
+  sequences. Useful for monitoring long runs.
 
 Example:
 

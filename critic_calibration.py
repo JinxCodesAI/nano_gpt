@@ -175,6 +175,7 @@ def analyze(
     device: torch.device,
     num_samples: int,
     split: str,
+    verbose: bool = False,
 ) -> List[float]:
     ignore_index = int(getattr(model.config, "ignore_index", -100))
 
@@ -182,6 +183,7 @@ def analyze(
     total_counts = torch.zeros(100, dtype=torch.long)
 
     samples_processed = 0
+    next_report = 100 if verbose else None
 
     while samples_processed < num_samples:
         batch = consumer.get_batch(split, device)
@@ -238,6 +240,23 @@ def analyze(
 
         samples_processed += sequence_limit
 
+        if verbose and next_report is not None:
+            while samples_processed >= next_report:
+                current: List[float | None] = []
+                for idx in range(100):
+                    total = int(total_counts[idx].item())
+                    if total > 0:
+                        correct = int(correct_counts[idx].item())
+                        current.append(correct / total)
+                    else:
+                        current.append(None)
+                filled_current = fill_empty_buckets(current)
+                print(
+                    f"[critic_calibration] {next_report} samples processed -> "
+                    f"{json.dumps(filled_current)}"
+                )
+                next_report += 100
+
     probabilities: List[float | None] = []
     for idx in range(100):
         total = int(total_counts[idx].item())
@@ -265,6 +284,11 @@ def main() -> None:
         choices=["train", "val"],
         help="Dataset split to evaluate (default: val)",
     )
+    parser.add_argument(
+        "--verbose",
+        action="store_true",
+        help="Log bucket probabilities every 100 processed samples",
+    )
 
     args = parser.parse_args()
 
@@ -284,6 +308,7 @@ def main() -> None:
         device=device,
         num_samples=max(1, int(args.num_samples)),
         split=args.split,
+        verbose=args.verbose,
     )
 
     output_path = checkpoint_path.with_suffix(".json")
