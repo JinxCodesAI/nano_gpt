@@ -9,7 +9,7 @@ wandb_run_name = 'sequence_scorer_complex_epoch_1'
 
 # Dataset configuration
 dataset = 'sequence_scorer'
-batch_size = 4
+batch_size = 128
 gradient_accumulation_steps = 8
 block_size = 1024
 eval_interval = 250

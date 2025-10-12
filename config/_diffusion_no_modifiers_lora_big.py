@@ -42,8 +42,8 @@ else:
     unmasking_stages = None
     validation_stages = None
 
-gradient_accumulation_steps = 4
-batch_size = 128  
+gradient_accumulation_steps = 8
+batch_size = 32  
 block_size = 1024 # Context size for masking
 
 learning_rate = 5e-4
