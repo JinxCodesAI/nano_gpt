@@ -7,11 +7,12 @@ eval_iters = 50
 log_interval = 10
 
 # save checkpoints when validation improves
-always_save_checkpoint = False
+always_save_checkpoint = True
+compile = True
 
 wandb_log = True # override via command line if you like
 wandb_project = 'char-diffusion'
-wandb_run_name = 'bert-char'
+wandb_run_name = 'bert-char-no-entropy-modifier+critic'
 
 dataset = 'char_diffusion'
 
@@ -41,30 +42,36 @@ else:
     unmasking_stages = None
     validation_stages = None
 
-gradient_accumulation_steps = 1
-batch_size = 32  # Slightly larger batch size for BERT training
+gradient_accumulation_steps = 4
+batch_size = 128  
 block_size = 1024 # Context size for masking
 
-# BERT training typically uses lower learning rates
 learning_rate = 5e-4
-max_iters = 10000
-lr_decay_iters = 10000
+max_iters = 6000
+lr_decay_iters = 6000
 min_lr = 5e-5
 beta2 = 0.99
-warmup_iters = 500  # More warmup for BERT
+warmup_iters = 500  
 
 # Model architecture - bidirectional for BERT
-n_layer = 6
-n_head = 6
-n_embd = 384
+n_layer = 12
+n_head = 8
+n_embd = 512
 dropout = 0.1
 dtype = 'float16'
+
+
+use_lora_attn = True
+use_lora_mlp = True
+lora_rank = 32
+lora_alpha = 64.0
+lora_dropout = 0.0
+share_main_matrices = True
 
 # Model mode for masked language modeling (BERT-style)
 model_mode = 'language_model'
 
 # Diffusion/masking specific config
-mask_probability = 0.15  # Standard BERT masking rate
 mask_token_id = None  # Will be set from dataset meta
 
 # Data streaming config
@@ -80,9 +87,14 @@ ignore_index = -100  # Default PyTorch ignore index
 # batch_size = 4
 # block_size = 128
 
-loss_modifiers_enabled = True
+add_critic_head = True
+start_critic_iteration = 1000
+end_critic_iteration = 3000
+critic_alpha = 0.5
+loss_modifiers_enabled = False
+use_guidance = False
 
-entropy_modifier_enabled = True
+entropy_modifier_enabled = False
 entropy_modifier_weight = 0.3
 entropy_modifier_threshold = 0.1 
 # loss multiplier in range of [0.3, 3]

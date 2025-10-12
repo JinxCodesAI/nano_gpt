@@ -34,10 +34,10 @@ generation_start_wall_time = None
 # Model loading
 init_from = 'resume'  # 'resume' to load from checkpoint
 out_dir = 'out-char-diffusion'
-checkpoint_name = 'ckpt_MLM_7000.pt'  # Main model checkpoint
+checkpoint_name = 'ckpt_big_lora_10000.pt'  # Main model checkpoint
 
 # Generation parameters
-num_samples = 16  # Number of samples to generate
+num_samples = 1  # Number of samples to generate
 sequence_length = 1024  # Total length of generated sequence
 max_new_tokens = 100  # For regular sampling (non-diffusion)
 seed = -1
@@ -46,7 +46,7 @@ dtype = 'float16'  # Use float16 for RTX 2060 compatibility
 compile = False  # Use PyTorch 2.0 compilation (disabled due to triton issues)
 
 # Sampling method
-sampling_method = 'diffusion'  # 'diffusion' or 'multinomial' 
+sampling_method = 'multinomial'  # 'diffusion' or 'multinomial' 
 
 seed_text = "\nWell, sir; what did this gentleman to her?\n"
 
@@ -69,7 +69,7 @@ end_ratio = 0.05   # Final ratio of tokens to remask (5%)
 
 # Remasking parameters (diffusion only)
 randomness_strength = 0.2  # Balance between random (1.0) and model-guided (0.0) remasking
-intelligent_remasking = False  # Enable self-confidence based remasking when no remasking model
+intelligent_remasking = True  # Enable self-confidence based remasking when no remasking model
 
 # Quality metric configuration
 class QualityMetric(Enum):

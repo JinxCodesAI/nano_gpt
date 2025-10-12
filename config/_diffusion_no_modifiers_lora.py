@@ -7,7 +7,7 @@ eval_iters = 50
 log_interval = 10
 
 # save checkpoints when validation improves
-always_save_checkpoint = False
+always_save_checkpoint = True
 compile = True
 
 wandb_log = True # override via command line if you like
@@ -53,6 +53,11 @@ lr_decay_iters = 10000
 min_lr = 1e-4
 beta2 = 0.99
 warmup_iters = 500  # More warmup for BERT
+
+#with critic
+add_critic_head = True
+start_critic_iteration = 1000
+end_critic_iteration = 3000
 
 # Model architecture - bidirectional for BERT
 n_layer = 6
