@@ -12,8 +12,7 @@ compile = True
 
 wandb_log = True # override via command line if you like
 wandb_project = 'char-diffusion'
-wandb_run_name = 'bert-char-no-entropy-modifier'
-
+wandb_run_name = 'lora_no_modifiers'
 dataset = 'char_diffusion'
 
 composition_config = 'complex' # refers to data/char_diffusion/config/complex.py  use None if config is not defined

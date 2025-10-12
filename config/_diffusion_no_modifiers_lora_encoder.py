@@ -12,7 +12,7 @@ compile = True
 
 wandb_log = True # override via command line if you like
 wandb_project = 'char-diffusion'
-wandb_run_name = 'bert-char-no-entropy-modifier'
+wandb_run_name = 'lora_encoder_no_modifiers'
 
 dataset = 'char_diffusion'
 

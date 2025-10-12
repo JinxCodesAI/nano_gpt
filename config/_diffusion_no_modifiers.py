@@ -12,7 +12,7 @@ compile = True
 
 wandb_log = True # override via command line if you like
 wandb_project = 'char-diffusion'
-wandb_run_name = 'bert-char-no-entropy-modifier+critic'
+wandb_run_name = 'vanila_no_modifiers'
 
 dataset = 'char_diffusion'
 
