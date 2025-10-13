@@ -17,7 +17,7 @@ from model import GPTConfig, GPT, ModelMode
 from sample_utils import (
     linear_remasking_schedule, nucleus_sample, apply_remasking,
     calculate_selfconfidence_ratio, predict_and_sample_tokens, apply_remasking_step,
-    calculate_judge_scores,
+    calculate_judge_scores, load_critic_calibration_table,
 )
 
 from core.common.timings import TimingAccumulator, print_global_summary
@@ -338,7 +338,8 @@ def log_iteration_progress(iteration, total_iterations, tokens, mask_token_id, d
         print(f"  Sample: {preview}")
 
 def diffusion_generate(model, batch_size, total_length, iterations, mask_token_id, vocab_size,
-                      decode_fn, verbose=False, seed_ids=None, placement=SeedPlacement.PREFIX):
+                      decode_fn, verbose=False, seed_ids=None, placement=SeedPlacement.PREFIX,
+                      critic_calibration=None):
     """
     Generate text using diffusion-based iterative demasking
 
@@ -429,7 +430,8 @@ def diffusion_generate(model, batch_size, total_length, iterations, mask_token_i
                     intelligent_remasking=(False if getattr(getattr(model, 'config', object()), 'add_critic_head', False) else intelligent_remasking),
                     verbose=verbose and use_verbose_logging,
                     logits_from_predict=logits,
-                    protected_mask=protected_mask
+                    protected_mask=protected_mask,
+                    critic_calibration=critic_calibration,
                 )
             # apply_remasking_step returns (remasked_tokens, min_wrongness, remasked_indices)
             if isinstance(_remask_result, tuple):
@@ -589,6 +591,20 @@ if pad_token_id is not None and pad_token_id < len(itos):
     print(f"Using pad_token_id: {pad_token_id} ('{itos[pad_token_id]}')")
 print(f"Total vocab_size: {vocab_size}")
 print(f"Base vocab_size (content tokens): {base_vocab_size if base_vocab_size else vocab_size - 1}")
+
+critic_calibration_values, critic_calibration_found = load_critic_calibration_table(main_checkpoint_path)
+model_device = next(model.parameters()).device
+critic_calibration_tensor = torch.tensor(
+    critic_calibration_values,
+    dtype=torch.float32,
+    device=model_device,
+)
+if getattr(getattr(model, 'config', object()), 'add_critic_head', False):
+    if critic_calibration_found:
+        print("Loaded critic calibration table from calibration.json.")
+    else:
+        print("Warning: No critic calibration entry found; using default 0.01→0.99 ramp.")
+
 # Tokenize seed text to insert and protect from remasking
 seed_ids = [stoi[c] for c in seed_text if c in stoi] if seed_text else []
 if use_verbose_logging and seed_ids:
@@ -686,7 +702,8 @@ with torch.no_grad():
                 decode_fn=decode,
                 verbose=use_verbose_logging,
                 seed_ids=seed_ids,
-                placement=seed_placement
+                placement=seed_placement,
+                critic_calibration=critic_calibration_tensor,
             )
         elif sampling_method == 'multinomial':
             # Multinomial generation

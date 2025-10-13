@@ -2,9 +2,7 @@
 Simplified diffusion sampling script with critic-guided remasking and linear schedule.
 - Supports LANGUAGE_MODEL checkpoints with critic head enabled (add_critic_head=True)
 - Supports Judge and Node Quality metrics
-- Supports two schedule modes:
-  * 'ratio' (default): Uses linear schedule to decide how many tokens to re-mask; critic provides ordering
-  * 'threshold': Masks all tokens with wrongness above threshold; finishes early if no tokens exceed threshold
+- Uses a calibrated critic-guided ratio schedule to decide how many tokens to re-mask
 - Supports seed_text placement as prefix or random
 - Supports top-p sampling; no repetition penalty
 - Supports batch generation and special tokens [MASK] and [PAD]
@@ -29,6 +27,7 @@ from sample_utils import (
     predict_and_sample_tokens,
     apply_remasking_step,
     calculate_judge_scores,
+    load_critic_calibration_table,
 )
 
 
@@ -159,8 +158,8 @@ def diffusion_generate(
     verbose: bool = False,
     show_progress: bool = True,
     ctx=None,
-    schedule_mode: str = 'ratio',
     save_iterations: bool = False,
+    critic_calibration=None,
 ):
     device = next(model.parameters()).device
 
@@ -188,8 +187,7 @@ def diffusion_generate(
         print(f"  - Length: {total_length}")
         print(f"  - Iterations: {iterations}")
         print(f"  - Temperature: {temperature}, Top-p: {top_p}")
-        schedule_desc = "threshold-based" if schedule_mode == 'threshold' else "ratio-based"
-        print(f"  - Using critic-guided remasking ({schedule_desc} schedule)")
+        print("  - Using calibrated critic-guided remasking")
         print("=" * 60)
 
     # Track min_wrongness from previous iteration for display
@@ -211,16 +209,13 @@ def diffusion_generate(
                 from sample_utils import linear_remasking_schedule
                 current_ratio = linear_remasking_schedule(iteration, iterations, start_ratio, end_ratio)
 
-            if schedule_mode == 'threshold':
-                # Threshold is inverted: ratio=0.95 means threshold=0.05
-                current_threshold = 1.0 - current_ratio
-                print(f"Iteration {iteration+1}/{iterations}: {masked_count}/{total_tokens} masked ({masked_ratio:.1%}), threshold={current_threshold:.3f}")
-            else:
-                # Ratio mode: show actual wrongness threshold from previous remasking
-                if prev_min_wrongness is not None:
-                    print(f"Iteration {iteration+1}/{iterations}: {masked_count}/{total_tokens} masked ({masked_ratio:.1%}), threshold={prev_min_wrongness:.3f}")
-                else:
-                    print(f"Iteration {iteration+1}/{iterations}: {masked_count}/{total_tokens} masked ({masked_ratio:.1%})")
+            log_message = (
+                f"Iteration {iteration+1}/{iterations}: {masked_count}/{total_tokens} "
+                f"masked ({masked_ratio:.1%}), target_ratio={current_ratio:.3f}"
+            )
+            if prev_min_wrongness is not None:
+                log_message += f", min_wrongness={prev_min_wrongness:.3f}"
+            print(log_message)
 
             if iteration in (0, iterations - 1):
                 sample_text = decode_fn(tokens[0])
@@ -267,26 +262,8 @@ def diffusion_generate(
                     verbose=verbose,
                     logits_from_predict=logits,
                     protected_mask=protected_mask,
-                    schedule_mode=schedule_mode,
+                    critic_calibration=critic_calibration,
                 )
-
-            # Check for early termination in threshold mode
-            if remasked is None:
-                if verbose or show_progress:
-                    print(f"  Early termination: no tokens exceed threshold")
-                if save_iterations:
-                    # Save final iteration data for all samples
-                    tokens_cpu = tokens.cpu().tolist()
-                    pred_tokens_cpu = pred_tokens.cpu().tolist()
-                    for sample_idx in range(batch_size):
-                        samples_data[sample_idx].append({
-                            'iteration': iteration + 1,
-                            'input_masked': tokens_cpu[sample_idx],
-                            'output_unmasked': pred_tokens_cpu[sample_idx],
-                            'remasked_indices': []
-                        })
-                tokens = pred_tokens
-                break
 
             if save_iterations:
                 # Organize remasked_indices by sample
@@ -356,11 +333,9 @@ def main():
     parser.add_argument('--iterations', type=int, default=15, help='Number of diffusion iterations')
     parser.add_argument('--temperature', type=float, default=0.8, help='Sampling temperature')
     parser.add_argument('--top-p', type=float, default=1.0, help='Nucleus top-p (1.0 to disable)')
-    parser.add_argument('--schedule-mode', type=str, choices=['ratio', 'threshold'], default='ratio',
-                        help='Schedule mode: ratio (mask fixed percentage, default) or threshold (mask all above threshold)')
-    parser.add_argument('--start-ratio', type=float, default=0.95, help='Initial mask ratio/threshold for linear schedule')
-    parser.add_argument('--end-ratio', type=float, default=0.05, help='Final mask ratio/threshold for linear schedule')
-    parser.add_argument('--masking-ratios', type=str, default=None, help='Comma-separated custom ratios/thresholds (overrides linear schedule)')
+    parser.add_argument('--start-ratio', type=float, default=0.95, help='Initial mask ratio for linear schedule')
+    parser.add_argument('--end-ratio', type=float, default=0.05, help='Final mask ratio for linear schedule')
+    parser.add_argument('--masking-ratios', type=str, default=None, help='Comma-separated custom ratios (overrides linear schedule)')
     parser.add_argument('--randomness-strength', type=float, default=0.0, help='Blend randomization into critic ordering [0-1]')
 
     # Seed text and placement
@@ -418,6 +393,18 @@ def main():
         print(f"Using pad_token_id: {pad_token_id} ({itos[pad_token_id]})")
     print(f"Model vocab_size: {vocab_size} | Data vocab_size: {meta_vocab_size}")
 
+    calibration_values, calibration_found = load_critic_calibration_table(main_ckpt)
+    model_device = next(model.parameters()).device
+    critic_calibration_tensor = torch.tensor(
+        calibration_values,
+        dtype=torch.float32,
+        device=model_device,
+    )
+    if calibration_found:
+        print("Loaded critic calibration table from calibration.json.")
+    else:
+        print("Warning: No critic calibration entry found; using default 0.01→0.99 ramp.")
+
     # Tokenize seed text
     seed_ids = [stoi[c] for c in args.seed_text if c in stoi] if args.seed_text else []
     if args.verbose and seed_ids:
@@ -457,7 +444,7 @@ def main():
     print(f"Sequence length: {args.sequence_length}")
     print(f"Iterations: {iterations}")
     schedule_type_str = 'custom' if masking_ratios is not None else 'linear'
-    print(f"Schedule: {schedule_type_str} {args.schedule_mode} ({args.start_ratio:.1%} -> {args.end_ratio:.1%})")
+    print(f"Schedule: {schedule_type_str} ({args.start_ratio:.1%} -> {args.end_ratio:.1%})")
     print(f"Temperature: {args.temperature}, Top-p: {args.top_p}")
     print(f"Quality metric: {metric.value}")
     print("="*60)
@@ -486,8 +473,8 @@ def main():
                 verbose=args.verbose,
                 show_progress=not args.no_progress,
                 ctx=ctx,
-                schedule_mode=args.schedule_mode,
                 save_iterations=args.save is not None,
+                critic_calibration=critic_calibration_tensor,
             )
 
             if args.save is not None:
