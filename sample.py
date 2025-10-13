@@ -557,9 +557,22 @@ def diffusion_generate(
         return tokens, samples_data
     return tokens
 
-def multinomial_generate(model, batch_size, total_length, iterations, mask_token_id, vocab_size,
-                        decode_fn, temperature=0.8, verbose=False, seed_ids=None,
-                        placement=SeedPlacement.PREFIX, pad_token_id=None, base_vocab_size=None):
+def multinomial_generate(
+    model,
+    batch_size,
+    total_length,
+    iterations,
+    mask_token_id,
+    vocab_size,
+    decode_fn,
+    temperature=0.8,
+    verbose=False,
+    seed_ids=None,
+    placement=SeedPlacement.PREFIX,
+    pad_token_id=None,
+    base_vocab_size=None,
+    save_iterations=False,
+):
     """
     Generate text using multinomial sampling with iterative full-sequence resampling
 
@@ -615,6 +628,8 @@ def multinomial_generate(model, batch_size, total_length, iterations, mask_token
         print("=" * 60)
 
     previous_tokens = None
+    samples_data = [[] for _ in range(batch_size)] if save_iterations else None
+    mask_token_value = int(mask_token_id)
 
     for iteration in range(iterations):
         if verbose or show_progress:
@@ -623,6 +638,7 @@ def multinomial_generate(model, batch_size, total_length, iterations, mask_token
 
         # Store previous tokens for change tracking
         previous_tokens = tokens.clone()
+        tokens_before = previous_tokens
 
         # Step 1: Run model forward pass
         _t = get_global_timer()
@@ -659,7 +675,55 @@ def multinomial_generate(model, batch_size, total_length, iterations, mask_token
             new_tokens = tokens.clone()
             new_tokens[~protected_mask] = sampled_tokens[~protected_mask]
 
+        if save_iterations:
+            tokens_before_cpu = tokens_before.detach().cpu()
+            new_tokens_cpu = new_tokens.detach().cpu()
+
+            if iteration == 0:
+                for sample_idx in range(batch_size):
+                    samples_data[sample_idx].append(
+                        {
+                            'iteration': iteration + 1,
+                            'input_masked': tokens_before_cpu[sample_idx].tolist(),
+                            'output_unmasked': new_tokens_cpu[sample_idx].tolist(),
+                            'remasked_indices': None,
+                        }
+                    )
+            else:
+                changed_mask = tokens_before_cpu != new_tokens_cpu
+                input_masked_cpu = tokens_before_cpu.clone()
+                for sample_idx in range(batch_size):
+                    changed_indices = (
+                        torch.nonzero(
+                            changed_mask[sample_idx], as_tuple=False
+                        )
+                        .squeeze(-1)
+                        .tolist()
+                    )
+
+                    # Update previous iteration entry with the indices that changed this round
+                    samples_data[sample_idx][-1]['remasked_indices'] = changed_indices
+
+                    if changed_indices:
+                        input_masked_cpu[sample_idx, changed_indices] = mask_token_value
+
+                    samples_data[sample_idx].append(
+                        {
+                            'iteration': iteration + 1,
+                            'input_masked': input_masked_cpu[sample_idx].tolist(),
+                            'output_unmasked': new_tokens_cpu[sample_idx].tolist(),
+                            'remasked_indices': None,
+                        }
+                    )
+
         tokens = new_tokens
+
+    if save_iterations:
+        for sample_idx in range(batch_size):
+            if samples_data[sample_idx]:
+                if samples_data[sample_idx][-1]['remasked_indices'] is None:
+                    samples_data[sample_idx][-1]['remasked_indices'] = []
+        return tokens, samples_data
 
     return tokens
 
@@ -835,7 +899,7 @@ with torch.no_grad():
                 generated_tokens = diffusion_output
         elif sampling_method == 'multinomial':
             # Multinomial generation
-            generated_tokens = multinomial_generate(
+            multinomial_output = multinomial_generate(
                 model=model,
                 batch_size=num_samples,
                 total_length=sequence_length,
@@ -848,11 +912,16 @@ with torch.no_grad():
                 seed_ids=seed_ids,
                 placement=seed_placement,
                 pad_token_id=pad_token_id,
-                base_vocab_size=base_vocab_size
+                base_vocab_size=base_vocab_size,
+                save_iterations=save_iterations_path is not None,
             )
+            if save_iterations_path is not None:
+                generated_tokens, iteration_data = multinomial_output
+            else:
+                generated_tokens = multinomial_output
         _end_wall = time.time()
 
-        if sampling_method == 'diffusion' and save_iterations_path is not None:
+        if save_iterations_path is not None:
             print(f"\nSaving iteration data to {save_iterations_path}...")
             samples_output = []
             for sample_idx, sample_iterations in enumerate(iteration_data):
