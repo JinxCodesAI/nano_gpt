@@ -265,29 +265,48 @@ def analyze(
                 targets=targets,
                 attention_mask=attention_mask,
             )
-            critic_logits = model.critic_scores(inputs, attention_mask=attention_mask)
-            critic_scores = torch.sigmoid(critic_logits)
+            # Sample predictions from the model distribution for each token
+            vocab_dim = logits.size(-1)
+            probs = torch.softmax(logits.float(), dim=-1)
+            flat_probs = probs.reshape(-1, vocab_dim)
+            sampled = torch.multinomial(flat_probs, num_samples=1)
+            predictions = sampled.view_as(targets)
 
-        predictions = torch.argmax(logits, dim=-1)
-        valid_mask = targets != ignore_index
+            critic_logits = model.critic_scores(predictions, attention_mask=attention_mask)
+            critic_scores = torch.sigmoid(critic_logits)
 
         batch_size = inputs.size(0)
         sequence_limit = min(batch_size, num_samples - samples_processed)
 
-        for batch_idx in range(sequence_limit):
-            seq_valid = valid_mask[batch_idx]
-            seq_scores = critic_scores[batch_idx]
-            seq_preds = predictions[batch_idx]
-            seq_targets = targets[batch_idx]
+        if sequence_limit <= 0:
+            break
 
-            valid_positions = torch.nonzero(seq_valid, as_tuple=False).view(-1)
-            for pos in valid_positions:
-                score = float(seq_scores[pos].item())
-                bucket = bucket_index(score)
-                is_correct = bool(seq_preds[pos].item() == seq_targets[pos].item())
-                total_counts[bucket] += 1
-                if is_correct:
-                    correct_counts[bucket] += 1
+        supervision_mask = (targets != ignore_index) & attention_mask.bool()
+
+        eval_mask = supervision_mask[:sequence_limit]
+        eval_scores = critic_scores[:sequence_limit]
+        eval_preds = predictions[:sequence_limit]
+        eval_targets = targets[:sequence_limit]
+
+        flat_mask = eval_mask.reshape(-1)
+        if flat_mask.any():
+            flat_scores = eval_scores.reshape(-1)[flat_mask]
+            flat_preds = eval_preds.reshape(-1)[flat_mask]
+            flat_targets = eval_targets.reshape(-1)[flat_mask]
+
+            clamped_scores = torch.clamp(flat_scores, 0.0, 1.0 - 1e-8)
+            buckets = (clamped_scores * 100.0).long()
+            buckets = torch.clamp(buckets, 0, 99)
+
+            is_correct = (flat_preds == flat_targets).to(torch.long)
+
+            bucket_cpu = buckets.to("cpu")
+            correct_cpu = is_correct.to("cpu")
+
+            total_counts.index_add_(
+                0, bucket_cpu, torch.ones_like(bucket_cpu, dtype=torch.long)
+            )
+            correct_counts.index_add_(0, bucket_cpu, correct_cpu)
 
         samples_processed += sequence_limit
 

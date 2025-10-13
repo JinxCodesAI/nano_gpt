@@ -54,6 +54,11 @@ The script aggregates critic scores into 100 buckets, one for each 0.01 band on
 buckets by copying the nearest populated value towards 0.5 as requested in the
 original spec.
 
+For every supervised token the model samples a prediction from the softmax
+distribution (via multinomial sampling) before querying the critic head on the
+sampled sequence. This ensures the calibration reflects the critic's behaviour
+on actual generated tokens instead of argmax teacher-forced inputs.
+
 Results are written next to the checkpoint with the same filename but a `.json`
 extension. In the example above, the script produces
 `checkpoints/char_diffusion/latest.json`, containing an array with exactly 100
