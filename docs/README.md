@@ -23,6 +23,8 @@ Practical, task-focused walk-throughs for day-to-day development.
   coherent diffusion decoding.
 - [Sampling and Diffusion Generation](./guides/sampling.md) – running
   `sample.py`, tuning iterative demasking, and extending remasking strategies.
+- [Critic Calibration](./guides/critic_calibration.md) – evaluating critic
+  scores against observed token accuracy and producing calibration tables.
 
 ## Research & Design Notes
 
