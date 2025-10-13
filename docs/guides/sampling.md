@@ -24,6 +24,7 @@ Both strategies share the same loader path, vocabulary handling, seed protection
    ```bash
    python sample.py --sampling_method=diffusion --iterations=32 --temperature=0.7
    ```
+   The configurator only accepts `--key=value` style overrides—flags without an explicit value (for example `--save`) will raise the `AssertionError` shown above. When enabling iteration capture, provide the full path as the value: `python sample.py --save_iterations_path=out/run.json`.
    Config files passed as positional arguments are executed before CLI key/value overrides, allowing reproducible experiment bundles.【F:sample.py†L1-L196】【F:configurator.py†L1-L40】
 3. **Choose seed placement.** The optional `seed_text` is tokenized and protected either at the prefix or a random offset. Protected tokens are never remasked or resampled.【F:sample.py†L262-L299】【F:sample.py†L485-L555】
 4. **Run generation.** The script wraps inference in `torch.no_grad()` and AMP contexts when CUDA is available. A `TimingAccumulator` provides per-stage latency stats if enabled.【F:sample.py†L680-L756】
