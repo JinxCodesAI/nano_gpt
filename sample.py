@@ -6,6 +6,7 @@ import os
 import time
 import math
 import pickle
+import json
 from contextlib import nullcontext
 from collections import Counter
 
@@ -70,6 +71,9 @@ end_ratio = 0.05   # Final ratio of tokens to remask (5%)
 # Remasking parameters (diffusion only)
 randomness_strength = 0.2  # Balance between random (1.0) and model-guided (0.0) remasking
 intelligent_remasking = True  # Enable self-confidence based remasking when no remasking model
+
+# Iteration saving (set to a path like 'output.json' to enable)
+save_iterations_path = None
 
 # Quality metric configuration
 class QualityMetric(Enum):
@@ -339,7 +343,7 @@ def log_iteration_progress(iteration, total_iterations, tokens, mask_token_id, d
 
 def diffusion_generate(model, batch_size, total_length, iterations, mask_token_id, vocab_size,
                       decode_fn, verbose=False, seed_ids=None, placement=SeedPlacement.PREFIX,
-                      critic_calibration=None):
+                      critic_calibration=None, save_iterations=False):
     """
     Generate text using diffusion-based iterative demasking
 
@@ -385,6 +389,8 @@ def diffusion_generate(model, batch_size, total_length, iterations, mask_token_i
             print(f"  - Using random remasking")
         print("=" * 60)
 
+    samples_data = [[] for _ in range(batch_size)] if save_iterations else None
+
     for iteration in range(iterations):
         if verbose or show_progress:
             log_iteration_progress(iteration, iterations, tokens, mask_token_id, decode_fn)
@@ -406,8 +412,6 @@ def diffusion_generate(model, batch_size, total_length, iterations, mask_token_i
                 pad_token_id=pad_token_id,
                 base_vocab_size=base_vocab_size
             )
-
-        tokens = prediction_tokens
 
         # Step 2: Remask for next iteration (except last iteration)
         if iteration < iterations - 1:
@@ -435,14 +439,56 @@ def diffusion_generate(model, batch_size, total_length, iterations, mask_token_i
                 )
             # apply_remasking_step returns (remasked_tokens, min_wrongness, remasked_indices)
             if isinstance(_remask_result, tuple):
-                remasked_tokens = _remask_result[0]
-                # Early termination signal in threshold mode (nothing to mask)
+                remasked_tokens, _min_wrongness, remasked_indices = _remask_result
+
+                if save_iterations:
+                    tokens_cpu = tokens.detach().cpu().tolist()
+                    pred_tokens_cpu = prediction_tokens.detach().cpu().tolist()
+                    remasked_by_sample = [[] for _ in range(batch_size)]
+                    for batch_idx, pos in remasked_indices:
+                        remasked_by_sample[batch_idx].append(pos)
+                    for sample_idx in range(batch_size):
+                        samples_data[sample_idx].append({
+                            'iteration': iteration + 1,
+                            'input_masked': tokens_cpu[sample_idx],
+                            'output_unmasked': pred_tokens_cpu[sample_idx],
+                            'remasked_indices': remasked_by_sample[sample_idx],
+                        })
+
+                # Early termination signal (nothing to remask)
                 if remasked_tokens is None:
+                    tokens = prediction_tokens
                     break
+
                 tokens = remasked_tokens
             else:
-                # Backward-compat path
+                # Backward-compat path without detailed remasking metadata
+                if save_iterations:
+                    tokens_cpu = tokens.detach().cpu().tolist()
+                    pred_tokens_cpu = prediction_tokens.detach().cpu().tolist()
+                    for sample_idx in range(batch_size):
+                        samples_data[sample_idx].append({
+                            'iteration': iteration + 1,
+                            'input_masked': tokens_cpu[sample_idx],
+                            'output_unmasked': pred_tokens_cpu[sample_idx],
+                            'remasked_indices': [],
+                        })
                 tokens = _remask_result
+        else:
+            if save_iterations:
+                tokens_cpu = tokens.detach().cpu().tolist()
+                pred_tokens_cpu = prediction_tokens.detach().cpu().tolist()
+                for sample_idx in range(batch_size):
+                    samples_data[sample_idx].append({
+                        'iteration': iteration + 1,
+                        'input_masked': tokens_cpu[sample_idx],
+                        'output_unmasked': pred_tokens_cpu[sample_idx],
+                        'remasked_indices': [],
+                    })
+            tokens = prediction_tokens
+
+    if save_iterations:
+        return tokens, samples_data
 
     return tokens
 
@@ -558,6 +604,7 @@ model, checkpoint = load_model_from_checkpoint(main_checkpoint_path, device, com
 
 # Load vocabulary
 stoi, itos, meta_vocab_size, dataset_name, meta = load_vocabulary(checkpoint)
+meta_path = os.path.join('data', dataset_name, 'meta.pkl')
 
 # Get model's actual vocabulary size from checkpoint
 model_vocab_size = model.config.vocab_size
@@ -692,7 +739,7 @@ with torch.no_grad():
     with ctx:
         if sampling_method == 'diffusion':
             # Diffusion generation
-            generated_tokens = diffusion_generate(
+            diffusion_output = diffusion_generate(
                 model=model,
                 batch_size=num_samples,
                 total_length=sequence_length,
@@ -704,7 +751,12 @@ with torch.no_grad():
                 seed_ids=seed_ids,
                 placement=seed_placement,
                 critic_calibration=critic_calibration_tensor,
+                save_iterations=save_iterations_path is not None,
             )
+            if save_iterations_path is not None:
+                generated_tokens, iteration_data = diffusion_output
+            else:
+                generated_tokens = diffusion_output
         elif sampling_method == 'multinomial':
             # Multinomial generation
             generated_tokens = multinomial_generate(
@@ -723,6 +775,29 @@ with torch.no_grad():
                 base_vocab_size=base_vocab_size
             )
         _end_wall = time.time()
+
+        if sampling_method == 'diffusion' and save_iterations_path is not None:
+            print(f"\nSaving iteration data to {save_iterations_path}...")
+            samples_output = []
+            for sample_idx, sample_iterations in enumerate(iteration_data):
+                samples_output.append({
+                    'sample_id': sample_idx,
+                    'iterations': sample_iterations,
+                })
+
+            output_data = {
+                'generator': main_checkpoint_path,
+                'meta': meta_path,
+                'samples': samples_output,
+            }
+
+            with open(save_iterations_path, 'w') as f:
+                json.dump(output_data, f, indent=2)
+
+            print(
+                f"Saved {len(samples_output)} samples with "
+                f"{len(samples_output[0]['iterations']) if samples_output else 0} iterations each"
+            )
 
         # Calculate quality metric (for both diffusion and multinomial)
         metric = quality_metric
