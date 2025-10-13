@@ -56,7 +56,11 @@ attribute to locate `data/char_diffusion/`. You can also provide
 The script aggregates critic scores into 100 buckets, one for each 0.01 band on
 `[0, 1]`, computes the empirical probability that the critic target equals 1
 (`model error`) for each bucket, and fills empty buckets by copying the nearest
-populated value towards 0.5 as requested in the original spec.
+populated value towards 0.5 as requested in the original spec. Because the
+critic was trained without an external attention mask, the script also ignores
+any dataset-provided `attention_mask` so the transformer and critic process the
+filled-in tokens exactly as they do during training and in the interactive
+explorer.
 
 For every supervised token the model samples a prediction from the softmax
 distribution (via multinomial sampling) before querying the critic head on the
@@ -95,6 +99,6 @@ buckets were populated correctly.
   with `add_critic_head=True`. If this check fails, retrain or choose a
   compatible checkpoint.
 - **Different batch schemas:** The script expects batches that expose either
-  `input`/`target` or `x`/`y` tensors along with an optional `attention_mask`.
-  If your dataset uses a different naming convention, extend the script before
-  running.
+  `input`/`target` or `x`/`y` tensors. Dataset-provided attention masks are
+  ignored so the calibration matches the critic's training graph; if your
+  batches use different field names, extend the script before running.

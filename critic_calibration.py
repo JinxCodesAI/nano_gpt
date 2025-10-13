@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Analyze critic calibration against ground-truth token accuracy.
+"""Analyze critic calibration against observed critic targets.
 
 This script loads a diffusion checkpoint with an enabled critic head and a
 streaming dataset produced by the corresponding data provider. It runs a single
@@ -7,9 +7,10 @@ forward pass for randomly sampled batches from the dataset, evaluates the
 critic score for each supervised token, and aggregates calibration statistics.
 
 For every critic score bucket (width 0.01 across [0, 1]), the script computes
-the empirical probability that the model's token prediction is correct.
-Buckets with no observations inherit the value from the closest populated
-bucket towards the center of the range (0.5) as requested.
+the empirical probability that the critic target equals ``1`` (token judged
+incorrect by the critic objective). Buckets with no observations inherit the
+value from the closest populated bucket towards the center of the range (0.5)
+as requested.
 
 The resulting array of 100 probabilities is written as JSON next to the
 checkpoint, reusing the checkpoint's filename but with a ``.json`` suffix.
@@ -262,10 +263,6 @@ def analyze(
         if inputs is None or targets is None:
             raise KeyError("Batch missing required input/target tensors")
 
-        attention_mask = batch.get("attention_mask")
-        if attention_mask is None:
-            attention_mask = torch.ones_like(inputs, dtype=torch.long)
-
         batch_mode = batch.get("_model_mode")
         if batch_mode in (ModelMode.SEQUENCE_SCORER, "sequence_scorer"):
             raise RuntimeError(
@@ -277,7 +274,6 @@ def analyze(
             logits, _ = model(
                 inputs,
                 targets=targets,
-                attention_mask=attention_mask,
             )
 
             artifacts = build_critic_artifacts_from_logits(
@@ -294,9 +290,7 @@ def analyze(
             critic_target = artifacts["critic_target"]
             critic_valid = artifacts["critic_valid"]
 
-            critic_logits = model.critic_scores(
-                critic_input, attention_mask=attention_mask
-            )
+            critic_logits = model.critic_scores(critic_input)
             critic_scores = torch.sigmoid(critic_logits)
 
         batch_size = inputs.size(0)
@@ -308,9 +302,6 @@ def analyze(
         eval_scores = critic_scores[:sequence_limit]
         eval_targets = critic_target[:sequence_limit]
         eval_valid = critic_valid[:sequence_limit]
-
-        if attention_mask is not None:
-            eval_valid = eval_valid & attention_mask[:sequence_limit].bool()
 
         flat_mask = eval_valid.reshape(-1)
         if flat_mask.any():
