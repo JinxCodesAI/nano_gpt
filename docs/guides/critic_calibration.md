@@ -8,7 +8,9 @@ head's confidence scores match the model's actual token-level accuracy.
   ready (e.g., run `python prepare.py config/train_char_diffusion.py`).
 - A checkpoint produced by a model trained with `add_critic_head=True`.
 - Access to the same vocabulary/config metadata that was saved alongside the
-  dataset (the script reads `meta.pkl`).
+  dataset (the script reads `meta.pkl`). This metadata must expose the
+  `mask_token_id` (and optionally `pad_token_id`) so the script can faithfully
+  rebuild the critic inputs.
 
 > **Tip:** The script automatically selects CUDA when available; otherwise it
 > falls back to CPU execution.
@@ -56,8 +58,12 @@ original spec.
 
 For every supervised token the model samples a prediction from the softmax
 distribution (via multinomial sampling) before querying the critic head on the
-sampled sequence. This ensures the calibration reflects the critic's behaviour
-on actual generated tokens instead of argmax teacher-forced inputs.
+filled-in sequence produced by
+`build_critic_artifacts_from_logits`. The helper mirrors the training and
+interactive tooling: it replaces only the masked tokens, retains untouched input
+tokens, and marks both masked tokens and ignore-index positions as valid for the
+critic. This keeps the calibration aligned with how the critic was trained and
+how `interactive_diffusion_explorer.py` visualises the scores.
 
 Results are written next to the checkpoint with the same filename but a `.json`
 extension. In the example above, the script produces
@@ -65,10 +71,10 @@ extension. In the example above, the script produces
 probabilities.
 
 After saving the JSON file the script also prints two summary statistics: the
-overall accuracy of the sampled predictions against the ground-truth tokens and
-the same value recomputed from the aggregated bucket counts. These numbers
-should match and offer a quick sanity check that the calibration buckets were
-populated correctly.
+overall accuracy of the critic-valid positions (masked tokens plus ignore-index
+slots counted as trivially correct) and the same value recomputed from the
+aggregated bucket counts. These numbers should match and offer a quick sanity
+check that the calibration buckets were populated correctly.
 
 ### Troubleshooting
 - **Missing dataset files:** Ensure the resolved dataset directory contains a

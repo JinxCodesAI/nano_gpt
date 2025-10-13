@@ -28,6 +28,7 @@ import torch
 
 from dataset_consumer import DatasetConsumer
 from model import GPT, GPTConfig, ModelMode
+from sample_utils import build_critic_artifacts_from_logits
 
 
 DEPRECATED_MODEL_FIELDS = {
@@ -228,7 +229,17 @@ def analyze(
     split: str,
     verbose: bool = False,
 ) -> Tuple[List[float], float, float]:
-    ignore_index = int(getattr(model.config, "ignore_index", -100))
+    cfg = getattr(model, "config", object())
+
+    mask_token_id = meta.get("mask_token_id", getattr(cfg, "mask_token_id", None))
+    if mask_token_id is None:
+        raise RuntimeError(
+            "Critic calibration requires 'mask_token_id' in dataset meta or model config"
+        )
+
+    ignore_index = int(getattr(cfg, "ignore_index", meta.get("ignore_index", -100)))
+    pad_token_id = meta.get("pad_token_id", getattr(cfg, "pad_token_id", None))
+    critic_scope = getattr(cfg, "critic_target_scope", "masked_and_ignore")
 
     correct_counts = torch.zeros(100, dtype=torch.long)
     total_counts = torch.zeros(100, dtype=torch.long)
@@ -268,14 +279,24 @@ def analyze(
                 targets=targets,
                 attention_mask=attention_mask,
             )
-            # Sample predictions from the model distribution for each token
-            vocab_dim = logits.size(-1)
-            probs = torch.softmax(logits.float(), dim=-1)
-            flat_probs = probs.reshape(-1, vocab_dim)
-            sampled = torch.multinomial(flat_probs, num_samples=1)
-            predictions = sampled.view_as(targets)
 
-            critic_logits = model.critic_scores(predictions, attention_mask=attention_mask)
+            artifacts = build_critic_artifacts_from_logits(
+                idx=inputs,
+                logits=logits,
+                targets=targets,
+                mask_token_id=int(mask_token_id),
+                ignore_index=ignore_index,
+                pad_token_id=pad_token_id,
+                scope=critic_scope,
+            )
+
+            critic_input = artifacts["critic_input"]
+            critic_target = artifacts["critic_target"]
+            critic_valid = artifacts["critic_valid"]
+
+            critic_logits = model.critic_scores(
+                critic_input, attention_mask=attention_mask
+            )
             critic_scores = torch.sigmoid(critic_logits)
 
         batch_size = inputs.size(0)
@@ -284,24 +305,23 @@ def analyze(
         if sequence_limit <= 0:
             break
 
-        supervision_mask = (targets != ignore_index) & attention_mask.bool()
-
-        eval_mask = supervision_mask[:sequence_limit]
         eval_scores = critic_scores[:sequence_limit]
-        eval_preds = predictions[:sequence_limit]
-        eval_targets = targets[:sequence_limit]
+        eval_targets = critic_target[:sequence_limit]
+        eval_valid = critic_valid[:sequence_limit]
 
-        flat_mask = eval_mask.reshape(-1)
+        if attention_mask is not None:
+            eval_valid = eval_valid & attention_mask[:sequence_limit].bool()
+
+        flat_mask = eval_valid.reshape(-1)
         if flat_mask.any():
             flat_scores = eval_scores.reshape(-1)[flat_mask]
-            flat_preds = eval_preds.reshape(-1)[flat_mask]
             flat_targets = eval_targets.reshape(-1)[flat_mask]
 
             clamped_scores = torch.clamp(flat_scores, 0.0, 1.0 - 1e-8)
             buckets = (clamped_scores * 100.0).long()
             buckets = torch.clamp(buckets, 0, 99)
 
-            is_correct = (flat_preds == flat_targets).to(torch.long)
+            is_correct = (flat_targets == 0).to(torch.long)
 
             bucket_cpu = buckets.to("cpu")
             correct_cpu = is_correct.to("cpu")
@@ -311,7 +331,7 @@ def analyze(
             correct_counts.index_add_(0, bucket_cpu, correct_cpu)
 
             global_total += int(token_totals.sum().item())
-            global_correct += int(correct_cpu.sum().item())
+            global_correct += int(is_correct.sum().item())
 
         samples_processed += sequence_limit
 
