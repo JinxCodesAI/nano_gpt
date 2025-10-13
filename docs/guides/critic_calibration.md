@@ -17,13 +17,16 @@ head's confidence scores match the model's actual token-level accuracy.
 From the repository root:
 
 ```bash
-python critic_calibration.py <dataset_name> <checkpoint_path> <num_sequences> \
+python critic_calibration.py <dataset_or_config> <checkpoint_path> <num_sequences> \
   [--split train|val] [--verbose]
 ```
 
 Arguments:
-- `dataset_name`: Folder under `data/` that contains the dataset to sample from
-  (for example `char_diffusion`).
+- `dataset_or_config`: Either the dataset name (e.g. `char_diffusion`), the
+  path to the dataset directory, or the path to a Python config file that sets
+  `dataset = "..."`. The script resolves relative paths against your current
+  working directory as well as the repository root so it works whether you run
+  it from inside or outside `data/`.
 - `checkpoint_path`: Path to the `.pt` / `.pth` checkpoint that includes a critic
   head.
 - `num_sequences`: Number of dataset sequences to evaluate. Each sequence is a
@@ -36,10 +39,14 @@ Arguments:
 Example:
 
 ```bash
-python critic_calibration.py char_diffusion \
+python critic_calibration.py config/_diffusion_no_modifiers.py \
   checkpoints/char_diffusion/latest.pt \
   1024 --split val
 ```
+
+The example above passes a training config; the script reads its `dataset`
+attribute to locate `data/char_diffusion/`. You can also provide
+`char_diffusion` or the absolute path to the dataset directory directly.
 
 ### Output
 The script aggregates critic scores into 100 buckets, one for each 0.01 band on
@@ -53,8 +60,10 @@ extension. In the example above, the script produces
 probabilities.
 
 ### Troubleshooting
-- **Missing dataset files:** Ensure `data/<dataset_name>/meta.pkl` exists and
-  that queue files are being produced by the streaming provider.
+- **Missing dataset files:** Ensure the resolved dataset directory contains a
+  `meta.pkl` file and queue batches for the requested split. If you pass a
+  config file, double-check that its `dataset` attribute points to the prepared
+  dataset.
 - **Missing critic head:** The script validates that the checkpoint was created
   with `add_critic_head=True`. If this check fails, retrain or choose a
   compatible checkpoint.

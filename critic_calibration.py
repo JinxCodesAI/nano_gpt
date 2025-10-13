@@ -89,10 +89,61 @@ def load_model(checkpoint_path: Path, device: torch.device) -> GPT:
     return model
 
 
-def load_dataset_consumer(dataset_name: str, device: torch.device) -> Tuple[DatasetConsumer, dict]:
-    dataset_dir = Path("data") / dataset_name
-    if not dataset_dir.exists():
-        raise FileNotFoundError(f"Dataset directory not found: {dataset_dir}")
+def resolve_dataset_directory(dataset_arg: str) -> Path:
+    """Resolve a dataset identifier to an on-disk directory.
+
+    ``dataset_arg`` may be a dataset name (e.g. ``"char_diffusion"``), a path to the
+    dataset directory, or a path to a Python config file that defines a ``dataset``
+    attribute. Paths are interpreted relative to the current working directory and
+    the directory containing this script.
+    """
+
+    script_dir = Path(__file__).resolve().parent
+    raw_path = Path(dataset_arg).expanduser()
+
+    def candidate_dirs() -> List[Path]:
+        bases = [Path.cwd(), script_dir]
+        seen: set[Path] = set()
+        for base in bases:
+            for candidate in (base / dataset_arg, base / "data" / dataset_arg):
+                try:
+                    resolved = candidate.expanduser()
+                except RuntimeError:
+                    # ``expanduser`` can fail on some malformed inputs; skip them
+                    continue
+                if resolved in seen:
+                    continue
+                seen.add(resolved)
+                yield resolved
+
+    # Direct directory specification (absolute or relative)
+    if raw_path.is_dir():
+        return raw_path
+
+    # Treat config files as pointers to the dataset name
+    if raw_path.is_file() and raw_path.suffix == ".py":
+        import runpy
+
+        config_globals = runpy.run_path(str(raw_path))
+        dataset_name = config_globals.get("dataset")
+        if not dataset_name:
+            raise ValueError(
+                f"Config file {raw_path} does not define a 'dataset' attribute."
+            )
+        return resolve_dataset_directory(str(dataset_name))
+
+    for candidate in candidate_dirs():
+        if candidate.is_dir():
+            return candidate
+
+    raise FileNotFoundError(
+        "Unable to locate dataset directory for argument "
+        f"{dataset_arg!r}. Provide a dataset name, directory, or config file."
+    )
+
+
+def load_dataset_consumer(dataset_arg: str, device: torch.device) -> Tuple[DatasetConsumer, dict]:
+    dataset_dir = resolve_dataset_directory(dataset_arg)
 
     meta_path = dataset_dir / "meta.pkl"
     if not meta_path.exists():
@@ -271,7 +322,10 @@ def analyze(
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="Critic calibration analysis")
-    parser.add_argument("dataset", help="Dataset name (e.g., char_diffusion)")
+    parser.add_argument(
+        "dataset",
+        help="Dataset name, directory, or config file (e.g., char_diffusion or config/_diffusion.py)",
+    )
     parser.add_argument("checkpoint", help="Path to the model checkpoint (.pt/.pth)")
     parser.add_argument(
         "num_samples",
