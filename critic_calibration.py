@@ -227,11 +227,14 @@ def analyze(
     num_samples: int,
     split: str,
     verbose: bool = False,
-) -> List[float]:
+) -> Tuple[List[float], float, float]:
     ignore_index = int(getattr(model.config, "ignore_index", -100))
 
     correct_counts = torch.zeros(100, dtype=torch.long)
     total_counts = torch.zeros(100, dtype=torch.long)
+
+    global_correct = 0
+    global_total = 0
 
     samples_processed = 0
     next_report = 100 if verbose else None
@@ -302,11 +305,13 @@ def analyze(
 
             bucket_cpu = buckets.to("cpu")
             correct_cpu = is_correct.to("cpu")
+            token_totals = torch.ones_like(bucket_cpu, dtype=torch.long)
 
-            total_counts.index_add_(
-                0, bucket_cpu, torch.ones_like(bucket_cpu, dtype=torch.long)
-            )
+            total_counts.index_add_(0, bucket_cpu, token_totals)
             correct_counts.index_add_(0, bucket_cpu, correct_cpu)
+
+            global_total += int(token_totals.sum().item())
+            global_correct += int(correct_cpu.sum().item())
 
         samples_processed += sequence_limit
 
@@ -336,7 +341,18 @@ def analyze(
         else:
             probabilities.append(None)
 
-    return fill_empty_buckets(probabilities)
+    filled = fill_empty_buckets(probabilities)
+
+    overall_accuracy = 0.0
+    if global_total > 0:
+        overall_accuracy = global_correct / global_total
+
+    bucket_accuracy = 0.0
+    total_sum = int(total_counts.sum().item())
+    if total_sum > 0:
+        bucket_accuracy = int(correct_counts.sum().item()) / total_sum
+
+    return filled, overall_accuracy, bucket_accuracy
 
 
 def main() -> None:
@@ -374,7 +390,7 @@ def main() -> None:
     model = load_model(checkpoint_path, device)
     consumer, meta = load_dataset_consumer(args.dataset, device)
 
-    probabilities = analyze(
+    probabilities, overall_accuracy, bucket_accuracy = analyze(
         model=model,
         consumer=consumer,
         meta=meta,
@@ -389,6 +405,14 @@ def main() -> None:
         json.dump(probabilities, f, indent=2)
 
     print(f"Saved critic calibration probabilities to {output_path}")
+    print(
+        "Overall accuracy (sampled predictions vs. targets): "
+        f"{overall_accuracy:.6f}"
+    )
+    print(
+        "Bucket-weighted accuracy (sum(correct_counts) / sum(total_counts)): "
+        f"{bucket_accuracy:.6f}"
+    )
 
 
 if __name__ == "__main__":

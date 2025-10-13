@@ -64,6 +64,12 @@ extension. In the example above, the script produces
 `checkpoints/char_diffusion/latest.json`, containing an array with exactly 100
 probabilities.
 
+After saving the JSON file the script also prints two summary statistics: the
+overall accuracy of the sampled predictions against the ground-truth tokens and
+the same value recomputed from the aggregated bucket counts. These numbers
+should match and offer a quick sanity check that the calibration buckets were
+populated correctly.
+
 ### Troubleshooting
 - **Missing dataset files:** Ensure the resolved dataset directory contains a
   `meta.pkl` file and queue batches for the requested split. If you pass a
