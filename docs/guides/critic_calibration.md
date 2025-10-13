@@ -35,7 +35,7 @@ Arguments:
 - `num_sequences`: Number of dataset sequences to evaluate. Each sequence is a
   full batch item (not individual tokens). The script stops after processing the
   requested number of sequences.
-- `--split`: Optional dataset split to read from (`val` by default).
+- `--split`: Optional dataset split to read from (`train` by default).
 - `--verbose`: Emit intermediate bucket statistics (per-bucket totals, target-1
   counts, and probabilities) every 100 processed sequences. Useful for
   monitoring long runs.
@@ -45,7 +45,7 @@ Example:
 ```bash
 python critic_calibration.py config/_diffusion_no_modifiers.py \
   checkpoints/char_diffusion/latest.pt \
-  1024 --split val
+  1024 --split train
 ```
 
 The example above passes a training config; the script reads its `dataset`
@@ -71,12 +71,13 @@ tokens, and marks both masked tokens and ignore-index positions as valid for the
 critic. This keeps the calibration aligned with how the critic was trained and
 how `interactive_diffusion_explorer.py` visualises the scores.
 
-Results are written next to the checkpoint with the same filename but a `.json`
-extension. In the example above, the script produces
-`checkpoints/char_diffusion/latest.json`, containing an array with exactly 100
+Results are stored in a shared `calibration.json` file within the same directory
+as the checkpoint. Each run updates (or creates) a key in that file named
+after the provided checkpoint path, and the associated value is the array of 100
 probabilities corresponding to the critic target being 1 (i.e. the token is
 incorrect) for each bucket. Buckets with no direct observations inherit the
-probability from the closest populated bucket as described above.
+probability from the closest populated bucket as described above, so the saved
+array exactly mirrors the verbose bucket report.
 
 When `--verbose` is active the script prints a table of 100 lines after every
 100 processed sequences. Each line shows the bucket index, the number of critic

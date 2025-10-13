@@ -12,8 +12,9 @@ incorrect by the critic objective). Buckets with no observations inherit the
 value from the closest populated bucket towards the center of the range (0.5)
 as requested.
 
-The resulting array of 100 probabilities is written as JSON next to the
-checkpoint, reusing the checkpoint's filename but with a ``.json`` suffix.
+All calibration runs are stored in a shared ``calibration.json`` file located
+next to the analyzed checkpoint. Each checkpoint path becomes a key in that
+JSON object, and the value is the array of 100 probabilities described above.
 """
 
 from __future__ import annotations
@@ -409,9 +410,9 @@ def main() -> None:
     )
     parser.add_argument(
         "--split",
-        default="val",
+        default="train",
         choices=["train", "val"],
-        help="Dataset split to evaluate (default: val)",
+        help="Dataset split to evaluate (default: train)",
     )
     parser.add_argument(
         "--verbose",
@@ -440,11 +441,35 @@ def main() -> None:
         verbose=args.verbose,
     )
 
-    output_path = checkpoint_path.with_suffix(".json")
-    with output_path.open("w", encoding="utf-8") as f:
-        json.dump(probabilities, f, indent=2)
+    output_path = checkpoint_path.parent / "calibration.json"
 
-    print(f"Saved critic calibration probabilities to {output_path}")
+    calibration_payload: dict[str, List[float]] = {}
+    if output_path.exists():
+        try:
+            with output_path.open("r", encoding="utf-8") as f:
+                existing = json.load(f)
+            if isinstance(existing, dict):
+                calibration_payload = {
+                    str(key): list(map(float, value))
+                    for key, value in existing.items()
+                    if isinstance(value, list)
+                }
+        except json.JSONDecodeError:
+            # Corrupted or unexpected file; start fresh but warn the user.
+            print(
+                f"Warning: Existing calibration file {output_path} is not valid JSON. "
+                "Overwriting with a fresh mapping."
+            )
+
+    calibration_payload[str(checkpoint_path)] = [float(p) for p in probabilities]
+
+    with output_path.open("w", encoding="utf-8") as f:
+        json.dump(calibration_payload, f, indent=2, sort_keys=True)
+
+    print(
+        f"Saved critic calibration probabilities for {checkpoint_path} "
+        f"into {output_path}"
+    )
     print(
         "Overall critic-target positive rate (target==1 fraction): "
         f"{overall_positive_rate:.6f}"
