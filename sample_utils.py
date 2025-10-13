@@ -580,16 +580,18 @@ def apply_remasking_step(tokens, prediction_tokens, iteration, iterations, sched
         calibrated_wrongness = calibration_tensor[bucket_indices]
         calibrated_wrongness = torch.clamp(calibrated_wrongness, min=1e-6)
 
-        blend = float(randomness_strength)
-        if not math.isfinite(blend):
-            blend = 1.0
-        blend = max(0.0, min(blend, 1.0))
+        randomness = float(randomness_strength)
+        if not math.isfinite(randomness):
+            randomness = 0.0
+        randomness = max(0.0, min(randomness, 1.0))
+
+        noise = torch.rand_like(calibrated_wrongness)
+        adjusted_wrongness = (1.0 - randomness) * calibrated_wrongness + randomness * noise
+        adjusted_wrongness = torch.clamp(adjusted_wrongness, min=1e-6)
 
         luck = torch.rand_like(calibrated_wrongness)
-        if blend < 1.0:
-            luck = blend * luck + (1.0 - blend) * 0.5
 
-        ratios = luck / calibrated_wrongness
+        ratios = luck / adjusted_wrongness
         ratios = ratios.masked_fill(~unmaskable, float('inf'))
 
         if k > 0:
