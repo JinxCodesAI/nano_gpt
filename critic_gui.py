@@ -54,6 +54,9 @@ class CriticGUI:
         self.json_data = None
         self.current_sample_idx = 0
         self.current_iteration_idx = 0
+        self.json_iteration_input_text = None
+        self.json_iteration_output_tokens = None
+        self.json_iteration_remask_indices = None
 
         self.setup_ui()
         
@@ -391,52 +394,61 @@ class CriticGUI:
             messagebox.showerror("Error Loading JSON", str(e))
             self.status_var.set("Error loading JSON")
 
-    def close_json_save(self):
-        """Close JSON save mode and return to normal operation"""
+    def _exit_json_mode(self, reset_text: bool, status_message: str):
+        """Internal helper to leave JSON mode while optionally preserving the text buffer."""
         if not self.json_mode:
+            if status_message:
+                self.status_var.set(status_message)
             return
 
-        # Reset JSON mode state
         self.json_mode = False
         self.json_data = None
         self.current_sample_idx = 0
         self.current_iteration_idx = 0
+        self.json_iteration_input_text = None
+        self.json_iteration_output_tokens = None
+        self.json_iteration_remask_indices = None
 
-        # Hide navigation frame and close button
+        # Hide JSON specific controls and restore ratio/randomness sliders
         self.nav_frame.pack_forget()
         self.close_json_btn.pack_forget()
-
-        # Show threshold frame
         self.threshold_frame.pack(fill=tk.X, pady=5)
 
-        # Reset UI state
-        self.current_tokens = None
-        self.current_scores = None
+        # Reset workflow state but keep whatever text is currently shown
         self.workflow_state = 'unmask'
+        self.current_scores = None
         self.random_noise = None
         self.random_luck = None
 
-        # Clear text widget
-        self.text_widget.config(state=tk.NORMAL)
-        self.text_widget.delete("1.0", tk.END)
-
-        # Clear all tags
-        for tag in self.text_widget.tag_names():
-            if tag.startswith("char_") or tag.startswith("mask_preview_"):
-                self.text_widget.tag_delete(tag)
-
-        # Insert sample text with masks
-        sample_text = "The [MASK][MASK][MASK][MASK][MASK] brown fox [MASK][MASK][MASK][MASK][MASK] over the lazy dog."
-        self.text_widget.insert("1.0", sample_text)
-
-        # Update button states
-        self.unmask_btn.config(state=tk.NORMAL)
+        self.unmask_btn.config(state=tk.NORMAL if self.model is not None else tk.DISABLED)
         self.score_btn.config(state=tk.DISABLED)
         self.remask_btn.config(state=tk.DISABLED)
 
+        self.text_widget.config(state=tk.NORMAL)
+
+        for tag in list(self.text_widget.tag_names()):
+            if tag.startswith("char_") or tag.startswith("mask_preview_"):
+                self.text_widget.tag_delete(tag)
+
+        if reset_text:
+            self.current_tokens = None
+            self.text_widget.delete("1.0", tk.END)
+
+            sample_text = "The [MASK][MASK][MASK][MASK][MASK] brown fox [MASK][MASK][MASK][MASK][MASK] over the lazy dog."
+            self.text_widget.insert("1.0", sample_text)
+
         self.update_remask_info()
 
-        self.status_var.set("JSON save closed. Ready for normal operation.")
+        if status_message:
+            self.status_var.set(status_message)
+
+    def close_json_save(self):
+        """Close JSON save mode and return to normal operation"""
+        self._exit_json_mode(reset_text=True, status_message="JSON save closed. Ready for normal operation.")
+
+    def detach_from_json(self, status_message: str):
+        """Detach from JSON playback but keep the current buffer for manual editing."""
+        self._exit_json_mode(reset_text=False, status_message=status_message)
 
     def load_iteration_from_json(self):
         """Load and display the current sample/iteration from JSON data"""
@@ -458,12 +470,19 @@ class CriticGUI:
             self.random_noise = None
             self.random_luck = None
 
+            # Remember JSON iteration buffers for edit detection
+            self.json_iteration_input_text = self.tokens_to_text(input_masked)
+            self.json_iteration_output_tokens = output_unmasked.clone()
+            self.json_iteration_remask_indices = list(remasked_indices)
+
             # Display input (masked)
-            input_text = self.tokens_to_text(input_masked)
+            input_text = self.json_iteration_input_text
             self.text_widget.config(state=tk.NORMAL)
             self.text_widget.delete("1.0", tk.END)
+            for tag in self.text_widget.tag_names():
+                if tag.startswith("char_") or tag.startswith("mask_preview_"):
+                    self.text_widget.tag_delete(tag)
             self.text_widget.insert("1.0", input_text)
-            self.text_widget.config(state=tk.DISABLED)
 
             # Update button states for JSON mode
             self.unmask_btn.config(state=tk.NORMAL)
@@ -473,7 +492,10 @@ class CriticGUI:
             self.workflow_state = 'unmask'
 
             iteration_num = iteration_data['iteration']
-            self.status_var.set(f"Sample {self.current_sample_idx + 1}, Iteration {iteration_num}: {len(remasked_indices)} tokens will be remasked")
+            self.status_var.set(
+                f"Sample {self.current_sample_idx + 1}, Iteration {iteration_num}: "
+                f"{len(remasked_indices)} tokens will be remasked. Edit the text before Unmask to branch."
+            )
 
         except Exception as e:
             import traceback
@@ -568,19 +590,23 @@ class CriticGUI:
             self.status_var.set("Unmasking...")
             self.root.update()
 
-            if self.json_mode:
-                # In JSON mode, load precomputed unmasked output
-                sample_data = self.json_data['samples'][self.current_sample_idx]
-                iteration_data = sample_data['iterations'][self.current_iteration_idx]
-                unmasked_tokens = torch.tensor(iteration_data['output_unmasked'], dtype=torch.long)
-                self.current_tokens = unmasked_tokens
-                self.current_scores = None
-                self.random_noise = None
-                self.random_luck = None
+            current_text = self.text_widget.get("1.0", tk.END).strip()
+            use_json_replay = (
+                self.json_mode
+                and self.json_iteration_input_text is not None
+                and self.json_iteration_output_tokens is not None
+                and current_text == self.json_iteration_input_text
+            )
+
+            if use_json_replay:
+                # Reuse the precomputed unmasking from the save file
+                unmasked_tokens = self.json_iteration_output_tokens.clone()
             else:
-                # Normal mode: compute unmasking
-                text = self.text_widget.get("1.0", tk.END).strip()
-                tokens = self.text_to_tokens(text)
+                if self.json_mode:
+                    # Switch to live mode while keeping the current buffer intact
+                    self.detach_from_json("Detached from JSON playback. Running live unmask from the current text.")
+
+                tokens = self.text_to_tokens(current_text)
 
                 unmasked_tokens = unmask_tokens(
                     self.model, tokens,
@@ -591,10 +617,10 @@ class CriticGUI:
                     dtype=self.dtype
                 )
 
-                self.current_tokens = unmasked_tokens.cpu()
-                self.current_scores = None
-                self.random_noise = None
-                self.random_luck = None
+            self.current_tokens = unmasked_tokens.cpu()
+            self.current_scores = None
+            self.random_noise = None
+            self.random_luck = None
 
             # Update text widget
             unmasked_text = self.tokens_to_text(self.current_tokens)
@@ -825,19 +851,52 @@ class CriticGUI:
             self.remask_btn.config(state=tk.DISABLED)
             self.score_btn.config(state=tk.DISABLED)
 
+            ratio_pct = self.remask_ratio_var.get()
+
             if self.json_mode:
-                # In JSON mode, disable unmask and enable navigation
-                self.unmask_btn.config(state=tk.DISABLED)
-                self.text_widget.config(state=tk.DISABLED)
+                # Advance the playback cursor so the next Unmask step mirrors the saved run
+                self.unmask_btn.config(state=tk.NORMAL)
+                sample_data = self.json_data['samples'][self.current_sample_idx]
+                iterations = sample_data['iterations']
+
+                if self.current_iteration_idx < len(iterations) - 1:
+                    self.current_iteration_idx += 1
+                    self.update_navigation_labels()
+
+                    next_data = iterations[self.current_iteration_idx]
+                    next_input = torch.tensor(next_data['input_masked'], dtype=torch.long)
+                    next_output = torch.tensor(next_data['output_unmasked'], dtype=torch.long)
+
+                    self.current_tokens = next_input.clone()
+                    self.json_iteration_input_text = self.tokens_to_text(next_input)
+                    self.json_iteration_output_tokens = next_output.clone()
+                    self.json_iteration_remask_indices = list(next_data['remasked_indices'])
+
+                    current_text = self.text_widget.get("1.0", tk.END).strip()
+                    if current_text != self.json_iteration_input_text:
+                        self.text_widget.delete("1.0", tk.END)
+                        self.text_widget.insert("1.0", self.json_iteration_input_text)
+
+                    iteration_num = next_data.get('iteration', self.current_iteration_idx + 1)
+                    self.status_var.set(
+                        f"Advanced to iteration {iteration_num}: {len(self.json_iteration_remask_indices)} tokens will be remasked. "
+                        "Edit text before Unmask to branch or keep it to replay the saved step."
+                    )
+                else:
+                    # No further iterations in JSON - allow branching from the final mask state
+                    self.json_iteration_input_text = remasked_text
+                    self.json_iteration_output_tokens = None
+                    self.json_iteration_remask_indices = []
+                    self.status_var.set(
+                        f"Remasked {num_remasked} tokens (ratio {ratio_pct:.1f}%). Final iteration reached. "
+                        "Edit the text and click Unmask to continue manually."
+                    )
             else:
                 # In normal mode, enable unmask for next iteration
                 self.unmask_btn.config(state=tk.NORMAL)
-
-            ratio_pct = self.remask_ratio_var.get()
-            self.status_var.set(
-                f"Remasked {num_remasked} tokens (ratio {ratio_pct:.1f}%). "
-                + ("Navigate to next iteration." if self.json_mode else "Edit text or click Unmask to continue.")
-            )
+                self.status_var.set(
+                    f"Remasked {num_remasked} tokens (ratio {ratio_pct:.1f}%). Edit text or click Unmask to continue."
+                )
 
         except Exception as e:
             import traceback
