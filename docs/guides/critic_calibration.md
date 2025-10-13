@@ -1,7 +1,8 @@
 ## Critic Calibration Script
 
 This guide explains how to run `critic_calibration.py` to measure how well the critic
-head's confidence scores match the model's actual token-level accuracy.
+head's confidence scores align with the critic targets (0 = correct, 1 = error)
+generated from the model's sampled completions.
 
 ### Prerequisites
 - A streaming dataset prepared under `data/<dataset_name>/` with queue files
@@ -35,8 +36,9 @@ Arguments:
   full batch item (not individual tokens). The script stops after processing the
   requested number of sequences.
 - `--split`: Optional dataset split to read from (`val` by default).
-- `--verbose`: Emit intermediate bucket probabilities every 100 processed
-  sequences. Useful for monitoring long runs.
+- `--verbose`: Emit intermediate bucket statistics (per-bucket totals, target-1
+  counts, and probabilities) every 100 processed sequences. Useful for
+  monitoring long runs.
 
 Example:
 
@@ -52,9 +54,9 @@ attribute to locate `data/char_diffusion/`. You can also provide
 
 ### Output
 The script aggregates critic scores into 100 buckets, one for each 0.01 band on
-`[0, 1]`, computes the empirical accuracy for each bucket, and fills empty
-buckets by copying the nearest populated value towards 0.5 as requested in the
-original spec.
+`[0, 1]`, computes the empirical probability that the critic target equals 1
+(`model error`) for each bucket, and fills empty buckets by copying the nearest
+populated value towards 0.5 as requested in the original spec.
 
 For every supervised token the model samples a prediction from the softmax
 distribution (via multinomial sampling) before querying the critic head on the
@@ -68,13 +70,21 @@ how `interactive_diffusion_explorer.py` visualises the scores.
 Results are written next to the checkpoint with the same filename but a `.json`
 extension. In the example above, the script produces
 `checkpoints/char_diffusion/latest.json`, containing an array with exactly 100
-probabilities.
+probabilities corresponding to the critic target being 1 (i.e. the token is
+incorrect) for each bucket. Buckets with no direct observations inherit the
+probability from the closest populated bucket as described above.
+
+When `--verbose` is active the script prints a table of 100 lines after every
+100 processed sequences. Each line shows the bucket index, the number of critic
+scores that landed in that bucket, how many of those had critic target 1, and
+the resulting probability (or `0.0` if the bucket has no samples yet). These
+figures help diagnose any unexpected distribution shifts.
 
 After saving the JSON file the script also prints two summary statistics: the
-overall accuracy of the critic-valid positions (masked tokens plus ignore-index
-slots counted as trivially correct) and the same value recomputed from the
-aggregated bucket counts. These numbers should match and offer a quick sanity
-check that the calibration buckets were populated correctly.
+overall critic-target positive rate (fraction of critic-valid positions with
+target 1) and the same value recomputed from the aggregated bucket counts.
+These numbers should match and offer a quick sanity check that the calibration
+buckets were populated correctly.
 
 ### Troubleshooting
 - **Missing dataset files:** Ensure the resolved dataset directory contains a

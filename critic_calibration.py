@@ -241,11 +241,11 @@ def analyze(
     pad_token_id = meta.get("pad_token_id", getattr(cfg, "pad_token_id", None))
     critic_scope = getattr(cfg, "critic_target_scope", "masked_and_ignore")
 
-    correct_counts = torch.zeros(100, dtype=torch.long)
     total_counts = torch.zeros(100, dtype=torch.long)
+    target_one_counts = torch.zeros(100, dtype=torch.long)
 
-    global_correct = 0
     global_total = 0
+    global_target_one = 0
 
     samples_processed = 0
     next_report = 100 if verbose else None
@@ -321,17 +321,17 @@ def analyze(
             buckets = (clamped_scores * 100.0).long()
             buckets = torch.clamp(buckets, 0, 99)
 
-            is_correct = (flat_targets == 0).to(torch.long)
+            target_one = (flat_targets >= 0.5).to(torch.long)
 
             bucket_cpu = buckets.to("cpu")
-            correct_cpu = is_correct.to("cpu")
+            target_one_cpu = target_one.to("cpu")
             token_totals = torch.ones_like(bucket_cpu, dtype=torch.long)
 
             total_counts.index_add_(0, bucket_cpu, token_totals)
-            correct_counts.index_add_(0, bucket_cpu, correct_cpu)
+            target_one_counts.index_add_(0, bucket_cpu, target_one_cpu)
 
             global_total += int(token_totals.sum().item())
-            global_correct += int(is_correct.sum().item())
+            global_target_one += int(target_one_cpu.sum().item())
 
         samples_processed += sequence_limit
 
@@ -341,38 +341,67 @@ def analyze(
                 for idx in range(100):
                     total = int(total_counts[idx].item())
                     if total > 0:
-                        correct = int(correct_counts[idx].item())
-                        current.append(correct / total)
+                        positives = int(target_one_counts[idx].item())
+                        current.append(positives / total)
                     else:
                         current.append(None)
+
                 filled_current = fill_empty_buckets(current)
-                print(
-                    f"[critic_calibration] {next_report} samples processed -> "
-                    f"{json.dumps(filled_current)}"
-                )
+
+                print(f"[critic_calibration] {next_report} samples processed ->")
+                for idx in range(100):
+                    total = int(total_counts[idx].item())
+                    positives = int(target_one_counts[idx].item())
+                    prob = filled_current[idx] if total > 0 else 0.0
+                    print(
+                        f"  bucket {idx:02d}: hits={total}, target1={positives}, "
+                        f"prob={prob:.6f}"
+                    )
                 next_report += 100
+
+    if verbose:
+        current: List[float | None] = []
+        for idx in range(100):
+            total = int(total_counts[idx].item())
+            if total > 0:
+                positives = int(target_one_counts[idx].item())
+                current.append(positives / total)
+            else:
+                current.append(None)
+
+        filled_current = fill_empty_buckets(current)
+
+        print("[critic_calibration] final bucket statistics ->")
+        for idx in range(100):
+            total = int(total_counts[idx].item())
+            positives = int(target_one_counts[idx].item())
+            prob = filled_current[idx] if total > 0 else 0.0
+            print(
+                f"  bucket {idx:02d}: hits={total}, target1={positives}, "
+                f"prob={prob:.6f}"
+            )
 
     probabilities: List[float | None] = []
     for idx in range(100):
         total = int(total_counts[idx].item())
         if total > 0:
-            correct = int(correct_counts[idx].item())
-            probabilities.append(correct / total)
+            positives = int(target_one_counts[idx].item())
+            probabilities.append(positives / total)
         else:
             probabilities.append(None)
 
     filled = fill_empty_buckets(probabilities)
 
-    overall_accuracy = 0.0
+    overall_positive_rate = 0.0
     if global_total > 0:
-        overall_accuracy = global_correct / global_total
+        overall_positive_rate = global_target_one / global_total
 
-    bucket_accuracy = 0.0
+    bucket_positive_rate = 0.0
     total_sum = int(total_counts.sum().item())
     if total_sum > 0:
-        bucket_accuracy = int(correct_counts.sum().item()) / total_sum
+        bucket_positive_rate = int(target_one_counts.sum().item()) / total_sum
 
-    return filled, overall_accuracy, bucket_accuracy
+    return filled, overall_positive_rate, bucket_positive_rate
 
 
 def main() -> None:
@@ -410,7 +439,7 @@ def main() -> None:
     model = load_model(checkpoint_path, device)
     consumer, meta = load_dataset_consumer(args.dataset, device)
 
-    probabilities, overall_accuracy, bucket_accuracy = analyze(
+    probabilities, overall_positive_rate, bucket_positive_rate = analyze(
         model=model,
         consumer=consumer,
         meta=meta,
@@ -426,12 +455,12 @@ def main() -> None:
 
     print(f"Saved critic calibration probabilities to {output_path}")
     print(
-        "Overall accuracy (sampled predictions vs. targets): "
-        f"{overall_accuracy:.6f}"
+        "Overall critic-target positive rate (target==1 fraction): "
+        f"{overall_positive_rate:.6f}"
     )
     print(
-        "Bucket-weighted accuracy (sum(correct_counts) / sum(total_counts)): "
-        f"{bucket_accuracy:.6f}"
+        "Bucket-weighted positive rate (sum(target1_counts) / sum(total_counts)): "
+        f"{bucket_positive_rate:.6f}"
     )
 
 
