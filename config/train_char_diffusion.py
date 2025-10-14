@@ -8,6 +8,7 @@ log_interval = 10
 
 # save checkpoints when validation improves
 always_save_checkpoint = False
+compile = True
 
 wandb_log = False # override via command line if you like
 wandb_project = 'char-diffusion'
@@ -58,6 +59,8 @@ n_layer = 8
 n_head = 8
 n_embd = 512
 dropout = 0.1
+attention_type = 'bidirectional' # Critical for BERT-style training
+position_encoding = 'rotary'
 dtype = 'float16'
 
 # Training type for masked language modeling

@@ -9,13 +9,15 @@ eval_iters = 200
 log_interval = 10
 
 # save checkpoints when validation improves
-always_save_checkpoint = False
+always_save_checkpoint = True
+compile = True
 
-wandb_log = False # override via command line if you like
+wandb_log = True # override via command line if you like
 wandb_project = 'char-diffusion'
 wandb_run_name = 'random-replacement-char'
 
 dataset = 'char_random_replacement'
+data_stream_verbose = True
 
 composition_config = 'example'  # refers to data/char_random_replacement/config/example.py; use None if config is not defined
 
@@ -49,7 +51,7 @@ else:
     unmasking_stages = None
     validation_stages = None
 
-gradient_accumulation_steps = 1
+gradient_accumulation_steps = 4
 batch_size = 16  # Slightly larger batch size for BERT training
 block_size = 1024 # Context size for masking
 
@@ -62,9 +64,9 @@ beta2 = 0.99
 warmup_iters = 500  # More warmup for BERT
 
 # Model architecture - bidirectional for BERT
-n_layer = 8
-n_head = 8
-n_embd = 512
+n_layer = 6
+n_head = 6
+n_embd = 384
 dropout = 0.1
 dtype = 'float16'
 
