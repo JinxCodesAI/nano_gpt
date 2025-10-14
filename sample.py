@@ -11,11 +11,11 @@ from model import GPTConfig, GPT
 # -----------------------------------------------------------------------------
 init_from = 'resume' # either 'resume' (from an out_dir) or a gpt2 variant (e.g. 'gpt2-xl')
 out_dir = 'out-char-random-replacement' # ignored if init_from is not 'resume'
-ckpt_name = 'ckpt_MLM_3500.pt'
+ckpt_name = 'ckpt_MLM_1000.pt'
 start = "\nWhere is the king?" # or "<|endoftext|>" or etc. Can also specify a file, use as: "FILE:prompt.txt"
 num_samples = 1 # number of samples to draw
 max_new_tokens = 900 # number of tokens generated in each sample
-max_iterations = 20 # maximum number of diffusion iterations per sample
+max_iterations = 50 # maximum number of diffusion iterations per sample
 fix_prompt_during_diffusion = True # keep conditioning text fixed at every iteration when True
 temperature = 0.8 # 1.0 = no change, < 1.0 = less random, > 1.0 = more random, in predictions
 seed = 42
@@ -75,6 +75,10 @@ else:
     encode = lambda s: enc.encode(s, allowed_special={"<|endoftext|>"})
     decode = lambda l: enc.decode(l)
 
+GREEN = "\033[92m"
+ORANGE = "\033[38;5;208m"
+RESET = "\033[0m"
+
 # encode the beginning of the prompt
 if start.startswith('FILE:'):
     with open(start[5:], 'r', encoding='utf-8') as f:
@@ -96,6 +100,7 @@ with torch.no_grad():
             x = torch.zeros((1, seq_length), dtype=torch.long, device=device)
             x[0, :initial_length] = prompt
 
+            prev_decoded = None
             iteration = 0
             while iteration < max_iterations:
                 # Execute a full forward pass on the current sequence to obtain token logits.
@@ -103,7 +108,17 @@ with torch.no_grad():
                 # (prompt + generated tokens) before proposing replacements for the active window.
                 
                 dupa = x[0, :max_token_pos].tolist()
-                print(decode(dupa))
+                print(f"Iteration {iteration}, sample {k}")
+                decoded = decode(dupa)
+
+                colored_chars = []
+                for idx, char in enumerate(decoded):
+                    if prev_decoded is not None and idx < len(prev_decoded) and char == prev_decoded[idx]:
+                        colored_chars.append(f"{GREEN}{char}{RESET}")
+                    else:
+                        colored_chars.append(f"{ORANGE}{char}{RESET}")
+                print("".join(colored_chars))
+                prev_decoded = decoded
                 logits, _ = model(x)
 
                 # Convert logits to probabilities for every token position. The softmax is taken
