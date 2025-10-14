@@ -10,4 +10,6 @@ __pycache__/
 env/
 venv/
 wandb/
+out/
+out-char-diffusion/
 out/*.txt
