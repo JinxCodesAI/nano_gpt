@@ -1,0 +1,26 @@
+# Char Random Replacement Streaming Dataset
+
+This dataset mirrors the streaming infrastructure of `data/char_diffusion` but
+swaps BERT-style corruption for a configurable random replacement strategy. The
+provider inherits the sampling loop, stage masking (`random`, `sticky`,
+`span`), and queue handling from `CharDiffusionProvider` while overriding the
+corruption step.
+
+## Key differences from `char_diffusion`
+
+- **Mask selection** – Masked positions are generated exactly as in
+  `char_diffusion` so existing stage compositions remain valid.
+- **Corruption** – Every masked character is replaced with a randomly sampled
+  token drawn from the base vocabulary (excluding `[MASK]` and any additional
+  `extra_special_token_ids`). A configurable
+  `original_token_probability_multiplier` biases the sampling distribution
+  towards keeping the original character.
+- **Extensibility** – The corruption logic lives in
+  `corruption_utils.RandomReplacementCorruptor`, making it easy to add new
+  replacement rules in future revisions.
+
+Run `prepare.py` with a config that sets `dataset='char_random_replacement'`
+and either copies `input.txt` into this directory or points `data_dir` at
+`data/char_diffusion` to reuse the existing Shakespeare corpus. All other knobs
+(`batch_size`, `block_size`, stages, etc.) work identically to the original
+dataset.
