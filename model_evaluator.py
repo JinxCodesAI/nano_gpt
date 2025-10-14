@@ -35,7 +35,7 @@ import torch
 from contextlib import nullcontext
 
 from model import GPT, GPTConfig, ModelMode
-from sample_utils import predict_and_sample_tokens, apply_remasking_step
+from sample_utils import predict_and_sample_tokens, apply_remasking_step, load_critic_calibration_table
 
 # Sticky masking utilities live with the dataset helpers
 sys.path.append('data/char_diffusion')
@@ -94,6 +94,8 @@ class ModelInfo:
     dataset_text: Optional[str] = None
     block_size: Optional[int] = None
     meta: Optional[Dict] = None
+    critic_calibration: Optional[torch.Tensor] = None
+    calibration_found: bool = False
 
 
 # ---------------------------------------------------------------------------
@@ -311,6 +313,21 @@ class ModelEvaluatorApp:
         info.model = model
         info.checkpoint = checkpoint
         self.ensure_metadata(info)
+        calibration_values, calibration_found = load_critic_calibration_table(info.path)
+        calibration_tensor = torch.tensor(
+            calibration_values,
+            dtype=torch.float32,
+            device=next(model.parameters()).device,
+        )
+        info.critic_calibration = calibration_tensor
+        info.calibration_found = calibration_found
+        if calibration_found:
+            print(f"[calibration] Loaded critic calibration for {info.name}.")
+        else:
+            print(
+                f"[calibration] No critic calibration entry for {info.name}; "
+                "using default 0.01→0.99 ramp."
+            )
         return model
 
     # ------------------------------------------------------------------
@@ -580,6 +597,7 @@ class ModelEvaluatorApp:
                 verbose=False,
                 logits_from_predict=logits,
                 protected_mask=protected,
+                critic_calibration=info.critic_calibration,
             )
             if isinstance(remask_result, tuple):
                 remasked_tokens = remask_result[0]
@@ -663,6 +681,7 @@ class ModelEvaluatorApp:
                                 verbose=False,
                                 logits_from_predict=logits,
                                 protected_mask=protected,
+                                critic_calibration=info.critic_calibration,
                             )
                             if isinstance(remask_result, tuple):
                                 nxt = remask_result[0]

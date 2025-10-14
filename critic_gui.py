@@ -20,12 +20,11 @@ import numpy as np
 from inference_utils import (
     load_model_checkpoint,
     load_vocabulary,
-    encode_text,
     decode_tokens,
     unmask_tokens,
     score_tokens_with_critic,
-    remask_worst_tokens
 )
+from sample_utils import load_critic_calibration_table
 
 
 class CriticGUI:
@@ -44,12 +43,20 @@ class CriticGUI:
         self.current_tokens = None
         self.current_scores = None
         self.workflow_state = 'generate'  # generate, unmask, score, remask
+        self.critic_calibration_tensor = torch.linspace(0.01, 0.99, 100)
+        self.calibration_found = False
+        self.current_checkpoint_path = None
+        self.random_noise = None
+        self.random_luck = None
 
         # JSON save mode state
         self.json_mode = False
         self.json_data = None
         self.current_sample_idx = 0
         self.current_iteration_idx = 0
+        self.json_iteration_input_text = None
+        self.json_iteration_output_tokens = None
+        self.json_iteration_remask_indices = None
 
         self.setup_ui()
         
@@ -137,29 +144,66 @@ class CriticGUI:
         self.threshold_frame = ttk.Frame(bottom_frame)
         self.threshold_frame.pack(fill=tk.X, pady=5)
 
-        ttk.Label(self.threshold_frame, text="Remask Threshold (%):").pack(side=tk.LEFT, padx=5)
+        ttk.Label(self.threshold_frame, text="Remask Ratio (%):").pack(side=tk.LEFT, padx=5)
 
-        self.threshold_var = tk.DoubleVar(value=30.0)
-        self.threshold_slider = ttk.Scale(self.threshold_frame, from_=0, to=100,
-                                         variable=self.threshold_var, orient=tk.HORIZONTAL,
-                                         length=300, command=self.on_threshold_change)
-        self.threshold_slider.pack(side=tk.LEFT, padx=5)
+        self.remask_ratio_var = tk.DoubleVar(value=30.0)
+        self.remask_ratio_slider = ttk.Scale(
+            self.threshold_frame,
+            from_=0,
+            to=100,
+            variable=self.remask_ratio_var,
+            orient=tk.HORIZONTAL,
+            length=250,
+            command=self.on_ratio_change,
+        )
+        self.remask_ratio_slider.pack(side=tk.LEFT, padx=5)
 
-        self.threshold_label = ttk.Label(self.threshold_frame, text="30.0%")
-        self.threshold_label.pack(side=tk.LEFT, padx=5)
-
-        ttk.Label(self.threshold_frame, text="Wrongness cutoff:").pack(side=tk.LEFT, padx=5)
-        self.wrongness_label = ttk.Label(self.threshold_frame, text="N/A", foreground="blue")
-        self.wrongness_label.pack(side=tk.LEFT, padx=5)
+        self.remask_ratio_label = ttk.Label(self.threshold_frame, text="30.0%")
+        self.remask_ratio_label.pack(side=tk.LEFT, padx=5)
 
         ttk.Label(self.threshold_frame, text="Tokens to remask:").pack(side=tk.LEFT, padx=5)
         self.tokens_count_label = ttk.Label(self.threshold_frame, text="N/A", foreground="blue")
         self.tokens_count_label.pack(side=tk.LEFT, padx=5)
+
+        ttk.Label(self.threshold_frame, text="Luck/wrongness cutoff:").pack(side=tk.LEFT, padx=5)
+        self.cutoff_label = ttk.Label(self.threshold_frame, text="N/A", foreground="blue")
+        self.cutoff_label.pack(side=tk.LEFT, padx=5)
+
+        ttk.Label(self.threshold_frame, text="Randomness:").pack(side=tk.LEFT, padx=5)
+        self.randomness_var = tk.DoubleVar(value=0.2)
+        self.randomness_slider = ttk.Scale(
+            self.threshold_frame,
+            from_=0.0,
+            to=1.0,
+            variable=self.randomness_var,
+            orient=tk.HORIZONTAL,
+            length=200,
+            command=self.on_randomness_change,
+        )
+        self.randomness_slider.pack(side=tk.LEFT, padx=5)
+
+        self.randomness_label = ttk.Label(self.threshold_frame, text="0.20")
+        self.randomness_label.pack(side=tk.LEFT, padx=5)
         
         # Status bar
         self.status_var = tk.StringVar(value="Load a model or JSON save to begin")
         status_bar = ttk.Label(self.root, textvariable=self.status_var, relief=tk.SUNKEN, anchor=tk.W)
         status_bar.pack(fill=tk.X, side=tk.BOTTOM)
+
+    def load_calibration_for_checkpoint(self, checkpoint_path):
+        """Load or reset critic calibration data for the active checkpoint."""
+        try:
+            calibration_values, found = load_critic_calibration_table(checkpoint_path)
+        except Exception:
+            calibration_values, found = (torch.linspace(0.01, 0.99, 100).tolist(), False)
+
+        self.critic_calibration_tensor = torch.tensor(calibration_values, dtype=torch.float32)
+        self.calibration_found = found
+
+        if found:
+            print("Loaded critic calibration table for GUI remasking.")
+        else:
+            print("Using default 0.01→0.99 critic calibration ramp for GUI remasking.")
         
     def load_model(self):
         """Load a model checkpoint"""
@@ -177,6 +221,8 @@ class CriticGUI:
             
             # Load model
             self.model, self.metadata = load_model_checkpoint(checkpoint_path, self.device, self.dtype)
+            self.current_checkpoint_path = checkpoint_path
+            self.load_calibration_for_checkpoint(checkpoint_path)
             
             # Check for critic head
             if not self.metadata['has_critic']:
@@ -230,7 +276,23 @@ class CriticGUI:
                     return
 
             # Load vocabulary
-            self.itos, self.stoi, _ = load_vocabulary(str(meta_path))
+            self.itos, self.stoi, meta = load_vocabulary(str(meta_path))
+
+            if self.metadata.get('mask_token_id') is None:
+                mask_from_meta = meta.get('mask_token_id') if isinstance(meta, dict) else None
+                if mask_from_meta is not None:
+                    self.metadata['mask_token_id'] = mask_from_meta
+                elif self.metadata.get('vocab_size') is not None:
+                    self.metadata['mask_token_id'] = int(self.metadata['vocab_size']) - 1
+                elif self.itos is not None:
+                    self.metadata['mask_token_id'] = len(self.itos) - 1
+                elif self.itos is not None:
+                    self.metadata['mask_token_id'] = len(self.itos) - 1
+
+            if self.metadata.get('pad_token_id') is None and isinstance(meta, dict):
+                pad_from_meta = meta.get('pad_token_id')
+                if pad_from_meta is not None:
+                    self.metadata['pad_token_id'] = pad_from_meta
             
             # Update UI
             model_name = Path(checkpoint_path).name
@@ -279,13 +341,27 @@ class CriticGUI:
                 return
 
             self.model, self.metadata = load_model_checkpoint(generator_path, self.device, self.dtype)
+            self.current_checkpoint_path = generator_path
+            self.load_calibration_for_checkpoint(generator_path)
 
             # Load vocabulary
             if not os.path.exists(meta_path):
                 messagebox.showerror("Error", f"Meta file not found: {meta_path}")
                 return
 
-            self.itos, self.stoi, _ = load_vocabulary(meta_path)
+            self.itos, self.stoi, meta = load_vocabulary(meta_path)
+
+            if self.metadata.get('mask_token_id') is None:
+                mask_from_meta = meta.get('mask_token_id') if isinstance(meta, dict) else None
+                if mask_from_meta is not None:
+                    self.metadata['mask_token_id'] = mask_from_meta
+                elif self.metadata.get('vocab_size') is not None:
+                    self.metadata['mask_token_id'] = int(self.metadata['vocab_size']) - 1
+
+            if self.metadata.get('pad_token_id') is None and isinstance(meta, dict):
+                pad_from_meta = meta.get('pad_token_id')
+                if pad_from_meta is not None:
+                    self.metadata['pad_token_id'] = pad_from_meta
 
             # Enter JSON mode
             self.json_mode = True
@@ -318,48 +394,61 @@ class CriticGUI:
             messagebox.showerror("Error Loading JSON", str(e))
             self.status_var.set("Error loading JSON")
 
-    def close_json_save(self):
-        """Close JSON save mode and return to normal operation"""
+    def _exit_json_mode(self, reset_text: bool, status_message: str):
+        """Internal helper to leave JSON mode while optionally preserving the text buffer."""
         if not self.json_mode:
+            if status_message:
+                self.status_var.set(status_message)
             return
 
-        # Reset JSON mode state
         self.json_mode = False
         self.json_data = None
         self.current_sample_idx = 0
         self.current_iteration_idx = 0
+        self.json_iteration_input_text = None
+        self.json_iteration_output_tokens = None
+        self.json_iteration_remask_indices = None
 
-        # Hide navigation frame and close button
+        # Hide JSON specific controls and restore ratio/randomness sliders
         self.nav_frame.pack_forget()
         self.close_json_btn.pack_forget()
-
-        # Show threshold frame
         self.threshold_frame.pack(fill=tk.X, pady=5)
 
-        # Reset UI state
-        self.current_tokens = None
-        self.current_scores = None
+        # Reset workflow state but keep whatever text is currently shown
         self.workflow_state = 'unmask'
+        self.current_scores = None
+        self.random_noise = None
+        self.random_luck = None
 
-        # Clear text widget
-        self.text_widget.config(state=tk.NORMAL)
-        self.text_widget.delete("1.0", tk.END)
-
-        # Clear all tags
-        for tag in self.text_widget.tag_names():
-            if tag.startswith("char_") or tag.startswith("mask_preview_"):
-                self.text_widget.tag_delete(tag)
-
-        # Insert sample text with masks
-        sample_text = "The [MASK][MASK][MASK][MASK][MASK] brown fox [MASK][MASK][MASK][MASK][MASK] over the lazy dog."
-        self.text_widget.insert("1.0", sample_text)
-
-        # Update button states
-        self.unmask_btn.config(state=tk.NORMAL)
+        self.unmask_btn.config(state=tk.NORMAL if self.model is not None else tk.DISABLED)
         self.score_btn.config(state=tk.DISABLED)
         self.remask_btn.config(state=tk.DISABLED)
 
-        self.status_var.set("JSON save closed. Ready for normal operation.")
+        self.text_widget.config(state=tk.NORMAL)
+
+        for tag in list(self.text_widget.tag_names()):
+            if tag.startswith("char_") or tag.startswith("mask_preview_"):
+                self.text_widget.tag_delete(tag)
+
+        if reset_text:
+            self.current_tokens = None
+            self.text_widget.delete("1.0", tk.END)
+
+            sample_text = "The [MASK][MASK][MASK][MASK][MASK] brown fox [MASK][MASK][MASK][MASK][MASK] over the lazy dog."
+            self.text_widget.insert("1.0", sample_text)
+
+        self.update_remask_info()
+
+        if status_message:
+            self.status_var.set(status_message)
+
+    def close_json_save(self):
+        """Close JSON save mode and return to normal operation"""
+        self._exit_json_mode(reset_text=True, status_message="JSON save closed. Ready for normal operation.")
+
+    def detach_from_json(self, status_message: str):
+        """Detach from JSON playback but keep the current buffer for manual editing."""
+        self._exit_json_mode(reset_text=False, status_message=status_message)
 
     def load_iteration_from_json(self):
         """Load and display the current sample/iteration from JSON data"""
@@ -378,13 +467,22 @@ class CriticGUI:
             # Store current state
             self.current_tokens = output_unmasked
             self.current_scores = None
+            self.random_noise = None
+            self.random_luck = None
+
+            # Remember JSON iteration buffers for edit detection
+            self.json_iteration_input_text = self.tokens_to_text(input_masked)
+            self.json_iteration_output_tokens = output_unmasked.clone()
+            self.json_iteration_remask_indices = list(remasked_indices)
 
             # Display input (masked)
-            input_text = self.tokens_to_text(input_masked)
+            input_text = self.json_iteration_input_text
             self.text_widget.config(state=tk.NORMAL)
             self.text_widget.delete("1.0", tk.END)
+            for tag in self.text_widget.tag_names():
+                if tag.startswith("char_") or tag.startswith("mask_preview_"):
+                    self.text_widget.tag_delete(tag)
             self.text_widget.insert("1.0", input_text)
-            self.text_widget.config(state=tk.DISABLED)
 
             # Update button states for JSON mode
             self.unmask_btn.config(state=tk.NORMAL)
@@ -394,7 +492,10 @@ class CriticGUI:
             self.workflow_state = 'unmask'
 
             iteration_num = iteration_data['iteration']
-            self.status_var.set(f"Sample {self.current_sample_idx + 1}, Iteration {iteration_num}: {len(remasked_indices)} tokens will be remasked")
+            self.status_var.set(
+                f"Sample {self.current_sample_idx + 1}, Iteration {iteration_num}: "
+                f"{len(remasked_indices)} tokens will be remasked. Edit the text before Unmask to branch."
+            )
 
         except Exception as e:
             import traceback
@@ -489,17 +590,23 @@ class CriticGUI:
             self.status_var.set("Unmasking...")
             self.root.update()
 
-            if self.json_mode:
-                # In JSON mode, load precomputed unmasked output
-                sample_data = self.json_data['samples'][self.current_sample_idx]
-                iteration_data = sample_data['iterations'][self.current_iteration_idx]
-                unmasked_tokens = torch.tensor(iteration_data['output_unmasked'], dtype=torch.long)
-                self.current_tokens = unmasked_tokens
-                self.current_scores = None
+            current_text = self.text_widget.get("1.0", tk.END).strip()
+            use_json_replay = (
+                self.json_mode
+                and self.json_iteration_input_text is not None
+                and self.json_iteration_output_tokens is not None
+                and current_text == self.json_iteration_input_text
+            )
+
+            if use_json_replay:
+                # Reuse the precomputed unmasking from the save file
+                unmasked_tokens = self.json_iteration_output_tokens.clone()
             else:
-                # Normal mode: compute unmasking
-                text = self.text_widget.get("1.0", tk.END).strip()
-                tokens = self.text_to_tokens(text)
+                if self.json_mode:
+                    # Switch to live mode while keeping the current buffer intact
+                    self.detach_from_json("Detached from JSON playback. Running live unmask from the current text.")
+
+                tokens = self.text_to_tokens(current_text)
 
                 unmasked_tokens = unmask_tokens(
                     self.model, tokens,
@@ -510,11 +617,13 @@ class CriticGUI:
                     dtype=self.dtype
                 )
 
-                self.current_tokens = unmasked_tokens
-                self.current_scores = None
+            self.current_tokens = unmasked_tokens.cpu()
+            self.current_scores = None
+            self.random_noise = None
+            self.random_luck = None
 
             # Update text widget
-            unmasked_text = self.tokens_to_text(unmasked_tokens)
+            unmasked_text = self.tokens_to_text(self.current_tokens)
             self.text_widget.config(state=tk.NORMAL)
             self.text_widget.delete("1.0", tk.END)
             self.text_widget.insert("1.0", unmasked_text)
@@ -554,24 +663,28 @@ class CriticGUI:
             
             # Score tokens
             scores = score_tokens_with_critic(
-                self.model, self.current_tokens,
-                device=self.device, dtype=self.dtype
+                self.model,
+                self.current_tokens,
+                device=self.device,
+                dtype=self.dtype,
             )
-            
-            self.current_scores = scores
-            
+
+            self.current_scores = scores.to(dtype=torch.float32).cpu()
+            self.random_noise = torch.rand_like(self.current_scores)
+            self.random_luck = torch.rand_like(self.current_scores)
+
             # Apply gradient coloring to text
-            self.apply_gradient_coloring(scores)
-            
-            # Update wrongness display
-            self.update_wrongness_display()
+            self.apply_gradient_coloring(self.current_scores)
+
+            # Update remask display to show counts/cutoff
+            self.update_remask_info()
             
             # Update workflow state
             self.workflow_state = 'remask'
             self.score_btn.config(state=tk.DISABLED)
             self.remask_btn.config(state=tk.NORMAL)
             
-            self.status_var.set("Scoring complete. Adjust threshold and click Remask.")
+            self.status_var.set("Scoring complete. Adjust ratio/randomness and click Remask.")
             
         except Exception as e:
             messagebox.showerror("Error", f"Scoring failed: {e}")
@@ -608,11 +721,69 @@ class CriticGUI:
             
             self.text_widget.tag_add(tag_name, start_idx, end_idx)
             self.text_widget.tag_configure(tag_name, background=color)
-            
+
             char_idx += 1
-    
+
+    def plan_remask(self, mask_ratio: float):
+        """Compute remasking indices using calibrated critic scores and stored randomness."""
+        if self.current_tokens is None or self.current_scores is None:
+            return None, None, None, None, None
+
+        mask_ratio = max(0.0, min(1.0, float(mask_ratio)))
+
+        scores = self.current_scores.view(-1)
+        seq_len = scores.numel()
+        if seq_len == 0:
+            return torch.empty(0, dtype=torch.long), scores, scores, scores, None
+
+        tokens = self.current_tokens.view(-1)
+        mask_token_id = self.metadata.get('mask_token_id')
+        if mask_token_id is None:
+            raise ValueError("Mask token ID missing from metadata; cannot perform remasking.")
+
+        unmaskable = tokens != int(mask_token_id)
+
+        available = unmaskable.nonzero(as_tuple=False).flatten()
+        available_count = int(available.numel())
+
+        k = int(seq_len * mask_ratio)
+        if k > available_count:
+            k = available_count
+
+        if self.random_noise is None or self.random_noise.shape != scores.shape:
+            self.random_noise = torch.rand_like(scores)
+        if self.random_luck is None or self.random_luck.shape != scores.shape:
+            self.random_luck = torch.rand_like(scores)
+
+        calibration = self.critic_calibration_tensor.to(dtype=scores.dtype)
+        if calibration.numel() != 100:
+            calibration = torch.linspace(0.01, 0.99, 100, dtype=scores.dtype)
+
+        bucket_indices = (scores * 100.0).floor().long()
+        bucket_indices = torch.clamp(bucket_indices, 0, calibration.numel() - 1)
+        calibrated_wrongness = calibration[bucket_indices]
+        calibrated_wrongness = torch.clamp(calibrated_wrongness, min=1e-6)
+
+        randomness = max(0.0, min(1.0, float(self.randomness_var.get())))
+        noise = self.random_noise.to(dtype=scores.dtype)
+        luck = self.random_luck.to(dtype=scores.dtype)
+
+        adjusted_wrongness = (1.0 - randomness) * calibrated_wrongness + randomness * noise
+        adjusted_wrongness = torch.clamp(adjusted_wrongness, min=1e-6)
+
+        ratios = luck / adjusted_wrongness
+        ratios = ratios.masked_fill(~unmaskable, float('inf'))
+
+        if k <= 0 or available_count == 0:
+            return torch.empty(0, dtype=torch.long), ratios, adjusted_wrongness, calibrated_wrongness, None
+
+        topk = torch.topk(ratios, k, largest=False)
+        cutoff = float(topk.values[-1].item()) if topk.values.numel() > 0 else None
+
+        return topk.indices, ratios, adjusted_wrongness, calibrated_wrongness, cutoff
+
     def remask(self):
-        """Remask worst tokens based on threshold"""
+        """Remask tokens using calibrated critic ratios and the selected mask ratio."""
         if self.model is None or self.current_tokens is None or self.current_scores is None:
             messagebox.showerror("Error", "No scores available for remasking")
             return
@@ -631,18 +802,23 @@ class CriticGUI:
 
                 num_remasked = len(remasked_indices)
             else:
-                # Normal mode: compute remasking based on threshold
-                threshold_pct = self.threshold_var.get()
+                # Normal mode: compute remasking using calibrated critic probabilities
+                mask_ratio = self.remask_ratio_var.get() / 100.0
+                selected_indices, _, _, _, cutoff = self.plan_remask(mask_ratio)
+                if selected_indices is None:
+                    messagebox.showerror("Error", "Unable to compute remasking plan")
+                    return
 
-                remasked_tokens, worst_indices = remask_worst_tokens(
-                    self.current_tokens,
-                    self.current_scores,
-                    self.metadata['mask_token_id'],
-                    threshold_pct,
-                    content_len=len(self.current_tokens) if self.current_tokens.dim() == 1 else self.current_tokens.shape[1]
-                )
+                remasked_tokens = self.current_tokens.clone()
+                remask_positions = [int(idx) for idx in selected_indices.cpu().tolist()]
+                for idx in remask_positions:
+                    remasked_tokens[idx] = self.metadata['mask_token_id']
 
-                num_remasked = len(worst_indices)
+                num_remasked = len(remask_positions)
+                if cutoff is not None:
+                    self.cutoff_label.config(text=f"{cutoff:.3f}")
+                else:
+                    self.cutoff_label.config(text="N/A")
 
             # Update workflow state FIRST to prevent preview from running
             self.workflow_state = 'unmask'
@@ -650,6 +826,11 @@ class CriticGUI:
             # Store remasked tokens
             self.current_tokens = remasked_tokens
             self.current_scores = None
+            self.random_noise = None
+            self.random_luck = None
+
+            # Reset displayed metrics now that scores are invalidated
+            self.update_remask_info()
 
             # Update text widget
             remasked_text = self.tokens_to_text(remasked_tokens)
@@ -670,16 +851,52 @@ class CriticGUI:
             self.remask_btn.config(state=tk.DISABLED)
             self.score_btn.config(state=tk.DISABLED)
 
+            ratio_pct = self.remask_ratio_var.get()
+
             if self.json_mode:
-                # In JSON mode, disable unmask and enable navigation
-                self.unmask_btn.config(state=tk.DISABLED)
-                self.text_widget.config(state=tk.DISABLED)
+                # Advance the playback cursor so the next Unmask step mirrors the saved run
+                self.unmask_btn.config(state=tk.NORMAL)
+                sample_data = self.json_data['samples'][self.current_sample_idx]
+                iterations = sample_data['iterations']
+
+                if self.current_iteration_idx < len(iterations) - 1:
+                    self.current_iteration_idx += 1
+                    self.update_navigation_labels()
+
+                    next_data = iterations[self.current_iteration_idx]
+                    next_input = torch.tensor(next_data['input_masked'], dtype=torch.long)
+                    next_output = torch.tensor(next_data['output_unmasked'], dtype=torch.long)
+
+                    self.current_tokens = next_input.clone()
+                    self.json_iteration_input_text = self.tokens_to_text(next_input)
+                    self.json_iteration_output_tokens = next_output.clone()
+                    self.json_iteration_remask_indices = list(next_data['remasked_indices'])
+
+                    current_text = self.text_widget.get("1.0", tk.END).strip()
+                    if current_text != self.json_iteration_input_text:
+                        self.text_widget.delete("1.0", tk.END)
+                        self.text_widget.insert("1.0", self.json_iteration_input_text)
+
+                    iteration_num = next_data.get('iteration', self.current_iteration_idx + 1)
+                    self.status_var.set(
+                        f"Advanced to iteration {iteration_num}: {len(self.json_iteration_remask_indices)} tokens will be remasked. "
+                        "Edit text before Unmask to branch or keep it to replay the saved step."
+                    )
+                else:
+                    # No further iterations in JSON - allow branching from the final mask state
+                    self.json_iteration_input_text = remasked_text
+                    self.json_iteration_output_tokens = None
+                    self.json_iteration_remask_indices = []
+                    self.status_var.set(
+                        f"Remasked {num_remasked} tokens (ratio {ratio_pct:.1f}%). Final iteration reached. "
+                        "Edit the text and click Unmask to continue manually."
+                    )
             else:
                 # In normal mode, enable unmask for next iteration
                 self.unmask_btn.config(state=tk.NORMAL)
-
-            self.status_var.set(f"Remasked {num_remasked} tokens. " +
-                              ("Navigate to next iteration." if self.json_mode else "Edit text or click Unmask to continue."))
+                self.status_var.set(
+                    f"Remasked {num_remasked} tokens (ratio {ratio_pct:.1f}%). Edit text or click Unmask to continue."
+                )
 
         except Exception as e:
             import traceback
@@ -687,30 +904,40 @@ class CriticGUI:
             messagebox.showerror("Error", f"Remasking failed: {e}")
             self.status_var.set("Remasking failed")
     
-    def on_threshold_change(self, *args):
-        """Handle threshold slider change - update display and preview"""
-        self.update_wrongness_display()
+    def on_ratio_change(self, *args):
+        """Handle ratio slider change - update display and preview"""
+        self.update_remask_info()
 
         # ONLY preview if in remask state - do NOT preview in other states
         if self.workflow_state == 'remask' and self.current_scores is not None:
             self.preview_remask()
         else:
-            # In other states, just update the wrongness display
+            # In other states, just update the displayed metrics
             pass
 
+    def on_randomness_change(self, *args):
+        """Handle randomness slider updates."""
+        value = max(0.0, min(1.0, float(self.randomness_var.get())))
+        self.randomness_var.set(value)
+        self.randomness_label.config(text=f"{value:.2f}")
+
+        self.update_remask_info()
+
+        if self.workflow_state == 'remask' and self.current_scores is not None:
+            self.preview_remask()
+
     def preview_remask(self):
-        """Preview which tokens will be masked at current threshold"""
+        """Preview which tokens will be masked at the current ratio"""
         try:
-            threshold_pct = self.threshold_var.get()
+            mask_ratio = self.remask_ratio_var.get() / 100.0
+            plan = self.plan_remask(mask_ratio)
+            if plan[0] is None:
+                return
 
-            # Calculate which tokens would be remasked
-            scores_np = self.current_scores.cpu().numpy()
-            num_to_remask = int((threshold_pct / 100.0) * len(scores_np))
-            num_to_remask = max(1, min(num_to_remask, len(scores_np)))
+            selected_indices = plan[0]
+            remask_set = set(int(idx) for idx in selected_indices.cpu().tolist())
 
-            # Get indices of worst tokens
-            worst_indices = np.argsort(scores_np)[::-1][:num_to_remask]
-            worst_set = set(worst_indices)
+            scores_np = self.current_scores.numpy()
 
             # Clear existing coloring
             for tag in self.text_widget.tag_names():
@@ -725,7 +952,7 @@ class CriticGUI:
             for i, char in enumerate(text):
                 if i >= len(scores_np):
                     new_text_parts.append(char)
-                elif i in worst_set:
+                elif i in remask_set:
                     new_text_parts.append('[MASK]')
                 else:
                     new_text_parts.append(char)
@@ -741,7 +968,7 @@ class CriticGUI:
                     self.text_widget.insert(tk.END, char)
                     continue
 
-                if i in worst_set:
+                if i in remask_set:
                     # Insert [MASK] with red background
                     start_idx = self.text_widget.index(tk.END + "-1c")
                     self.text_widget.insert(tk.END, '[MASK]')
@@ -767,30 +994,32 @@ class CriticGUI:
             # Silently fail for preview - don't interrupt user
             pass
 
-    def update_wrongness_display(self, *args):
-        """Update the wrongness cutoff display based on threshold"""
-        threshold_pct = self.threshold_var.get()
-        self.threshold_label.config(text=f"{threshold_pct:.1f}%")
+    def update_remask_info(self, *args):
+        """Update displayed ratio, token count, and cutoff for the current slider value."""
+        ratio_pct = self.remask_ratio_var.get()
+        self.remask_ratio_label.config(text=f"{ratio_pct:.1f}%")
 
         if self.current_scores is not None:
-            # Calculate wrongness cutoff (score value at threshold percentile)
-            scores_np = self.current_scores.cpu().numpy()
-            num_to_remask = int((threshold_pct / 100.0) * len(scores_np))
-            num_to_remask = max(1, min(num_to_remask, len(scores_np)))
+            mask_ratio = ratio_pct / 100.0
+            plan = self.plan_remask(mask_ratio)
+            if plan[0] is None:
+                self.tokens_count_label.config(text="N/A")
+                self.cutoff_label.config(text="N/A")
+                return
 
-            # Update token count
-            self.tokens_count_label.config(text=f"{num_to_remask} / {len(scores_np)}")
+            selected_indices = plan[0]
+            cutoff = plan[4]
+            num_total = int(self.current_scores.numel())
+            num_selected = len(selected_indices)
 
-            # Get the score at the cutoff
-            sorted_scores = np.sort(scores_np)[::-1]  # Descending
-            if num_to_remask <= len(sorted_scores):
-                cutoff_score = sorted_scores[num_to_remask - 1]
-                self.wrongness_label.config(text=f"{cutoff_score:.3f}")
+            self.tokens_count_label.config(text=f"{num_selected} / {num_total}")
+            if cutoff is not None:
+                self.cutoff_label.config(text=f"{cutoff:.3f}")
             else:
-                self.wrongness_label.config(text="N/A")
+                self.cutoff_label.config(text="N/A")
         else:
-            self.wrongness_label.config(text="N/A")
             self.tokens_count_label.config(text="N/A")
+            self.cutoff_label.config(text="N/A")
 
 
 def main():

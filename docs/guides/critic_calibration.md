@@ -79,6 +79,13 @@ incorrect) for each bucket. Buckets with no direct observations inherit the
 probability from the closest populated bucket as described above, so the saved
 array exactly mirrors the verbose bucket report.
 
+Both `sample.py` and `sample_simple.py` automatically read these tables when a
+critic head is present. If a checkpoint has no dedicated entry in
+`calibration.json`, the samplers fall back to a synthetic calibration ramp that
+starts at 0.01 for bucket 0 and linearly increases to 0.99 for bucket 99. This
+ensures critic-guided remasking remains functional even before a calibration
+pass has been recorded.
+
 When `--verbose` is active the script prints a table of 100 lines after every
 100 processed sequences. Each line shows the bucket index, the number of critic
 scores that landed in that bucket, how many of those had critic target 1, and

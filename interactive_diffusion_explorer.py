@@ -14,12 +14,16 @@ from contextlib import nullcontext
 from typing import Dict, Any, List, Tuple, Optional
 
 import torch
-from model import GPTConfig, GPT
+from model import GPTConfig, GPT, ModelMode
 
 # Import utilities from existing files
 sys.path.append('data/char_diffusion')
 from masking_utils import apply_stage_masking, apply_random_masking_cpu, apply_target_driven_sticky_masking_cpu, apply_span_masking_cpu
-from sample_utils import build_critic_artifacts_from_logits
+from sample_utils import (
+    apply_remasking_step,
+    build_critic_artifacts_from_logits,
+    load_critic_calibration_table,
+)
 
 
 # Terminal control
@@ -63,6 +67,10 @@ class DiffusionExplorer:
         self.file_metadata = None
         self.ptdtype = {'float32': torch.float32, 'bfloat16': torch.bfloat16, 'float16': torch.float16}[DTYPE]
         self.ctx = nullcontext() if DEVICE == 'cpu' else torch.amp.autocast(device_type=DEVICE, dtype=self.ptdtype)
+        self.critic_calibration_values: Optional[List[float]] = None
+        self.critic_calibration_found: bool = False
+        self.critic_calibration_tensor: Optional[torch.Tensor] = None
+        self.randomness_strength: float = 0.5
 
     def clear_screen(self):
         """Clear console screen"""
@@ -278,6 +286,7 @@ class DiffusionExplorer:
                 # Success - update instance state
                 self.model = model
                 self.model_path = checkpoint_path
+                self._load_critic_calibration_metadata()
 
                 print(f"✅ Model loaded successfully")
                 print(f"   • Parameters: {self.model.get_num_params()/1e6:.1f}M")
@@ -293,6 +302,42 @@ class DiffusionExplorer:
                 print("Press any key to select a different checkpoint...")
                 self.wait_for_key()
                 continue
+
+    def _load_critic_calibration_metadata(self) -> None:
+        """Load critic calibration table for the currently loaded model, if any."""
+        self.critic_calibration_values = None
+        self.critic_calibration_found = False
+        self.critic_calibration_tensor = None
+
+        if self.model is None or self.model_path is None:
+            return
+
+        try:
+            calibration_values, calibration_found = load_critic_calibration_table(self.model_path)
+        except Exception:
+            calibration_values, calibration_found = None, False
+
+        if calibration_values is None:
+            return
+
+        self.critic_calibration_values = calibration_values
+        self.critic_calibration_found = calibration_found
+
+        has_critic = getattr(getattr(self.model, 'config', object()), 'add_critic_head', False)
+        if not has_critic:
+            return
+
+        device = next(self.model.parameters()).device
+        self.critic_calibration_tensor = torch.tensor(
+            calibration_values,
+            dtype=torch.float32,
+            device=device,
+        )
+
+        if calibration_found:
+            print("Loaded critic calibration table from calibration.json.")
+        else:
+            print("Warning: No critic calibration entry found; using default 0.01→0.99 ramp.")
 
     def select_dataset(self) -> bool:
         """Select dataset from available datasets"""
@@ -1270,6 +1315,10 @@ class DiffusionExplorer:
         self.print_header("Critic-Guided Iterative Unmasking")
 
         try:
+            if self.critic_calibration_tensor is None and self.model_path is not None:
+                # Ensure calibration metadata is available for the active checkpoint
+                self._load_critic_calibration_metadata()
+
             # Work on device
             current_tokens = masked_tokens.clone().to(DEVICE)
             current_mask = mask.clone()
@@ -1277,6 +1326,24 @@ class DiffusionExplorer:
 
             iteration = 0
             temperature = 0.8
+            randomness_strength = self.randomness_strength
+
+            print("🎛️ Remasking randomness strength controls how much uniform noise mixes with calibrated critic wrongness.")
+            randomness_input = input(f"Set randomness strength (0-1, blank keeps {randomness_strength:.2f}): ").strip()
+            if randomness_input:
+                try:
+                    randomness_strength = float(randomness_input)
+                except ValueError:
+                    print("⚠️ Invalid randomness strength input; keeping previous value.")
+            randomness_strength = max(0.0, min(1.0, randomness_strength))
+            self.randomness_strength = randomness_strength
+
+            seq_len = current_tokens.shape[1]
+            protected_mask = torch.zeros_like(current_tokens, dtype=torch.bool)
+            if content_len < seq_len:
+                protected_mask[:, content_len:] = True
+            if self.pad_token_id is not None:
+                protected_mask |= (original_tokens_device == int(self.pad_token_id))
 
             while True:
                 iteration += 1
@@ -1296,6 +1363,8 @@ class DiffusionExplorer:
                 current_text = self.decode_tokens(current_tokens[0])
                 print(f"    {repr(current_text)}")
                 print()
+
+                tokens_before_prediction = current_tokens.clone()
 
                 # Unmask step: fill masked positions with model predictions
                 with torch.no_grad():
@@ -1320,6 +1389,8 @@ class DiffusionExplorer:
                         # Clear mask for these positions
                         current_mask[0, masked_positions] = False
 
+                logits_for_remask = scaled_logits.detach()
+
                 # Show unmasked result with color coding
                 print(f"✅ Unmasking complete!")
                 print(f"📄 Unmasked state (🟢=correct 🔴=incorrect ⚪=original):")
@@ -1334,13 +1405,11 @@ class DiffusionExplorer:
                     char = self.itos.get(token_id, f'[UNK:{token_id}]') if token_id < len(self.itos) else f'[UNK:{token_id}]'
 
                     if i in was_masked_set:
-                        # This was masked and just predicted
                         if token_id == original_id:
-                            colored_parts.append(f'\033[32m{char}\033[0m')  # Green = correct
+                            colored_parts.append(f'\033[32m{char}\033[0m')
                         else:
-                            colored_parts.append(f'\033[31m{char}\033[0m')  # Red = incorrect
+                            colored_parts.append(f'\033[31m{char}\033[0m')
                     else:
-                        # Original token (not masked)
                         colored_parts.append(char)
 
                 print(''.join(colored_parts))
@@ -1365,65 +1434,91 @@ class DiffusionExplorer:
                 print("=" * 80)
                 print()
 
-                print("Enter remasking threshold (% of tokens to remask, 0-100):")
+                print("Enter percentage of content tokens to remask (0-100).")
                 print("  0 = Exit iterative loop")
-                threshold_input = input("Threshold % (default 30): ").strip()
+                ratio_input = input("Remask % (default 30): ").strip()
 
-                if threshold_input == '0':
+                if ratio_input == '0':
                     print("Exiting iterative unmasking.")
                     self.wait_for_key()
                     break
 
                 try:
-                    threshold_pct = float(threshold_input) if threshold_input else 30.0
-                    threshold_pct = max(0.0, min(100.0, threshold_pct))
+                    remask_pct = float(ratio_input) if ratio_input else 30.0
+                    remask_pct = max(0.0, min(100.0, remask_pct))
                 except ValueError:
-                    threshold_pct = 30.0
+                    remask_pct = 30.0
 
-                # Calculate number of tokens to remask (only within content_len)
-                num_to_remask = int((threshold_pct / 100.0) * content_len)
-                num_to_remask = max(1, min(num_to_remask, content_len))
+                if remask_pct <= 0.0:
+                    print("No additional tokens selected for remasking. Ending loop.")
+                    self.wait_for_key()
+                    break
 
-                print(f"🔄 Remasking {num_to_remask} tokens (threshold: {threshold_pct:.1f}%)")
+                mask_ratio = remask_pct / 100.0
+                desired_count = max(1, int(round(mask_ratio * content_len)))
+                desired_count = min(desired_count, content_len)
+                effective_ratio = desired_count / max(seq_len, 1)
+
+                print(f"🔄 Targeting {desired_count} tokens ({remask_pct:.1f}% of content, effective ratio {effective_ratio:.4f}).")
                 print()
 
-                # Use critic to score all content tokens
-                with torch.no_grad():
-                    with self.ctx:
-                        critic_logits = self.model.critic_scores(current_tokens)
-                        critic_probs = torch.sigmoid(critic_logits)
+                prediction_snapshot = current_tokens.clone()
 
-                # Select top-k worst tokens (highest critic scores) within content
-                content_probs = critic_probs[0, :content_len]
-                _, worst_indices = torch.topk(content_probs, k=num_to_remask, largest=True)
+                remask_result = apply_remasking_step(
+                    tokens=tokens_before_prediction,
+                    prediction_tokens=current_tokens,
+                    iteration=0,
+                    iterations=1,
+                    schedule_type='custom',
+                    masking_ratios=None,
+                    start_ratio=effective_ratio,
+                    end_ratio=effective_ratio,
+                    randomness_strength=randomness_strength,
+                    mask_token_id=self.mask_token_id,
+                    device=DEVICE,
+                    base_model=self.model,
+                    intelligent_remasking=False,
+                    verbose=False,
+                    logits_from_predict=logits_for_remask,
+                    protected_mask=protected_mask,
+                    critic_calibration=self.critic_calibration_tensor,
+                )
 
-                # Show which tokens will be remasked (color them red) - respect newlines
-                print(f"🔴 Tokens selected for remasking (highest critic scores):")
+                if not isinstance(remask_result, tuple):
+                    remasked_tokens = remask_result
+                    min_wrongness = None
+                    remasked_indices = []
+                else:
+                    remasked_tokens, min_wrongness, remasked_indices = remask_result
+
+                remasked_positions = [pos for (batch_idx, pos) in remasked_indices if batch_idx == 0]
+                actual_count = len(remasked_positions)
+
+                if actual_count == 0:
+                    print("⚠️ Critic-guided planner did not select any tokens for remasking.")
+                else:
+                    remask_set = set(remasked_positions)
+                    colored_parts = []
+                    for i in range(content_len):
+                        token_id = int(prediction_snapshot[0, i].item())
+                        char = self.itos.get(token_id, f'[UNK:{token_id}]') if token_id < len(self.itos) else f'[UNK:{token_id}]'
+                        if i in remask_set:
+                            colored_parts.append(f'\033[31m{char}\033[0m')
+                        else:
+                            colored_parts.append(char)
+                    print(f"🔴 Tokens selected for remasking (calibrated critic ratios):")
+                    print(''.join(colored_parts))
+                    print()
+                    print(f"    \033[31m🔴 = Will be remasked\033[0m  ⚪ = Kept")
+
+                if min_wrongness is not None:
+                    print(f"Lowest calibrated wrongness among selected tokens: {min_wrongness:.4f}")
+                print(f"Randomness strength applied: {randomness_strength:.2f}")
+                print(f"Actual remasked tokens: {actual_count}")
                 print()
-                remask_set = set(worst_indices.tolist())
-                colored_parts = []
-                for i in range(content_len):
-                    token_id = int(current_tokens[0, i].item())
-                    char = self.itos.get(token_id, f'[UNK:{token_id}]') if token_id < len(self.itos) else f'[UNK:{token_id}]'
-                    if i in remask_set:
-                        colored_parts.append(f'\033[31m{char}\033[0m')  # Red
-                    else:
-                        colored_parts.append(char)
-                print(''.join(colored_parts))
-                print()
-                print(f"    \033[31m🔴 = Will be remasked\033[0m  ⚪ = Kept")
-                print()
 
-                # Wait for user to observe
-                self.wait_for_key("Press any key to apply remasking and continue to next iteration...")
-
-                # Apply remasking
-                for idx in worst_indices:
-                    current_tokens[0, idx] = self.mask_token_id
-                    current_mask[0, idx] = True
-
-                print(f"✅ Remasked {num_to_remask} tokens")
-                print()
+                current_tokens = remasked_tokens
+                current_mask = (current_tokens == self.mask_token_id)
 
         except Exception as e:
             print(f"❌ Error during critic iterative unmasking: {e}")

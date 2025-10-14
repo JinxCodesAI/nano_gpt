@@ -24,23 +24,25 @@ Both strategies share the same loader path, vocabulary handling, seed protection
    ```bash
    python sample.py --sampling_method=diffusion --iterations=32 --temperature=0.7
    ```
+   The configurator only accepts `--key=value` style overrides—flags without an explicit value (for example `--save`) will raise the `AssertionError` shown above. When enabling iteration capture, provide the full path as the value: `python sample.py --save_iterations_path=out/run.json`.
    Config files passed as positional arguments are executed before CLI key/value overrides, allowing reproducible experiment bundles.【F:sample.py†L1-L196】【F:configurator.py†L1-L40】
 3. **Choose seed placement.** The optional `seed_text` is tokenized and protected either at the prefix or a random offset. Protected tokens are never remasked or resampled.【F:sample.py†L262-L299】【F:sample.py†L485-L555】
 4. **Run generation.** The script wraps inference in `torch.no_grad()` and AMP contexts when CUDA is available. A `TimingAccumulator` provides per-stage latency stats if enabled.【F:sample.py†L680-L756】
 5. **(Optional) Evaluate quality.** After sampling, the script can compute self-confidence scores or run a judge model configured for sequence scoring.【F:sample.py†L718-L756】
+6. **(Optional) Capture iteration traces.** Set `save_iterations_path` to a JSON file to mirror the simplified sampler's logging; diffusion runs will return the per-iteration token snapshots and masked indices so they can be exported alongside generator and metadata paths for later inspection.【F:sample.py†L346-L519】【F:sample.py†L742-L794】
 
 ## 3. Diffusion Sampling Lifecycle
 
 1. **Initialization.** The batch is filled with mask tokens, and seed text is injected and protected. Verbose mode prints sanity checks before diffusion begins.【F:sample.py†L343-L390】
 2. **Iteration loop.** Each pass performs:
    - **Prediction:** `predict_and_sample_tokens` runs the model on the current tokens, collects logits for masked positions, applies temperature/top-p, excludes special tokens, and samples replacements. Sampling is batched per masked location to avoid re-decoding unmasked tokens.【F:sample.py†L392-L414】【F:sample_utils.py†L71-L206】
-   - **Remasking (except the final pass):** `apply_remasking_step` determines which positions to mask before the next iteration, using either schedules, critic logits, or intelligent uncertainty heuristics.【F:sample.py†L416-L451】【F:sample_utils.py†L401-L579】
-3. **Schedules.** By default, a linear schedule decreases the remasking ratio from `start_ratio` to `end_ratio`. Custom per-iteration ratios are supported when `schedule_type='custom'`. The helper delegates to `linear_remasking_schedule` when running in ratio mode.【F:sample_utils.py†L11-L28】【F:sample_utils.py†L463-L495】
-4. **Remasking strategies.** Inside `apply_remasking_step` the helper ranks candidate positions and, depending on guidance availability, blends deterministic scores with the `randomness_strength` noise term so repeated runs do not collapse to identical edits:
-   - **Critic-guided remasking:** If the model exposes `add_critic_head`, `critic_logits` are used as per-token wrongness scores. In ratio mode those logits are linearly mixed with uniform noise using `randomness_strength` before the top-k tokens are selected, while threshold mode ignores the blend and masks everything above the schedule threshold.【F:sample.py†L384-L387】【F:sample_utils.py†L468-L552】
-   - **Intelligent self-remasking:** When diffusion logits are available, the helper converts the probability of the sampled token into an uncertainty score (`1 - p`). Ratio mode again applies the `randomness_strength` blend with uniform noise before choosing the highest-uncertainty tokens; threshold mode masks every position whose uncertainty clears the schedule threshold and exits early if none qualify.【F:sample_utils.py†L521-L562】
-   - **Random fallback:** When neither critic nor uncertainty scores exist, the helper falls back to `apply_remasking`, which simply permutes eligible indices and masks the requested count. The randomness blend has no effect in this path because there is no deterministic score to mix with, so the result is purely random.【F:sample_utils.py†L310-L388】【F:sample_utils.py†L564-L579】
-   All paths respect protected seed positions, support early termination when nothing should be masked, and degrade gracefully to ratio selection if a threshold schedule is requested without a guidance signal.【F:sample_utils.py†L430-L579】
+   - **Remasking (except the final pass):** `apply_remasking_step` determines which positions to mask before the next iteration, using either schedules, critic logits, or intelligent uncertainty heuristics.【F:sample.py†L416-L519】【F:sample_utils.py†L401-L579】
+3. **Schedules.** By default, a linear schedule decreases the remasking ratio from `start_ratio` to `end_ratio`. Custom per-iteration ratios are supported when `schedule_type='custom'`. The helper delegates to `linear_remasking_schedule` when running in ratio mode.【F:sample_utils.py†L11-L28】【F:sample_utils.py†L509-L549】
+4. **Remasking strategies.** Inside `apply_remasking_step` the helper ranks candidate positions and, depending on guidance availability, mixes deterministic scores with the `randomness_strength` noise term so repeated runs do not collapse to identical edits:
+   - **Critic-guided remasking:** With `add_critic_head` enabled, the critic logits are passed through a sigmoid, mapped to calibration buckets (from `calibration.json` or a default 0.01→0.99 ramp), and transformed into calibrated wrongness probabilities. Each eligible token draws a uniform `luck` value while `randomness_strength` interpolates those calibrated probabilities toward fresh uniform noise before computing the `luck / wrongness` ratios. The sampler masks the `k` positions with the smallest ratios and records the same metadata that the simplified sampler emits when `save_iterations_path` is configured.【F:sample.py†L346-L519】【F:sample_utils.py†L567-L606】
+   - **Intelligent self-remasking:** When diffusion logits are available, the helper converts the probability of the sampled token into an uncertainty score (`1 - p`). Those scores are blended with uniform noise using `randomness_strength` before selecting the highest-uncertainty positions for masking.【F:sample_utils.py†L610-L640】
+   - **Random fallback:** When neither critic nor uncertainty scores exist, the helper falls back to `apply_remasking`, which simply permutes eligible indices and masks the requested count. The randomness blend has no effect in this path because there is no deterministic score to mix with, so the result is purely random.【F:sample_utils.py†L310-L388】【F:sample_utils.py†L642-L652】
+     All paths respect protected seed positions and default to ratio schedules even without explicit guidance.【F:sample_utils.py†L463-L652】
 5. **Progress reporting.** `log_iteration_progress` prints the percentage of masked tokens and snapshots of decoded text for the first and final iterations when `show_progress` is enabled.【F:sample.py†L300-L341】
 
 ## 4. Multinomial Resampling Lifecycle
@@ -58,8 +60,7 @@ Multinomial mode keeps the same initialization and progress logging but bypasses
 | `top_p` | Diffusion only | Enables nucleus sampling that restricts sampling to the smallest token set whose cumulative probability exceeds `top_p`. Set to 1.0 to disable.【F:sample_utils.py†L31-L69】【F:sample.py†L400-L412】 |
 | `iterations` | Both | Number of predict/remask or resample cycles. Diffusion can exit early if remasking schedules finish or no tokens qualify for masking.【F:sample.py†L392-L451】【F:sample.py†L512-L556】 |
 | `start_ratio` / `end_ratio` | Diffusion | Define how aggressively masks are reintroduced over time. Higher `start_ratio` masks most tokens early for broad exploration; higher `end_ratio` keeps more tokens mutable toward the end.【F:sample_utils.py†L11-L28】【F:sample_utils.py†L401-L579】 |
-| `randomness_strength` | Diffusion | Blends deterministic guidance with uniform noise when selecting tokens to remask, preventing the process from getting stuck in local optima.【F:sample_utils.py†L333-L373】【F:sample_utils.py†L468-L579】 |
-| `schedule_mode` | Diffusion | Choose between masking a fixed ratio per iteration (`ratio`) or masking everything above a wrongness threshold (`threshold`). Threshold mode provides adaptive iteration counts via early termination signals.【F:sample_utils.py†L430-L579】 |
+| `randomness_strength` | Diffusion | Blends deterministic guidance with uniform noise when selecting tokens to remask, preventing the process from getting stuck in local optima.【F:sample_utils.py†L333-L373】【F:sample_utils.py†L463-L579】 |
 | `seed_placement` | Both | Chooses whether `seed_text` anchors the prefix or a random offset. Protected positions are never masked or resampled.【F:sample.py†L262-L299】【F:sample.py†L485-L555】 |
 | `base_vocab_size`, `mask_token_id`, `pad_token_id` | Both | Guard rails that remove special tokens from sampling logits; values come from dataset metadata to stay consistent with training.【F:sample_utils.py†L153-L170】【F:sample.py†L559-L603】 |
 
@@ -71,10 +72,10 @@ Multinomial mode keeps the same initialization and progress logging but bypasses
 
 ## 7. Extending Sampling Behavior
 
-- **New remasking heuristics:** Add branches inside `apply_remasking_step` to compute a score tensor and mask accordingly. Ensure compatibility with both ratio and threshold modes, and consider randomness blending to avoid deterministic traps.【F:sample_utils.py†L430-L579】
-- **Alternative schedules:** Replace or augment `linear_remasking_schedule` with custom functions; update `schedule_type` handling to select them based on configuration.【F:sample_utils.py†L11-L28】【F:sample_utils.py†L463-L495】
+  - **New remasking heuristics:** Add branches inside `apply_remasking_step` to compute a score tensor and mask accordingly. When extending the critic path, remember to map scores into calibrated probabilities so they remain compatible with the luck/ratio selection used during sampling.【F:sample_utils.py†L463-L652】
+  - **Alternative schedules:** Replace or augment `linear_remasking_schedule` with custom functions; update `schedule_type` handling to select them based on configuration.【F:sample_utils.py†L11-L28】【F:sample_utils.py†L509-L549】
 - **Custom quality metrics:** Mirror the judge/self-confidence implementations by adding new enum members, loading required models, and computing metrics within the post-generation block.【F:sample.py†L680-L756】
-- **Diffusion loop instrumentation:** When instrumenting new heuristics or integrating with reinforcement pipelines, prefer to hook into `predict_and_sample_tokens` and `apply_remasking_step` so that diffusion-specific optimizations (mask-aware batching, remasking thresholds, critic integration) remain in effect.【F:sample.py†L392-L451】【F:sample_utils.py†L401-L579】
+- **Diffusion loop instrumentation:** When instrumenting new heuristics or integrating with reinforcement pipelines, prefer to hook into `predict_and_sample_tokens` and `apply_remasking_step` so that diffusion-specific optimizations (mask-aware batching, calibrated remasking, critic integration) remain in effect.【F:sample.py†L392-L451】【F:sample_utils.py†L401-L579】
 
 ## 8. Performance Considerations
 

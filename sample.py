@@ -6,6 +6,7 @@ import os
 import time
 import math
 import pickle
+import json
 from contextlib import nullcontext
 from collections import Counter
 
@@ -17,7 +18,7 @@ from model import GPTConfig, GPT, ModelMode
 from sample_utils import (
     linear_remasking_schedule, nucleus_sample, apply_remasking,
     calculate_selfconfidence_ratio, predict_and_sample_tokens, apply_remasking_step,
-    calculate_judge_scores,
+    calculate_judge_scores, load_critic_calibration_table,
 )
 
 from core.common.timings import TimingAccumulator, print_global_summary
@@ -70,6 +71,9 @@ end_ratio = 0.05   # Final ratio of tokens to remask (5%)
 # Remasking parameters (diffusion only)
 randomness_strength = 0.2  # Balance between random (1.0) and model-guided (0.0) remasking
 intelligent_remasking = True  # Enable self-confidence based remasking when no remasking model
+
+# Iteration saving (set to a path like 'output.json' to enable)
+save_iterations_path = None
 
 # Quality metric configuration
 class QualityMetric(Enum):
@@ -337,18 +341,42 @@ def log_iteration_progress(iteration, total_iterations, tokens, mask_token_id, d
         preview = sample_text[:100] + ('...' if len(sample_text) > 100 else '')
         print(f"  Sample: {preview}")
 
-def diffusion_generate(model, batch_size, total_length, iterations, mask_token_id, vocab_size,
-                      decode_fn, verbose=False, seed_ids=None, placement=SeedPlacement.PREFIX):
-    """
-    Generate text using diffusion-based iterative demasking
+def diffusion_generate(
+    model,
+    batch_size,
+    total_length,
+    iterations,
+    mask_token_id,
+    vocab_size,
+    temperature,
+    top_p,
+    decode_fn,
+    seed_ids=None,
+    placement=SeedPlacement.PREFIX,
+    start_ratio=0.95,
+    end_ratio=0.05,
+    masking_ratios=None,
+    schedule_type='linear',
+    randomness_strength=0.0,
+    verbose=False,
+    show_progress=True,
+    save_iterations=False,
+    critic_calibration=None,
+    pad_token_id=None,
+    base_vocab_size=None,
+    intelligent_remasking=False,
+):
+    """Generate text using diffusion-based iterative demasking."""
 
-    Returns:
-        Generated tokens (batch_size, total_length)
-    """
-    # Start with all positions masked
-    tokens = torch.full((batch_size, total_length), mask_token_id, dtype=torch.long, device=device)
+    device = next(model.parameters()).device
 
-    # Apply seed text (never to be masked) if provided
+    tokens = torch.full(
+        (batch_size, total_length),
+        int(mask_token_id),
+        dtype=torch.long,
+        device=device,
+    )
+
     tokens, protected_mask = apply_seed_text(
         tokens=tokens,
         seed_ids=seed_ids,
@@ -356,39 +384,79 @@ def diffusion_generate(model, batch_size, total_length, iterations, mask_token_i
         batch_size=batch_size,
         total_length=total_length,
         device=device,
-        verbose=verbose
+        verbose=verbose,
     )
 
-    # Debug: Check initial token setup
     if verbose:
         print(f"DEBUG: Initial tokens shape: {tokens.shape}")
         print(f"DEBUG: mask_token_id: {mask_token_id}, vocab_size: {vocab_size}")
-        print(f"DEBUG: All tokens set to mask_token_id: {torch.all(tokens == mask_token_id).item()}")
-        print(f"DEBUG: Token value range: {tokens.min().item()} to {tokens.max().item()}")
+        print(
+            "DEBUG: All tokens set to mask_token_id: "
+            f"{torch.all(tokens == mask_token_id).item()}"
+        )
+        print(
+            "DEBUG: Token value range: "
+            f"{tokens.min().item()} to {tokens.max().item()}"
+        )
 
-    # Mark the wall-clock start of generation aligned with the first progress log
     global generation_start_wall_time
     generation_start_wall_time = time.time()
 
     if verbose or show_progress:
-        print(f"Starting diffusion generation:")
+        print("Starting diffusion generation:")
         print(f"  - Samples: {batch_size}")
         print(f"  - Length: {total_length}")
         print(f"  - Iterations: {iterations}")
-        print(f"  - Temperature: {temperature}")
-        if getattr(getattr(model, 'config', object()), 'add_critic_head', False):
-            print(f"  - Using critic-guided remasking")
-        elif intelligent_remasking:
-            print(f"  - Using intelligent self-remasking")
+        print(f"  - Temperature: {temperature}, Top-p: {top_p}")
+        if masking_ratios is not None:
+            print(
+                f"  - Custom schedule with {len(masking_ratios)} ratios"
+            )
         else:
-            print(f"  - Using random remasking")
+            print(
+                f"  - Schedule: {schedule_type} ({start_ratio:.1%} → {end_ratio:.1%})"
+            )
+        if getattr(getattr(model, 'config', object()), 'add_critic_head', False):
+            print("  - Using critic-guided remasking")
+        elif intelligent_remasking:
+            print("  - Using intelligent self-remasking")
+        else:
+            print("  - Using random remasking")
         print("=" * 60)
+
+    samples_data = [[] for _ in range(batch_size)] if save_iterations else None
+    prev_min_wrongness = None
 
     for iteration in range(iterations):
         if verbose or show_progress:
-            log_iteration_progress(iteration, iterations, tokens, mask_token_id, decode_fn)
+            if masking_ratios is not None and iteration < len(masking_ratios):
+                target_ratio = masking_ratios[iteration]
+            else:
+                target_ratio = linear_remasking_schedule(
+                    iteration,
+                    iterations,
+                    start_ratio,
+                    end_ratio,
+                )
+            masked_count = (tokens == mask_token_id).sum().item()
+            total_tokens = tokens.numel()
+            masked_ratio = masked_count / max(total_tokens, 1)
+            log_message = (
+                f"Iteration {iteration + 1}/{iterations}: "
+                f"{masked_count}/{total_tokens} masked "
+                f"({masked_ratio:.1%}), target_ratio={target_ratio:.3f}"
+            )
+            if prev_min_wrongness is not None:
+                log_message += f", min_wrongness={prev_min_wrongness:.3f}"
+            print(log_message)
 
-        # Step 1: Predict tokens for masked positions
+            if iteration in (0, iterations - 1) and tokens.numel() > 0:
+                sample_text = decode_fn(tokens[0])
+                preview = sample_text[:100] + (
+                    '...' if len(sample_text) > 100 else ''
+                )
+                print(f"  Sample: {preview}")
+
         _t = get_global_timer()
         _cm = _t.measure('predict_and_sample') if _t is not None else nullcontext()
         with _cm:
@@ -403,22 +471,21 @@ def diffusion_generate(model, batch_size, total_length, iterations, mask_token_i
                 verbose=verbose and use_verbose_logging,
                 return_logits=True,
                 pad_token_id=pad_token_id,
-                base_vocab_size=base_vocab_size
+                base_vocab_size=base_vocab_size,
             )
 
-        tokens = prediction_tokens
-
-        # Step 2: Remask for next iteration (except last iteration)
         if iteration < iterations - 1:
             _t = get_global_timer()
             _cm = _t.measure('remask') if _t is not None else nullcontext()
             with _cm:
-                _remask_result = apply_remasking_step(
+                remask_result = apply_remasking_step(
                     tokens=tokens,
                     prediction_tokens=prediction_tokens,
                     iteration=iteration,
                     iterations=iterations,
-                    schedule_type=schedule_type,
+                    schedule_type=(
+                        'custom' if masking_ratios is not None else schedule_type
+                    ),
                     masking_ratios=masking_ratios,
                     start_ratio=start_ratio,
                     end_ratio=end_ratio,
@@ -426,27 +493,86 @@ def diffusion_generate(model, batch_size, total_length, iterations, mask_token_i
                     mask_token_id=mask_token_id,
                     device=device,
                     base_model=model,
-                    intelligent_remasking=(False if getattr(getattr(model, 'config', object()), 'add_critic_head', False) else intelligent_remasking),
+                    intelligent_remasking=(
+                        False
+                        if getattr(
+                            getattr(model, 'config', object()),
+                            'add_critic_head',
+                            False,
+                        )
+                        else intelligent_remasking
+                    ),
                     verbose=verbose and use_verbose_logging,
                     logits_from_predict=logits,
-                    protected_mask=protected_mask
+                    protected_mask=protected_mask,
+                    critic_calibration=critic_calibration,
                 )
-            # apply_remasking_step returns (remasked_tokens, min_wrongness, remasked_indices)
-            if isinstance(_remask_result, tuple):
-                remasked_tokens = _remask_result[0]
-                # Early termination signal in threshold mode (nothing to mask)
-                if remasked_tokens is None:
-                    break
-                tokens = remasked_tokens
-            else:
-                # Backward-compat path
-                tokens = _remask_result
 
+            if not isinstance(remask_result, tuple):
+                remasked_tokens = remask_result
+                min_wrongness = None
+                remasked_indices = []
+            else:
+                remasked_tokens, min_wrongness, remasked_indices = remask_result
+
+            if save_iterations:
+                tokens_cpu = tokens.detach().cpu().tolist()
+                pred_tokens_cpu = prediction_tokens.detach().cpu().tolist()
+                remasked_by_sample = [[] for _ in range(batch_size)]
+                for batch_idx, pos in remasked_indices:
+                    remasked_by_sample[batch_idx].append(pos)
+                for sample_idx in range(batch_size):
+                    samples_data[sample_idx].append(
+                        {
+                            'iteration': iteration + 1,
+                            'input_masked': tokens_cpu[sample_idx],
+                            'output_unmasked': pred_tokens_cpu[sample_idx],
+                            'remasked_indices': remasked_by_sample[sample_idx],
+                        }
+                    )
+
+            prev_min_wrongness = min_wrongness
+
+            if remasked_tokens is None:
+                tokens = prediction_tokens
+                break
+
+            tokens = remasked_tokens
+        else:
+            if save_iterations:
+                tokens_cpu = tokens.detach().cpu().tolist()
+                pred_tokens_cpu = prediction_tokens.detach().cpu().tolist()
+                for sample_idx in range(batch_size):
+                    samples_data[sample_idx].append(
+                        {
+                            'iteration': iteration + 1,
+                            'input_masked': tokens_cpu[sample_idx],
+                            'output_unmasked': pred_tokens_cpu[sample_idx],
+                            'remasked_indices': [],
+                        }
+                    )
+            tokens = prediction_tokens
+
+    if save_iterations:
+        return tokens, samples_data
     return tokens
 
-def multinomial_generate(model, batch_size, total_length, iterations, mask_token_id, vocab_size,
-                        decode_fn, temperature=0.8, verbose=False, seed_ids=None,
-                        placement=SeedPlacement.PREFIX, pad_token_id=None, base_vocab_size=None):
+def multinomial_generate(
+    model,
+    batch_size,
+    total_length,
+    iterations,
+    mask_token_id,
+    vocab_size,
+    decode_fn,
+    temperature=0.8,
+    verbose=False,
+    seed_ids=None,
+    placement=SeedPlacement.PREFIX,
+    pad_token_id=None,
+    base_vocab_size=None,
+    save_iterations=False,
+):
     """
     Generate text using multinomial sampling with iterative full-sequence resampling
 
@@ -502,6 +628,8 @@ def multinomial_generate(model, batch_size, total_length, iterations, mask_token
         print("=" * 60)
 
     previous_tokens = None
+    samples_data = [[] for _ in range(batch_size)] if save_iterations else None
+    mask_token_value = int(mask_token_id)
 
     for iteration in range(iterations):
         if verbose or show_progress:
@@ -510,6 +638,7 @@ def multinomial_generate(model, batch_size, total_length, iterations, mask_token
 
         # Store previous tokens for change tracking
         previous_tokens = tokens.clone()
+        tokens_before = previous_tokens
 
         # Step 1: Run model forward pass
         _t = get_global_timer()
@@ -546,7 +675,55 @@ def multinomial_generate(model, batch_size, total_length, iterations, mask_token
             new_tokens = tokens.clone()
             new_tokens[~protected_mask] = sampled_tokens[~protected_mask]
 
+        if save_iterations:
+            tokens_before_cpu = tokens_before.detach().cpu()
+            new_tokens_cpu = new_tokens.detach().cpu()
+
+            if iteration == 0:
+                for sample_idx in range(batch_size):
+                    samples_data[sample_idx].append(
+                        {
+                            'iteration': iteration + 1,
+                            'input_masked': tokens_before_cpu[sample_idx].tolist(),
+                            'output_unmasked': new_tokens_cpu[sample_idx].tolist(),
+                            'remasked_indices': None,
+                        }
+                    )
+            else:
+                changed_mask = tokens_before_cpu != new_tokens_cpu
+                input_masked_cpu = tokens_before_cpu.clone()
+                for sample_idx in range(batch_size):
+                    changed_indices = (
+                        torch.nonzero(
+                            changed_mask[sample_idx], as_tuple=False
+                        )
+                        .squeeze(-1)
+                        .tolist()
+                    )
+
+                    # Update previous iteration entry with the indices that changed this round
+                    samples_data[sample_idx][-1]['remasked_indices'] = changed_indices
+
+                    if changed_indices:
+                        input_masked_cpu[sample_idx, changed_indices] = mask_token_value
+
+                    samples_data[sample_idx].append(
+                        {
+                            'iteration': iteration + 1,
+                            'input_masked': input_masked_cpu[sample_idx].tolist(),
+                            'output_unmasked': new_tokens_cpu[sample_idx].tolist(),
+                            'remasked_indices': None,
+                        }
+                    )
+
         tokens = new_tokens
+
+    if save_iterations:
+        for sample_idx in range(batch_size):
+            if samples_data[sample_idx]:
+                if samples_data[sample_idx][-1]['remasked_indices'] is None:
+                    samples_data[sample_idx][-1]['remasked_indices'] = []
+        return tokens, samples_data
 
     return tokens
 
@@ -556,6 +733,7 @@ model, checkpoint = load_model_from_checkpoint(main_checkpoint_path, device, com
 
 # Load vocabulary
 stoi, itos, meta_vocab_size, dataset_name, meta = load_vocabulary(checkpoint)
+meta_path = os.path.join('data', dataset_name, 'meta.pkl')
 
 # Get model's actual vocabulary size from checkpoint
 model_vocab_size = model.config.vocab_size
@@ -589,6 +767,20 @@ if pad_token_id is not None and pad_token_id < len(itos):
     print(f"Using pad_token_id: {pad_token_id} ('{itos[pad_token_id]}')")
 print(f"Total vocab_size: {vocab_size}")
 print(f"Base vocab_size (content tokens): {base_vocab_size if base_vocab_size else vocab_size - 1}")
+
+critic_calibration_values, critic_calibration_found = load_critic_calibration_table(main_checkpoint_path)
+model_device = next(model.parameters()).device
+critic_calibration_tensor = torch.tensor(
+    critic_calibration_values,
+    dtype=torch.float32,
+    device=model_device,
+)
+if getattr(getattr(model, 'config', object()), 'add_critic_head', False):
+    if critic_calibration_found:
+        print("Loaded critic calibration table from calibration.json.")
+    else:
+        print("Warning: No critic calibration entry found; using default 0.01→0.99 ramp.")
+
 # Tokenize seed text to insert and protect from remasking
 seed_ids = [stoi[c] for c in seed_text if c in stoi] if seed_text else []
 if use_verbose_logging and seed_ids:
@@ -676,21 +868,38 @@ with torch.no_grad():
     with ctx:
         if sampling_method == 'diffusion':
             # Diffusion generation
-            generated_tokens = diffusion_generate(
+            diffusion_output = diffusion_generate(
                 model=model,
                 batch_size=num_samples,
                 total_length=sequence_length,
                 iterations=iterations,
                 mask_token_id=mask_token_id,
                 vocab_size=vocab_size,  # Full vocab size (includes mask token)
+                temperature=temperature,
+                top_p=top_p,
                 decode_fn=decode,
-                verbose=use_verbose_logging,
                 seed_ids=seed_ids,
-                placement=seed_placement
+                placement=seed_placement,
+                start_ratio=start_ratio,
+                end_ratio=end_ratio,
+                masking_ratios=masking_ratios,
+                schedule_type=schedule_type,
+                randomness_strength=randomness_strength,
+                verbose=use_verbose_logging,
+                show_progress=show_progress,
+                save_iterations=save_iterations_path is not None,
+                critic_calibration=critic_calibration_tensor,
+                pad_token_id=pad_token_id,
+                base_vocab_size=base_vocab_size,
+                intelligent_remasking=intelligent_remasking,
             )
+            if save_iterations_path is not None:
+                generated_tokens, iteration_data = diffusion_output
+            else:
+                generated_tokens = diffusion_output
         elif sampling_method == 'multinomial':
             # Multinomial generation
-            generated_tokens = multinomial_generate(
+            multinomial_output = multinomial_generate(
                 model=model,
                 batch_size=num_samples,
                 total_length=sequence_length,
@@ -703,9 +912,37 @@ with torch.no_grad():
                 seed_ids=seed_ids,
                 placement=seed_placement,
                 pad_token_id=pad_token_id,
-                base_vocab_size=base_vocab_size
+                base_vocab_size=base_vocab_size,
+                save_iterations=save_iterations_path is not None,
             )
+            if save_iterations_path is not None:
+                generated_tokens, iteration_data = multinomial_output
+            else:
+                generated_tokens = multinomial_output
         _end_wall = time.time()
+
+        if save_iterations_path is not None:
+            print(f"\nSaving iteration data to {save_iterations_path}...")
+            samples_output = []
+            for sample_idx, sample_iterations in enumerate(iteration_data):
+                samples_output.append({
+                    'sample_id': sample_idx,
+                    'iterations': sample_iterations,
+                })
+
+            output_data = {
+                'generator': main_checkpoint_path,
+                'meta': meta_path,
+                'samples': samples_output,
+            }
+
+            with open(save_iterations_path, 'w') as f:
+                json.dump(output_data, f, indent=2)
+
+            print(
+                f"Saved {len(samples_output)} samples with "
+                f"{len(samples_output[0]['iterations']) if samples_output else 0} iterations each"
+            )
 
         # Calculate quality metric (for both diffusion and multinomial)
         metric = quality_metric
