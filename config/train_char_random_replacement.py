@@ -1,74 +1,89 @@
-"""Training configuration for the random replacement character dataset.
+"""Training configuration for the char_random_replacement dataset."""
 
-This module mirrors :mod:`config.train_char_diffusion` but swaps in the
-``char_random_replacement`` dataset and reloads stage composition configs from
-``data/char_random_replacement/config``. Importing the diffusion config first
-lets us inherit sensible defaults without copying every hyperparameter.
-"""
+# train a character-level model for diffusion/unmasking tasks
+# based on shakespeare data with random replacement corruption
 
-from __future__ import annotations
+out_dir = 'out-char-random-replacement'
+eval_interval = 250
+eval_iters = 200
+log_interval = 10
 
-import importlib.util
-import os
+# save checkpoints when validation improves
+always_save_checkpoint = False
 
-from config.train_char_diffusion import *  # noqa: F401,F403 - re-export base defaults
+wandb_log = False # override via command line if you like
+wandb_project = 'char-diffusion'
+wandb_run_name = 'random-replacement-char'
 
+dataset = 'char_random_replacement'
 
-dataset = "char_random_replacement"
-wandb_run_name = "random-replacement-char"
+composition_config = 'example'  # refers to data/char_random_replacement/config/example.py; use None if config is not defined
 
-# ``composition_config`` refers to ``data/char_random_replacement/config/<name>.py``.
-composition_config = "example"
-
-
-def _load_stage_config(dataset_name: str, config_name: str | None) -> None:
-    """Populate globals with stage configuration overrides.
-
-    This replicates the logic used in ``train_char_diffusion`` but resolves the
-    composition module relative to ``dataset_name`` so that both ``train.py``
-    and ``prepare.py`` can reuse the same config file.
-    """
-
-    global use_all_stages_for_training
-    global unmasking_stages
-    global validation_stages
-
-    if config_name is None:
-        use_all_stages_for_training = None
-        unmasking_stages = None
-        validation_stages = None
-        return
-
+# Load global variables from composition config if specified
+if composition_config is not None:
+    import os
     config_path = os.path.join(
         os.path.dirname(__file__),
-        "..",
-        "data",
-        dataset_name,
-        "config",
-        f"{config_name}.py",
+        '..',
+        'data',
+        dataset,
+        'config',
+        f'{composition_config}.py',
     )
+    if os.path.exists(config_path):
+        import importlib.util
+        spec = importlib.util.spec_from_file_location(f"{composition_config}_config", config_path)
+        config_module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(config_module)
 
-    if not os.path.exists(config_path):
+        # Import all global variables from the config
+        for attr_name in dir(config_module):
+            if not attr_name.startswith('_'):
+                globals()[attr_name] = getattr(config_module, attr_name)
+        print(f"Loaded composition config from {config_path}")
+    else:
         print(f"Warning: composition config file not found at {config_path}")
-        use_all_stages_for_training = None
-        unmasking_stages = None
-        validation_stages = None
-        return
+else:
+    # Set default values when no composition config is used
+    use_all_stages_for_training = None
+    unmasking_stages = None
+    validation_stages = None
 
-    spec = importlib.util.spec_from_file_location(f"{config_name}_config", config_path)
-    if spec is None or spec.loader is None:
-        raise ImportError(f"Unable to load composition config at {config_path}")
+gradient_accumulation_steps = 1
+batch_size = 16  # Slightly larger batch size for BERT training
+block_size = 1024 # Context size for masking
 
-    module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
+# BERT training typically uses lower learning rates
+learning_rate = 5e-4
+max_iters = 10000
+lr_decay_iters = 10000
+min_lr = 5e-5
+beta2 = 0.99
+warmup_iters = 500  # More warmup for BERT
 
-    for attr_name, value in module.__dict__.items():
-        if attr_name.startswith("_"):
-            continue
-        globals()[attr_name] = value
+# Model architecture - bidirectional for BERT
+n_layer = 8
+n_head = 8
+n_embd = 512
+dropout = 0.1
+dtype = 'float16'
 
-    print(f"Loaded composition config from {config_path}")
+# Training type for masked language modeling
+training_type = 'MLM' # Masked Language Modeling
 
+# Diffusion/masking specific config
+mask_probability = 0.15  # Standard BERT masking rate
+mask_token_id = None  # Will be set from dataset meta
 
-_load_stage_config(dataset, composition_config)
+# Data streaming config
+batches_per_file = 100  # Smaller files for faster iteration
+max_backlog_files = 3
+sleep_seconds = 1.0
+data_stream_verbose = True
+ignore_index = -100  # Default PyTorch ignore index
 
+# For debugging on smaller machines, uncomment:
+# device = 'cpu'
+# compile = False
+# batch_size = 4
+# block_size = 128
