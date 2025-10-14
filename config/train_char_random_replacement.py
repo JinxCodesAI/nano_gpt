@@ -51,8 +51,8 @@ else:
     unmasking_stages = None
     validation_stages = None
 
-gradient_accumulation_steps = 4
-batch_size = 16  # Slightly larger batch size for BERT training
+gradient_accumulation_steps = 2
+batch_size = 384  # Slightly larger batch size for BERT training
 block_size = 1024 # Context size for masking
 
 # BERT training typically uses lower learning rates
@@ -79,7 +79,7 @@ mask_token_id = None  # Will be set from dataset meta
 
 # Data streaming config
 batches_per_file = 100  # Smaller files for faster iteration
-max_backlog_files = 3
+max_backlog_files = 10
 sleep_seconds = 1.0
 data_stream_verbose = True
 ignore_index = -100  # Default PyTorch ignore index
