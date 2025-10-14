@@ -9,13 +9,15 @@ eval_iters = 200
 log_interval = 10
 
 # save checkpoints when validation improves
-always_save_checkpoint = False
+always_save_checkpoint = True
+compile = True
 
-wandb_log = False # override via command line if you like
+wandb_log = True # override via command line if you like
 wandb_project = 'char-diffusion'
 wandb_run_name = 'random-replacement-char'
 
 dataset = 'char_random_replacement'
+data_stream_verbose = True
 
 composition_config = 'example'  # refers to data/char_random_replacement/config/example.py; use None if config is not defined
 

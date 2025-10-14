@@ -143,9 +143,42 @@ class DatasetConsumer:
         if self._mode != "queue":
             return
         # delete only in queue mode
+        stats_line = None
+        if self.verbose:
+            tensors = self._loaded_data.get(split)
+            try:
+                if tensors:
+                    first_tensor = next(iter(tensors.values()))
+                    num_samples = int(first_tensor.shape[0])
+
+                    x_tensor = tensors.get("x")
+                    if x_tensor is not None:
+                        total_tokens = int(x_tensor.numel())
+                    else:
+                        total_tokens = int(
+                            sum(int(t.numel()) for t in tensors.values() if isinstance(t, torch.Tensor))
+                        )
+
+                    masked_tokens = None
+                    y_tensor = tensors.get("y")
+                    if y_tensor is not None:
+                        ignore_index = self.meta.get("ignore_index", -100)
+                        masked_tokens = int((y_tensor != ignore_index).sum().item())
+
+                    parts = [
+                        f"samples={num_samples}",
+                        f"tokens={total_tokens}",
+                    ]
+                    if masked_tokens is not None:
+                        parts.append(f"masked={masked_tokens}")
+                    stats_line = ", ".join(parts)
+            except Exception as stats_err:
+                stats_line = f"stats_unavailable: {stats_err}"
         try:
             os.remove(path)
             if self.verbose:
+                if stats_line:
+                    print(f"[consumer] file stats: {stats_line} for {path}")
                 print(f"[consumer] deleted: {path}")
         except Exception as e:
             if self.verbose:
@@ -282,4 +315,3 @@ class DatasetConsumer:
             "current_val_batch": self._current_batch_idx["val"],
             "initialized": self._initialized,
         }
-

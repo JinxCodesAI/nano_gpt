@@ -10,16 +10,15 @@ from model import GPTConfig, GPT
 
 # -----------------------------------------------------------------------------
 init_from = 'resume' # either 'resume' (from an out_dir) or a gpt2 variant (e.g. 'gpt2-xl')
-out_dir = 'out-shakespeare-char' # ignored if init_from is not 'resume'
-ckpt_name = 'ckpt_shakespeare_char_3250.pt'
-start = "\n" # or "<|endoftext|>" or etc. Can also specify a file, use as: "FILE:prompt.txt"
-num_samples = 10 # number of samples to draw
-max_new_tokens = 500 # number of tokens generated in each sample
+out_dir = 'out-char-random-replacement' # ignored if init_from is not 'resume'
+ckpt_name = 'ckpt_MLM_3500.pt'
+start = "\nWhere is the king?" # or "<|endoftext|>" or etc. Can also specify a file, use as: "FILE:prompt.txt"
+num_samples = 1 # number of samples to draw
+max_new_tokens = 900 # number of tokens generated in each sample
 max_iterations = 20 # maximum number of diffusion iterations per sample
 fix_prompt_during_diffusion = True # keep conditioning text fixed at every iteration when True
 temperature = 0.8 # 1.0 = no change, < 1.0 = less random, > 1.0 = more random, in predictions
-top_k = 10 # retain only the top_k most likely tokens, clamp others to have 0 probability
-seed = 1337
+seed = 42
 device = 'cuda' # examples: 'cpu', 'cuda', 'cuda:0', 'cuda:1', etc.
 dtype = 'bfloat16' if torch.cuda.is_available() and torch.cuda.is_bf16_supported() else 'float16' # 'float32' or 'bfloat16' or 'float16'
 compile = False # use PyTorch 2.0 to compile the model to be faster
@@ -102,6 +101,9 @@ with torch.no_grad():
                 # Execute a full forward pass on the current sequence to obtain token logits.
                 # We pass the entire padded sequence so the model can condition on every position
                 # (prompt + generated tokens) before proposing replacements for the active window.
+                
+                dupa = x[0, :max_token_pos].tolist()
+                print(decode(dupa))
                 logits, _ = model(x)
 
                 # Convert logits to probabilities for every token position. The softmax is taken
