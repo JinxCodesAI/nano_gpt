@@ -8,7 +8,7 @@ The core pieces you will interact with are:
 
 - `config/train_char_diffusion.py` – shared configuration used by both the data producer (`prepare.py`) and the trainer (`train.py`).
 - `data/char_diffusion/` – self-contained dataset provider that performs BERT-style masking over Shakespeare text and streams batches to disk.
-- `train.py` – the generic training loop that now defaults to the discrete diffusion configuration but is still hackable for custom experiments.
+- `train.py` – the generic training loop that now defaults to the discrete diffusion configuration but is still hackable for custom experiments. The underlying Transformer is strictly bidirectional and uses rotary position embeddings throughout.
 
 ## Install
 
@@ -18,7 +18,7 @@ pip install torch numpy wandb tqdm
 
 Optional extras:
 
-- [`transformers`](https://github.com/huggingface/transformers) and [`tiktoken`](https://github.com/openai/tiktoken) are only required if you plan to use the legacy sampling utilities in `sample.py`.
+- [`transformers`](https://github.com/huggingface/transformers) and [`tiktoken`](https://github.com/openai/tiktoken) remain useful for data preparation workflows, but autoregressive sampling utilities have been removed.
 
 ## Quick start: character diffusion workflow
 
@@ -68,7 +68,7 @@ The producer/consumer handshake allows you to swap in your own dataset by creati
 
 ## Efficiency notes
 
-`train.py` remains identical in spirit to the original nanoGPT script. It supports PyTorch 2.0 compilation, gradient accumulation, and distributed training. The default configuration now targets masked modeling, but causal language modeling remains possible by swapping in your own config.
+`train.py` remains identical in spirit to the original nanoGPT script. It supports PyTorch 2.0 compilation, gradient accumulation, and distributed training. The default configuration now targets masked modeling and the model code exclusively supports bidirectional diffusion-style objectives.
 
 `bench.py` can still be used for micro-benchmarks. By default it operates on synthetic data so you can measure kernel throughput without preparing a dataset. Set `real_data=True` and adapt the loader if you build a new provider with a memmap-compatible format.
 
