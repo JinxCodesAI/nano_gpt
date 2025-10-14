@@ -89,10 +89,16 @@ class CharDiffusionProvider(DataProviderBase):
         val_data = data[int(n * 0.9) :]
         self.train_ids = [self.stoi[c] for c in train_data]
         self.val_ids = [self.stoi[c] for c in val_data]
+
+        # Pre-compute candidate start positions aligned with line boundaries
+        self._newline_token_ids = {self.stoi[ch] for ch in ("\n", "\r") if ch in self.stoi}
+        self._train_line_start_indices = self._compute_line_start_indices(self.train_ids)
+        self._val_line_start_indices = self._compute_line_start_indices(self.val_ids)
         
         # Validate and initialize stage configuration
         self._validate_stage_config()
         self._initialize_stage_distribution()
+        self._stage_cycle_state = {"train": [], "val": []}
         
         if self.verbose:
             print(f"CharDiffusionProvider initialized:")
@@ -177,6 +183,84 @@ class CharDiffusionProvider(DataProviderBase):
         
         return distribution
 
+    def _get_stage_distribution(self, split: str) -> Optional[List[Dict]]:
+        return self.train_stage_distribution if split == "train" else self.val_stage_distribution
+
+    def _ensure_stage_cycle(self, split: str, rng) -> None:
+        if not self.use_all_stages_for_training:
+            return
+        if self._stage_cycle_state[split]:
+            return
+        distribution = self._get_stage_distribution(split)
+        if not distribution:
+            raise ValueError("Stage distribution requested but not configured.")
+
+        stage_pool: List[Dict] = []
+        for info in distribution:
+            stage_pool.extend([info["config"]] * info["count"])
+
+        if not stage_pool:
+            raise ValueError("Stage distribution produced no entries; check configuration.")
+
+        perm = torch.randperm(len(stage_pool), generator=rng).tolist()
+        shuffled = [stage_pool[i] for i in perm]
+        self._stage_cycle_state[split] = shuffled
+
+    def _pop_stage_config(self, split: str, rng) -> Dict:
+        if not self.use_all_stages_for_training:
+            raise RuntimeError("Stage config requested but stage training is disabled.")
+        self._ensure_stage_cycle(split, rng)
+        if not self._stage_cycle_state[split]:
+            self._ensure_stage_cycle(split, rng)
+        config = self._stage_cycle_state[split].pop()
+        if not self._stage_cycle_state[split]:
+            # Mark cycle as completed; next request will refresh
+            self._stage_cycle_state[split] = []
+        return config
+
+    def _compute_line_start_indices(self, ids: List[int]) -> torch.Tensor:
+        """Identify start indices that align with the first non-newline character on each line."""
+        if self.block_size is None:
+            raise ValueError("block_size must be set before computing line-aligned starts")
+
+        limit = len(ids) - self.block_size
+        if limit < 0:
+            raise ValueError("block_size is larger than the available sequence length")
+
+        starts: List[int] = []
+        last_was_newline = True  # treat start-of-file as a newline boundary
+        newline_ids = self._newline_token_ids
+
+        for idx, token_id in enumerate(ids):
+            if token_id in newline_ids:
+                last_was_newline = True
+                continue
+            if last_was_newline:
+                if idx <= limit:
+                    starts.append(idx)
+                last_was_newline = False
+                continue
+            last_was_newline = False
+
+        if not starts:
+            raise ValueError(
+                "No valid line-aligned start positions found; check input text or reduce block_size."
+            )
+        return torch.tensor(starts, dtype=torch.long)
+
+    def _get_line_start_indices(self, split: str) -> torch.Tensor:
+        return self._train_line_start_indices if split == "train" else self._val_line_start_indices
+
+    def _sample_start_positions(
+        self, start_candidates: torch.Tensor, num_samples: int, rng
+    ) -> List[int]:
+        if start_candidates.numel() == 0:
+            raise ValueError("No available start positions to sample from.")
+        choice_indices = torch.randint(
+            0, start_candidates.shape[0], (num_samples,), generator=rng
+        )
+        return start_candidates[choice_indices].tolist()
+
     def build_meta(self) -> Dict:
         """Build metadata for BERT-style masked language modeling."""
         if self.block_size is None:
@@ -207,10 +291,8 @@ class CharDiffusionProvider(DataProviderBase):
     def _sample_default_batch(self, split: str, rng) -> Dict[str, Any]:
         """Sample a batch with default BERT-style masking."""
         ids = self.train_ids if split == "train" else self.val_ids
-        max_start_idx = len(ids) - self.block_size
-        
-        # Use the provided RNG for proper randomization
-        ix = torch.randint(0, max_start_idx, (self.batch_size,), generator=rng).tolist()
+        start_candidates = self._get_line_start_indices(split)
+        ix = self._sample_start_positions(start_candidates, self.batch_size, rng)
         
         # Create sequences as tensor
         x_list = [ids[i : i + self.block_size] for i in ix]
@@ -233,67 +315,25 @@ class CharDiffusionProvider(DataProviderBase):
     def _sample_stage_based_batch(self, split: str, rng) -> Dict[str, Any]:
         """Sample a batch using stage-based masking configuration."""
         ids = self.train_ids if split == "train" else self.val_ids
-        max_start_idx = len(ids) - self.block_size
-        
-        # Get stage distribution for this split
-        stage_distribution = self.train_stage_distribution if split == "train" else self.val_stage_distribution
-        
-        # Generate samples according to stage distribution
-        all_x = []
-        all_y = []
-        
-        for stage_info in stage_distribution:
-            stage_config = stage_info['config']
-            count = stage_info['count']
-            
-            if count == 0:
-                continue
-                
-            # Sample sequences for this stage
-            ix = torch.randint(0, max_start_idx, (count * self.batch_size,), generator=rng).tolist()
-            x_list = [ids[i : i + self.block_size] for i in ix]
-            x_stage = torch.tensor(x_list, dtype=torch.long).view(count, self.batch_size, self.block_size)
-            
-            # Apply stage-specific masking to each batch in this stage
-            for batch_idx in range(count):
-                batch_x = x_stage[batch_idx]
-                
-                # Apply stage-specific masking
-                stage_corrupted_x, mask = apply_stage_masking(
-                    batch_x, stage_config, self.mask_token_id,
-                    self.vocab_size - 1, rng
-                )
+        start_candidates = self._get_line_start_indices(split)
 
-                corrupted_x = self._apply_stage_corruption(
-                    stage_corrupted_x, batch_x, mask, rng
-                )
+        stage_config = self._pop_stage_config(split, rng)
 
-                # Create labels: ignore_index for non-masked positions, original token for masked
-                labels = torch.where(mask, batch_x, self.ignore_index)
-                
-                all_x.append(corrupted_x)
-                all_y.append(labels)
-        
-        # Concatenate all batches and shuffle them randomly to distribute stages
-        if all_x:
-            combined_x = torch.cat(all_x, dim=0)
-            combined_y = torch.cat(all_y, dim=0)
-            
-            # Randomly shuffle the batches to mix different stage types
-            total_samples = combined_x.shape[0]
-            shuffle_indices = torch.randperm(total_samples, generator=rng)
-            
-            shuffled_x = combined_x[shuffle_indices]
-            shuffled_y = combined_y[shuffle_indices]
-            
-            # Take only one batch worth of samples (the base class expects single batch)
-            return {
-                "x": shuffled_x[:self.batch_size],
-                "y": shuffled_y[:self.batch_size],
-            }
-        else:
-            # Fallback to default masking if no stages configured
-            return self._sample_default_batch(split, rng)
+        ix = self._sample_start_positions(start_candidates, self.batch_size, rng)
+        x_list = [ids[i : i + self.block_size] for i in ix]
+        batch_x = torch.tensor(x_list, dtype=torch.long)
+
+        stage_corrupted_x, mask = apply_stage_masking(
+            batch_x, stage_config, self.mask_token_id, self.vocab_size - 1, rng
+        )
+
+        corrupted_x = self._apply_stage_corruption(
+            stage_corrupted_x, batch_x, mask, rng
+        )
+
+        labels = torch.where(mask, batch_x, self.ignore_index)
+
+        return {"x": corrupted_x, "y": labels}
 
 
 def main():

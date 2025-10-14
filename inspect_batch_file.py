@@ -193,6 +193,15 @@ def inspect_batch(
     decoder = None
     if meta and isinstance(meta.get("itos"), dict):
         decoder = {int(k): str(v) for k, v in meta["itos"].items()}
+    elif resolved_meta_path is None:
+        print("Note: no meta.pkl found while walking up from the batch file; decoding disabled.")
+        print()
+    elif meta is None:
+        print(f"Note: failed to load vocab from meta at {resolved_meta_path}; decoding disabled.")
+        print()
+    else:
+        print(f"Note: meta at {resolved_meta_path} does not define 'itos'; decoding disabled.")
+        print()
 
     ignore_index: Optional[int] = None
     if meta and "ignore_index" in meta:

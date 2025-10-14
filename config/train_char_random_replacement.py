@@ -51,7 +51,7 @@ else:
     unmasking_stages = None
     validation_stages = None
 
-gradient_accumulation_steps = 1
+gradient_accumulation_steps = 4
 batch_size = 16  # Slightly larger batch size for BERT training
 block_size = 1024 # Context size for masking
 
@@ -64,9 +64,9 @@ beta2 = 0.99
 warmup_iters = 500  # More warmup for BERT
 
 # Model architecture - bidirectional for BERT
-n_layer = 8
-n_head = 8
-n_embd = 512
+n_layer = 6
+n_head = 6
+n_embd = 384
 dropout = 0.1
 dtype = 'float16'
 

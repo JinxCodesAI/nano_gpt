@@ -98,20 +98,26 @@ def main() -> None:
 
     ProviderCls = _provider_for_dataset(dataset)
 
-    provider = ProviderCls(
-        data_dir=data_dir,
-        batch_size=cfg['batch_size'],
-        block_size=cfg['block_size'],
-        target_size=cfg.get('target_size', None),
-        batches_per_file=cfg.get('batches_per_file', 100),
-        max_backlog_files=cfg.get('max_backlog_files', 2),
-        sleep_seconds=cfg.get('sleep_seconds', 2.0),
-        seed=cfg.get('seed', 1337),
-        verbose=cfg.get('data_stream_verbose', True),
-    )
+    provider_kwargs = {
+        "data_dir": data_dir,
+        "batch_size": cfg["batch_size"],
+        "block_size": cfg["block_size"],
+        "target_size": cfg.get("target_size", None),
+        "batches_per_file": cfg.get("batches_per_file", 100),
+        "max_backlog_files": cfg.get("max_backlog_files", 2),
+        "sleep_seconds": cfg.get("sleep_seconds", 2.0),
+        "seed": cfg.get("seed", 1337),
+        "verbose": cfg.get("data_stream_verbose", True),
+    }
+
+    # Pass through optional stage-composition knobs when defined.
+    for key in ("use_all_stages_for_training", "unmasking_stages", "validation_stages"):
+        if key in cfg:
+            provider_kwargs[key] = cfg[key]
+
+    provider = ProviderCls(**provider_kwargs)
     provider.run()
 
 
 if __name__ == '__main__':
     main()
-
