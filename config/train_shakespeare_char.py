@@ -30,9 +30,6 @@ n_layer = 6
 n_head = 6
 n_embd = 384
 dropout = 0.2
-attention_type = 'causal' # 'causal' or 'bidirectional'
-position_encoding = 'absolute' # 'absolute' or 'rotary'
-
 training_type = 'LM' # 'MLM' for masked LM, 'TOKEN_CLASSIFICATION' for token level classification, 'SEQUENCE_SCORING' for sequence classification
 
 # on macbook also add

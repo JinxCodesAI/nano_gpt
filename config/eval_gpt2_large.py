@@ -1,8 +1,12 @@
-# evaluate the base gpt2
-# n_layer=36, n_head=20, n_embd=1280
-# 774M parameters
+"""Evaluate a saved diffusion checkpoint (historical GPT-2 large config name retained)."""
+
+# Directory containing the checkpoint manager output (`ckpt.pt`).
+out_dir = 'out-your-run'
+
 batch_size = 8
-eval_iters = 500 # use more iterations to get good estimate
+eval_iters = 500
 eval_only = True
 wandb_log = False
-init_from = 'gpt2-large'
+
+# Resume from a repository-generated checkpoint; GPT-2 weights are legacy only.
+init_from = 'resume'

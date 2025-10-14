@@ -1,8 +1,12 @@
-# evaluate the base gpt2
-# n_layer=48, n_head=25, n_embd=1600
-# 1558M parameters
+"""Evaluate a saved diffusion checkpoint (historical GPT-2 XL config name retained)."""
+
+# Set this to the directory whose CheckpointManager wrote `ckpt.pt`.
+out_dir = 'out-your-run'
+
 batch_size = 8
-eval_iters = 500 # use more iterations to get good estimate
+eval_iters = 500
 eval_only = True
 wandb_log = False
-init_from = 'gpt2-xl'
+
+# Evaluation resumes from local checkpoints only.
+init_from = 'resume'
