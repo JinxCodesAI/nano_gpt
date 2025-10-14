@@ -26,7 +26,7 @@ def apply_bert_style_corruption_cpu(x: torch.Tensor, mask: torch.Tensor,
     corrupted_x = x.clone()
     
     # Generate random values for all masked positions at once
-    rand_vals = torch.rand(mask.shape, generator=rng)
+    rand_vals = torch.rand(mask.shape, generator=rng, device=mask.device)
     
     # Create masks for the three corruption types
     mask_positions = mask & (rand_vals < 0.8)  # 80%: [MASK] token
@@ -39,7 +39,9 @@ def apply_bert_style_corruption_cpu(x: torch.Tensor, mask: torch.Tensor,
     # Apply random tokens
     if random_positions.any():
         num_random = random_positions.sum().item()
-        random_tokens = torch.randint(0, vocab_size, (num_random,), generator=rng)
+        random_tokens = torch.randint(
+            0, vocab_size, (num_random,), generator=rng, device=mask.device
+        )
         corrupted_x[random_positions] = random_tokens
     
     return corrupted_x
@@ -62,7 +64,7 @@ def apply_random_masking_cpu(x: torch.Tensor, mask_probability: float,
         mask: Boolean mask indicating which positions were selected for prediction
     """
     # Generate random mask using provided RNG
-    mask_tensor = torch.rand(x.shape, generator=rng)
+    mask_tensor = torch.rand(x.shape, generator=rng, device=x.device)
     mask = mask_tensor < mask_probability
     
     # Apply BERT-style corruption
@@ -100,79 +102,58 @@ def apply_target_driven_sticky_masking_cpu(x: torch.Tensor, target_masked_ratio:
         # No masking needed - return early
         return x.clone(), torch.zeros_like(x, dtype=torch.bool, device=device)
     
-    # Start with no masks
-    masked_x = x.clone()
-    
-    # Pre-allocate tensors to avoid repeated allocations
     current_mask = torch.zeros_like(x, dtype=torch.bool, device=device)
     neighbor_masked = torch.zeros_like(x, dtype=torch.bool, device=device)
-    
-    # Continue masking until we reach the target for each sequence
-    max_rounds = min(1000, target_masked_count * 10)  # Adaptive safety limit
-    target_tensor = torch.tensor(target_masked_count, device=device, dtype=torch.long)
-    
-    for round_idx in range(max_rounds):
-        # Update current mask state
-        current_mask = (masked_x == mask_token_id)
-        
-        # Check if we've reached target for all sequences
-        current_counts = current_mask.sum(dim=1)  # (batch_size,)
+    current_counts = torch.zeros(batch_size, dtype=torch.long, device=device)
+    target_tensor = torch.full((batch_size,), target_masked_count, dtype=torch.long, device=device)
+
+    max_rounds = min(1000, target_masked_count * 10)
+
+    for _ in range(max_rounds):
         sequences_need_more = current_counts < target_tensor
-        
         if not sequences_need_more.any():
-            break  # All sequences reached target
-        
-        # Find neighbor positions for sticky masking (reuse buffer)
+            break
+
         neighbor_masked.zero_()
-        
-        # Check left and right neighbors (vectorized)
-        neighbor_masked[:, 1:] |= current_mask[:, :-1]  # Left neighbor
-        neighbor_masked[:, :-1] |= current_mask[:, 1:]  # Right neighbor
-        
-        # Generate random values for masking decision
-        rand_vals = torch.rand(x.shape, dtype=torch.float, device=device, generator=rng)
-        
-        # Apply different probabilities based on neighbor status (vectorized)
+        neighbor_masked[:, 1:] |= current_mask[:, :-1]
+        neighbor_masked[:, :-1] |= current_mask[:, 1:]
+
+        rand_vals = torch.rand(x.shape, generator=rng, device=device)
         mask_probs = torch.where(neighbor_masked, p2_probability, p1_probability)
-        new_masks = (rand_vals < mask_probs) & ~current_mask
-        
-        # Only mask sequences that haven't reached target yet (vectorized)
-        sequences_need_more_expanded = sequences_need_more.unsqueeze(1).expand(-1, seq_len)
-        new_masks &= sequences_need_more_expanded
-        
-        # Apply new masks (vectorized) - just mark positions, don't corrupt yet
-        masked_x[new_masks] = mask_token_id
+        new_masks = (rand_vals < mask_probs) & (~current_mask)
+        new_masks &= sequences_need_more.unsqueeze(1)
 
-    # Final adjustment: remove excess masks
-    final_mask = (masked_x == mask_token_id)
-    final_counts = final_mask.sum(dim=1)  # (batch_size,)
+        if not new_masks.any():
+            break
 
-    # Only process sequences that exceeded target
+        additions = new_masks.sum(dim=1)
+        current_mask |= new_masks
+        current_counts += additions
+
+    final_counts = current_counts.clone()
     exceeded_sequences = torch.where(final_counts > target_tensor)[0]
 
     if exceeded_sequences.numel() > 0:
-        # Process exceeded sequences
-        for batch_idx in exceeded_sequences:
-            excess = (final_counts[batch_idx] - target_tensor).item()
-            if excess > 0:
-                # Find masked positions
-                seq_mask = final_mask[batch_idx]
-                masked_positions = torch.where(seq_mask)[0]
+        for batch_idx in exceeded_sequences.tolist():
+            excess = (final_counts[batch_idx] - target_tensor[batch_idx]).item()
+            if excess <= 0:
+                continue
+            seq_mask = current_mask[batch_idx]
+            masked_positions = torch.where(seq_mask)[0]
+            if masked_positions.numel() == 0:
+                continue
+            perm_indices = torch.randperm(
+                masked_positions.size(0), generator=rng, device=device
+            )[:excess]
+            positions_to_unmask = masked_positions[perm_indices]
+            current_mask[batch_idx, positions_to_unmask] = False
 
-                # Randomly select positions to unmask
-                perm_indices = torch.randperm(masked_positions.size(0), generator=rng)[:excess]
-                positions_to_unmask = masked_positions[perm_indices]
+    masked_x = x.clone()
+    masked_x[current_mask] = mask_token_id
 
-                # Restore original tokens (vectorized)
-                masked_x[batch_idx, positions_to_unmask] = x[batch_idx, positions_to_unmask]
+    corrupted_x = apply_bert_style_corruption_cpu(x, current_mask, mask_token_id, vocab_size, rng)
 
-    # Get final mask state and apply BERT-style corruption
-    final_mask = (masked_x == mask_token_id)
-
-    # Apply BERT-style 80/10/10 corruption to the selected positions
-    corrupted_x = apply_bert_style_corruption_cpu(x, final_mask, mask_token_id, vocab_size, rng)
-
-    return corrupted_x, final_mask
+    return corrupted_x, current_mask
 
 
 def apply_span_masking_cpu(x: torch.Tensor, spans_count: int, 

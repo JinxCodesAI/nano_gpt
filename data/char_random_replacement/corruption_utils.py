@@ -30,9 +30,6 @@ class RandomReplacementCorruptor:
         # Ensure deterministic ordering for reproducibility.
         sorted_candidates = sorted(int(token_id) for token_id in candidate_token_ids)
         self._candidate_tensor = torch.tensor(sorted_candidates, dtype=torch.long)
-        self._candidate_index = {
-            int(token_id): idx for idx, token_id in enumerate(sorted_candidates)
-        }
         self._original_multiplier = float(original_token_probability_multiplier)
 
     @property
@@ -44,36 +41,55 @@ class RandomReplacementCorruptor:
         if x.shape != mask.shape:
             raise ValueError("x and mask must share the same shape")
 
+        device = x.device
         corrupted = x.clone()
         masked_positions = mask.nonzero(as_tuple=False)
         if masked_positions.numel() == 0:
             return corrupted
 
-        candidates = self._candidate_tensor.to(x.device)
+        candidates = self._candidate_tensor.to(device)
         num_positions = masked_positions.size(0)
         num_candidates = candidates.size(0)
 
-        # Base weights initialised to 1 for all candidates.
-        weights = torch.ones((num_positions, num_candidates), dtype=torch.float32, device=x.device)
+        if num_candidates == 0:
+            raise ValueError("candidate_token_ids must contain at least one token")
 
-        if self._original_multiplier != 1.0:
-            original_tokens = x[masked_positions[:, 0], masked_positions[:, 1]].tolist()
-            for row_idx, token in enumerate(original_tokens):
-                candidate_idx = self._candidate_index.get(int(token))
-                if candidate_idx is not None:
-                    weights[row_idx, candidate_idx] *= self._original_multiplier
+        if num_candidates == 1:
+            replacements = candidates.expand(num_positions)
+            corrupted[masked_positions[:, 0], masked_positions[:, 1]] = replacements
+            return corrupted
 
-        weight_sums = weights.sum(dim=1, keepdim=True)
-        # Guard against degenerate configurations that zero out every weight.
-        if torch.any(weight_sums == 0):
-            raise ValueError("Sampling weights must be positive for every masked position")
+        original_tokens = x[masked_positions[:, 0], masked_positions[:, 1]]
+        candidate_indices = torch.searchsorted(candidates, original_tokens, right=False)
+        candidate_indices = torch.clamp(candidate_indices, max=num_candidates - 1)
+        match_mask = candidates[candidate_indices] == original_tokens
 
-        probabilities = weights / weight_sums
-        sampled_indices = torch.multinomial(
-            probabilities, 1, replacement=True, generator=rng
-        ).squeeze(1)
+        keep_prob = torch.zeros(num_positions, device=device, dtype=torch.float32)
+        if self._original_multiplier > 0 and match_mask.any():
+            denom = (num_candidates - 1) + self._original_multiplier
+            keep_prob[match_mask] = self._original_multiplier / denom
+
+        keep_draws = torch.rand(num_positions, generator=rng, device=device)
+        keep_mask = keep_draws < keep_prob
+
+        sampled_indices = torch.randint(
+            0, num_candidates, (num_positions,), generator=rng, device=device
+        )
+
+        exclude_mask = match_mask & (~keep_mask)
+        if exclude_mask.any():
+            exclude_count = exclude_mask.sum()
+            replacement_indices = torch.randint(
+                0, num_candidates - 1, (exclude_count,), generator=rng, device=device
+            )
+            orig_indices = candidate_indices[exclude_mask]
+            adjustment = (replacement_indices >= orig_indices).long()
+            sampled_indices[exclude_mask] = replacement_indices + adjustment
 
         replacements = candidates[sampled_indices]
+        if keep_mask.any():
+            replacements[keep_mask] = original_tokens[keep_mask]
+
         corrupted[masked_positions[:, 0], masked_positions[:, 1]] = replacements
         return corrupted
 

@@ -64,6 +64,14 @@ class CharDiffusionProvider(DataProviderBase):
         self.use_all_stages_for_training = kwargs.pop('use_all_stages_for_training', None)
         self.unmasking_stages = kwargs.pop('unmasking_stages', None)
         self.validation_stages = kwargs.pop('validation_stages', None)
+
+        device_arg = kwargs.pop('device', None)
+        if device_arg is None:
+            device_arg = 'cuda' if torch.cuda.is_available() else 'cpu'
+        device_obj = torch.device(device_arg)
+        if device_obj.type == 'cuda' and not torch.cuda.is_available():
+            device_obj = torch.device('cpu')
+        self._tensor_device = device_obj
         
         super().__init__(*args, **kwargs)
         
@@ -92,14 +100,14 @@ class CharDiffusionProvider(DataProviderBase):
 
         if self.block_size is None:
             raise ValueError("block_size must be set for CharDiffusionProvider")
-        self.train_ids_tensor = torch.tensor(self.train_ids, dtype=torch.long)
-        self.val_ids_tensor = torch.tensor(self.val_ids, dtype=torch.long)
-        self._sequence_offsets = torch.arange(self.block_size, dtype=torch.long)
+        self.train_ids_tensor = torch.tensor(self.train_ids, dtype=torch.long, device=self._tensor_device)
+        self.val_ids_tensor = torch.tensor(self.val_ids, dtype=torch.long, device=self._tensor_device)
+        self._sequence_offsets = torch.arange(self.block_size, dtype=torch.long, device=self._tensor_device)
 
         # Pre-compute candidate start positions aligned with line boundaries
         self._newline_token_ids = {self.stoi[ch] for ch in ("\n", "\r") if ch in self.stoi}
-        self._train_line_start_indices = self._compute_line_start_indices(self.train_ids)
-        self._val_line_start_indices = self._compute_line_start_indices(self.val_ids)
+        self._train_line_start_indices = self._compute_line_start_indices(self.train_ids).to(self._tensor_device)
+        self._val_line_start_indices = self._compute_line_start_indices(self.val_ids).to(self._tensor_device)
         
         # Validate and initialize stage configuration
         self._validate_stage_config()
@@ -113,6 +121,7 @@ class CharDiffusionProvider(DataProviderBase):
             print(f"  mask_token_id: {self.mask_token_id}")
             print(f"  train_data_size: {len(self.train_ids)}")
             print(f"  val_data_size: {len(self.val_ids)}")
+            print(f"  compute_device: {self._tensor_device}")
             if self.use_all_stages_for_training is not None:
                 print(f"  use_all_stages_for_training: {self.use_all_stages_for_training}")
                 print(f"  training_stages: {len(self.unmasking_stages) if self.unmasking_stages else 0}")
@@ -208,7 +217,9 @@ class CharDiffusionProvider(DataProviderBase):
         if not stage_pool:
             raise ValueError("Stage distribution produced no entries; check configuration.")
 
-        perm = torch.randperm(len(stage_pool), generator=rng).tolist()
+        perm = torch.randperm(
+            len(stage_pool), generator=rng, device=self._tensor_device
+        ).tolist()
         shuffled = [stage_pool[i] for i in perm]
         self._stage_cycle_state[split] = shuffled
 
@@ -263,7 +274,11 @@ class CharDiffusionProvider(DataProviderBase):
         if start_candidates.numel() == 0:
             raise ValueError("No available start positions to sample from.")
         choice_indices = torch.randint(
-            0, start_candidates.shape[0], (num_samples,), generator=rng
+            0,
+            start_candidates.shape[0],
+            (num_samples,),
+            generator=rng,
+            device=self._tensor_device,
         )
         return start_candidates[choice_indices]
 
@@ -274,6 +289,14 @@ class CharDiffusionProvider(DataProviderBase):
         flat_positions = positions.reshape(-1)
         gathered = ids_tensor[flat_positions]
         return gathered.view(start_indices.shape[0], self.block_size)
+
+    def _prepare_generator(self, rng: torch.Generator) -> torch.Generator:
+        if self._tensor_device.type == "cuda":
+            seed = torch.randint(0, 2**31 - 1, (1,), generator=rng).item()
+            device_rng = torch.Generator(device=self._tensor_device)
+            device_rng.manual_seed(seed)
+            return device_rng
+        return rng
 
     def build_meta(self) -> Dict:
         """Build metadata for BERT-style masked language modeling."""
@@ -297,10 +320,11 @@ class CharDiffusionProvider(DataProviderBase):
 
     def sample_batch(self, split: str, rng) -> Dict[str, Any]:
         """Sample a batch with stage-aware masking or default BERT-style masking."""
+        active_rng = self._prepare_generator(rng)
         if self.use_all_stages_for_training:
-            return self._sample_stage_based_batch(split, rng)
+            return self._sample_stage_based_batch(split, active_rng)
         else:
-            return self._sample_default_batch(split, rng)
+            return self._sample_default_batch(split, active_rng)
     
     def _sample_default_batch(self, split: str, rng) -> Dict[str, Any]:
         """Sample a batch with default BERT-style masking."""
@@ -311,7 +335,9 @@ class CharDiffusionProvider(DataProviderBase):
         x = self._gather_sequences(ids_tensor, start_indices)
         
         # Sample mask using the configured probability
-        mask = torch.rand(x.shape, generator=rng) < self.mask_probability
+        mask = torch.rand(
+            x.shape, generator=rng, device=self._tensor_device
+        ) < self.mask_probability
 
         # Apply corruption with subclass hook
         corrupted_x = self._apply_corruption(x, mask, rng)
@@ -320,8 +346,8 @@ class CharDiffusionProvider(DataProviderBase):
         labels = torch.where(mask, x, self.ignore_index)
         
         return {
-            "x": corrupted_x,
-            "y": labels,
+            "x": corrupted_x.cpu(),
+            "y": labels.cpu(),
         }
     
     def _sample_stage_based_batch(self, split: str, rng) -> Dict[str, Any]:
@@ -344,7 +370,7 @@ class CharDiffusionProvider(DataProviderBase):
 
         labels = torch.where(mask, batch_x, self.ignore_index)
 
-        return {"x": corrupted_x, "y": labels}
+        return {"x": corrupted_x.cpu(), "y": labels.cpu()}
 
 
 def main():
