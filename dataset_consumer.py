@@ -120,18 +120,23 @@ class DatasetConsumer:
         data = torch.load(path, map_location="cpu")
         # normalize data dict
         tensors: Dict[str, torch.Tensor] = {}
-        metadata: Dict = data.get("metadata", {})
-        if "x" in data and "y" in data:
-            tensors = {"x": data["x"], "y": data["y"]}
-        elif "tensors" in data:
-            tensors = data["tensors"]
+        metadata: Dict
+        if isinstance(data, dict):
+            metadata = data.get("metadata", {})
+            tensors = data.get("tensors", {})
+            if not tensors:
+                # allow legacy format where tensors are stored at top level
+                tensors = {k: v for k, v in data.items() if isinstance(v, torch.Tensor)}
         else:
-            # allow only tensors besides metadata
-            for k, v in data.items():
-                if k == "metadata":
-                    continue
-                if isinstance(v, torch.Tensor):
-                    tensors[k] = v
+            metadata = {}
+            tensors = {}
+
+        if not tensors:
+            raise RuntimeError(
+                f"Loaded batch file '{path}' but it did not contain any tensors. "
+                "Ensure the dataset producer finished writing files and that you are "
+                "using compatible versions of prepare.py and the provider."
+            )
         return tensors, metadata
 
     def _maybe_delete_consumed(self, split: str, path: str) -> None:

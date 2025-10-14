@@ -16,6 +16,7 @@ comes up with a better simple Python solution I am all ears.
 
 import sys
 from ast import literal_eval
+from pathlib import Path
 
 for arg in sys.argv[1:]:
     if '=' not in arg:
@@ -24,8 +25,18 @@ for arg in sys.argv[1:]:
         config_file = arg
         print(f"Overriding config with {config_file}:")
         with open(config_file) as f:
-            print(f.read())
-        exec(open(config_file).read())
+            source = f.read()
+            print(source)
+        prev_file = globals().get('__file__')
+        try:
+            globals()['__file__'] = str(Path(config_file).resolve())
+            code = compile(source, config_file, 'exec')
+            exec(code, globals())
+        finally:
+            if prev_file is not None:
+                globals()['__file__'] = prev_file
+            else:
+                globals().pop('__file__', None)
     else:
         # assume it's a --key=value argument
         assert arg.startswith('--')

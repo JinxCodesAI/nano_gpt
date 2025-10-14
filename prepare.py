@@ -33,7 +33,12 @@ def _load_config() -> dict:
     print(f"Overriding config with {config_file}:")
     with open(config_file) as f:
         print(f.read())
-    exec(open(config_file).read(), cfg_globals)
+    # emulate Python module globals so configs can rely on __file__ and __name__
+    cfg_globals['__file__'] = os.path.abspath(config_file)
+    cfg_globals.setdefault('__name__', '__config__')
+    with open(config_file, 'r') as f:
+        code = compile(f.read(), config_file, 'exec')
+    exec(code, cfg_globals)
     return cfg_globals
 
 
