@@ -103,53 +103,75 @@ def apply_target_driven_sticky_masking_cpu(x: torch.Tensor, target_masked_ratio:
         return x.clone(), torch.zeros_like(x, dtype=torch.bool, device=device)
     
     current_mask = torch.zeros_like(x, dtype=torch.bool, device=device)
-    neighbor_masked = torch.zeros_like(x, dtype=torch.bool, device=device)
     current_counts = torch.zeros(batch_size, dtype=torch.long, device=device)
     target_tensor = torch.full((batch_size,), target_masked_count, dtype=torch.long, device=device)
 
-    max_rounds = min(1000, target_masked_count * 10)
+    seq_len = x.shape[1]
+    max_batch_add = max(1, seq_len // 8)
 
-    for _ in range(max_rounds):
-        sequences_need_more = current_counts < target_tensor
-        if not sequences_need_more.any():
+    while True:
+        need = target_tensor - current_counts
+        active_idx = torch.nonzero(need > 0, as_tuple=False).squeeze(1)
+        if active_idx.numel() == 0:
             break
 
-        neighbor_masked.zero_()
-        neighbor_masked[:, 1:] |= current_mask[:, :-1]
-        neighbor_masked[:, :-1] |= current_mask[:, 1:]
+        sub_mask = current_mask.index_select(0, active_idx)
+        need_sub = need.index_select(0, active_idx)
 
-        rand_vals = torch.rand(x.shape, generator=rng, device=device)
-        mask_probs = torch.where(neighbor_masked, p2_probability, p1_probability)
-        new_masks = (rand_vals < mask_probs) & (~current_mask)
-        new_masks &= sequences_need_more.unsqueeze(1)
+        neighbor_masked = torch.zeros_like(sub_mask)
+        neighbor_masked[:, 1:] |= sub_mask[:, :-1]
+        neighbor_masked[:, :-1] |= sub_mask[:, 1:]
 
-        if not new_masks.any():
+        weights = torch.where(neighbor_masked, p2_probability, p1_probability)
+        weights = weights * (~sub_mask).float()
+
+        available_counts = (weights > 0).sum(dim=1)
+        need_sub = torch.minimum(need_sub, available_counts)
+        chunk = torch.minimum(need_sub, torch.full_like(need_sub, max_batch_add))
+
+        max_add = int(chunk.max().item())
+        if max_add == 0:
             break
 
-        additions = new_masks.sum(dim=1)
-        current_mask |= new_masks
-        current_counts += additions
+        weights = torch.where(
+            weights > 0, weights, torch.full_like(weights, 1e-6)
+        )
+        scores = -torch.log(torch.rand(weights.shape, device=device, generator=rng)) / weights
+        scores = scores.masked_fill(sub_mask, float("inf"))
 
-    final_counts = current_counts.clone()
-    exceeded_sequences = torch.where(final_counts > target_tensor)[0]
+        topk_vals, topk_idx = torch.topk(scores, max_add, dim=1, largest=False)
+        row_idx = torch.arange(active_idx.size(0), device=device).unsqueeze(1).expand(-1, max_add)
+        selection_mask = torch.arange(max_add, device=device).unsqueeze(0) < chunk.unsqueeze(1)
 
-    if exceeded_sequences.numel() > 0:
-        for batch_idx in exceeded_sequences.tolist():
-            excess = (final_counts[batch_idx] - target_tensor[batch_idx]).item()
-            if excess <= 0:
-                continue
-            seq_mask = current_mask[batch_idx]
-            masked_positions = torch.where(seq_mask)[0]
-            if masked_positions.numel() == 0:
-                continue
-            perm_indices = torch.randperm(
-                masked_positions.size(0), generator=rng, device=device
-            )[:excess]
-            positions_to_unmask = masked_positions[perm_indices]
-            current_mask[batch_idx, positions_to_unmask] = False
+        if selection_mask.any():
+            chosen_rows = row_idx[selection_mask]
+            chosen_cols = topk_idx[selection_mask]
+            sub_mask[chosen_rows, chosen_cols] = True
 
-    masked_x = x.clone()
-    masked_x[current_mask] = mask_token_id
+        current_mask.index_copy_(0, active_idx, sub_mask)
+        current_counts[active_idx] += chunk
+
+    remaining = target_tensor - current_counts
+    remaining_idx = torch.nonzero(remaining > 0, as_tuple=False).squeeze(1)
+    if remaining_idx.numel() > 0:
+        sub_mask = current_mask.index_select(0, remaining_idx)
+        remaining_sub = remaining.index_select(0, remaining_idx)
+        available = (~sub_mask)
+        available_counts = available.sum(dim=1)
+        remaining_sub = torch.minimum(remaining_sub, available_counts)
+        max_add = int(remaining_sub.max().item())
+        if max_add > 0:
+            scores = torch.rand(sub_mask.shape, device=device, generator=rng)
+            scores = scores.masked_fill(~available, float("inf"))
+            topk_val, topk_idx = torch.topk(scores, max_add, dim=1, largest=False)
+            row_idx = torch.arange(remaining_idx.size(0), device=device).unsqueeze(1).expand(-1, max_add)
+            selection_mask = torch.arange(max_add, device=device).unsqueeze(0) < remaining_sub.unsqueeze(1)
+            if selection_mask.any():
+                chosen_rows = row_idx[selection_mask]
+                chosen_cols = topk_idx[selection_mask]
+                sub_mask[chosen_rows, chosen_cols] = True
+            current_mask.index_copy_(0, remaining_idx, sub_mask)
+            current_counts[remaining_idx] += remaining_sub
 
     corrupted_x = apply_bert_style_corruption_cpu(x, current_mask, mask_token_id, vocab_size, rng)
 

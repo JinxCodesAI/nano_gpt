@@ -79,7 +79,7 @@ mask_token_id = None  # Will be set from dataset meta
 
 # Data streaming config
 batches_per_file = 100  # Smaller files for faster iteration
-max_backlog_files = 10
+max_backlog_files = 3
 sleep_seconds = 1.0
 data_stream_verbose = True
 ignore_index = -100  # Default PyTorch ignore index

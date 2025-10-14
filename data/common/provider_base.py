@@ -92,19 +92,84 @@ class DataProviderBase:
         rng.manual_seed(per_seed)
 
         start_time = time.time()
-        # collect batches
-        batches = [self.sample_batch(split, rng) for _ in range(self.batches_per_file)]
-        # concatenate along batch dimension
-        keys = batches[0].keys()
-        tensors: Dict[str, torch.Tensor] = {}
+        sample_time = 0.0
+        device_copy_time = 0.0
+        cpu_transfer_time = 0.0
+        save_time = 0.0
+        total_batches = self.batches_per_file
+        if total_batches <= 0:
+            raise ValueError("batches_per_file must be positive")
+
+        t0 = time.perf_counter()
+        first_batch = self.sample_batch(split, rng)
+        sample_time += time.perf_counter() - t0
+        keys = first_batch.keys()
+        total_capacity = self.batch_size * total_batches
+
+        device_buffers: Dict[str, torch.Tensor] = {}
+        first_batch_size = next(iter(first_batch.values())).shape[0]
+
         for k in keys:
-            tensors[k] = torch.cat([b[k] for b in batches], dim=0)
+            first_tensor = first_batch[k]
+            sample_shape = first_tensor.shape[1:]
+            buffer = torch.empty(
+                (total_capacity,) + sample_shape,
+                dtype=first_tensor.dtype,
+                device=first_tensor.device,
+            )
+            buffer[0:first_batch_size] = first_tensor
+            device_buffers[k] = buffer
+
+        offset = first_batch_size
+        total_written = first_batch_size
+        del first_batch
+
+        for _ in range(1, total_batches):
+            t0 = time.perf_counter()
+            batch = self.sample_batch(split, rng)
+            sample_time += time.perf_counter() - t0
+            current_size = next(iter(batch.values())).shape[0]
+            for k in keys:
+                data = batch[k]
+                buf = device_buffers[k]
+                if data.device != buf.device:
+                    t_copy_start = time.perf_counter()
+                    data = data.to(buf.device)
+                    device_copy_time += time.perf_counter() - t_copy_start
+                end = offset + current_size
+                if end > buf.shape[0]:
+                    raise RuntimeError(
+                        f"Buffer overflow when writing batch {seq}; "
+                        f"expected capacity {buf.shape[0]}, attempting to write up to {end}"
+                    )
+                buf[offset:end] = data
+            offset += current_size
+            total_written += current_size
+            del batch
+
+        tensors: Dict[str, torch.Tensor] = {}
+        for k, buf in device_buffers.items():
+            if buf.device.type != "cpu":
+                torch.cuda.synchronize() if buf.device.type == "cuda" else None
+                t_cpu_start = time.perf_counter()
+                tensors[k] = buf[:total_written].to("cpu", non_blocking=True)
+                torch.cuda.synchronize() if buf.device.type == "cuda" else None
+                cpu_transfer_time += time.perf_counter() - t_cpu_start
+            else:
+                tensors[k] = buf[:total_written]
+        device_buffers.clear()
+        try:
+            del buf  # release reference to last buffer
+        except UnboundLocalError:
+            pass
+        del device_buffers
         metadata = {
             "batch_size": self.batch_size,
             "num_batches": self.batches_per_file,
             "file_idx": seq,
             "split": split,
             "produced_at": int(time.time() * 1000),
+            "total_samples": total_written,
         }
         # write atomic
         d = self.train_dir if split == "train" else self.val_dir
@@ -113,10 +178,12 @@ class DataProviderBase:
         final_name = f"{ts}-{seq:06d}-{self.batches_per_file}.pt"
         tmp_path = os.path.join(d, tmp_name)
         final_path = os.path.join(d, final_name)
+        t_save_start = time.perf_counter()
         torch.save({"tensors": tensors, "metadata": metadata}, tmp_path)
+        save_time += time.perf_counter() - t_save_start
         os.replace(tmp_path, final_path)
         if self.verbose:
-            total_samples = self.batch_size * self.batches_per_file
+            total_samples = total_written
             total_batches = self.batches_per_file
             elapsed = time.time() - start_time
             ms_total = elapsed * 1000.0
@@ -126,7 +193,11 @@ class DataProviderBase:
             print(
                 f"[provider] stats: {total_samples} samples, "
                 f"{ms_total:.1f} ms total, {ms_per_sample:.3f} ms/sample, "
-                f"{ms_per_batch:.1f} ms/batch"
+                f"{ms_per_batch:.1f} ms/batch "
+                f"(sample={sample_time*1000:.1f} ms, "
+                f"device_copy={device_copy_time*1000:.1f} ms, "
+                f"cpu_transfer={cpu_transfer_time*1000:.1f} ms, "
+                f"save={save_time*1000:.1f} ms)"
             )
 
     def run(self, splits: Iterable[str] = ("train", "val")) -> None:

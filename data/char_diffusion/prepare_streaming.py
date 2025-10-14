@@ -346,8 +346,8 @@ class CharDiffusionProvider(DataProviderBase):
         labels = torch.where(mask, x, self.ignore_index)
         
         return {
-            "x": corrupted_x.cpu(),
-            "y": labels.cpu(),
+            "x": corrupted_x,
+            "y": labels,
         }
     
     def _sample_stage_based_batch(self, split: str, rng) -> Dict[str, Any]:
@@ -370,7 +370,7 @@ class CharDiffusionProvider(DataProviderBase):
 
         labels = torch.where(mask, batch_x, self.ignore_index)
 
-        return {"x": corrupted_x.cpu(), "y": labels.cpu()}
+        return {"x": corrupted_x, "y": labels}
 
 
 def main():
