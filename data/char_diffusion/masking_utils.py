@@ -257,22 +257,13 @@ def apply_stage_masking(x: torch.Tensor, stage_config: Dict[str, Any],
     if stage_type == 'random':
         max_masked_ratio = stage_config['max_masked_ratio']
         # For random masking, each sample gets a different random ratio up to max
-        batch_size = x.shape[0]
-        mask_ratios = torch.rand(batch_size, generator=rng) * max_masked_ratio
-        
-        # Apply masking for each sample with its ratio
-        all_corrupted = []
-        all_masks = []
-        
-        for i in range(batch_size):
-            sample_x = x[i:i+1]  # Keep batch dimension
-            corrupted_x, mask = apply_random_masking_cpu(
-                sample_x, mask_ratios[i].item(), mask_token_id, vocab_size, rng
-            )
-            all_corrupted.append(corrupted_x)
-            all_masks.append(mask)
-        
-        return torch.cat(all_corrupted, dim=0), torch.cat(all_masks, dim=0)
+        batch_size, seq_len = x.shape
+        mask_ratios = torch.rand(batch_size, generator=rng, dtype=torch.float, device=x.device) * max_masked_ratio
+        thresholds = mask_ratios.unsqueeze(1)
+        rand_vals = torch.rand((batch_size, seq_len), generator=rng, dtype=torch.float, device=x.device)
+        mask = rand_vals < thresholds
+        corrupted_x = apply_bert_style_corruption_cpu(x, mask, mask_token_id, vocab_size, rng)
+        return corrupted_x, mask
         
     elif stage_type == 'sticky':
         target_masked_ratio = stage_config['target_masked_ratio']

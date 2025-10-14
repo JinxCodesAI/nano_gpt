@@ -90,6 +90,12 @@ class CharDiffusionProvider(DataProviderBase):
         self.train_ids = [self.stoi[c] for c in train_data]
         self.val_ids = [self.stoi[c] for c in val_data]
 
+        if self.block_size is None:
+            raise ValueError("block_size must be set for CharDiffusionProvider")
+        self.train_ids_tensor = torch.tensor(self.train_ids, dtype=torch.long)
+        self.val_ids_tensor = torch.tensor(self.val_ids, dtype=torch.long)
+        self._sequence_offsets = torch.arange(self.block_size, dtype=torch.long)
+
         # Pre-compute candidate start positions aligned with line boundaries
         self._newline_token_ids = {self.stoi[ch] for ch in ("\n", "\r") if ch in self.stoi}
         self._train_line_start_indices = self._compute_line_start_indices(self.train_ids)
@@ -253,13 +259,21 @@ class CharDiffusionProvider(DataProviderBase):
 
     def _sample_start_positions(
         self, start_candidates: torch.Tensor, num_samples: int, rng
-    ) -> List[int]:
+    ) -> torch.Tensor:
         if start_candidates.numel() == 0:
             raise ValueError("No available start positions to sample from.")
         choice_indices = torch.randint(
             0, start_candidates.shape[0], (num_samples,), generator=rng
         )
-        return start_candidates[choice_indices].tolist()
+        return start_candidates[choice_indices]
+
+    def _gather_sequences(
+        self, ids_tensor: torch.Tensor, start_indices: torch.Tensor
+    ) -> torch.Tensor:
+        positions = start_indices.unsqueeze(1) + self._sequence_offsets
+        flat_positions = positions.reshape(-1)
+        gathered = ids_tensor[flat_positions]
+        return gathered.view(start_indices.shape[0], self.block_size)
 
     def build_meta(self) -> Dict:
         """Build metadata for BERT-style masked language modeling."""
@@ -290,13 +304,11 @@ class CharDiffusionProvider(DataProviderBase):
     
     def _sample_default_batch(self, split: str, rng) -> Dict[str, Any]:
         """Sample a batch with default BERT-style masking."""
-        ids = self.train_ids if split == "train" else self.val_ids
+        ids_tensor = self.train_ids_tensor if split == "train" else self.val_ids_tensor
         start_candidates = self._get_line_start_indices(split)
-        ix = self._sample_start_positions(start_candidates, self.batch_size, rng)
-        
-        # Create sequences as tensor
-        x_list = [ids[i : i + self.block_size] for i in ix]
-        x = torch.tensor(x_list, dtype=torch.long)
+        start_indices = self._sample_start_positions(start_candidates, self.batch_size, rng)
+
+        x = self._gather_sequences(ids_tensor, start_indices)
         
         # Sample mask using the configured probability
         mask = torch.rand(x.shape, generator=rng) < self.mask_probability
@@ -314,14 +326,13 @@ class CharDiffusionProvider(DataProviderBase):
     
     def _sample_stage_based_batch(self, split: str, rng) -> Dict[str, Any]:
         """Sample a batch using stage-based masking configuration."""
-        ids = self.train_ids if split == "train" else self.val_ids
+        ids_tensor = self.train_ids_tensor if split == "train" else self.val_ids_tensor
         start_candidates = self._get_line_start_indices(split)
 
         stage_config = self._pop_stage_config(split, rng)
 
-        ix = self._sample_start_positions(start_candidates, self.batch_size, rng)
-        x_list = [ids[i : i + self.block_size] for i in ix]
-        batch_x = torch.tensor(x_list, dtype=torch.long)
+        start_indices = self._sample_start_positions(start_candidates, self.batch_size, rng)
+        batch_x = self._gather_sequences(ids_tensor, start_indices)
 
         stage_corrupted_x, mask = apply_stage_masking(
             batch_x, stage_config, self.mask_token_id, self.vocab_size - 1, rng
