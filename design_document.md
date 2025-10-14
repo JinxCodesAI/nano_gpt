@@ -144,19 +144,18 @@ Extensibility points for advanced datasets
   - common sampling helpers: next-span for LM; dynamic masking for MLM; stratified sampling for classification
   - deterministic RNG per file via base seed + file seq for reproducibility
 
-### Example: Shakespeare Char Provider (sketch)
-Dataset-specific code only implements sample logic using already loaded ids.
+### Example: Char Diffusion Provider (sketch)
+Dataset-specific code focuses on masked token generation while relying on the base class for queue management.
 
-- build_meta: sets training_type=LM, vocab_size, batch_schema = [x:int64[block_size], y:int64[target_size]]
-- sample_batch(train, rng):
-  - choose random start indices; slice arrays; return {"x": x, "y": y}
+- `build_meta`: sets `training_type='MLM'`, adds vocabulary/mask metadata, and defines `batch_schema` with masked inputs and reconstruction targets.
+- `sample_batch(split, rng)`: chooses stage configuration, applies BERT-style masking, and returns `{"x": corrupted_tokens, "y": targets}`.
 
 ### Example: BERT MLM Provider (sketch)
 - training_type=MLM, batch_schema includes input_ids:int64[block_size], attention_mask:int8[block_size], labels:int64[block_size] with -100 for unmasked
 - sample_batch applies 15% masking with standard BERT rules and returns dict
 
 ### Configuration & CLI
-- Consumer: constructed from training config (similar to current train_shakespeare_char.py), auto-discovers meta and schema
+- Consumer: constructed from training config (mirrors `config/train_char_diffusion.py`), auto-discovers meta and schema
 - Provider: prepare.py scripts become thin wrappers around subclass of DataProviderBase with argparse options. Minimal flags:
   - --batch_size, --block_size, --target_size, --batches_per_file, --max_backlog_files, --sleep_seconds, --force_regenerate (optional: purge existing queue/*)
 - Misconfiguration handling:

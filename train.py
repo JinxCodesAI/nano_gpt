@@ -35,7 +35,7 @@ from checkpoint_manager import CheckpointManager
 torch._dynamo.config.suppress_errors = True
 
 # -----------------------------------------------------------------------------
-# default config values designed for a small GPT-like model on OpenWebText
+# default config values designed for the character diffusion masked-model setup
 # I/O
 out_dir = 'out'
 eval_interval = 2000
@@ -49,7 +49,7 @@ wandb_log = False # disabled by default
 wandb_project = 'owt'
 wandb_run_name = 'run' # 'run' + str(time.time())
 # data
-dataset = 'openwebtext'
+dataset = 'char_diffusion'
 gradient_accumulation_steps = 5 * 8 # used to simulate larger batch sizes
 batch_size = 12 # if gradient_accumulation_steps > 1, this is the micro-batch size
 block_size = 1024
