@@ -15,6 +15,7 @@ comes up with a better simple Python solution I am all ears.
 """
 
 import sys
+import builtins
 from ast import literal_eval
 from pathlib import Path
 
@@ -30,7 +31,7 @@ for arg in sys.argv[1:]:
         prev_file = globals().get('__file__')
         try:
             globals()['__file__'] = str(Path(config_file).resolve())
-            code = compile(source, config_file, 'exec')
+            code = builtins.compile(source, config_file, 'exec')
             exec(code, globals())
         finally:
             if prev_file is not None:
