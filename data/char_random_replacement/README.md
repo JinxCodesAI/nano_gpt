@@ -19,6 +19,18 @@ corruption step.
   `corruption_utils.RandomReplacementCorruptor`, making it easy to add new
   replacement rules in future revisions.
 
+## Stage composition configs
+
+Stage schedules live under `config/`. They follow the same structure as the
+`char_diffusion` configs, meaning you can either reuse the shared
+`config/complex.py` proxy or start from the included
+[`config/example.py`](config/example.py) file and adjust the stage dictionaries
+for your experiment. A ready-to-run training/prepare configuration is available
+at [`config/train_char_random_replacement.py`](../../config/train_char_random_replacement.py);
+use it as-is or copy it into your own experiment directory as a template.
+
+## Usage
+
 Run `prepare.py` with a config that sets `dataset='char_random_replacement'`
 and either copies `input.txt` into this directory or points `data_dir` at
 `data/char_diffusion` to reuse the existing Shakespeare corpus. All other knobs
