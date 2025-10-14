@@ -91,6 +91,7 @@ class DataProviderBase:
         per_seed = (self.seed * 1000003) ^ (hash(split) & 0xFFFFFFFF) ^ seq
         rng.manual_seed(per_seed)
 
+        start_time = time.time()
         # collect batches
         batches = [self.sample_batch(split, rng) for _ in range(self.batches_per_file)]
         # concatenate along batch dimension
@@ -115,7 +116,18 @@ class DataProviderBase:
         torch.save({"tensors": tensors, "metadata": metadata}, tmp_path)
         os.replace(tmp_path, final_path)
         if self.verbose:
+            total_samples = self.batch_size * self.batches_per_file
+            total_batches = self.batches_per_file
+            elapsed = time.time() - start_time
+            ms_total = elapsed * 1000.0
+            ms_per_sample = ms_total / total_samples if total_samples else float("inf")
+            ms_per_batch = ms_total / total_batches if total_batches else float("inf")
             print(f"[provider] produced: {final_path}")
+            print(
+                f"[provider] stats: {total_samples} samples, "
+                f"{ms_total:.1f} ms total, {ms_per_sample:.3f} ms/sample, "
+                f"{ms_per_batch:.1f} ms/batch"
+            )
 
     def run(self, splits: Iterable[str] = ("train", "val")) -> None:
         self.ensure_dirs()
@@ -153,4 +165,3 @@ class DataProviderBase:
         except KeyboardInterrupt:
             if self.verbose:
                 print("Provider interrupted; exiting cleanly.")
-
