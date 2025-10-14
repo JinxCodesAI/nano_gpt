@@ -15,6 +15,8 @@ ckpt_name = 'ckpt_shakespeare_char_3250.pt'
 start = "\n" # or "<|endoftext|>" or etc. Can also specify a file, use as: "FILE:prompt.txt"
 num_samples = 10 # number of samples to draw
 max_new_tokens = 500 # number of tokens generated in each sample
+max_iterations = 20 # maximum number of diffusion iterations per sample
+fix_prompt_during_diffusion = True # keep conditioning text fixed at every iteration when True
 temperature = 0.8 # 1.0 = no change, < 1.0 = less random, > 1.0 = more random, in predictions
 top_k = 10 # retain only the top_k most likely tokens, clamp others to have 0 probability
 seed = 1337
@@ -79,12 +81,61 @@ if start.startswith('FILE:'):
     with open(start[5:], 'r', encoding='utf-8') as f:
         start = f.read()
 start_ids = encode(start)
-x = (torch.tensor(start_ids, dtype=torch.long, device=device)[None, ...])
+prompt = torch.tensor(start_ids, dtype=torch.long, device=device)
+initial_length = prompt.size(0)
+block_size = model.config.block_size
+if initial_length > block_size:
+    raise ValueError(f"Prompt is longer ({initial_length}) than model block size ({block_size}).")
 
-# run generation
+# run diffusion-style generation
 with torch.no_grad():
     with ctx:
         for k in range(num_samples):
-            y = model.generate(x, max_new_tokens, temperature=temperature, top_k=top_k)
-            print(decode(y[0].tolist()))
+            seq_length = block_size
+            max_token_pos = min(seq_length, initial_length + max_new_tokens)
+
+            x = torch.zeros((1, seq_length), dtype=torch.long, device=device)
+            x[0, :initial_length] = prompt
+
+            iteration = 0
+            while iteration < max_iterations:
+                # Execute a full forward pass on the current sequence to obtain token logits.
+                # We pass the entire padded sequence so the model can condition on every position
+                # (prompt + generated tokens) before proposing replacements for the active window.
+                logits, _ = model(x)
+
+                # Convert logits to probabilities for every token position. The softmax is taken
+                # across the vocabulary dimension, producing a categorical distribution that we can
+                # sample from to perform discrete diffusion updates.
+                probs = torch.softmax(logits, dim=-1)
+
+                # Slice out the probability distributions for only the active portion of the sequence
+                # (prompt length + allowable new tokens). We cast to float32 to keep multinomial sampling
+                # numerically stable even when the model is running in lower precision (e.g., bf16).
+                active_probs = probs[0, :max_token_pos, :].to(dtype=torch.float)
+
+                # Draw a token for every active position via multinomial sampling. We first collapse the
+                # sequence dimension so multinomial can treat each position independently, then restore
+                # the original shape to align with the sequence layout.
+                sampled = torch.multinomial(active_probs.view(-1, active_probs.size(-1)), 1)
+                sampled = sampled.view(1, -1)
+
+                # Write the sampled tokens back into the working sequence window, overwriting any previous
+                # proposals. Optionally restore the original prompt tokens so the conditioning text stays
+                # fixed throughout diffusion updates when the flag is enabled.
+                x[:, :max_token_pos] = sampled
+                if fix_prompt_during_diffusion:
+                    x[0, :initial_length] = prompt
+
+                # Zero out any positions beyond the active window so that the next iteration continues to
+                # treat them as padding (i.e., not part of the diffusion process yet).
+                if max_token_pos < seq_length:
+                    x[:, max_token_pos:] = 0
+
+                iteration += 1
+                if iteration >= max_iterations:
+                    break
+
+            final_tokens = x[0, :max_token_pos].tolist()
+            print(decode(final_tokens))
             print('---------------')
