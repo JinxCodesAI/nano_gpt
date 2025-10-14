@@ -12,7 +12,7 @@ import torch
 
 from data.common.provider_base import DataProviderBase
 from .file_utils import write_file_atomic, ensure_queue_dirs, get_backlog_size, get_max_sequence_number  
-from .masking_utils import apply_stage_masking, apply_random_masking_cpu
+from .masking_utils import apply_stage_masking
 
 
 def apply_bert_style_corruption_cpu(x: torch.Tensor, mask: torch.Tensor, 
@@ -51,31 +51,6 @@ def apply_bert_style_corruption_cpu(x: torch.Tensor, mask: torch.Tensor,
         corrupted_x[random_positions] = random_tokens
     
     return corrupted_x
-
-
-def apply_random_masking_cpu(x: torch.Tensor, mask_probability: float, 
-                           mask_token_id: int, vocab_size: int, rng=None) -> tuple[torch.Tensor, torch.Tensor]:
-    """
-    Optimized random masking for BERT-style training using tensor operations.
-    
-    Args:
-        x: Input tokens (batch_size, seq_len)
-        mask_probability: Probability of masking each token (0.0 to 1.0)
-        mask_token_id: Token ID for [MASK] token
-        vocab_size: Size of vocabulary for random token generation
-        
-    Returns:
-        corrupted_x: Input with masking applied
-        mask: Boolean mask indicating which positions were selected for prediction
-    """
-    # Generate random mask using provided RNG
-    mask_tensor = torch.rand(x.shape, generator=rng)
-    mask = mask_tensor < mask_probability
-    
-    # Apply BERT-style corruption
-    corrupted_x = apply_bert_style_corruption_cpu(x, mask, mask_token_id, vocab_size, rng)
-    
-    return corrupted_x, mask
 
 
 class CharDiffusionProvider(DataProviderBase):
@@ -153,6 +128,30 @@ class CharDiffusionProvider(DataProviderBase):
             self.train_stage_distribution = None
             self.val_stage_distribution = None
     
+    def _apply_corruption(self, x: torch.Tensor, mask: torch.Tensor, rng) -> torch.Tensor:
+        """Apply corruption to the masked positions.
+
+        Subclasses can override this method to customize the corruption
+        procedure while reusing mask generation logic.
+        """
+        return apply_bert_style_corruption_cpu(
+            x, mask, self.mask_token_id, self.vocab_size - 1, rng
+        )
+
+    def _apply_stage_corruption(
+        self,
+        stage_corrupted_x: torch.Tensor,
+        original_x: torch.Tensor,
+        mask: torch.Tensor,
+        rng,
+    ) -> torch.Tensor:
+        """Finalize corruption for stage-based masking.
+
+        The default implementation trusts the stage masking output, which
+        already applied BERT-style corruption.
+        """
+        return stage_corrupted_x
+
     def _calculate_stage_distribution(self, stages: List[Dict]) -> List[Dict]:
         """
         Calculate how many samples of each stage type to generate per file.
@@ -217,13 +216,12 @@ class CharDiffusionProvider(DataProviderBase):
         x_list = [ids[i : i + self.block_size] for i in ix]
         x = torch.tensor(x_list, dtype=torch.long)
         
-        # Apply BERT-style masking with the same RNG for consistency
-        corrupted_x, mask = apply_random_masking_cpu(
-            x, self.mask_probability, self.mask_token_id, 
-            self.vocab_size - 1,  # Exclude [MASK] token from random generation
-            rng
-        )
-        
+        # Sample mask using the configured probability
+        mask = torch.rand(x.shape, generator=rng) < self.mask_probability
+
+        # Apply corruption with subclass hook
+        corrupted_x = self._apply_corruption(x, mask, rng)
+
         # Create labels: ignore_index for non-masked positions (ignored in loss), original token for masked
         labels = torch.where(mask, x, self.ignore_index)
         
@@ -261,11 +259,15 @@ class CharDiffusionProvider(DataProviderBase):
                 batch_x = x_stage[batch_idx]
                 
                 # Apply stage-specific masking
-                corrupted_x, mask = apply_stage_masking(
-                    batch_x, stage_config, self.mask_token_id, 
+                stage_corrupted_x, mask = apply_stage_masking(
+                    batch_x, stage_config, self.mask_token_id,
                     self.vocab_size - 1, rng
                 )
-                
+
+                corrupted_x = self._apply_stage_corruption(
+                    stage_corrupted_x, batch_x, mask, rng
+                )
+
                 # Create labels: ignore_index for non-masked positions, original token for masked
                 labels = torch.where(mask, batch_x, self.ignore_index)
                 
