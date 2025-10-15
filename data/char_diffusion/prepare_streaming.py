@@ -173,6 +173,19 @@ class CharDiffusionProvider(DataProviderBase):
         """
         return stage_corrupted_x
 
+    def _create_labels(
+        self, original_x: torch.Tensor, mask: torch.Tensor, split: str
+    ) -> torch.Tensor:
+        """Create target labels for a batch.
+
+        By default, labels are the original tokens where masking was applied
+        and ``ignore_index`` everywhere else, matching the standard MLM
+        objective. Subclasses can override this hook to customize label
+        generation (e.g., to keep full targets for certain splits).
+        """
+        del split  # unused in the default implementation
+        return torch.where(mask, original_x, self.ignore_index)
+
     def _calculate_stage_distribution(self, stages: List[Dict]) -> List[Dict]:
         """
         Calculate how many samples of each stage type to generate per file.
@@ -343,8 +356,8 @@ class CharDiffusionProvider(DataProviderBase):
         corrupted_x = self._apply_corruption(x, mask, rng)
 
         # Create labels: ignore_index for non-masked positions (ignored in loss), original token for masked
-        labels = torch.where(mask, x, self.ignore_index)
-        
+        labels = self._create_labels(x, mask, split)
+
         return {
             "x": corrupted_x,
             "y": labels,
@@ -368,7 +381,7 @@ class CharDiffusionProvider(DataProviderBase):
             stage_corrupted_x, batch_x, mask, rng
         )
 
-        labels = torch.where(mask, batch_x, self.ignore_index)
+        labels = self._create_labels(batch_x, mask, split)
 
         return {"x": corrupted_x, "y": labels}
 

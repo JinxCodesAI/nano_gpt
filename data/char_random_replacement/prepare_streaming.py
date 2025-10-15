@@ -19,10 +19,12 @@ class CharRandomReplacementProvider(CharDiffusionProvider):
         *args,
         original_token_probability_multiplier: float = 1.0,
         extra_special_token_ids: Optional[Iterable[int]] = None,
+        dataset_partial_targets: bool = True,
         **kwargs,
     ) -> None:
         self._original_multiplier = original_token_probability_multiplier
         self._extra_special_token_ids = [int(token) for token in (extra_special_token_ids or [])]
+        self._dataset_partial_targets = bool(dataset_partial_targets)
         super().__init__(*args, **kwargs)
         self._initialize_corruptor()
 
@@ -53,6 +55,13 @@ class CharRandomReplacementProvider(CharDiffusionProvider):
         del stage_corrupted_x  # already encoded; we only need the mask
         return self._corruptor.corrupt(original_x, mask, rng)
 
+    def _create_labels(
+        self, original_x: torch.Tensor, mask: torch.Tensor, split: str
+    ) -> torch.Tensor:
+        if split == "train" and not self._dataset_partial_targets:
+            return original_x.clone()
+        return super()._create_labels(original_x, mask, split)
+
     # ------------------------------------------------------------------
     # Metadata
     # ------------------------------------------------------------------
@@ -66,6 +75,7 @@ class CharRandomReplacementProvider(CharDiffusionProvider):
                     "original_token_probability_multiplier": self._original_multiplier,
                     "extra_special_token_ids": self._extra_special_token_ids,
                 },
+                "train_partial_targets": self._dataset_partial_targets,
             }
         )
         return meta
@@ -133,6 +143,19 @@ def main() -> None:
         default=None,
         help="Token IDs to exclude from random replacement",
     )
+    parser.add_argument(
+        "--dataset_partial_targets",
+        action="store_true",
+        dest="dataset_partial_targets",
+        help="Keep partial targets (mask positions only) for the training split.",
+    )
+    parser.add_argument(
+        "--no-dataset_partial_targets",
+        action="store_false",
+        dest="dataset_partial_targets",
+        help="Use full identity targets for the training split.",
+    )
+    parser.set_defaults(dataset_partial_targets=True)
 
     args = parser.parse_args()
 
@@ -156,6 +179,7 @@ def main() -> None:
         original_token_probability_multiplier=
         args.original_token_probability_multiplier,
         extra_special_token_ids=args.extra_special_token_ids,
+        dataset_partial_targets=args.dataset_partial_targets,
         **stage_kwargs,
     )
     provider.run()
