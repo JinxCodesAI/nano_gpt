@@ -105,6 +105,7 @@ with torch.no_grad():
 
             prev_decoded = None
             total_log_likelihood = 0.0  # Track cumulative log likelihood over diffusion steps.
+            total_token_count = 0       # Track number of token evaluations for running averages.
             iteration = 0
             while iteration < max_iterations:
                 # Execute a full forward pass on the current sequence to obtain token logits.
@@ -130,10 +131,6 @@ with torch.no_grad():
                 flat_probs = active_probs.view(-1, active_probs.size(-1))
                 sampled_indices = torch.multinomial(flat_probs, 1)
 
-                flat_log_probs = active_log_probs.view(-1, active_log_probs.size(-1))
-                iteration_log_likelihood = flat_log_probs.gather(1, sampled_indices).mean().item()
-                total_log_likelihood += iteration_log_likelihood
-
                 sampled = sampled_indices.view(1, -1)
 
                 # Write the sampled tokens back into the working sequence window, overwriting any previous
@@ -142,6 +139,15 @@ with torch.no_grad():
                 x[:, :max_token_pos] = sampled
                 if fix_prompt_during_diffusion:
                     x[0, :initial_length] = prompt
+                    sampled[:, :initial_length] = prompt
+
+                # Evaluate log probabilities for the tokens that remain active after the optional prompt fix.
+                current_tokens = sampled[0, :max_token_pos].unsqueeze(-1)
+                iteration_log_probs = active_log_probs.gather(-1, current_tokens).squeeze(-1)
+                iteration_mean_log_prob = iteration_log_probs.mean().item()
+                total_log_likelihood += iteration_log_probs.sum().item()
+                total_token_count += iteration_log_probs.numel()
+                running_mean_log_prob = total_log_likelihood / total_token_count
 
                 # Zero out any positions beyond the active window so that the next iteration continues to
                 # treat them as padding (i.e., not part of the diffusion process yet).
@@ -162,7 +168,12 @@ with torch.no_grad():
                     else:
                         colored_chars.append(f"{ORANGE}{char}{RESET}")
                         orange_count+=1
-                print(f"Iteration {iteration}, sample {k} | cumulative log likelihood: {total_log_likelihood:.4f} | changed {orange_count}/{green_count+orange_count}")
+                print(
+                    f"Iteration {iteration}, sample {k} | "
+                    f"mean log prob: {iteration_mean_log_prob:.4f} | "
+                    f"running mean log prob: {running_mean_log_prob:.4f} | "
+                    f"changed {orange_count}/{green_count+orange_count}"
+                )
                 print("".join(colored_chars))
                 prev_decoded = decoded
 
@@ -171,6 +182,8 @@ with torch.no_grad():
                     break
 
             final_tokens = x[0, :max_token_pos].tolist()
+            average_log_prob = total_log_likelihood / total_token_count if total_token_count else float('nan')
             print(f"Total log likelihood for sample {k}: {total_log_likelihood:.4f}")
+            print(f"Average log probability per token for sample {k}: {average_log_prob:.4f}")
             print(decode(final_tokens))
             print('---------------')
