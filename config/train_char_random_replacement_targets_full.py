@@ -14,10 +14,11 @@ compile = True
 
 wandb_log = True # override via command line if you like
 wandb_project = 'char-diffusion'
-wandb_run_name = 'random-replacement-char'
+wandb_run_name = 'random-replacement-char-full-t'
 
 dataset = 'char_random_replacement'
 data_stream_verbose = True
+dataset_partial_targets = True
 
 composition_config = 'example'  # refers to data/char_random_replacement/config/example.py; use None if config is not defined
 
