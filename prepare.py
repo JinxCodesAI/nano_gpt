@@ -115,6 +115,9 @@ def main() -> None:
         if key in cfg:
             provider_kwargs[key] = cfg[key]
 
+    if dataset == "char_random_replacement" and "dataset_partial_targets" in cfg:
+        provider_kwargs["dataset_partial_targets"] = cfg["dataset_partial_targets"]
+
     provider = ProviderCls(**provider_kwargs)
     provider.run()
 
