@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 import math
-from typing import Iterable, Union
+from typing import Union
 
 import torch
 
@@ -39,10 +39,9 @@ def apply_re_noise(
     x: torch.Tensor,
     max_token_pos: int,
     initial_length: int,
-    vocab_size: int,
+    replace_character_id: int,
     ratio: float,
     device: Union[torch.device, str],
-    avoid_ids: Iterable[int] = (),
 ) -> torch.Tensor:
     """Apply re-noise to the active non-prompt region of ``x`` in-place."""
     if ratio <= 0.0:
@@ -64,19 +63,8 @@ def apply_re_noise(
     if not renoise_mask.any():
         return x
 
-    if not avoid_ids:
-        rand = torch.randint(low=0, high=vocab_size, size=x.shape, device=device)
-    else:
-        rand = torch.randint(low=0, high=vocab_size, size=x.shape, device=device)
-        avoid = torch.tensor(sorted({int(i) for i in avoid_ids}), dtype=torch.long, device=device)
-        for _ in range(4):
-            bad = (rand[..., None] == avoid).any(-1)
-            needs_resample = bad & renoise_mask
-            if not needs_resample.any():
-                break
-            rand = torch.where(needs_resample, torch.randint(0, vocab_size, x.shape, device=device), rand)
-
-    x = torch.where(renoise_mask, rand, x)
+    replacement = torch.full_like(x, fill_value=replace_character_id)
+    x = torch.where(renoise_mask, replacement, x)
     return x
 
 

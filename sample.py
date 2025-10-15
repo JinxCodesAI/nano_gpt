@@ -13,7 +13,7 @@ from sampling_utils import apply_re_noise, compute_noise_ratio
 init_from = 'resume' # either 'resume' (from an out_dir) or a gpt2 variant (e.g. 'gpt2-xl')
 out_dir = 'out-char-random-replacement' # ignored if init_from is not 'resume'
 ckpt_name = 'new_hope_2_9000.pt'
-start = "\nPOMPEY:\n" # or "<|endoftext|>" or etc. Can also specify a file, use as: "FILE:prompt.txt"
+start = "\ROMEO:\n" # or "<|endoftext|>" or etc. Can also specify a file, use as: "FILE:prompt.txt"
 num_samples = 1 # number of samples to draw
 max_new_tokens = 900 # number of tokens generated in each sample
 max_iterations = 20 # maximum number of diffusion iterations per sample
@@ -26,9 +26,8 @@ compile = False # use PyTorch 2.0 to compile the model to be faster
 
 # --- Re-noise schedule knobs ---
 noise_schedule = 'cosine'   # 'linear' or 'cosine' (anything else -> no re-noise)
-noise_start    = 0.20       # fraction of positions to randomize at iter 0 (e.g., 0.05–0.30)
-noise_end      = 0.00       # fraction at the last iteration (usually 0.0)
-avoid_ids      = []         # optional list of token IDs to never inject (e.g., PAD)
+noise_start    = 0.0       # fraction of positions to randomize at iter 0 (e.g., 0.05-0.30)
+noise_end      = 0.0       # fraction at the last iteration (usually 0.0)
 
 exec(open('configurator.py').read()) # overrides from command line or config file
 # -----------------------------------------------------------------------------
@@ -63,14 +62,6 @@ model.to(device)
 if compile:
     model = torch.compile(model) # requires PyTorch 2.0 (optional)
 
-vocab_size = getattr(model.config, 'vocab_size', None)
-if vocab_size is None:
-    vocab_size = model.get_input_embeddings().weight.size(0)
-pad_id = getattr(model.config, 'pad_token_id', None)
-extra_avoid = [] if pad_id is None else [pad_id]
-avoid = list({int(i) for i in (list(avoid_ids) + extra_avoid) if i is not None})
-avoid_ids_tuple = tuple(avoid)
-
 # look for the meta pickle in case it is available in the dataset folder
 load_meta = False
 if init_from == 'resume' and 'config' in checkpoint and 'dataset' in checkpoint['config']: # older checkpoints might not have these...
@@ -82,7 +73,28 @@ if load_meta:
         meta = pickle.load(f)
     # TODO want to make this more general to arbitrary encoder/decoder schemes
     stoi, itos = meta['stoi'], meta['itos']
-    encode = lambda s: [stoi[c] for c in s]
+    if ' ' not in stoi:
+        raise ValueError("Space character not found in dataset vocabulary; cannot perform space-based re-noising.")
+    space_token_id = stoi[' ']
+    _encode_unknown_cache = set()
+
+    def encode(s: str):
+        missing = set()
+        ids = []
+        for c in s:
+            idx = stoi.get(c)
+            if idx is None:
+                missing.add(c)
+                idx = space_token_id
+            ids.append(idx)
+        if missing:
+            unseen = missing.difference(_encode_unknown_cache)
+            if unseen:
+                printable = ", ".join(repr(ch) for ch in sorted(unseen))
+                print(f"Warning: substituting space for unknown characters: {printable}")
+                _encode_unknown_cache.update(unseen)
+        return ids
+
     decode = lambda l: ''.join([itos[i] for i in l])
 else:
     # ok let's assume gpt-2 encodings by default
@@ -90,6 +102,13 @@ else:
     enc = tiktoken.get_encoding("gpt2")
     encode = lambda s: enc.encode(s, allowed_special={"<|endoftext|>"})
     decode = lambda l: enc.decode(l)
+
+    space_token_ids = encode(" ")
+    if not space_token_ids:
+        raise ValueError("Encoder did not return a token id for a single space character.")
+    if len(space_token_ids) != 1:
+        raise ValueError(f"Expected a single token id for space, got: {space_token_ids}")
+    space_token_id = space_token_ids[0]
 
 GREEN = "\033[92m"
 ORANGE = "\033[38;5;208m"
@@ -128,9 +147,7 @@ with torch.no_grad():
                 # We pass the entire padded sequence so the model can condition on every position
                 # (prompt + generated tokens) before proposing replacements for the active window.
                 
-                dupa = x[0, :max_token_pos].tolist()
-                print(f"Iteration {iteration}, sample {k}")
-                decoded = decode(dupa)
+                decoded = decode(x[0, :max_token_pos].tolist())
 
                 colored_chars = []
                 for idx, char in enumerate(decoded):
@@ -138,7 +155,6 @@ with torch.no_grad():
                         colored_chars.append(f"{GREEN}{char}{RESET}")
                     else:
                         colored_chars.append(f"{ORANGE}{char}{RESET}")
-                print("".join(colored_chars))
                 prev_decoded = decoded
 
                 beta_s = compute_noise_ratio(iteration, max_iterations, noise_schedule, noise_start, noise_end)
@@ -146,10 +162,9 @@ with torch.no_grad():
                     x=x,
                     max_token_pos=max_token_pos,
                     initial_length=initial_length,
-                    vocab_size=vocab_size,
+                    replace_character_id=space_token_id,
                     ratio=beta_s,
                     device=device,
-                    avoid_ids=avoid_ids_tuple,
                 )
                 logits, _ = model(x)
                 logits = logits / temperature
@@ -185,9 +200,6 @@ with torch.no_grad():
                 current_tokens = sampled[0, :max_token_pos].unsqueeze(-1)
                 iteration_log_probs = active_log_probs.gather(-1, current_tokens).squeeze(-1)
                 iteration_mean_log_prob = iteration_log_probs.mean().item()
-                total_log_likelihood += iteration_log_probs.sum().item()
-                total_token_count += iteration_log_probs.numel()
-                running_mean_log_prob = total_log_likelihood / total_token_count
 
                 # Zero out any positions beyond the active window so that the next iteration continues to
                 # treat them as padding (i.e., not part of the diffusion process yet).
@@ -211,7 +223,6 @@ with torch.no_grad():
                 print(
                     f"Iteration {iteration}, sample {k} | "
                     f"mean log prob: {iteration_mean_log_prob:.4f} | "
-                    f"running mean log prob: {running_mean_log_prob:.4f} | "
                     f"changed {orange_count}/{green_count+orange_count}"
                 )
                 print("".join(colored_chars))
@@ -222,8 +233,5 @@ with torch.no_grad():
                     break
 
             final_tokens = x[0, :max_token_pos].tolist()
-            average_log_prob = total_log_likelihood / total_token_count if total_token_count else float('nan')
-            print(f"Total log likelihood for sample {k}: {total_log_likelihood:.4f}")
-            print(f"Average log probability per token for sample {k}: {average_log_prob:.4f}")
             print(decode(final_tokens))
             print('---------------')
