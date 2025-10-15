@@ -12,13 +12,13 @@ from sampling_utils import apply_re_noise, compute_noise_ratio
 # -----------------------------------------------------------------------------
 init_from = 'resume' # either 'resume' (from an out_dir) or a gpt2 variant (e.g. 'gpt2-xl')
 out_dir = 'out-char-random-replacement' # ignored if init_from is not 'resume'
-ckpt_name = 'ckpt_MLM_1000.pt'
-start = "\nWhere is the king?" # or "<|endoftext|>" or etc. Can also specify a file, use as: "FILE:prompt.txt"
+ckpt_name = 'new_hope_2_9000.pt'
+start = "\nPOMPEY:\n" # or "<|endoftext|>" or etc. Can also specify a file, use as: "FILE:prompt.txt"
 num_samples = 1 # number of samples to draw
 max_new_tokens = 900 # number of tokens generated in each sample
-max_iterations = 50 # maximum number of diffusion iterations per sample
+max_iterations = 20 # maximum number of diffusion iterations per sample
 fix_prompt_during_diffusion = True # keep conditioning text fixed at every iteration when True
-temperature = 0.8 # 1.0 = no change, < 1.0 = less random, > 1.0 = more random, in predictions
+temperature = 1.5 # 1.0 = no change, < 1.0 = less random, > 1.0 = more random, in predictions
 seed = 42
 device = 'cuda' # examples: 'cpu', 'cuda', 'cuda:0', 'cuda:1', etc.
 dtype = 'bfloat16' if torch.cuda.is_available() and torch.cuda.is_bf16_supported() else 'float16' # 'float32' or 'bfloat16' or 'float16'
@@ -116,7 +116,12 @@ with torch.no_grad():
             x = torch.zeros((1, seq_length), dtype=torch.long, device=device)
             x[0, :initial_length] = prompt
 
+            if temperature <= 0:
+                raise ValueError("temperature must be greater than zero to perform sampling.")
+
             prev_decoded = None
+            total_log_likelihood = 0.0  # Track cumulative log likelihood over diffusion steps.
+            total_token_count = 0       # Track number of token evaluations for running averages.
             iteration = 0
             while iteration < max_iterations:
                 # Execute a full forward pass on the current sequence to obtain token logits.
@@ -147,22 +152,26 @@ with torch.no_grad():
                     avoid_ids=avoid_ids_tuple,
                 )
                 logits, _ = model(x)
+                logits = logits / temperature
 
-                # Convert logits to probabilities for every token position. The softmax is taken
-                # across the vocabulary dimension, producing a categorical distribution that we can
-                # sample from to perform discrete diffusion updates.
-                probs = torch.softmax(logits, dim=-1)
+                # Convert logits to log-probabilities for every token position, then exponentiate
+                # to obtain probabilities for sampling.
+                log_probs = torch.log_softmax(logits, dim=-1)
+                probs = log_probs.exp()
 
-                # Slice out the probability distributions for only the active portion of the sequence
-                # (prompt length + allowable new tokens). We cast to float32 to keep multinomial sampling
-                # numerically stable even when the model is running in lower precision (e.g., bf16).
+                # Slice out both probability and log-probability distributions for the active portion
+                # of the sequence. Cast to float32 for stable multinomial sampling and log accumulation.
+                active_log_probs = log_probs[0, :max_token_pos, :].to(dtype=torch.float)
                 active_probs = probs[0, :max_token_pos, :].to(dtype=torch.float)
 
                 # Draw a token for every active position via multinomial sampling. We first collapse the
                 # sequence dimension so multinomial can treat each position independently, then restore
-                # the original shape to align with the sequence layout.
-                sampled = torch.multinomial(active_probs.view(-1, active_probs.size(-1)), 1)
-                sampled = sampled.view(1, -1)
+                # the original shape to align with the sequence layout. Accumulate the log likelihood of
+                # the selected tokens to report overall generation confidence.
+                flat_probs = active_probs.view(-1, active_probs.size(-1))
+                sampled_indices = torch.multinomial(flat_probs, 1)
+
+                sampled = sampled_indices.view(1, -1)
 
                 # Write the sampled tokens back into the working sequence window, overwriting any previous
                 # proposals. Optionally restore the original prompt tokens so the conditioning text stays
@@ -170,16 +179,51 @@ with torch.no_grad():
                 x[:, :max_token_pos] = sampled
                 if fix_prompt_during_diffusion:
                     x[0, :initial_length] = prompt
+                    sampled[:, :initial_length] = prompt
+
+                # Evaluate log probabilities for the tokens that remain active after the optional prompt fix.
+                current_tokens = sampled[0, :max_token_pos].unsqueeze(-1)
+                iteration_log_probs = active_log_probs.gather(-1, current_tokens).squeeze(-1)
+                iteration_mean_log_prob = iteration_log_probs.mean().item()
+                total_log_likelihood += iteration_log_probs.sum().item()
+                total_token_count += iteration_log_probs.numel()
+                running_mean_log_prob = total_log_likelihood / total_token_count
 
                 # Zero out any positions beyond the active window so that the next iteration continues to
                 # treat them as padding (i.e., not part of the diffusion process yet).
                 if max_token_pos < seq_length:
                     x[:, max_token_pos:] = 0
 
+                dupa = x[0, :max_token_pos].tolist()
+                decoded = decode(dupa)
+
+
+                colored_chars = []
+                green_count = 0
+                orange_count = 0
+                for idx, char in enumerate(decoded):
+                    if prev_decoded is not None and idx < len(prev_decoded) and char == prev_decoded[idx]:
+                        colored_chars.append(f"{GREEN}{char}{RESET}")
+                        green_count+=1
+                    else:
+                        colored_chars.append(f"{ORANGE}{char}{RESET}")
+                        orange_count+=1
+                print(
+                    f"Iteration {iteration}, sample {k} | "
+                    f"mean log prob: {iteration_mean_log_prob:.4f} | "
+                    f"running mean log prob: {running_mean_log_prob:.4f} | "
+                    f"changed {orange_count}/{green_count+orange_count}"
+                )
+                print("".join(colored_chars))
+                prev_decoded = decoded
+
                 iteration += 1
                 if iteration >= max_iterations:
                     break
 
             final_tokens = x[0, :max_token_pos].tolist()
+            average_log_prob = total_log_likelihood / total_token_count if total_token_count else float('nan')
+            print(f"Total log likelihood for sample {k}: {total_log_likelihood:.4f}")
+            print(f"Average log probability per token for sample {k}: {average_log_prob:.4f}")
             print(decode(final_tokens))
             print('---------------')
