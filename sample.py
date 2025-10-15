@@ -7,6 +7,7 @@ from contextlib import nullcontext
 import torch
 import tiktoken
 from model import GPTConfig, GPT
+from sampling_utils import apply_re_noise, compute_noise_ratio
 
 # -----------------------------------------------------------------------------
 init_from = 'resume' # either 'resume' (from an out_dir) or a gpt2 variant (e.g. 'gpt2-xl')
@@ -22,6 +23,13 @@ seed = 42
 device = 'cuda' # examples: 'cpu', 'cuda', 'cuda:0', 'cuda:1', etc.
 dtype = 'bfloat16' if torch.cuda.is_available() and torch.cuda.is_bf16_supported() else 'float16' # 'float32' or 'bfloat16' or 'float16'
 compile = False # use PyTorch 2.0 to compile the model to be faster
+
+# --- Re-noise schedule knobs ---
+noise_schedule = 'cosine'   # 'linear' or 'cosine' (anything else -> no re-noise)
+noise_start    = 0.20       # fraction of positions to randomize at iter 0 (e.g., 0.05–0.30)
+noise_end      = 0.00       # fraction at the last iteration (usually 0.0)
+avoid_ids      = []         # optional list of token IDs to never inject (e.g., PAD)
+
 exec(open('configurator.py').read()) # overrides from command line or config file
 # -----------------------------------------------------------------------------
 
@@ -54,6 +62,14 @@ model.eval()
 model.to(device)
 if compile:
     model = torch.compile(model) # requires PyTorch 2.0 (optional)
+
+vocab_size = getattr(model.config, 'vocab_size', None)
+if vocab_size is None:
+    vocab_size = model.get_input_embeddings().weight.size(0)
+pad_id = getattr(model.config, 'pad_token_id', None)
+extra_avoid = [] if pad_id is None else [pad_id]
+avoid = list({int(i) for i in (list(avoid_ids) + extra_avoid) if i is not None})
+avoid_ids_tuple = tuple(avoid)
 
 # look for the meta pickle in case it is available in the dataset folder
 load_meta = False
@@ -111,6 +127,30 @@ with torch.no_grad():
                 # Execute a full forward pass on the current sequence to obtain token logits.
                 # We pass the entire padded sequence so the model can condition on every position
                 # (prompt + generated tokens) before proposing replacements for the active window.
+                
+                dupa = x[0, :max_token_pos].tolist()
+                print(f"Iteration {iteration}, sample {k}")
+                decoded = decode(dupa)
+
+                colored_chars = []
+                for idx, char in enumerate(decoded):
+                    if prev_decoded is not None and idx < len(prev_decoded) and char == prev_decoded[idx]:
+                        colored_chars.append(f"{GREEN}{char}{RESET}")
+                    else:
+                        colored_chars.append(f"{ORANGE}{char}{RESET}")
+                print("".join(colored_chars))
+                prev_decoded = decoded
+
+                beta_s = compute_noise_ratio(iteration, max_iterations, noise_schedule, noise_start, noise_end)
+                x = apply_re_noise(
+                    x=x,
+                    max_token_pos=max_token_pos,
+                    initial_length=initial_length,
+                    vocab_size=vocab_size,
+                    ratio=beta_s,
+                    device=device,
+                    avoid_ids=avoid_ids_tuple,
+                )
                 logits, _ = model(x)
                 logits = logits / temperature
 
