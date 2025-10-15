@@ -238,6 +238,7 @@ class DatasetConsumer:
 
         start_idx = self._current_batch_idx[split] * self.batch_size
         end_idx = min(start_idx + self.batch_size, total_samples)
+        needs_pad = False
 
         # if consumed all samples, advance file
         if start_idx >= total_samples:
@@ -256,11 +257,12 @@ class DatasetConsumer:
             self._loaded_data[split] = tensors
             self._loaded_metadata[split] = metadata
             self._current_batch_idx[split] = 0
-            # recompute indices
             first_key = next(iter(tensors))
             total_samples = tensors[first_key].shape[0]
             start_idx = 0
             end_idx = min(self.batch_size, total_samples)
+        elif end_idx - start_idx < self.batch_size:
+            needs_pad = True
 
         # slice per field
         batch_tensors: Dict[str, torch.Tensor] = {}
@@ -268,7 +270,7 @@ class DatasetConsumer:
             batch_tensors[k] = v[start_idx:end_idx]
 
         cur_bs = next(iter(batch_tensors.values())).shape[0]
-        if 0 < cur_bs < self.batch_size:
+        if needs_pad and cur_bs < self.batch_size:
             need = self.batch_size - cur_bs
 
             def _repeat_to_fill(t: torch.Tensor, need: int) -> torch.Tensor:
@@ -279,8 +281,17 @@ class DatasetConsumer:
             for k, v in list(batch_tensors.items()):
                 batch_tensors[k] = torch.cat([v, _repeat_to_fill(v, need)], dim=0)
 
+        final_batch = end_idx >= total_samples
+
         # advance
         self._current_batch_idx[split] += 1
+
+        if final_batch:
+            if self._mode == "queue":
+                path = self._split_files[split][self._current_file_idx[split]]
+                self._maybe_delete_consumed(split, path)
+                self._split_files[split] = self._list_available_files(split)
+            self._advance_to_next_file(split)
 
         # move to device
         def _to_device(t: torch.Tensor) -> torch.Tensor:
