@@ -4,9 +4,12 @@ Sample from a trained model
 import os
 import pickle
 from contextlib import nullcontext
+
 import torch
 import tiktoken
+
 from model import GPTConfig, GPT
+from sampling_utils import apply_re_noise, blend_with_uniform, compute_noise_ratio
 
 # -----------------------------------------------------------------------------
 init_from = 'resume' # either 'resume' (from an out_dir) or a gpt2 variant (e.g. 'gpt2-xl')
@@ -18,6 +21,21 @@ max_new_tokens = 900 # number of tokens generated in each sample
 max_iterations = 20 # maximum number of diffusion iterations per sample
 fix_prompt_during_diffusion = True # keep conditioning text fixed at every iteration when True
 temperature = 1.5 # 1.0 = no change, < 1.0 = less random, > 1.0 = more random, in predictions
+# --- Re-noise schedule knobs ---
+noise_schedule = 'cosine'   # 'linear' or 'cosine' (anything else -> no re-noise)
+noise_start    = 0.20       # fraction of positions to randomize at iter 0 (e.g., 0.05–0.30)
+noise_end      = 0.00       # fraction at the last iteration (usually 0.0)
+avoid_ids      = []         # optional list of token IDs to never inject (e.g., PAD)
+
+# Optional temperature annealing
+temperature_schedule = None  # 'linear', 'cosine', or None to keep temperature fixed
+temperature_start = 1.8
+temperature_end = 0.95
+
+# Optional probability blending with uniform distribution
+probability_blend_schedule = None
+probability_blend_start = 0.10
+probability_blend_end = 0.00
 seed = 42
 device = 'cuda' # examples: 'cpu', 'cuda', 'cuda:0', 'cuda:1', etc.
 dtype = 'bfloat16' if torch.cuda.is_available() and torch.cuda.is_bf16_supported() else 'float16' # 'float32' or 'bfloat16' or 'float16'
@@ -54,6 +72,12 @@ model.eval()
 model.to(device)
 if compile:
     model = torch.compile(model) # requires PyTorch 2.0 (optional)
+
+vocab_size = getattr(model.config, 'vocab_size', None)
+if vocab_size is None:
+    raise AttributeError("model.config.vocab_size is required for sampling")
+pad_id = getattr(model.config, 'pad_token_id', None)
+avoid = list(set(avoid_ids + ([pad_id] if pad_id is not None else [])))
 
 # look for the meta pickle in case it is available in the dataset folder
 load_meta = False
@@ -107,21 +131,61 @@ with torch.no_grad():
             total_log_likelihood = 0.0  # Track cumulative log likelihood over diffusion steps.
             iteration = 0
             while iteration < max_iterations:
+                beta_s = compute_noise_ratio(
+                    iteration,
+                    max_iterations,
+                    (noise_schedule or "").lower(),
+                    noise_start,
+                    noise_end,
+                )
+                x = apply_re_noise(
+                    x=x,
+                    max_token_pos=max_token_pos,
+                    initial_length=initial_length,
+                    vocab_size=vocab_size,
+                    ratio=beta_s,
+                    device=x.device,
+                    avoid_ids=avoid,
+                )
+
+                tau_s = temperature
+                if temperature_schedule:
+                    tau_s = compute_noise_ratio(
+                        iteration,
+                        max_iterations,
+                        (temperature_schedule or "").lower(),
+                        temperature_start,
+                        temperature_end,
+                    )
+                if tau_s <= 0:
+                    raise ValueError("temperature (scheduled or fixed) must stay positive.")
+
                 # Execute a full forward pass on the current sequence to obtain token logits.
                 # We pass the entire padded sequence so the model can condition on every position
                 # (prompt + generated tokens) before proposing replacements for the active window.
                 logits, _ = model(x)
-                logits = logits / temperature
+                logits = logits / tau_s
 
-                # Convert logits to log-probabilities for every token position, then exponentiate
-                # to obtain probabilities for sampling.
-                log_probs = torch.log_softmax(logits, dim=-1)
-                probs = log_probs.exp()
+                # Convert logits to probabilities for every token position.
+                probs = torch.softmax(logits, dim=-1)
+
+                lambda_s = 0.0
+                if probability_blend_schedule:
+                    lambda_s = compute_noise_ratio(
+                        iteration,
+                        max_iterations,
+                        (probability_blend_schedule or "").lower(),
+                        probability_blend_start,
+                        probability_blend_end,
+                    )
+                probs = blend_with_uniform(probs, lambda_s)
+                probs_float = probs.to(dtype=torch.float)
+                log_probs = torch.log(probs_float.clamp_min(1e-20))
 
                 # Slice out both probability and log-probability distributions for the active portion
                 # of the sequence. Cast to float32 for stable multinomial sampling and log accumulation.
                 active_log_probs = log_probs[0, :max_token_pos, :].to(dtype=torch.float)
-                active_probs = probs[0, :max_token_pos, :].to(dtype=torch.float)
+                active_probs = probs_float[0, :max_token_pos, :]
 
                 # Draw a token for every active position via multinomial sampling. We first collapse the
                 # sequence dimension so multinomial can treat each position independently, then restore
