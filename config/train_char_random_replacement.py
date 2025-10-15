@@ -5,7 +5,7 @@
 
 out_dir = 'out-char-random-replacement'
 eval_interval = 250
-eval_iters = 200
+eval_iters = 50
 log_interval = 10
 
 # save checkpoints when validation improves
@@ -51,7 +51,7 @@ else:
     unmasking_stages = None
     validation_stages = None
 
-gradient_accumulation_steps = 2
+gradient_accumulation_steps = 1
 batch_size = 384  # Slightly larger batch size for BERT training
 block_size = 1024 # Context size for masking
 
@@ -78,7 +78,7 @@ mask_probability = 0.15  # Standard BERT masking rate
 mask_token_id = None  # Will be set from dataset meta
 
 # Data streaming config
-batches_per_file = 100  # Smaller files for faster iteration
+batches_per_file = 10  # Smaller files for faster iteration
 max_backlog_files = 3
 sleep_seconds = 1.0
 data_stream_verbose = True
