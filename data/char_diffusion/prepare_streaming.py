@@ -113,6 +113,7 @@ class CharDiffusionProvider(DataProviderBase):
         self._validate_stage_config()
         self._initialize_stage_distribution()
         self._stage_cycle_state = {"train": [], "val": []}
+        self._stage_mix_buffer = {"train": [], "val": []}
         
         if self.verbose:
             print(f"CharDiffusionProvider initialized:")
@@ -363,27 +364,72 @@ class CharDiffusionProvider(DataProviderBase):
             "y": labels,
         }
     
-    def _sample_stage_based_batch(self, split: str, rng) -> Dict[str, Any]:
-        """Sample a batch using stage-based masking configuration."""
+    def _refill_stage_mix_buffer(self, split: str, rng) -> None:
+        """Pre-generate a cycle of stage batches and mix samples across them."""
+        if self._stage_mix_buffer[split]:
+            return
+
         ids_tensor = self.train_ids_tensor if split == "train" else self.val_ids_tensor
         start_candidates = self._get_line_start_indices(split)
 
-        stage_config = self._pop_stage_config(split, rng)
+        self._ensure_stage_cycle(split, rng)
+        stage_configs = []
+        while self._stage_cycle_state[split]:
+            stage_configs.append(self._stage_cycle_state[split].pop())
 
-        start_indices = self._sample_start_positions(start_candidates, self.batch_size, rng)
-        batch_x = self._gather_sequences(ids_tensor, start_indices)
+        if not stage_configs:
+            raise ValueError("Stage cycle did not yield any configurations to sample from.")
 
-        stage_corrupted_x, mask = apply_stage_masking(
-            batch_x, stage_config, self.mask_token_id, self.vocab_size - 1, rng
+        collected_x: List[torch.Tensor] = []
+        collected_y: List[torch.Tensor] = []
+
+        for stage_config in stage_configs:
+            start_indices = self._sample_start_positions(
+                start_candidates, self.batch_size, rng
+            )
+            batch_x = self._gather_sequences(ids_tensor, start_indices)
+            stage_corrupted_x, mask = apply_stage_masking(
+                batch_x, stage_config, self.mask_token_id, self.vocab_size - 1, rng
+            )
+            corrupted_x = self._apply_stage_corruption(
+                stage_corrupted_x, batch_x, mask, rng
+            )
+            labels = self._create_labels(batch_x, mask, split)
+
+            collected_x.append(corrupted_x)
+            collected_y.append(labels)
+
+        stacked_x = torch.cat(collected_x, dim=0)
+        stacked_y = torch.cat(collected_y, dim=0)
+
+        perm = torch.randperm(
+            stacked_x.shape[0], generator=rng, device=self._tensor_device
         )
+        shuffled_x = stacked_x[perm]
+        shuffled_y = stacked_y[perm]
 
-        corrupted_x = self._apply_stage_corruption(
-            stage_corrupted_x, batch_x, mask, rng
-        )
+        batched_x = torch.split(shuffled_x, self.batch_size, dim=0)
+        batched_y = torch.split(shuffled_y, self.batch_size, dim=0)
 
-        labels = self._create_labels(batch_x, mask, split)
+        if len(batched_x) != len(batched_y):
+            raise RuntimeError("Mismatch in shuffled batch sizes during stage mixing.")
 
-        return {"x": corrupted_x, "y": labels}
+        mixed_batches: List[Dict[str, torch.Tensor]] = []
+        for bx, by in zip(batched_x, batched_y):
+            if bx.shape[0] != self.batch_size:
+                continue  # drop incomplete batches, should not typically occur
+            mixed_batches.append({"x": bx.contiguous(), "y": by.contiguous()})
+
+        if not mixed_batches:
+            raise RuntimeError("Stage mixing failed to generate any full batches.")
+
+        # Store in reverse order so we can pop from the end efficiently
+        self._stage_mix_buffer[split] = list(reversed(mixed_batches))
+
+    def _sample_stage_based_batch(self, split: str, rng) -> Dict[str, Any]:
+        """Sample a batch using stage-based masking configuration."""
+        self._refill_stage_mix_buffer(split, rng)
+        return self._stage_mix_buffer[split].pop()
 
 
 def main():
