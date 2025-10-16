@@ -115,6 +115,11 @@ def apply_mixed_corruption(
     if not mask_bool.any():
         return x.clone()
 
+    masked_ratio = (
+        mask_bool.sum(dtype=torch.float32) / float(mask_bool.numel())
+    ).item()
+    fragment_enabled = masked_ratio < 0.5
+
     total_weight = float(sum(mixture_weights))
     if total_weight <= 0:
         raise ValueError("mixture_weights must sum to a positive value")
@@ -141,6 +146,9 @@ def apply_mixed_corruption(
         corrupted[mask_token_mask] = mask_token_id
 
     if fragment_mask.any():
+        if not fragment_enabled:
+            corrupted[fragment_mask] = mask_token_id
+            return corrupted
         fragments = fragment_sampler(x.shape[0], rng)
         if fragments.shape != x.shape:
             raise ValueError(

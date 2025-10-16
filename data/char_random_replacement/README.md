@@ -14,7 +14,8 @@ corruption step.
   three-way mix: 60% random token replacement (respecting the configurable
   `original_token_probability_multiplier`), 20% literal `[MASK]` insertion, and
   20% borrowing characters from a randomly sampled fragment of the training
-  corpus at the same positions. Validation batches retain the original pure
+  corpus at the same positions whenever the batch masking ratio stays below
+  50% (otherwise this branch falls back to `[MASK]` as well). Validation batches retain the original pure
   random-replacement behaviour.
 - **Extensibility** – The corruption logic lives in
   `corruption_utils.RandomReplacementCorruptor`, making it easy to add new
