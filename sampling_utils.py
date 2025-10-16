@@ -71,17 +71,9 @@ def apply_re_noise(
 def uncertainty_from_logprobs(log_probs: torch.Tensor, tokens: torch.Tensor) -> torch.Tensor:
     """Return per-position uncertainty ``1 - p(token)`` as a detached 1D tensor."""
     with torch.no_grad():
-        if log_probs.dim() != 3 or tokens.dim() != 2:
-            raise ValueError('Expected log_probs shape (1, T, V) and tokens shape (1, T).')
-        if log_probs.size(0) != 1 or tokens.size(0) != 1:
-            raise ValueError('uncertainty_from_logprobs only supports batch size 1.')
-
         T = tokens.size(1)
-        if log_probs.size(1) < T:
-            raise ValueError('log_probs shorter than tokens in sequence dimension.')
-
         idx = torch.arange(T, device=log_probs.device)
-        p_self = log_probs[0, idx, tokens[0, idx]].exp()
+        p_self = log_probs[0, idx, tokens[0]].exp()
         return (1.0 - p_self).detach()
 
 
@@ -157,41 +149,28 @@ def deletion_scores_from_probs(
     lam: float,
 ) -> torch.Tensor:
     """Compute deletion desirability per position using lookahead heuristics."""
-    if probs.dim() != 3 or tokens.dim() != 2:
-        raise ValueError('Expected probs shape (1, T, V) and tokens shape (1, T).')
-    if probs.size(0) != 1 or tokens.size(0) != 1:
-        raise ValueError('deletion_scores_from_probs only supports batch size 1.')
-
     T = tokens.size(1)
-    if probs.size(1) < T:
-        raise ValueError('probs shorter than tokens in sequence dimension.')
-
     if T < 2:
-        return torch.zeros(0, device=probs.device, dtype=probs.dtype)
+        return torch.zeros(1, device=tokens.device, dtype=probs.dtype)
 
-    device = probs.device
-    idx = torch.arange(T - 1, device=device)
-    current = tokens[0, :-1]
-    right = tokens[0, 1:]
+    c = tokens[0]
+    r = tokens[0, 1:]
+    p_self = probs[0, torch.arange(T, device=probs.device), c]
+    p_here_right = probs[0, torch.arange(T - 1, device=probs.device), r]
+    d1 = p_here_right - p_self[:-1]
 
-    p_current = probs[0, idx, current]
-    p_right = probs[0, idx, right]
-    delta1 = p_right - p_current
+    if T >= 3:
+        n = tokens[0, 2:]
+        p_next_next = probs[0, 1:-1, n]
+        p_next_right = probs[0, 1:-1, r[:-1]]
+        d2_core = p_next_next - p_next_right
+        d2 = torch.cat([d2_core, torch.zeros(1, device=tokens.device, dtype=probs.dtype)], dim=0)
+    else:
+        d2 = torch.zeros(T - 1, device=tokens.device, dtype=probs.dtype)
 
-    delta2 = torch.zeros_like(delta1)
-    if T > 2:
-        idx_next = torch.arange(1, T - 1, device=device)
-        next_tokens = tokens[0, 2:]
-        p_next = probs[0, idx_next, next_tokens]
-        p_right_next = probs[0, idx_next, right[1:]]
-        delta2[:-1] = p_next - p_right_next
-
-    margin_tensor = torch.as_tensor(margin, device=device, dtype=probs.dtype)
-    lam_tensor = torch.as_tensor(lam, device=device, dtype=probs.dtype)
-
-    delta1 = torch.clamp(delta1 - margin_tensor, min=0.0)
-    delta2 = torch.clamp(delta2 - margin_tensor, min=0.0)
-    return delta1 + lam_tensor * delta2
+    d1 = torch.clamp_min(d1 - margin, 0.0)
+    d2 = torch.clamp_min(d2 - margin, 0.0)
+    return d1 + lam * d2
 
 
 def build_cooldown_mask(length: int, edits: Sequence[int], distance: int, device: torch.device) -> torch.Tensor:

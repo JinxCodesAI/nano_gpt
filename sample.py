@@ -165,92 +165,94 @@ with torch.no_grad():
             total_log_likelihood = 0.0  # Track cumulative log likelihood over diffusion steps.
             total_token_count = 0       # Track number of token evaluations for running averages.
             iteration = 0
-            last_log_probs = None
             last_insert_indices: List[int] = []
             last_delete_indices: List[int] = []
+
+            logits, _ = model(x)
+            last_log_probs = torch.log_softmax(logits, dim=-1).detach()
+
             while iteration < max_iterations:
-                if last_log_probs is not None:
-                    active_len = max(0, max_token_pos - initial_length)
-                    r_ins = compute_noise_ratio(iteration, max_iterations, edit_schedule, insert_ratio_start, insert_ratio_end)
-                    r_del = compute_noise_ratio(iteration, max_iterations, edit_schedule, delete_ratio_start, delete_ratio_end)
-                    k_ins = max(0, int(r_ins * active_len))
-                    k_del = max(0, int(r_del * active_len))
+                active_len = max(0, max_token_pos - initial_length)
+                r_ins = compute_noise_ratio(iteration, max_iterations, edit_schedule, insert_ratio_start, insert_ratio_end)
+                r_del = compute_noise_ratio(iteration, max_iterations, edit_schedule, delete_ratio_start, delete_ratio_end)
+                k_ins = max(0, int(r_ins * active_len))
+                k_del = max(0, int(r_del * active_len))
 
-                    if length_target_mode == 'to_max_new':
-                        target_len = min(block_size, initial_length + max_new_tokens)
-                        error = max_token_pos - target_len
-                        if error > 0:
-                            k_del = min(active_len, k_del + min(3, error))
-                        elif error < 0:
-                            extra = min(3, -error)
-                            capacity = max(0, block_size - max_token_pos)
-                            k_ins = min(k_ins + extra, capacity + active_len)
+                if length_target_mode == 'to_max_new':
+                    target_len = min(block_size, initial_length + max_new_tokens)
+                    error = max_token_pos - target_len
+                    if error > 0:
+                        k_del = min(active_len, k_del + min(3, error))
+                    elif error < 0:
+                        extra = min(3, -error)
+                        capacity = max(0, block_size - max_token_pos)
+                        k_ins = min(k_ins + extra, capacity + active_len)
 
-                    # Insertion scoring and application
-                    u = uncertainty_from_logprobs(last_log_probs[:, :max_token_pos, :], x[:, :max_token_pos])
-                    gap_scores = score_gaps_for_insertion(u)
-                    allowed_gap_count = max(0, gap_scores.numel() - max(0, initial_length))
-                    k_ins = min(k_ins, allowed_gap_count)
-                    cooldown_mask_gaps = build_cooldown_mask(
-                        gap_scores.numel(), last_insert_indices, cooldown_distance, gap_scores.device
+                # Insertion scoring and application
+                u = uncertainty_from_logprobs(last_log_probs[:, :max_token_pos, :], x[:, :max_token_pos])
+                gap_scores = score_gaps_for_insertion(u)
+                allowed_gap_count = max(0, gap_scores.numel() - max(0, initial_length))
+                k_ins = min(k_ins, allowed_gap_count)
+                cooldown_mask_gaps = build_cooldown_mask(
+                    gap_scores.numel(), last_insert_indices, cooldown_distance, gap_scores.device
+                )
+                sel_gaps = select_topk_mask(
+                    gap_scores,
+                    k_ins,
+                    forbid_lo=0,
+                    forbid_hi=max(0, initial_length),
+                    additional_forbid=cooldown_mask_gaps,
+                )
+                gap_indices = torch.nonzero(sel_gaps, as_tuple=False).flatten().tolist()
+                if gap_indices:
+                    max_token_pos, applied_insertions = apply_insertions(
+                        x,
+                        gap_indices,
+                        max_token_pos=max_token_pos,
+                        block_size=block_size,
+                        fill_id=space_token_id,
                     )
-                    sel_gaps = select_topk_mask(
-                        gap_scores,
-                        k_ins,
-                        forbid_lo=0,
-                        forbid_hi=max(0, initial_length),
-                        additional_forbid=cooldown_mask_gaps,
-                    )
-                    gap_indices = torch.nonzero(sel_gaps, as_tuple=False).flatten().tolist()
-                    if gap_indices:
-                        max_token_pos, applied_insertions = apply_insertions(
-                            x,
-                            gap_indices,
-                            max_token_pos=max_token_pos,
-                            block_size=block_size,
-                            fill_id=space_token_id,
-                        )
-                    else:
-                        applied_insertions = []
+                else:
+                    applied_insertions = []
 
-                    # Deletion scoring and application
-                    last_probs = last_log_probs.exp()
-                    del_scores = deletion_scores_from_probs(
-                        last_probs[:, :max_token_pos, :],
-                        x[:, :max_token_pos],
-                        margin=delete_margin,
-                        lam=delete_lambda,
+                # Deletion scoring and application
+                last_probs = last_log_probs.exp()
+                del_scores = deletion_scores_from_probs(
+                    last_probs[:, :max_token_pos, :],
+                    x[:, :max_token_pos],
+                    margin=delete_margin,
+                    lam=delete_lambda,
+                )
+                allowed_delete_count = max(0, del_scores.numel() - max(0, initial_length))
+                k_del = min(k_del, allowed_delete_count)
+                cooldown_mask_del = build_cooldown_mask(
+                    del_scores.numel(), last_delete_indices, cooldown_distance, del_scores.device
+                )
+                sel_del = select_topk_mask(
+                    del_scores,
+                    k_del,
+                    forbid_lo=0,
+                    forbid_hi=max(0, initial_length),
+                    additional_forbid=cooldown_mask_del,
+                )
+                del_indices = torch.nonzero(sel_del, as_tuple=False).flatten().tolist()
+                if del_indices:
+                    max_token_pos, applied_deletions = apply_deletions(
+                        x,
+                        del_indices,
+                        max_token_pos=max_token_pos,
+                        initial_length=initial_length,
+                        fill_id=space_token_id,
+                        prior_insertions=applied_insertions,
                     )
-                    allowed_delete_count = max(0, del_scores.numel() - max(0, initial_length))
-                    k_del = min(k_del, allowed_delete_count)
-                    cooldown_mask_del = build_cooldown_mask(
-                        del_scores.numel(), last_delete_indices, cooldown_distance, del_scores.device
-                    )
-                    sel_del = select_topk_mask(
-                        del_scores,
-                        k_del,
-                        forbid_lo=0,
-                        forbid_hi=max(0, initial_length),
-                        additional_forbid=cooldown_mask_del,
-                    )
-                    del_indices = torch.nonzero(sel_del, as_tuple=False).flatten().tolist()
-                    if del_indices:
-                        max_token_pos, applied_deletions = apply_deletions(
-                            x,
-                            del_indices,
-                            max_token_pos=max_token_pos,
-                            initial_length=initial_length,
-                            fill_id=space_token_id,
-                            prior_insertions=applied_insertions,
-                        )
-                    else:
-                        applied_deletions = []
+                else:
+                    applied_deletions = []
 
-                    last_insert_indices = applied_insertions
-                    last_delete_indices = applied_deletions
+                last_insert_indices = applied_insertions
+                last_delete_indices = applied_deletions
 
-                    if fix_prompt_during_diffusion:
-                        x[0, :initial_length] = prompt
+                if fix_prompt_during_diffusion:
+                    x[0, :initial_length] = prompt
 
                 decoded = decode(x[0, :max_token_pos].tolist())
                 colored_chars = []
