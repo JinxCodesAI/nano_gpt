@@ -9,6 +9,7 @@ from typing import List, Optional
 import torch
 import tiktoken
 from model import GPTConfig, GPT
+from display import DiffusionDisplay
 from sampling_utils import (
     apply_deletions,
     apply_insertions,
@@ -25,7 +26,7 @@ from sampling_utils import (
 init_from = 'resume' # either 'resume' (from an out_dir) or a gpt2 variant (e.g. 'gpt2-xl')
 out_dir = 'out-char-random-replacement' # ignored if init_from is not 'resume'
 ckpt_name = 'new_hope_2_9000.pt'
-start = "\ROMEO:\n" # or "<|endoftext|>" or etc. Can also specify a file, use as: "FILE:prompt.txt"
+start = "ROMEO:\n" # or "<|endoftext|>" or etc. Can also specify a file, use as: "FILE:prompt.txt"
 num_samples = 1 # number of samples to draw
 max_new_tokens = 900 # number of tokens generated in each sample
 max_iterations = 20 # maximum number of diffusion iterations per sample
@@ -115,7 +116,7 @@ if load_meta:
     stoi, itos = meta['stoi'], meta['itos']
     if ' ' not in stoi:
         raise ValueError("Space character not found in dataset vocabulary; cannot perform space-based re-noising.")
-    space_token_id = stoi[' ']
+    space_token_id = stoi['X']
     _encode_unknown_cache = set()
 
     def encode(s: str):
@@ -150,12 +151,6 @@ else:
         raise ValueError(f"Expected a single token id for space, got: {space_token_ids}")
     space_token_id = space_token_ids[0]
 
-GREEN = "\033[92m"
-ORANGE = "\033[38;5;208m"
-RED_BACKGROUND = "\033[41m"
-WHITE_BACKGROUND = "\033[47m"
-RESET = "\033[0m"
-
 # encode the beginning of the prompt
 if start.startswith('FILE:'):
     with open(start[5:], 'r', encoding='utf-8') as f:
@@ -180,7 +175,6 @@ with torch.no_grad():
             if temperature <= 0:
                 raise ValueError("temperature must be greater than zero to perform sampling.")
 
-            prev_decoded = None
             total_log_likelihood = 0.0  # Track cumulative log likelihood over diffusion steps.
             total_token_count = 0       # Track number of token evaluations for running averages.
             iteration = 0
@@ -189,14 +183,15 @@ with torch.no_grad():
 
             logits, _ = model(x)
             last_log_probs = torch.log_softmax(logits, dim=-1).detach()
+            display = DiffusionDisplay(decode)
 
             while iteration < max_iterations:
+                display.start_iteration(max_token_pos)
                 active_len = max(0, max_token_pos - initial_length)
                 r_ins = compute_noise_ratio(iteration, max_iterations, edit_schedule, insert_ratio_start, insert_ratio_end)
                 r_del = compute_noise_ratio(iteration, max_iterations, edit_schedule, delete_ratio_start, delete_ratio_end)
                 k_ins = max(0, int(r_ins * active_len))
                 k_del = max(0, int(r_del * active_len))
-                token_index_map: List[Optional[int]] = list(range(max_token_pos))
 
                 if length_target_mode == 'to_max_new':
                     target_len = min(block_size, initial_length + max_new_tokens)
@@ -224,7 +219,6 @@ with torch.no_grad():
                     additional_forbid=cooldown_mask_gaps,
                 )
                 gap_indices = torch.nonzero(sel_gaps, as_tuple=False).flatten().tolist()
-                insertion_positions_pre_deletion: List[int] = []
                 if gap_indices:
                     max_token_pos, applied_insertions = apply_insertions(
                         x,
@@ -233,18 +227,10 @@ with torch.no_grad():
                         block_size=block_size,
                         fill_id=space_token_id,
                     )
-                    offset = 0
-                    for idx in applied_insertions:
-                        insertion_positions_pre_deletion.append(idx + offset)
-                        offset += 1
                 else:
                     applied_insertions = []
-                    insertion_positions_pre_deletion = []
 
-                if insertion_positions_pre_deletion:
-                    for pos in insertion_positions_pre_deletion:
-                        if 0 <= pos <= len(token_index_map):
-                            token_index_map.insert(pos, None)
+                display.register_insertions(applied_insertions)
 
                 # Deletion scoring and application
                 last_probs = last_log_probs.exp()
@@ -267,7 +253,7 @@ with torch.no_grad():
                     additional_forbid=cooldown_mask_del,
                 )
                 del_indices = torch.nonzero(sel_del, as_tuple=False).flatten().tolist()
-                pre_deletion_tokens = None
+                pre_deletion_tokens: Optional[List[int]] = None
                 if del_indices:
                     pre_deletion_tokens = x[0, :max_token_pos].tolist()
                     max_token_pos, applied_deletions = apply_deletions(
@@ -281,10 +267,8 @@ with torch.no_grad():
                 else:
                     applied_deletions = []
 
-                if applied_deletions:
-                    for del_idx in sorted(applied_deletions, reverse=True):
-                        if 0 <= del_idx < len(token_index_map):
-                            token_index_map.pop(del_idx)
+                display.capture_pre_deletion(pre_deletion_tokens, applied_deletions)
+                display.register_deletions(applied_deletions)
 
                 last_insert_indices = applied_insertions
                 last_delete_indices = applied_deletions
@@ -341,56 +325,15 @@ with torch.no_grad():
                 if max_token_pos < seq_length:
                     x[:, max_token_pos:] = 0
 
-                decoded = decode(x[0, :max_token_pos].tolist())
-
-                deletion_display = None
-                if applied_deletions and pre_deletion_tokens:
-                    pre_deletion_decoded = decode(pre_deletion_tokens)
-                    deletion_set = set(applied_deletions)
-                    highlighted_pre_deletion = []
-                    for idx, char in enumerate(pre_deletion_decoded):
-                        if idx in deletion_set:
-                            highlighted_pre_deletion.append(f"{RED_BACKGROUND}{char}{RESET}")
-                        else:
-                            highlighted_pre_deletion.append(char)
-                    deletion_display = "".join(highlighted_pre_deletion)
-
-                colored_chars = []
-                green_count = 0
-                orange_count = 0
-                for idx, char in enumerate(decoded):
-                    source_idx = token_index_map[idx] if idx < len(token_index_map) else None
-                    if source_idx is None:
-                        base_color = ORANGE
-                        orange_count += 1
-                        colored_chars.append(f"{WHITE_BACKGROUND}{base_color}{char}{RESET}")
-                        continue
-                    same_as_prev = (
-                        prev_decoded is not None
-                        and source_idx < len(prev_decoded)
-                        and char == prev_decoded[source_idx]
-                    )
-                    if same_as_prev:
-                        base_color = GREEN
-                        green_count += 1
-                    else:
-                        base_color = ORANGE
-                        orange_count += 1
-
-                    colored_chars.append(f"{base_color}{char}{RESET}")
-
-                print(
-                    f"Iteration {iteration}, sample {k} | "
-                    f"mean log prob: {iteration_mean_log_prob:.4f} | "
-                    f"changed {orange_count}/{green_count+orange_count} | "
-                    f"ins {len(applied_insertions)} | del {len(applied_deletions)}"
+                tokens_for_display = x[0, :max_token_pos].tolist()
+                display.emit_iteration(
+                    iteration=iteration,
+                    sample_index=k,
+                    mean_log_prob=iteration_mean_log_prob,
+                    insert_count=len(applied_insertions),
+                    delete_count=len(applied_deletions),
+                    tokens=tokens_for_display,
                 )
-                if deletion_display is not None:
-                    print(f"Before deletion: {deletion_display}")
-                print("".join(colored_chars))
-                print("==========================================================================================================================")
-                prev_decoded = decoded
-
                 last_log_probs = log_probs.detach()
 
                 iteration += 1
@@ -398,5 +341,4 @@ with torch.no_grad():
                     break
 
             final_tokens = x[0, :max_token_pos].tolist()
-            print(decode(final_tokens))
-            print('---------------')
+            display.emit_final_tokens(final_tokens)
