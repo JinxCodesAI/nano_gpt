@@ -1,7 +1,7 @@
 """Utilities for configurable random-replacement corruption."""
 from __future__ import annotations
 
-from typing import Iterable, Optional, Sequence
+from typing import Callable, Iterable, Optional, Sequence, Tuple
 
 import torch
 
@@ -92,6 +92,64 @@ class RandomReplacementCorruptor:
 
         corrupted[masked_positions[:, 0], masked_positions[:, 1]] = replacements
         return corrupted
+
+
+FragmentSampler = Callable[[int, torch.Generator], torch.Tensor]
+
+
+def apply_mixed_corruption(
+    x: torch.Tensor,
+    mask: torch.Tensor,
+    rng,
+    *,
+    random_corruptor: RandomReplacementCorruptor,
+    mask_token_id: int,
+    fragment_sampler: FragmentSampler,
+    mixture_weights: Tuple[float, float, float] = (0.6, 0.2, 0.2),
+) -> torch.Tensor:
+    """Apply hybrid corruption with random, [MASK], and fragment strategies."""
+    if x.shape != mask.shape:
+        raise ValueError("x and mask must share the same shape")
+
+    mask_bool = mask.to(dtype=torch.bool)
+    if not mask_bool.any():
+        return x.clone()
+
+    total_weight = float(sum(mixture_weights))
+    if total_weight <= 0:
+        raise ValueError("mixture_weights must sum to a positive value")
+
+    normalized = tuple(weight / total_weight for weight in mixture_weights)
+    random_share, mask_share, _ = normalized
+    random_threshold = random_share
+    mask_threshold = random_share + mask_share
+
+    selection = torch.rand(
+        mask.shape, generator=rng, device=x.device, dtype=torch.float32
+    )
+    random_mask = mask_bool & (selection < random_threshold)
+    mask_token_mask = mask_bool & (selection >= random_threshold) & (selection < mask_threshold)
+    fragment_mask = mask_bool & ~(random_mask | mask_token_mask)
+
+    corrupted = x.clone()
+
+    if random_mask.any():
+        random_corrupted = random_corruptor.corrupt(x, random_mask, rng)
+        corrupted[random_mask] = random_corrupted[random_mask]
+
+    if mask_token_mask.any():
+        corrupted[mask_token_mask] = mask_token_id
+
+    if fragment_mask.any():
+        fragments = fragment_sampler(x.shape[0], rng)
+        if fragments.shape != x.shape:
+            raise ValueError(
+                "Fragment sampler returned tensor with shape "
+                f"{fragments.shape}, expected {x.shape}."
+            )
+        corrupted[fragment_mask] = fragments[fragment_mask]
+
+    return corrupted
 
 
 def build_candidate_token_ids(

@@ -10,11 +10,12 @@ corruption step.
 
 - **Mask selection** – Masked positions are generated exactly as in
   `char_diffusion` so existing stage compositions remain valid.
-- **Corruption** – Every masked character is replaced with a randomly sampled
-  token drawn from the base vocabulary (excluding `[MASK]` and any additional
-  `extra_special_token_ids`). A configurable
-  `original_token_probability_multiplier` biases the sampling distribution
-  towards keeping the original character.
+- **Corruption** - Masked characters in the training split now follow a
+  three-way mix: 60% random token replacement (respecting the configurable
+  `original_token_probability_multiplier`), 20% literal `[MASK]` insertion, and
+  20% borrowing characters from a randomly sampled fragment of the training
+  corpus at the same positions. Validation batches retain the original pure
+  random-replacement behaviour.
 - **Extensibility** – The corruption logic lives in
   `corruption_utils.RandomReplacementCorruptor`, making it easy to add new
   replacement rules in future revisions.

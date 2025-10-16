@@ -2,13 +2,17 @@
 from __future__ import annotations
 
 import os
-from typing import Any, Dict, Iterable, Optional
+from typing import Any, Callable, Dict, Iterable, Optional
 
 import torch
 
 from data.char_diffusion.prepare_streaming import CharDiffusionProvider
 
-from .corruption_utils import RandomReplacementCorruptor, build_candidate_token_ids
+from .corruption_utils import (
+    RandomReplacementCorruptor,
+    apply_mixed_corruption,
+    build_candidate_token_ids,
+)
 
 
 class CharRandomReplacementProvider(CharDiffusionProvider):
@@ -22,9 +26,11 @@ class CharRandomReplacementProvider(CharDiffusionProvider):
         dataset_partial_targets: bool = True,
         **kwargs,
     ) -> None:
+        self._train_corruption_mixture = (0.6, 0.2, 0.2)
         self._original_multiplier = original_token_probability_multiplier
         self._extra_special_token_ids = [int(token) for token in (extra_special_token_ids or [])]
         self._dataset_partial_targets = bool(dataset_partial_targets)
+        self._active_corruption_split: Optional[str] = None
         super().__init__(*args, **kwargs)
         self._initialize_corruptor()
 
@@ -41,8 +47,42 @@ class CharRandomReplacementProvider(CharDiffusionProvider):
             candidate_ids,
             original_token_probability_multiplier=self._original_multiplier,
         )
+        self._fragment_sampler = self._build_fragment_sampler()
+
+    def sample_batch(self, split: str, rng):
+        self._active_corruption_split = split
+        try:
+            return super().sample_batch(split, rng)
+        finally:
+            self._active_corruption_split = None
+
+    def _build_fragment_sampler(self) -> Callable[[int, torch.Generator], torch.Tensor]:
+        def sampler(batch_size: int, sampler_rng: torch.Generator) -> torch.Tensor:
+            if batch_size <= 0:
+                raise ValueError("batch_size must be positive for fragment sampling")
+            start_indices = self._sample_start_positions(
+                self._train_line_start_indices, batch_size, sampler_rng
+            )
+            return self._gather_sequences(self.train_ids_tensor, start_indices)
+
+        return sampler
+
+    def _apply_train_corruption(
+        self, x: torch.Tensor, mask: torch.Tensor, rng
+    ) -> torch.Tensor:
+        return apply_mixed_corruption(
+            x,
+            mask,
+            rng,
+            random_corruptor=self._corruptor,
+            mask_token_id=self.mask_token_id,
+            fragment_sampler=self._fragment_sampler,
+            mixture_weights=self._train_corruption_mixture,
+        )
 
     def _apply_corruption(self, x: torch.Tensor, mask: torch.Tensor, rng):
+        if self._active_corruption_split == "train":
+            return self._apply_train_corruption(x, mask, rng)
         return self._corruptor.corrupt(x, mask, rng)
 
     def _apply_stage_corruption(
@@ -53,6 +93,8 @@ class CharRandomReplacementProvider(CharDiffusionProvider):
         rng,
     ) -> torch.Tensor:
         del stage_corrupted_x  # already encoded; we only need the mask
+        if self._active_corruption_split == "train":
+            return self._apply_train_corruption(original_x, mask, rng)
         return self._corruptor.corrupt(original_x, mask, rng)
 
     def _create_labels(
