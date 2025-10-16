@@ -154,7 +154,8 @@ def right_shift_(x: torch.Tensor, start: int, end: int, fill_id: int) -> None:
     """
     if end - start <= 0:
         return
-    x[:, start + 1 : end] = x[:, start:end - 1]
+    slice_to_move = x[:, start:end - 1].clone()
+    x[:, start + 1 : end] = slice_to_move
     x[:, start] = fill_id
 
 
@@ -169,7 +170,8 @@ def left_shift_(x: torch.Tensor, start: int, end: int, fill_id: int) -> None:
     """
     if end - start <= 0:
         return
-    x[:, start:end - 1] = x[:, start + 1 : end]
+    slice_to_move = x[:, start + 1 : end].clone()
+    x[:, start:end - 1] = slice_to_move
     x[:, end - 1] = fill_id
 
 
