@@ -7,6 +7,33 @@ from typing import List, Sequence, Tuple, Union
 import torch
 
 
+def _gather_token_scores(
+    probs: torch.Tensor, positions: torch.Tensor, token_ids: torch.Tensor
+) -> torch.Tensor:
+    """Return per-position probabilities/log-probs for selected token ids.
+
+    Args:
+        probs: Tensor shaped ``(1, T, V)`` containing probabilities or log-probabilities.
+        positions: Long tensor of shape ``(L,)`` with the time indices to sample.
+        token_ids: Long tensor of shape ``(L,)`` identifying which token to read at each
+            position.
+
+    Returns:
+        A tensor of shape ``(L,)`` gathering ``probs[0, positions[i], token_ids[i]]`` for
+        each ``i``. Returns an empty tensor when ``L == 0``.
+    """
+
+    if token_ids.numel() == 0:
+        return torch.empty(0, device=probs.device, dtype=probs.dtype)
+
+    positions = positions.to(device=probs.device, dtype=torch.long)
+    token_ids = token_ids.to(device=probs.device, dtype=torch.long)
+
+    step_probs = probs[0].index_select(0, positions)
+    gathered = step_probs.gather(1, token_ids.unsqueeze(-1))
+    return gathered.squeeze(-1)
+
+
 def _interp_linear(s: int, S: int, start: float, end: float) -> float:
     """Linearly interpolate between endpoints for a scheduling helper.
 
@@ -124,8 +151,8 @@ def uncertainty_from_logprobs(log_probs: torch.Tensor, tokens: torch.Tensor) -> 
     with torch.no_grad():
         T = tokens.size(1)
         idx = torch.arange(T, device=log_probs.device)
-        p_self = log_probs[0, idx, tokens[0]].exp()
-        return (1.0 - p_self).detach()
+        log_p_self = _gather_token_scores(log_probs, idx, tokens[0])
+        return (1.0 - log_p_self.exp()).detach()
 
 
 def score_gaps_for_insertion(u: torch.Tensor) -> torch.Tensor:
@@ -251,16 +278,21 @@ def deletion_scores_from_probs(
 
     c = tokens[0]
     r = tokens[0, 1:]
-    p_self = probs[0, torch.arange(T, device=probs.device), c]
-    p_here_right = probs[0, torch.arange(T - 1, device=probs.device), r]
+    positions = torch.arange(T, device=probs.device)
+    p_self = _gather_token_scores(probs, positions, c)
+    gap_positions = torch.arange(T - 1, device=probs.device)
+    p_here_right = _gather_token_scores(probs, gap_positions, r)
     d1 = p_here_right - p_self[:-1]
 
     if T >= 3:
         n = tokens[0, 2:]
-        p_next_next = probs[0, 1:-1, n]
-        p_next_right = probs[0, 1:-1, r[:-1]]
+        next_positions = torch.arange(1, T - 1, device=probs.device)
+        p_next_next = _gather_token_scores(probs, next_positions, n)
+        p_next_right = _gather_token_scores(probs, next_positions, r[:-1])
         d2_core = p_next_next - p_next_right
-        d2 = torch.cat([d2_core, torch.zeros(1, device=tokens.device, dtype=probs.dtype)], dim=0)
+        d2 = torch.cat(
+            [d2_core, torch.zeros(1, device=tokens.device, dtype=probs.dtype)], dim=0
+        )
     else:
         d2 = torch.zeros(T - 1, device=tokens.device, dtype=probs.dtype)
 
