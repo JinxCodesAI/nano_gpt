@@ -48,11 +48,11 @@ edit_schedule        = 'cosine'
 # insert_ratio_start/end: fraction of the currently active (non-prompt) length that we try to fill
 #                         with new insertions at the beginning/end of diffusion. Values in the
 #                         0.00–0.10 range tend to preserve coherence without overwhelming updates.
-insert_ratio_start   = 0.04
+insert_ratio_start   = 0.2
 insert_ratio_end     = 0.00
 # delete_ratio_start/end: fraction of the active region eligible for deletion early/late in the
 #                         schedule. Keep these below ~0.10 to avoid deleting large spans at once.
-delete_ratio_start   = 0.04
+delete_ratio_start   = 0.2
 delete_ratio_end     = 0.00
 # delete_margin: probability buffer applied before considering a removal beneficial. Larger margins
 #                make deletions rarer; values around 0.01–0.05 generally work well.
@@ -67,7 +67,7 @@ delete_lambda        = 0.30
 length_target_mode   = 'none'
 # cooldown_distance: radius of edit suppression in tokens. Recently edited positions are skipped
 #                    for this many steps on each side to avoid thrashing. 0 disables cooldown.
-cooldown_distance    = 1
+cooldown_distance    = 5
 
 exec(open('configurator.py').read()) # overrides from command line or config file
 # -----------------------------------------------------------------------------
@@ -143,7 +143,7 @@ else:
     encode = lambda s: enc.encode(s, allowed_special={"<|endoftext|>"})
     decode = lambda l: enc.decode(l)
 
-    space_token_ids = encode(" ")
+    space_token_ids = encode("-")
     if not space_token_ids:
         raise ValueError("Encoder did not return a token id for a single space character.")
     if len(space_token_ids) != 1:
@@ -152,6 +152,8 @@ else:
 
 GREEN = "\033[92m"
 ORANGE = "\033[38;5;208m"
+RED_BACKGROUND = "\033[41m"
+WHITE_BACKGROUND = "\033[47m"
 RESET = "\033[0m"
 
 # encode the beginning of the prompt
@@ -221,6 +223,7 @@ with torch.no_grad():
                     additional_forbid=cooldown_mask_gaps,
                 )
                 gap_indices = torch.nonzero(sel_gaps, as_tuple=False).flatten().tolist()
+                insertion_positions_pre_deletion: List[int] = []
                 if gap_indices:
                     max_token_pos, applied_insertions = apply_insertions(
                         x,
@@ -229,8 +232,13 @@ with torch.no_grad():
                         block_size=block_size,
                         fill_id=space_token_id,
                     )
+                    offset = 0
+                    for idx in applied_insertions:
+                        insertion_positions_pre_deletion.append(idx + offset)
+                        offset += 1
                 else:
                     applied_insertions = []
+                    insertion_positions_pre_deletion = []
 
                 # Deletion scoring and application
                 last_probs = last_log_probs.exp()
@@ -253,7 +261,9 @@ with torch.no_grad():
                     additional_forbid=cooldown_mask_del,
                 )
                 del_indices = torch.nonzero(sel_del, as_tuple=False).flatten().tolist()
+                pre_deletion_tokens = None
                 if del_indices:
+                    pre_deletion_tokens = x[0, :max_token_pos].tolist()
                     max_token_pos, applied_deletions = apply_deletions(
                         x,
                         del_indices,
@@ -270,15 +280,6 @@ with torch.no_grad():
 
                 if fix_prompt_during_diffusion:
                     x[0, :initial_length] = prompt
-
-                decoded = decode(x[0, :max_token_pos].tolist())
-                colored_chars = []
-                for idx, char in enumerate(decoded):
-                    if prev_decoded is not None and idx < len(prev_decoded) and char == prev_decoded[idx]:
-                        colored_chars.append(f"{GREEN}{char}{RESET}")
-                    else:
-                        colored_chars.append(f"{ORANGE}{char}{RESET}")
-                prev_decoded = decoded
 
                 beta_s = compute_noise_ratio(iteration, max_iterations, noise_schedule, noise_start, noise_end)
                 x = apply_re_noise(
@@ -329,27 +330,60 @@ with torch.no_grad():
                 if max_token_pos < seq_length:
                     x[:, max_token_pos:] = 0
 
-                dupa = x[0, :max_token_pos].tolist()
-                decoded = decode(dupa)
+                decoded = decode(x[0, :max_token_pos].tolist())
 
+                surviving_insertions: List[int] = []
+                if insertion_positions_pre_deletion:
+                    deletions_sorted = sorted(applied_deletions)
+                    del_ptr = 0
+                    for pos in insertion_positions_pre_deletion:
+                        while del_ptr < len(deletions_sorted) and deletions_sorted[del_ptr] < pos:
+                            del_ptr += 1
+                        if del_ptr < len(deletions_sorted) and deletions_sorted[del_ptr] == pos:
+                            del_ptr += 1
+                            continue
+                        surviving_insertions.append(pos - del_ptr)
+
+                deletion_display = None
+                if applied_deletions and pre_deletion_tokens:
+                    pre_deletion_decoded = decode(pre_deletion_tokens)
+                    deletion_set = set(applied_deletions)
+                    highlighted_pre_deletion = []
+                    for idx, char in enumerate(pre_deletion_decoded):
+                        if idx in deletion_set:
+                            highlighted_pre_deletion.append(f"{RED_BACKGROUND}{char}{RESET}")
+                        else:
+                            highlighted_pre_deletion.append(char)
+                    deletion_display = "".join(highlighted_pre_deletion)
 
                 colored_chars = []
                 green_count = 0
                 orange_count = 0
+                insert_positions = set(surviving_insertions)
                 for idx, char in enumerate(decoded):
-                    if prev_decoded is not None and idx < len(prev_decoded) and char == prev_decoded[idx]:
-                        colored_chars.append(f"{GREEN}{char}{RESET}")
-                        green_count+=1
+                    same_as_prev = prev_decoded is not None and idx < len(prev_decoded) and char == prev_decoded[idx]
+                    if same_as_prev:
+                        base_color = GREEN
+                        green_count += 1
                     else:
-                        colored_chars.append(f"{ORANGE}{char}{RESET}")
-                        orange_count+=1
+                        base_color = ORANGE
+                        orange_count += 1
+
+                    if idx in insert_positions:
+                        colored_chars.append(f"{WHITE_BACKGROUND}{base_color}{char}{RESET}")
+                    else:
+                        colored_chars.append(f"{base_color}{char}{RESET}")
+
                 print(
                     f"Iteration {iteration}, sample {k} | "
                     f"mean log prob: {iteration_mean_log_prob:.4f} | "
                     f"changed {orange_count}/{green_count+orange_count} | "
                     f"ins {len(applied_insertions)} | del {len(applied_deletions)}"
                 )
+                if deletion_display is not None:
+                    print(f"Before deletion: {deletion_display}")
                 print("".join(colored_chars))
+                print("==========================================================================================================================")
                 prev_decoded = decoded
 
                 last_log_probs = log_probs.detach()
