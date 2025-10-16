@@ -42,14 +42,31 @@ noise_start    = 0.0       # fraction of positions to randomize at iter 0 (e.g.,
 noise_end      = 0.0       # fraction at the last iteration (usually 0.0)
 
 # --- Structural edit knobs ---
-edit_schedule        = 'cosine'   # 'linear' or 'cosine'
-insert_ratio_start   = 0.04       # fraction of active length inserted early
+# edit_schedule: interpolation curve for mapping iteration -> edit ratios. Accepts "linear" or
+#                "cosine", defaults to cosine decay. Any other value disables edits.
+edit_schedule        = 'cosine'
+# insert_ratio_start/end: fraction of the currently active (non-prompt) length that we try to fill
+#                         with new insertions at the beginning/end of diffusion. Values in the
+#                         0.00–0.10 range tend to preserve coherence without overwhelming updates.
+insert_ratio_start   = 0.04
 insert_ratio_end     = 0.00
+# delete_ratio_start/end: fraction of the active region eligible for deletion early/late in the
+#                         schedule. Keep these below ~0.10 to avoid deleting large spans at once.
 delete_ratio_start   = 0.04
 delete_ratio_end     = 0.00
+# delete_margin: probability buffer applied before considering a removal beneficial. Larger margins
+#                make deletions rarer; values around 0.01–0.05 generally work well.
 delete_margin        = 0.02
+# delete_lambda: weight for the second-order deletion heuristic that looks one token ahead. Raising
+#                this emphasizes deletions that also improve the following token. Typical range is
+#                0.1–0.5.
 delete_lambda        = 0.30
-length_target_mode   = 'none'     # 'none' | 'to_max_new'
+# length_target_mode: optional policy that nudges the sequence toward a target length. "none" leaves
+#                     lengths unconstrained, while "to_max_new" gradually pushes toward
+#                     initial_length + max_new_tokens.
+length_target_mode   = 'none'
+# cooldown_distance: radius of edit suppression in tokens. Recently edited positions are skipped
+#                    for this many steps on each side to avoid thrashing. 0 disables cooldown.
 cooldown_distance    = 1
 
 exec(open('configurator.py').read()) # overrides from command line or config file
@@ -191,7 +208,7 @@ with torch.no_grad():
                 # Insertion scoring and application
                 u = uncertainty_from_logprobs(last_log_probs[:, :max_token_pos, :], x[:, :max_token_pos])
                 gap_scores = score_gaps_for_insertion(u)
-                allowed_gap_count = max(0, gap_scores.numel() - max(0, initial_length))
+                allowed_gap_count = max(0, gap_scores.numel() - initial_length)
                 k_ins = min(k_ins, allowed_gap_count)
                 cooldown_mask_gaps = build_cooldown_mask(
                     gap_scores.numel(), last_insert_indices, cooldown_distance, gap_scores.device
@@ -200,7 +217,7 @@ with torch.no_grad():
                     gap_scores,
                     k_ins,
                     forbid_lo=0,
-                    forbid_hi=max(0, initial_length),
+                    forbid_hi=initial_length,
                     additional_forbid=cooldown_mask_gaps,
                 )
                 gap_indices = torch.nonzero(sel_gaps, as_tuple=False).flatten().tolist()
@@ -223,7 +240,7 @@ with torch.no_grad():
                     margin=delete_margin,
                     lam=delete_lambda,
                 )
-                allowed_delete_count = max(0, del_scores.numel() - max(0, initial_length))
+                allowed_delete_count = max(0, del_scores.numel() - initial_length)
                 k_del = min(k_del, allowed_delete_count)
                 cooldown_mask_del = build_cooldown_mask(
                     del_scores.numel(), last_delete_indices, cooldown_distance, del_scores.device
@@ -232,7 +249,7 @@ with torch.no_grad():
                     del_scores,
                     k_del,
                     forbid_lo=0,
-                    forbid_hi=max(0, initial_length),
+                    forbid_hi=initial_length,
                     additional_forbid=cooldown_mask_del,
                 )
                 del_indices = torch.nonzero(sel_del, as_tuple=False).flatten().tolist()
@@ -329,7 +346,8 @@ with torch.no_grad():
                 print(
                     f"Iteration {iteration}, sample {k} | "
                     f"mean log prob: {iteration_mean_log_prob:.4f} | "
-                    f"changed {orange_count}/{green_count+orange_count}"
+                    f"changed {orange_count}/{green_count+orange_count} | "
+                    f"ins {len(applied_insertions)} | del {len(applied_deletions)}"
                 )
                 print("".join(colored_chars))
                 prev_decoded = decoded

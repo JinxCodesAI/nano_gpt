@@ -8,13 +8,33 @@ import torch
 
 
 def _interp_linear(s: int, S: int, start: float, end: float) -> float:
-    """Linearly interpolate between start and end for iteration ``s`` out of ``S``."""
+    """Linearly interpolate between endpoints for a scheduling helper.
+
+    Args:
+        s: Current iteration index, expected in ``[0, S)``.
+        S: Total number of iterations in the schedule. Values ``<=1`` collapse to ``start``.
+        start: Ratio applied at the beginning of the process.
+        end: Ratio applied at the final iteration.
+
+    Returns:
+        The interpolated ratio for iteration ``s`` under a linear schedule.
+    """
     t = 0.0 if S <= 1 else s / (S - 1)
     return start + (end - start) * t
 
 
 def _interp_cosine(s: int, S: int, start: float, end: float) -> float:
-    """Cosine anneal from start to end across ``S`` iterations."""
+    """Cosine-annealed interpolation for schedule helpers.
+
+    Args:
+        s: Current iteration index, expected in ``[0, S)``.
+        S: Total number of iterations in the schedule. Values ``<=1`` collapse to ``start``.
+        start: Ratio applied at the beginning of the process.
+        end: Ratio applied at the final iteration.
+
+    Returns:
+        The interpolated ratio for iteration ``s`` using cosine decay.
+    """
     t = 0.0 if S <= 1 else s / (S - 1)
     w = 0.5 * (1.0 + math.cos(math.pi * t))
     return end + (start - end) * w
@@ -27,7 +47,18 @@ def compute_noise_ratio(
     start: float,
     end: float,
 ) -> float:
-    """Return the noise ratio for a given iteration according to the schedule."""
+    """Map an iteration to a scalar ratio according to a named schedule.
+
+    Args:
+        iteration: Zero-based iteration currently being executed.
+        max_iterations: Total number of iterations in the process.
+        schedule: Either ``"linear"`` or ``"cosine"``; any other value disables the ratio.
+        start: Ratio applied at iteration ``0``.
+        end: Ratio applied at iteration ``max_iterations - 1``.
+
+    Returns:
+        The interpolated ratio for the provided iteration. Returns ``0.0`` for unknown schedules.
+    """
     if schedule == 'linear':
         return _interp_linear(iteration, max_iterations, start, end)
     if schedule == 'cosine':
@@ -43,7 +74,19 @@ def apply_re_noise(
     ratio: float,
     device: Union[torch.device, str],
 ) -> torch.Tensor:
-    """Apply re-noise to the active non-prompt region of ``x`` in-place."""
+    """Randomly overwrite active, non-prompt positions with a filler token.
+
+    Args:
+        x: Batch of token ids shaped ``(1, seq_len)`` being edited in-place.
+        max_token_pos: Exclusive upper bound of the active window within ``x``.
+        initial_length: Number of prompt tokens at the beginning of the sequence.
+        replace_character_id: Token id used when re-noising positions.
+        ratio: Probability of re-noising any eligible position.
+        device: Torch device on which to allocate helper tensors.
+
+    Returns:
+        The modified tensor ``x`` with a subset of active positions replaced.
+    """
     if ratio <= 0.0:
         return x
 
@@ -69,7 +112,15 @@ def apply_re_noise(
 
 
 def uncertainty_from_logprobs(log_probs: torch.Tensor, tokens: torch.Tensor) -> torch.Tensor:
-    """Return per-position uncertainty ``1 - p(token)`` as a detached 1D tensor."""
+    """Quantify token-level uncertainty from model log probabilities.
+
+    Args:
+        log_probs: Log-probabilities of shape ``(1, T, V)`` covering the active sequence.
+        tokens: Token ids of shape ``(1, T)`` corresponding to the evaluated positions.
+
+    Returns:
+        A detached ``(T,)`` tensor where each element is ``1 - p(token)`` in ``[0, 1]``.
+    """
     with torch.no_grad():
         T = tokens.size(1)
         idx = torch.arange(T, device=log_probs.device)
@@ -78,14 +129,29 @@ def uncertainty_from_logprobs(log_probs: torch.Tensor, tokens: torch.Tensor) -> 
 
 
 def score_gaps_for_insertion(u: torch.Tensor) -> torch.Tensor:
-    """Score gaps between tokens using neighbouring uncertainty."""
+    """Estimate insertion desirability for each inter-token gap.
+
+    Args:
+        u: Uncertainty scores per token, shaped ``(T,)``.
+
+    Returns:
+        A tensor of length ``T - 1`` whose ``i``-th value reflects how uncertain either
+        neighbor of the gap ``i`` is, using the maximum of the two uncertainties.
+    """
     if u.numel() < 2:
         return torch.empty(0, device=u.device, dtype=u.dtype)
     return torch.maximum(u[:-1], u[1:])
 
 
 def right_shift_(x: torch.Tensor, start: int, end: int, fill_id: int) -> None:
-    """Shift ``x[:, start:end)`` right by one and place ``fill_id`` at ``start``."""
+    """In-place helper to make room for an insertion in ``x``.
+
+    Args:
+        x: Sequence batch shaped ``(1, seq_len)`` modified in-place.
+        start: Index where the vacant slot should appear.
+        end: Exclusive end of the region to shift.
+        fill_id: Token id used to populate the newly opened slot at ``start``.
+    """
     if end - start <= 0:
         return
     x[:, start + 1 : end] = x[:, start:end - 1]
@@ -93,7 +159,14 @@ def right_shift_(x: torch.Tensor, start: int, end: int, fill_id: int) -> None:
 
 
 def left_shift_(x: torch.Tensor, start: int, end: int, fill_id: int) -> None:
-    """Shift ``x[:, start:end)`` left by one and place ``fill_id`` at ``end-1``."""
+    """In-place helper to close a gap after deleting from ``x``.
+
+    Args:
+        x: Sequence batch shaped ``(1, seq_len)`` modified in-place.
+        start: Inclusive beginning of the window being compacted.
+        end: Exclusive end of the active sequence window.
+        fill_id: Token id written into the vacated slot at ``end - 1``.
+    """
     if end - start <= 0:
         return
     x[:, start:end - 1] = x[:, start + 1 : end]
@@ -108,7 +181,18 @@ def select_topk_mask(
     forbid_hi: int = 0,
     additional_forbid: torch.Tensor | None = None,
 ) -> torch.Tensor:
-    """Return boolean mask for the ``k`` highest scores respecting forbidden regions."""
+    """Select the top-``k`` scoring positions while respecting constraints.
+
+    Args:
+        scores: One-dimensional tensor of candidate scores.
+        k: Number of selections to return.
+        forbid_lo: Inclusive lower bound of an index range that must remain unselected.
+        forbid_hi: Exclusive upper bound of the forbidden range.
+        additional_forbid: Optional boolean tensor masking individual forbidden indices.
+
+    Returns:
+        A boolean tensor with ``True`` at the chosen indices and ``False`` elsewhere.
+    """
 
     if scores.dim() != 1:
         raise ValueError('scores must be 1D tensor')
@@ -148,7 +232,17 @@ def deletion_scores_from_probs(
     margin: float,
     lam: float,
 ) -> torch.Tensor:
-    """Compute deletion desirability per position using lookahead heuristics."""
+    """Rank token positions by how beneficial a deletion appears.
+
+    Args:
+        probs: Token probabilities with shape ``(1, T, V)``.
+        tokens: Token ids with shape ``(1, T)`` for the active sequence.
+        margin: Minimum improvement threshold before a deletion is considered worthwhile.
+        lam: Weight assigned to the second-order lookahead term.
+
+    Returns:
+        A ``(T - 1,)`` tensor scoring each position (except the last) for deletion.
+    """
     T = tokens.size(1)
     if T < 2:
         return torch.zeros(1, device=tokens.device, dtype=probs.dtype)
@@ -174,7 +268,17 @@ def deletion_scores_from_probs(
 
 
 def build_cooldown_mask(length: int, edits: Sequence[int], distance: int, device: torch.device) -> torch.Tensor:
-    """Return boolean mask of indices to suppress due to cooldown."""
+    """Mark indices that should be skipped due to recent edits.
+
+    Args:
+        length: Number of positions in the target mask.
+        edits: Sequence of indices that were just edited.
+        distance: Radius around each edit to mark as unavailable.
+        device: Torch device for the returned mask.
+
+    Returns:
+        A boolean tensor where ``True`` denotes positions that should be suppressed.
+    """
     mask = torch.zeros(length, dtype=torch.bool, device=device)
     if distance <= 0 or not edits:
         return mask
@@ -195,7 +299,19 @@ def apply_insertions(
     block_size: int,
     fill_id: int,
 ) -> Tuple[int, List[int]]:
-    """Insert fill tokens at the requested gap indices from right to left."""
+    """Insert filler tokens into the sequence at specified gaps.
+
+    Args:
+        x: Sequence batch shaped ``(1, seq_len)`` modified in-place.
+        gap_indices: Indices of the gaps (between tokens) to populate.
+        max_token_pos: Exclusive upper bound of the active region before insertion.
+        block_size: Maximum number of tokens allowed in ``x``.
+        fill_id: Token id written into the new slots.
+
+    Returns:
+        A tuple ``(new_max_token_pos, applied_indices)`` with the updated active length and
+        the concrete token indices where insertions occurred (sorted ascending).
+    """
     applied: List[int] = []
     for g in sorted(gap_indices, reverse=True):
         if g < 0:
@@ -220,7 +336,21 @@ def apply_deletions(
     fill_id: int,
     prior_insertions: Sequence[int] | None = None,
 ) -> Tuple[int, List[int]]:
-    """Delete characters at the requested indices from left to right."""
+    """Remove tokens from the sequence at specified indices.
+
+    Args:
+        x: Sequence batch shaped ``(1, seq_len)`` modified in-place.
+        position_indices: Positions (relative to pre-insertion layout) proposed for deletion.
+        max_token_pos: Exclusive upper bound of the active region before deletion.
+        initial_length: Number of prompt tokens that must remain untouched.
+        fill_id: Token id placed in vacated trailing slots after compaction.
+        prior_insertions: Indices where insertions were applied this iteration, used to align
+            deletion coordinates with the shifted sequence.
+
+    Returns:
+        A tuple ``(new_max_token_pos, applied_indices)`` describing the updated active length and
+        the actual token indices that were deleted (sorted ascending).
+    """
 
     applied: List[int] = []
     offset = 0
