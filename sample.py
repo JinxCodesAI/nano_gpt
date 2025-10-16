@@ -1,15 +1,11 @@
 """
 Sample from a trained model
 """
-import os
-import pickle
-from contextlib import nullcontext
 from typing import List, Optional
 
 import torch
-import tiktoken
-from model import GPTConfig, GPT
 from display import DiffusionDisplay
+from model_setup import ModelSetup
 from sampling_utils import (
     apply_deletions,
     apply_insertions,
@@ -77,90 +73,22 @@ torch.manual_seed(seed)
 torch.cuda.manual_seed(seed)
 torch.backends.cuda.matmul.allow_tf32 = True # allow tf32 on matmul
 torch.backends.cudnn.allow_tf32 = True # allow tf32 on cudnn
-device_type = 'cuda' if 'cuda' in device else 'cpu' # for later use in torch.autocast
-ptdtype = {'float32': torch.float32, 'bfloat16': torch.bfloat16, 'float16': torch.float16}[dtype]
-ctx = nullcontext() if device_type == 'cpu' else torch.amp.autocast(device_type=device_type, dtype=ptdtype)
-
-# model
-if init_from == 'resume':
-    # init from a model saved in a specific directory
-    ckpt_path = os.path.join(out_dir, ckpt_name)
-    checkpoint = torch.load(ckpt_path, map_location=device)
-    gptconf = GPTConfig(**checkpoint['model_args'])
-    model = GPT(gptconf)
-    state_dict = checkpoint['model']
-    unwanted_prefix = '_orig_mod.'
-    for k,v in list(state_dict.items()):
-        if k.startswith(unwanted_prefix):
-            state_dict[k[len(unwanted_prefix):]] = state_dict.pop(k)
-    model.load_state_dict(state_dict)
-elif init_from.startswith('gpt2'):
-    # init from a given GPT-2 model
-    model = GPT.from_pretrained(init_from, dict(dropout=0.0))
-
-model.eval()
-model.to(device)
-if compile:
-    model = torch.compile(model) # requires PyTorch 2.0 (optional)
-
-# look for the meta pickle in case it is available in the dataset folder
-load_meta = False
-if init_from == 'resume' and 'config' in checkpoint and 'dataset' in checkpoint['config']: # older checkpoints might not have these...
-    meta_path = os.path.join('data', checkpoint['config']['dataset'], 'meta.pkl')
-    load_meta = os.path.exists(meta_path)
-if load_meta:
-    print(f"Loading meta from {meta_path}...")
-    with open(meta_path, 'rb') as f:
-        meta = pickle.load(f)
-    # TODO want to make this more general to arbitrary encoder/decoder schemes
-    stoi, itos = meta['stoi'], meta['itos']
-    if ' ' not in stoi:
-        raise ValueError("Space character not found in dataset vocabulary; cannot perform space-based re-noising.")
-    space_token_id = stoi['X']
-    _encode_unknown_cache = set()
-
-    def encode(s: str):
-        missing = set()
-        ids = []
-        for c in s:
-            idx = stoi.get(c)
-            if idx is None:
-                missing.add(c)
-                idx = space_token_id
-            ids.append(idx)
-        if missing:
-            unseen = missing.difference(_encode_unknown_cache)
-            if unseen:
-                printable = ", ".join(repr(ch) for ch in sorted(unseen))
-                print(f"Warning: substituting space for unknown characters: {printable}")
-                _encode_unknown_cache.update(unseen)
-        return ids
-
-    decode = lambda l: ''.join([itos[i] for i in l])
-else:
-    # ok let's assume gpt-2 encodings by default
-    print("No meta.pkl found, assuming GPT-2 encodings...")
-    enc = tiktoken.get_encoding("gpt2")
-    encode = lambda s: enc.encode(s, allowed_special={"<|endoftext|>"})
-    decode = lambda l: enc.decode(l)
-
-    space_token_ids = encode(" ")
-    if not space_token_ids:
-        raise ValueError("Encoder did not return a token id for a single space character.")
-    if len(space_token_ids) != 1:
-        raise ValueError(f"Expected a single token id for space, got: {space_token_ids}")
-    space_token_id = space_token_ids[0]
-
-# encode the beginning of the prompt
-if start.startswith('FILE:'):
-    with open(start[5:], 'r', encoding='utf-8') as f:
-        start = f.read()
-start_ids = encode(start)
-prompt = torch.tensor(start_ids, dtype=torch.long, device=device)
-initial_length = prompt.size(0)
-block_size = model.config.block_size
-if initial_length > block_size:
-    raise ValueError(f"Prompt is longer ({initial_length}) than model block size ({block_size}).")
+setup = ModelSetup(
+    init_from=init_from,
+    out_dir=out_dir,
+    ckpt_name=ckpt_name,
+    device=device,
+    dtype=dtype,
+    compile_model=compile,
+    start=start,
+)
+model = setup.model
+decode = setup.decode
+space_token_id = setup.space_token_id
+prompt = setup.prompt
+initial_length = setup.initial_length
+block_size = setup.block_size
+ctx = setup.autocast_context()
 
 # run diffusion-style generation
 with torch.no_grad():
