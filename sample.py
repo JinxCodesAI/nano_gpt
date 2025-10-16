@@ -4,7 +4,7 @@ Sample from a trained model
 import os
 import pickle
 from contextlib import nullcontext
-from typing import List
+from typing import List, Optional
 
 import torch
 import tiktoken
@@ -143,7 +143,7 @@ else:
     encode = lambda s: enc.encode(s, allowed_special={"<|endoftext|>"})
     decode = lambda l: enc.decode(l)
 
-    space_token_ids = encode("-")
+    space_token_ids = encode(" ")
     if not space_token_ids:
         raise ValueError("Encoder did not return a token id for a single space character.")
     if len(space_token_ids) != 1:
@@ -196,6 +196,7 @@ with torch.no_grad():
                 r_del = compute_noise_ratio(iteration, max_iterations, edit_schedule, delete_ratio_start, delete_ratio_end)
                 k_ins = max(0, int(r_ins * active_len))
                 k_del = max(0, int(r_del * active_len))
+                token_index_map: List[Optional[int]] = list(range(max_token_pos))
 
                 if length_target_mode == 'to_max_new':
                     target_len = min(block_size, initial_length + max_new_tokens)
@@ -240,6 +241,11 @@ with torch.no_grad():
                     applied_insertions = []
                     insertion_positions_pre_deletion = []
 
+                if insertion_positions_pre_deletion:
+                    for pos in insertion_positions_pre_deletion:
+                        if 0 <= pos <= len(token_index_map):
+                            token_index_map.insert(pos, None)
+
                 # Deletion scoring and application
                 last_probs = last_log_probs.exp()
                 del_scores = deletion_scores_from_probs(
@@ -274,6 +280,11 @@ with torch.no_grad():
                     )
                 else:
                     applied_deletions = []
+
+                if applied_deletions:
+                    for del_idx in sorted(applied_deletions, reverse=True):
+                        if 0 <= del_idx < len(token_index_map):
+                            token_index_map.pop(del_idx)
 
                 last_insert_indices = applied_insertions
                 last_delete_indices = applied_deletions
@@ -332,18 +343,6 @@ with torch.no_grad():
 
                 decoded = decode(x[0, :max_token_pos].tolist())
 
-                surviving_insertions: List[int] = []
-                if insertion_positions_pre_deletion:
-                    deletions_sorted = sorted(applied_deletions)
-                    del_ptr = 0
-                    for pos in insertion_positions_pre_deletion:
-                        while del_ptr < len(deletions_sorted) and deletions_sorted[del_ptr] < pos:
-                            del_ptr += 1
-                        if del_ptr < len(deletions_sorted) and deletions_sorted[del_ptr] == pos:
-                            del_ptr += 1
-                            continue
-                        surviving_insertions.append(pos - del_ptr)
-
                 deletion_display = None
                 if applied_deletions and pre_deletion_tokens:
                     pre_deletion_decoded = decode(pre_deletion_tokens)
@@ -359,9 +358,18 @@ with torch.no_grad():
                 colored_chars = []
                 green_count = 0
                 orange_count = 0
-                insert_positions = set(surviving_insertions)
                 for idx, char in enumerate(decoded):
-                    same_as_prev = prev_decoded is not None and idx < len(prev_decoded) and char == prev_decoded[idx]
+                    source_idx = token_index_map[idx] if idx < len(token_index_map) else None
+                    if source_idx is None:
+                        base_color = ORANGE
+                        orange_count += 1
+                        colored_chars.append(f"{WHITE_BACKGROUND}{base_color}{char}{RESET}")
+                        continue
+                    same_as_prev = (
+                        prev_decoded is not None
+                        and source_idx < len(prev_decoded)
+                        and char == prev_decoded[source_idx]
+                    )
                     if same_as_prev:
                         base_color = GREEN
                         green_count += 1
@@ -369,10 +377,7 @@ with torch.no_grad():
                         base_color = ORANGE
                         orange_count += 1
 
-                    if idx in insert_positions:
-                        colored_chars.append(f"{WHITE_BACKGROUND}{base_color}{char}{RESET}")
-                    else:
-                        colored_chars.append(f"{base_color}{char}{RESET}")
+                    colored_chars.append(f"{base_color}{char}{RESET}")
 
                 print(
                     f"Iteration {iteration}, sample {k} | "
