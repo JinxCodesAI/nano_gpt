@@ -4,6 +4,12 @@
 
 This repository turns Andrej Karpathy’s [nanoGPT](https://github.com/karpathy/nanoGPT) into an experimentation bed for **discrete diffusion** on character-level language models. The original nanoGPT license and spirit of minimal, hackable code carry over; this fork rebuilds the data pipeline, adds diffusion-flavoured datasets, and ships utilities for iterative unmasking-based inference.
 
+Takes ideas and inspirations from:
+
+ [BERT](https://arxiv.org/pdf/1810.04805), [LLADA](https://arxiv.org/abs/2502.09992), [D3PM](https://arxiv.org/pdf/2107.03006), with also some ideas and research directions inspired by [Julia Turc channel](https://www.youtube.com/@juliaturc1/videos)
+
+ with a bit of a twist. 
+
 ## Highlights
 
 - Attribution: forked from [karpathy/nanoGPT](https://github.com/karpathy/nanoGPT) under the MIT license.
