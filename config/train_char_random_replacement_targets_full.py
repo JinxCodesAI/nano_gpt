@@ -52,19 +52,18 @@ else:
     unmasking_stages = None
     validation_stages = None
 
-gradient_accumulation_steps = 1
-batch_size = 384  # Slightly larger batch size for BERT training
+gradient_accumulation_steps = 1 # Increase if batch_size had to be reduced to keep same effective batch size
+batch_size = 384  # fits on A40 with 48 GB of RVAM, adjust for other machines
 block_size = 1024 # Context size for masking
 
-# BERT training typically uses lower learning rates
 learning_rate = 5e-4
 max_iters = 10000
 lr_decay_iters = 10000
 min_lr = 5e-5
 beta2 = 0.99
-warmup_iters = 500  # More warmup for BERT
+warmup_iters = 500  
 
-# Model architecture - bidirectional for BERT
+# Model architecture  
 n_layer = 6
 n_head = 6
 n_embd = 384
@@ -72,11 +71,7 @@ dropout = 0.1
 dtype = 'float16'
 
 # Training type for masked language modeling
-training_type = 'MLM' # Masked Language Modeling
-
-# Diffusion/masking specific config
-mask_probability = 0.15  # Standard BERT masking rate
-mask_token_id = None  # Will be set from dataset meta
+training_type = 'MLM' # Masked Language Modeling 
 
 # Data streaming config
 batches_per_file = 10  # Smaller files for faster iteration
