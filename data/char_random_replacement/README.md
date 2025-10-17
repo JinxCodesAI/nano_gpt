@@ -4,8 +4,8 @@
 
 ## Corruption Strategy
 
-- **Mixture** - Training batches use `(0.6, 0.2, 0.2)` weights for random token replacement, direct `[MASK]` insertion, and fragment borrowing from another slice of the training corpus.
-- **Corruptor** – `_initialize_corruptor` builds `RandomReplacementCorruptor`, excluding the `[MASK]` token and any IDs passed via `--extra_special_token_ids`. The original-token multiplier (`--original_token_probability_multiplier`) can bias the random branch toward leaving the source token unchanged.
+- **Mixture** – Training batches use `(0.8, 0.2, 0.0)` weights for random token replacement, direct `[MASK]` insertion, and fragment borrowing from another slice of the training corpus. Override this trio via `--train_corruption_mixture` or the `train_corruption_mixture` entry in your config.
+- **Corruptor** – `_initialize_corruptor` builds `RandomReplacementCorruptor`, excluding the `[MASK]` token and any IDs passed via `--extra_special_token_ids`. The original-token multiplier (`--original_token_probability_multiplier`) can bias the random branch toward leaving the source token unchanged; tune it on the CLI or through `original_token_probability_multiplier` in configs.
 - **Fragments** – `_build_fragment_sampler` draws aligned samples from the train split so fragment corruption can drop realistic context into the masked positions.
 - **Split awareness** – Validation batches skip the fragment pipeline and fall back to plain random replacement, keeping evaluation deterministic with respect to the corruption distribution.
 
@@ -18,12 +18,13 @@ By default the provider mirrors the base class and emits partial targets (only m
 Run `python data/char_random_replacement/prepare_streaming.py --help` to view the extended arguments:
 
 - `--original_token_probability_multiplier`
+- `--train_corruption_mixture RANDOM MASK FRAGMENT`
 - `--extra_special_token_ids`
 - `--dataset_partial_targets / --no-dataset_partial_targets`
 
 When `input.txt` is missing from this directory, the CLI automatically falls back to `data/char_diffusion/input.txt`, letting both providers share the same corpus.
 
-> **Config note:** When you launch the producer through `prepare.py` with a config file, only `dataset_partial_targets` is currently forwarded to the provider. `original_token_probability_multiplier` (and the extra token list) are not yet plumbed through the config path, so keep the default value or run the provider directly if you need to override it. If you want the config-driven workflow to support these knobs, add them to the dictionary passed into `CharRandomReplacementProvider` inside `prepare.py`.
+> **Config note:** `prepare.py` now forwards `dataset_partial_targets`, `original_token_probability_multiplier`, `train_corruption_mixture`, and `extra_special_token_ids` to the provider. See `config/train_char_random_replacement_targets_full.py` for an example wiring that toggles full targets and documents how to adjust the corruption knobs from a config file.
 
 ## Usage
 

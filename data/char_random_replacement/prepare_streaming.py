@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 import os
-from typing import Any, Callable, Dict, Iterable, Optional
+from typing import Any, Callable, Dict, Iterable, Optional, Tuple
 
 import torch
 
@@ -24,10 +24,13 @@ class CharRandomReplacementProvider(CharDiffusionProvider):
         original_token_probability_multiplier: float = 1.0,
         extra_special_token_ids: Optional[Iterable[int]] = None,
         dataset_partial_targets: bool = True,
+        train_corruption_mixture: Optional[Iterable[float]] = None,
         **kwargs,
     ) -> None:
-        self._train_corruption_mixture = (0.8, 0.2, 0.0) # """Problems to make it work"""
-        self._original_multiplier = original_token_probability_multiplier
+        self._train_corruption_mixture = self._coerce_train_corruption_mixture(
+            train_corruption_mixture
+        )
+        self._original_multiplier = float(original_token_probability_multiplier)
         self._extra_special_token_ids = [int(token) for token in (extra_special_token_ids or [])]
         self._dataset_partial_targets = bool(dataset_partial_targets)
         self._active_corruption_split: Optional[str] = None
@@ -107,6 +110,27 @@ class CharRandomReplacementProvider(CharDiffusionProvider):
     # ------------------------------------------------------------------
     # Metadata
     # ------------------------------------------------------------------
+    @staticmethod
+    def _coerce_train_corruption_mixture(
+        mixture: Optional[Iterable[float]],
+    ) -> Tuple[float, float, float]:
+        default = (0.8, 0.2, 0.0)
+        if mixture is None:
+            return default
+        try:
+            mixture_tuple = tuple(float(weight) for weight in mixture)
+        except TypeError as exc:
+            raise TypeError(
+                "train_corruption_mixture must be an iterable of three numeric weights"
+            ) from exc
+        if len(mixture_tuple) != 3:
+            raise ValueError("train_corruption_mixture must contain exactly three weights")
+        if any(weight < 0 for weight in mixture_tuple):
+            raise ValueError("train_corruption_mixture weights must be non-negative")
+        if sum(mixture_tuple) == 0:
+            raise ValueError("train_corruption_mixture weights must sum to a positive value")
+        return mixture_tuple
+
     def build_meta(self) -> Dict[str, Any]:  # type: ignore[override]
         meta = super().build_meta()
         meta.update(
@@ -116,6 +140,7 @@ class CharRandomReplacementProvider(CharDiffusionProvider):
                     "type": "random_replacement",
                     "original_token_probability_multiplier": self._original_multiplier,
                     "extra_special_token_ids": self._extra_special_token_ids,
+                    "train_corruption_mixture": self._train_corruption_mixture,
                 },
                 "train_partial_targets": self._dataset_partial_targets,
             }
@@ -179,6 +204,17 @@ def main() -> None:
         "--original_token_probability_multiplier", type=float, default=1.0
     )
     parser.add_argument(
+        "--train_corruption_mixture",
+        type=float,
+        nargs=3,
+        default=(0.8, 0.2, 0.0),
+        metavar=("RANDOM", "MASK", "FRAGMENT"),
+        help=(
+            "Mixture weights for (random replacement, mask token, fragment copy) "
+            "when corrupting training batches."
+        ),
+    )
+    parser.add_argument(
         "--extra_special_token_ids",
         type=int,
         nargs="*",
@@ -220,6 +256,7 @@ def main() -> None:
         verbose=args.verbose,
         original_token_probability_multiplier=
         args.original_token_probability_multiplier,
+        train_corruption_mixture=tuple(args.train_corruption_mixture),
         extra_special_token_ids=args.extra_special_token_ids,
         dataset_partial_targets=args.dataset_partial_targets,
         **stage_kwargs,
