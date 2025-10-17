@@ -137,7 +137,7 @@ class ModelSetup:
         enc = tiktoken.get_encoding("gpt2")
         encode = lambda text: enc.encode(text, allowed_special={"<|endoftext|>"})
         decode = lambda token_ids: enc.decode(token_ids)
-        space_token_ids = encode(" ")
+        space_token_ids = encode("[MASK]")
         if not space_token_ids:
             raise ValueError("Encoder did not return a token id for a single space character.")
         if len(space_token_ids) != 1:

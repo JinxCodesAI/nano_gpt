@@ -21,14 +21,14 @@ from sampling_utils import (
 # -----------------------------------------------------------------------------
 init_from = 'resume' # either 'resume' (from an out_dir) or a gpt2 variant (e.g. 'gpt2-xl')
 out_dir = 'out-char-random-replacement' # ignored if init_from is not 'resume'
-ckpt_name = 'new_hope_2_9000.pt'
-start = "ROMEO:\n" # or "<|endoftext|>" or etc. Can also specify a file, use as: "FILE:prompt.txt"
+ckpt_name = 'new_hope_4_9000.pt'
+start = "POMPEY:\n" # or "<|endoftext|>" or etc. Can also specify a file, use as: "FILE:prompt.txt"
 num_samples = 1 # number of samples to draw
 max_new_tokens = 900 # number of tokens generated in each sample
 max_iterations = 20 # maximum number of diffusion iterations per sample
 fix_prompt_during_diffusion = True # keep conditioning text fixed at every iteration when True
 temperature = 1.5 # 1.0 = no change, < 1.0 = less random, > 1.0 = more random, in predictions
-seed = 42
+seed = 43
 device = 'cuda' # examples: 'cpu', 'cuda', 'cuda:0', 'cuda:1', etc.
 dtype = 'bfloat16' if torch.cuda.is_available() and torch.cuda.is_bf16_supported() else 'float16' # 'float32' or 'bfloat16' or 'float16'
 compile = False # use PyTorch 2.0 to compile the model to be faster
@@ -45,11 +45,11 @@ edit_schedule        = 'cosine'
 # insert_ratio_start/end: fraction of the currently active (non-prompt) length that we try to fill
 #                         with new insertions at the beginning/end of diffusion. Values in the
 #                         0.00–0.10 range tend to preserve coherence without overwhelming updates.
-insert_ratio_start   = 0.0
+insert_ratio_start   = 0.00
 insert_ratio_end     = 0.00
 # delete_ratio_start/end: fraction of the active region eligible for deletion early/late in the
 #                         schedule. Keep these below ~0.10 to avoid deleting large spans at once.
-delete_ratio_start   = 0.0
+delete_ratio_start   = 0.00
 delete_ratio_end     = 0.00
 # delete_margin: probability buffer applied before considering a removal beneficial. Larger margins
 #                make deletions rarer; values around 0.01–0.05 generally work well.
