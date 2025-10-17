@@ -45,11 +45,11 @@ edit_schedule        = 'cosine'
 # insert_ratio_start/end: fraction of the currently active (non-prompt) length that we try to fill
 #                         with new insertions at the beginning/end of diffusion. Values in the
 #                         0.00–0.10 range tend to preserve coherence without overwhelming updates.
-insert_ratio_start   = 0.2
+insert_ratio_start   = 0.0
 insert_ratio_end     = 0.00
 # delete_ratio_start/end: fraction of the active region eligible for deletion early/late in the
 #                         schedule. Keep these below ~0.10 to avoid deleting large spans at once.
-delete_ratio_start   = 0.2
+delete_ratio_start   = 0.0
 delete_ratio_end     = 0.00
 # delete_margin: probability buffer applied before considering a removal beneficial. Larger margins
 #                make deletions rarer; values around 0.01–0.05 generally work well.

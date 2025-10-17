@@ -18,7 +18,7 @@ wandb_run_name = 'random-replacement-char-full-t'
 
 dataset = 'char_random_replacement'
 data_stream_verbose = True
-dataset_partial_targets = True
+dataset_partial_targets = False # IF True targets of unchanged positions are set to ignore_index, this is common practice in BERT training but do not work here 
 
 composition_config = 'example'  # refers to data/char_random_replacement/config/example.py; use None if config is not defined
 
