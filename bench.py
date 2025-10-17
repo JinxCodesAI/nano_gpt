@@ -12,7 +12,7 @@ from model import GPTConfig, GPT
 batch_size = 12
 block_size = 1024
 bias = False
-real_data = True
+real_data = False
 seed = 1337
 device = 'cuda' # examples: 'cpu', 'cuda', 'cuda:0', 'cuda:1', etc.
 dtype = 'bfloat16' if torch.cuda.is_available() and torch.cuda.is_bf16_supported() else 'float16' # 'float32' or 'bfloat16' or 'float16'
@@ -31,16 +31,12 @@ ctx = nullcontext() if device_type == 'cpu' else torch.amp.autocast(device_type=
 
 # data loading init
 if real_data:
-    dataset = 'openwebtext'
+    dataset = 'char_diffusion'
     data_dir = os.path.join('data', dataset)
-    train_data = np.memmap(os.path.join(data_dir, 'train.bin'), dtype=np.uint16, mode='r')
-    def get_batch(split):
-        data = train_data # note ignore split in benchmarking script
-        ix = torch.randint(len(data) - block_size, (batch_size,))
-        x = torch.stack([torch.from_numpy((data[i:i+block_size]).astype(np.int64)) for i in ix])
-        y = torch.stack([torch.from_numpy((data[i+1:i+1+block_size]).astype(np.int64)) for i in ix])
-        x, y = x.pin_memory().to(device, non_blocking=True), y.pin_memory().to(device, non_blocking=True)
-        return x, y
+    raise NotImplementedError(
+        "bench.py no longer ships with a memmap loader. Set real_data=False (default) or "
+        "adapt this block to read batches produced by your streaming dataset."
+    )
 else:
     # alternatively, if fixed data is desired to not care about data loading
     x = torch.randint(50304, (batch_size, block_size), device=device)
