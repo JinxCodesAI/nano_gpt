@@ -26,7 +26,7 @@ class CharRandomReplacementProvider(CharDiffusionProvider):
         dataset_partial_targets: bool = True,
         **kwargs,
     ) -> None:
-        self._train_corruption_mixture = (0.8, 0.2, 0.0"""Problems to make it work""")
+        self._train_corruption_mixture = (0.8, 0.2, 0.0) # """Problems to make it work"""
         self._original_multiplier = original_token_probability_multiplier
         self._extra_special_token_ids = [int(token) for token in (extra_special_token_ids or [])]
         self._dataset_partial_targets = bool(dataset_partial_targets)
