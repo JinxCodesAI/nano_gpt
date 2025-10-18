@@ -147,7 +147,8 @@ def apply_mixed_corruption(
 
     if fragment_mask.any():
         if not fragment_enabled:
-            corrupted[fragment_mask] = mask_token_id
+            random_corrupted = random_corruptor.corrupt(x, fragment_mask, rng)
+            corrupted[fragment_mask] = random_corrupted[fragment_mask]
             return corrupted
         fragments = fragment_sampler(x.shape[0], rng)
         if fragments.shape != x.shape:
