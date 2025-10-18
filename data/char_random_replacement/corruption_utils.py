@@ -106,7 +106,8 @@ def apply_mixed_corruption(
     mask_token_id: int,
     fragment_sampler: FragmentSampler,
     mixture_weights: Tuple[float, float, float] = (0.6, 0.2, 0.2),
-) -> torch.Tensor:
+    return_masks: bool = False,
+) -> torch.Tensor | Tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
     """Apply hybrid corruption with random, [MASK], and fragment strategies."""
     if x.shape != mask.shape:
         raise ValueError("x and mask must share the same shape")
@@ -149,15 +150,17 @@ def apply_mixed_corruption(
         if not fragment_enabled:
             random_corrupted = random_corruptor.corrupt(x, fragment_mask, rng)
             corrupted[fragment_mask] = random_corrupted[fragment_mask]
-            return corrupted
-        fragments = fragment_sampler(x.shape[0], rng)
-        if fragments.shape != x.shape:
-            raise ValueError(
-                "Fragment sampler returned tensor with shape "
-                f"{fragments.shape}, expected {x.shape}."
-            )
-        corrupted[fragment_mask] = fragments[fragment_mask]
+        else:
+            fragments = fragment_sampler(x.shape[0], rng)
+            if fragments.shape != x.shape:
+                raise ValueError(
+                    "Fragment sampler returned tensor with shape "
+                    f"{fragments.shape}, expected {x.shape}."
+                )
+            corrupted[fragment_mask] = fragments[fragment_mask]
 
+    if return_masks:
+        return corrupted, random_mask, mask_token_mask, fragment_mask
     return corrupted
 
 

@@ -124,6 +124,26 @@ def main() -> None:
         ):
             if key in cfg:
                 provider_kwargs[key] = cfg[key]
+    elif dataset == "char_inference_replacement":
+        checkpoint_dir = cfg.get("checkpoint_dir") or cfg.get("out_dir")
+        if checkpoint_dir is None:
+            raise ValueError(
+                "Config must define checkpoint_dir (or out_dir) for char_inference_replacement dataset."
+            )
+        provider_kwargs["checkpoint_dir"] = checkpoint_dir
+        for key in (
+            "inference_device",
+            "inference_dtype",
+            "inference_refresh_seconds",
+            "prediction_temperature",
+            "fallback_to_random",
+            "fallback_original_token_probability_multiplier",
+            "fallback_extra_special_token_ids",
+            "dataset_partial_targets",
+            "train_corruption_mixture",
+        ):
+            if key in cfg:
+                provider_kwargs[key] = cfg[key]
 
     provider = ProviderCls(**provider_kwargs)
     provider.run()

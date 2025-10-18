@@ -14,6 +14,11 @@ This guide explains how to add a new dataset to the streaming data pipeline and 
   - `data/<your_dataset>/config/*.py` (dataset-specific settings), optional
   - `data/<your_dataset>/queue/train` and `data/<your_dataset>/queue/val` are created by the provider
 
+Current reference implementations include:
+- `char_diffusion` – baseline BERT-style masking with random/unchanged branches.
+- `char_random_replacement` – extends the baseline with configurable random replacement and fragment sampling.
+- `char_inference_replacement` – replaces the random branch with checkpoint predictions (see `data/char_inference_replacement/README.md`).
+
 ### Step 1: Implement a provider
 Create `data/<your_dataset>/prepare_streaming.py` by subclassing `DataProviderBase`.
 

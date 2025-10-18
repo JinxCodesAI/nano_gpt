@@ -47,6 +47,15 @@ class DataProviderBase:
         self.val_dir = os.path.join(self.queue_dir, "val")
         self.meta_path = os.path.join(self.data_dir, "meta.pkl")
 
+    # ---- optional hooks for subclasses ----
+    def _on_file_start(self, split: str) -> None:
+        """Hook invoked before sampling batches for a file."""
+        return None
+
+    def _file_report_lines(self, split: str):
+        """Hook returning iterable of extra log lines per produced file."""
+        return ()
+
     # ---- to override ----
     def build_meta(self) -> Dict:
         """Return required metadata dict; must include training_type and batch_schema.
@@ -99,6 +108,8 @@ class DataProviderBase:
         total_batches = self.batches_per_file
         if total_batches <= 0:
             raise ValueError("batches_per_file must be positive")
+
+        self._on_file_start(split)
 
         t0 = time.perf_counter()
         first_batch = self.sample_batch(split, rng)
@@ -199,6 +210,10 @@ class DataProviderBase:
                 f"cpu_transfer={cpu_transfer_time*1000:.1f} ms, "
                 f"save={save_time*1000:.1f} ms)"
             )
+        extra_lines = list(self._file_report_lines(split))
+        if self.verbose:
+            for line in extra_lines:
+                print(line)
 
     def run(self, splits: Iterable[str] = ("train", "val")) -> None:
         self.ensure_dirs()
