@@ -63,7 +63,7 @@ else:
     validation_stages = None
 
 gradient_accumulation_steps = 4  # Increase if batch_size had to be reduced
-batch_size = 16  # fits on A40 with 48 GB of VRAM, adjust for other machines
+batch_size = 192  # fits on A40 with 48 GB of VRAM, adjust for other machines
 block_size = 1024  # Context size for masking
 
 learning_rate = 1e-3
