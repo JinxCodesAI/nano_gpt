@@ -19,8 +19,8 @@ wandb_run_name = 'random-replacement-char-full-t'
 dataset = 'char_random_replacement'
 data_stream_verbose = True
 dataset_partial_targets = False # IF True targets of unchanged positions are set to ignore_index, this is common practice in BERT training but do not work here 
-original_token_probability_multiplier = 1.0  # Increase to bias toward keeping the original token during random replacement.
-train_corruption_mixture = (0.8, 0.2, 0.0)  # (random, mask token, fragment) weights used for training corruption.
+original_token_probability_multiplier = 0.0  # Manipulate to bias toward or against keeping the original token during random replacement.
+train_corruption_mixture = (0.4, 0.2, 0.4)  # (random, mask token, fragment) weights used for training corruption.
 
 composition_config = 'example'  # refers to data/char_random_replacement/config/example.py; use None if config is not defined
 
