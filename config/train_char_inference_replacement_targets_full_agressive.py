@@ -62,7 +62,7 @@ else:
     unmasking_stages = None
     validation_stages = None
 
-gradient_accumulation_steps = 4  # Increase if batch_size had to be reduced
+gradient_accumulation_steps = 2  # Increase if batch_size had to be reduced
 batch_size = 192  # fits on A40 with 48 GB of VRAM, adjust for other machines
 block_size = 1024  # Context size for masking
 
