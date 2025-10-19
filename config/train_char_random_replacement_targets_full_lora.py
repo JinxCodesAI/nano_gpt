@@ -66,14 +66,14 @@ beta2 = 0.99
 warmup_iters = 500  
 
 # Model architecture  
-n_layer = 6
-n_head = 6
-n_embd = 384
+n_layer = 12
+n_head = 8
+n_embd = 512
 dropout = 0.1
 dtype = 'float16'
 # LoRA adapters (share main matrices by default when enabled)
-use_lora_attn = False
-use_lora_mlp = False
+use_lora_attn = True
+use_lora_mlp = True
 lora_rank = 64
 lora_alpha = 16.0
 lora_dropout = 0.05
