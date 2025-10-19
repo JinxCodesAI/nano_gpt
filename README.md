@@ -18,7 +18,30 @@ Takes ideas and inspirations from:
   - **Char Diffusion** – stage-aware BERT masking with partial targets.
   - **Char Random Replacement** – stochastic replacement objective tuned for editing-style diffusion.
 - Ready-to-train configs, inspection scripts, and an inference harness (`sample.py`) that iteratively refines text with configurable insertion, deletion, and re-noising schedules.
-- Documentation geared toward tinkering—follow the quick-starts, then dive into [`docs/diffusion_strategies.md`](docs/diffusion_strategies.md) for deeper comparisons and inference tips.
+- Documentation geared toward tinkering-follow the quick-starts, then dive into [`docs/diffusion_strategies.md`](docs/diffusion_strategies.md) for deeper comparisons and inference tips.
+
+### LoRA Adapters & Shared Projections
+
+The Transformer backbone now supports optional **LoRA adapters** that sit on top of a single shared copy of the heavy projection matrices. This preserves nanoGPT-style simplicity while cutting the parameter footprint whenever LoRA is enabled:
+
+- **Disabled by default**: vanilla projection layers behave exactly as before, and the parameter count is unchanged.
+- **Enabled per sub-module**: turn on attention adapters, MLP adapters, or both. When either is active the base `c_attn`, `c_proj`, `c_fc`, and `c_proj` matrices are shared across every block, while each block gets its own LoRA delta.
+
+Configuration knobs live alongside the other model defaults in [`train.py`](train.py:65) and any training config you load, for example [`config/train_char_random_replacement_targets_full.py`](config/train_char_random_replacement_targets_full.py:75):
+
+- `use_lora_attn` / `use_lora_mlp` (bool): gate the LoRA branches on the attention and MLP projections independently.
+- `lora_rank` (int): intrinsic rank of each adapter. Higher rank adds capacity and parameters; `0` behaves like disabled.
+- `lora_alpha` (float): scaling factor applied to the low-rank update (effective multiplier of `alpha / rank`).
+- `lora_dropout` (float): dropout applied inside the adapter path; use `0.0` to skip it.
+
+Enable them via a config file or CLI overrides:
+
+```bash
+python train.py config/train_char_random_replacement_targets_full.py \
+    --use_lora_attn=True --use_lora_mlp=True --lora_rank=8 --lora_dropout=0.05
+```
+
+LoRA state is stored in checkpoints (`model_args`), so resuming training picks up the same configuration automatically. Leave the flags off to keep the original full-parameter model.
 
 ## Installation
 

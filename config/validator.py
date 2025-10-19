@@ -48,3 +48,16 @@ def validate_config(cfg: Dict[str, Any]) -> None:
     # Additional hooks could validate training_type specific requirements once meta is available
     # For now we keep it minimal and strict on essentials.
 
+    # LoRA knobs are optional but must retain expected types if present
+    for key in ('use_lora_attn', 'use_lora_mlp'):
+        if key in cfg and not isinstance(cfg[key], bool):
+            raise ValueError(f"{key} must be a bool")
+    if 'lora_rank' in cfg and cfg['lora_rank'] is not None:
+        if not isinstance(cfg['lora_rank'], int):
+            raise ValueError("lora_rank must be an int if provided")
+    if 'lora_alpha' in cfg and cfg['lora_alpha'] is not None:
+        if not isinstance(cfg['lora_alpha'], (float, int)):
+            raise ValueError("lora_alpha must be numeric if provided")
+    if 'lora_dropout' in cfg and cfg['lora_dropout'] is not None:
+        if not isinstance(cfg['lora_dropout'], (float, int)):
+            raise ValueError("lora_dropout must be numeric if provided")

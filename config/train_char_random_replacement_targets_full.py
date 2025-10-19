@@ -71,6 +71,12 @@ n_head = 6
 n_embd = 384
 dropout = 0.1
 dtype = 'float16'
+# LoRA adapters (share main matrices by default when enabled)
+use_lora_attn = True
+use_lora_mlp = True
+lora_rank = 8
+lora_alpha = 16.0
+lora_dropout = 0.05
 
 # Training type for masked language modeling
 training_type = 'MLM' # Masked Language Modeling 

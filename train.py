@@ -61,6 +61,12 @@ n_head = 12
 n_embd = 768
 dropout = 0.0 # for pretraining 0 is good, for finetuning try 0.1+
 bias = False # do we use bias inside LayerNorm and Linear layers?
+# LoRA
+use_lora_attn = False
+use_lora_mlp = False
+lora_rank = 8
+lora_alpha = 16.0
+lora_dropout = 0.0
 # adamw optimizer
 learning_rate = 6e-4 # max learning rate
 max_iters = 600000 # total number of training iterations
@@ -151,8 +157,20 @@ config['meta'] = meta
 
 
 # model init
-model_args = dict(n_layer=n_layer, n_head=n_head, n_embd=n_embd, block_size=block_size,
-                  bias=bias, vocab_size=None, dropout=dropout) # start with model_args from command line
+model_args = dict(
+    n_layer=n_layer,
+    n_head=n_head,
+    n_embd=n_embd,
+    block_size=block_size,
+    bias=bias,
+    vocab_size=None,
+    dropout=dropout,
+    use_lora_attn=use_lora_attn,
+    use_lora_mlp=use_lora_mlp,
+    lora_rank=lora_rank,
+    lora_alpha=lora_alpha,
+    lora_dropout=lora_dropout,
+) # start with model_args from command line
 if init_from == 'scratch':
     # init a new model from scratch
     print("Initializing a new model from scratch")
@@ -169,8 +187,22 @@ elif init_from == 'resume':
     checkpoint_model_args = checkpoint['model_args']
     # force these config attributes to be equal otherwise we can't even resume training
     # the rest of the attributes (e.g. dropout) can stay as desired from command line
-    for k in ['n_layer', 'n_head', 'n_embd', 'block_size', 'bias', 'vocab_size']:
-        model_args[k] = checkpoint_model_args[k]
+    resume_keys = [
+        'n_layer',
+        'n_head',
+        'n_embd',
+        'block_size',
+        'bias',
+        'vocab_size',
+        'use_lora_attn',
+        'use_lora_mlp',
+        'lora_rank',
+        'lora_alpha',
+        'lora_dropout',
+    ]
+    for k in resume_keys:
+        if k in checkpoint_model_args:
+            model_args[k] = checkpoint_model_args[k]
     # create the model
     gptconf = GPTConfig(**model_args)
     model = GPT(gptconf)

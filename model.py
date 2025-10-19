@@ -75,6 +75,29 @@ class LayerNorm(nn.Module):
     def forward(self, input):
         return F.layer_norm(input, self.weight.shape, self.weight, self.bias, 1e-5)
 
+class LoRALinear(nn.Module):
+    """Lightweight adapter that defaults to no-op when disabled."""
+
+    def __init__(self, in_features, out_features, r=8, alpha=16.0, dropout=0.0, enabled=False):
+        super().__init__()
+        self.enabled = bool(enabled and r > 0)
+        if not self.enabled:
+            # keep module in the tree without parameters; eases conditional logic
+            self.register_buffer("_disabled", torch.tensor(0.0), persistent=False)
+            return
+        self.r = int(r)
+        self.scaling = float(alpha) / float(self.r)
+        self.A = nn.Linear(in_features, self.r, bias=False)
+        self.B = nn.Linear(self.r, out_features, bias=False)
+        self.drop = nn.Dropout(dropout) if dropout and dropout > 0 else nn.Identity()
+        nn.init.kaiming_uniform_(self.A.weight, a=math.sqrt(5))
+        nn.init.zeros_(self.B.weight)
+
+    def forward(self, x):
+        if not self.enabled:
+            return 0.0
+        return self.B(self.A(self.drop(x))) * self.scaling
+
 class BidirectionalSelfAttention(nn.Module):
     """Bidirectional self-attention with optional flash attention and RoPE"""
 
@@ -100,6 +123,15 @@ class BidirectionalSelfAttention(nn.Module):
             device=None  # Will be set when model is moved to device
         )
 
+        lora_kwargs = dict(
+            r=getattr(config, 'lora_rank', 0),
+            alpha=getattr(config, 'lora_alpha', 1.0),
+            dropout=getattr(config, 'lora_dropout', 0.0),
+            enabled=getattr(config, 'use_lora_attn', False),
+        )
+        self.lora_qkv = LoRALinear(config.n_embd, 3 * config.n_embd, **lora_kwargs)
+        self.lora_out = LoRALinear(config.n_embd, config.n_embd, **lora_kwargs)
+
         # flash attention make GPU go brrrrr but support is only in PyTorch >= 2.0
         self.flash = hasattr(torch.nn.functional, 'scaled_dot_product_attention')
         if not self.flash:
@@ -109,7 +141,10 @@ class BidirectionalSelfAttention(nn.Module):
         B, T, C = x.size() # batch size, sequence length, embedding dimensionality (n_embd)
 
         # calculate query, key, values for all heads in batch and move head forward to be the batch dim
-        q, k, v  = self.c_attn(x).split(self.n_embd, dim=2)
+        qkv_linear = self.c_attn(x)
+        if self.lora_qkv.enabled:
+            qkv_linear = qkv_linear + self.lora_qkv(x)
+        q, k, v  = qkv_linear.split(self.n_embd, dim=2)
         k = k.view(B, T, self.n_head, C // self.n_head).transpose(1, 2) # (B, nh, T, hs)
         q = q.view(B, T, self.n_head, C // self.n_head).transpose(1, 2) # (B, nh, T, hs)
         v = v.view(B, T, self.n_head, C // self.n_head).transpose(1, 2) # (B, nh, T, hs)
@@ -132,7 +167,10 @@ class BidirectionalSelfAttention(nn.Module):
         y = y.transpose(1, 2).contiguous().view(B, T, C) # re-assemble all head outputs side by side
 
         # output projection
-        y = self.resid_dropout(self.c_proj(y))
+        proj = self.c_proj(y)
+        if self.lora_out.enabled:
+            proj = proj + self.lora_out(y)
+        y = self.resid_dropout(proj)
         return y
 
 class MLP(nn.Module):
@@ -143,13 +181,25 @@ class MLP(nn.Module):
         self.gelu    = nn.GELU()
         self.c_proj  = nn.Linear(4 * config.n_embd, config.n_embd, bias=config.bias)
         self.dropout = nn.Dropout(config.dropout)
+        lora_kwargs = dict(
+            r=getattr(config, 'lora_rank', 0),
+            alpha=getattr(config, 'lora_alpha', 1.0),
+            dropout=getattr(config, 'lora_dropout', 0.0),
+            enabled=getattr(config, 'use_lora_mlp', False),
+        )
+        self.lora_fc = LoRALinear(config.n_embd, 4 * config.n_embd, **lora_kwargs)
+        self.lora_proj = LoRALinear(4 * config.n_embd, config.n_embd, **lora_kwargs)
 
     def forward(self, x):
-        x = self.c_fc(x)
-        x = self.gelu(x)
-        x = self.c_proj(x)
-        x = self.dropout(x)
-        return x
+        fc_out = self.c_fc(x)
+        if self.lora_fc.enabled:
+            fc_out = fc_out + self.lora_fc(x)
+        hidden = self.gelu(fc_out)
+        proj_out = self.c_proj(hidden)
+        if self.lora_proj.enabled:
+            proj_out = proj_out + self.lora_proj(hidden)
+        proj_out = self.dropout(proj_out)
+        return proj_out
 
 class Block(nn.Module):
 
@@ -177,6 +227,11 @@ class GPTConfig:
     dropout: float = 0.0
     bias: bool = True # True: bias in Linears and LayerNorms. False: a bit better and faster
     ignore_index: int = -100 # Standard PyTorch ignore index for loss computation
+    use_lora_attn: bool = False
+    use_lora_mlp: bool = False
+    lora_rank: int = 8
+    lora_alpha: float = 16.0
+    lora_dropout: float = 0.0
 
 class GPT(nn.Module):
 
@@ -201,6 +256,23 @@ class GPT(nn.Module):
         # This behavior is deprecated and will be an error in future versions"
         # not 100% sure what this is, so far seems to be harmless. TODO investigate
         self.transformer.wte.weight = self.lm_head.weight # https://paperswithcode.com/method/weight-tying
+
+        # share projection matrices across blocks when LoRA is active
+        share_attn = getattr(config, 'use_lora_attn', False)
+        share_mlp = getattr(config, 'use_lora_mlp', False)
+        if (share_attn or share_mlp) and len(self.transformer.h) > 1:
+            base_block = self.transformer.h[0]
+            for block in self.transformer.h[1:]:
+                if share_attn:
+                    block.attn.c_attn.weight = base_block.attn.c_attn.weight
+                    block.attn.c_attn.bias = base_block.attn.c_attn.bias
+                    block.attn.c_proj.weight = base_block.attn.c_proj.weight
+                    block.attn.c_proj.bias = base_block.attn.c_proj.bias
+                if share_mlp:
+                    block.mlp.c_fc.weight = base_block.mlp.c_fc.weight
+                    block.mlp.c_fc.bias = base_block.mlp.c_fc.bias
+                    block.mlp.c_proj.weight = base_block.mlp.c_proj.weight
+                    block.mlp.c_proj.bias = base_block.mlp.c_proj.bias
 
         # init all weights
         self.apply(self._init_weights)
@@ -300,4 +372,3 @@ class GPT(nn.Module):
         flops_promised = 150e12 # A40 GPU bfloat16 peak flops is 150 TFLOPS
         mfu = flops_achieved / flops_promised
         return mfu
-
