@@ -19,7 +19,7 @@ wandb_run_name = 'random-replacement-char-full-t'
 dataset = 'char_random_replacement'
 data_stream_verbose = True
 dataset_partial_targets = False # IF True targets of unchanged positions are set to ignore_index, this is common practice in BERT training but do not work here 
-original_token_probability_multiplier = 5.0  # Increase to bias toward keeping the original token during random replacement.
+original_token_probability_multiplier = 0.0  # Increase to bias toward keeping the original token during random replacement.
 train_corruption_mixture = (0.6, 0.2, 0.2)  # (random, mask token, fragment) weights used for training corruption.
 
 composition_config = 'example'  # refers to data/char_random_replacement/config/example.py; use None if config is not defined
@@ -59,7 +59,7 @@ batch_size = 384  # fits on A40 with 48 GB of RVAM, adjust for other machines
 block_size = 1024 # Context size for masking
 
 learning_rate = 1e-3
-max_iters = 10000
+max_iters = 50000
 lr_decay_iters = 10000
 min_lr = 5e-5
 beta2 = 0.99
