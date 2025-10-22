@@ -21,8 +21,8 @@ from sampling_utils import (
 # -----------------------------------------------------------------------------
 init_from = 'resume' # either 'resume' (from an out_dir) or a gpt2 variant (e.g. 'gpt2-xl')
 out_dir = 'out-char-random-replacement' # ignored if init_from is not 'resume'
-ckpt_name = 'new_hope_4_9000.pt'
-start = "POMPEY:\n" # or "<|endoftext|>" or etc. Can also specify a file, use as: "FILE:prompt.txt"
+ckpt_name = 'lora_37750_overfit.pt'
+start = "JHONNY:\n" # or "<|endoftext|>" or etc. Can also specify a file, use as: "FILE:prompt.txt"
 num_samples = 1 # number of samples to draw
 max_new_tokens = 900 # number of tokens generated in each sample
 max_iterations = 20 # maximum number of diffusion iterations per sample

@@ -60,7 +60,7 @@ block_size = 1024 # Context size for masking
 
 learning_rate = 1e-3
 max_iters = 50000
-lr_decay_iters = 10000
+lr_decay_iters = 50000
 min_lr = 5e-5
 beta2 = 0.99
 warmup_iters = 500  

@@ -13,3 +13,4 @@ wandb/
 out/
 out-char-diffusion/
 out/*.txt
+diffusion.code-workspace
