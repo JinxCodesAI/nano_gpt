@@ -23,6 +23,7 @@ init_from = 'resume' # either 'resume' (from an out_dir) or a gpt2 variant (e.g.
 out_dir = 'out-char-random-replacement' # ignored if init_from is not 'resume'
 ckpt_name = 'lora_37750_overfit.pt'
 start = "JHONNY:\n" # or "<|endoftext|>" or etc. Can also specify a file, use as: "FILE:prompt.txt"
+encoder_start = None  # optional separate encoder conditioning text (string or "FILE:path")
 num_samples = 1 # number of samples to draw
 max_new_tokens = 900 # number of tokens generated in each sample
 max_iterations = 20 # maximum number of diffusion iterations per sample
@@ -81,6 +82,7 @@ setup = ModelSetup(
     dtype=dtype,
     compile_model=compile,
     start=start,
+    encoder_start=encoder_start,
 )
 model = setup.model
 decode = setup.decode
@@ -88,6 +90,7 @@ space_token_id = setup.space_token_id
 prompt = setup.prompt
 initial_length = setup.initial_length
 block_size = setup.block_size
+encoder_prompt = setup.encoder_prompt
 ctx = setup.autocast_context()
 
 # run diffusion-style generation
@@ -100,6 +103,11 @@ with torch.no_grad():
             x = torch.zeros((1, seq_length), dtype=torch.long, device=device)
             x[0, :initial_length] = prompt
 
+            g_ctx = None
+            if getattr(model.config, "use_encoder_guidance", False):
+                enc_x = encoder_prompt.unsqueeze(0).to(device)
+                g_ctx = model.encode(enc_x)
+
             if temperature <= 0:
                 raise ValueError("temperature must be greater than zero to perform sampling.")
 
@@ -109,7 +117,7 @@ with torch.no_grad():
             last_insert_indices: List[int] = []
             last_delete_indices: List[int] = []
 
-            logits, _ = model(x)
+            logits, _ = model(x, g=g_ctx)
             last_log_probs = torch.log_softmax(logits, dim=-1).detach()
             display = DiffusionDisplay(decode)
 
@@ -213,7 +221,7 @@ with torch.no_grad():
                     ratio=beta_s,
                     device=device,
                 )
-                logits, _ = model(x)
+                logits, _ = model(x, g=g_ctx)
                 logits = logits / temperature
 
                 # Convert logits to log-probabilities for every token position, then exponentiate

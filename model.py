@@ -2,7 +2,7 @@
 
 import math
 import inspect
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 
 import torch
 import torch.nn as nn
@@ -98,6 +98,21 @@ class LoRALinear(nn.Module):
             return 0.0
         return self.B(self.A(self.drop(x))) * self.scaling
 
+class FiLMAdapterLR(nn.Module):
+    """Low-rank FiLM adapter that maps global context into per-channel scale and shift."""
+
+    def __init__(self, g_dim, c_dim, rank=8, bias=False, scale=1.0):
+        super().__init__()
+        r = max(1, int(rank))
+        self.scale = float(scale)
+        self.down = nn.Linear(g_dim, r, bias=bias)
+        self.up = nn.Linear(r, 2 * c_dim, bias=bias)
+
+    def forward(self, g):
+        gamma_beta = self.up(self.down(g)) * self.scale
+        gamma, beta = gamma_beta.chunk(2, dim=-1)
+        return gamma, beta
+
 class BidirectionalSelfAttention(nn.Module):
     """Bidirectional self-attention with optional flash attention and RoPE"""
 
@@ -173,6 +188,48 @@ class BidirectionalSelfAttention(nn.Module):
         y = self.resid_dropout(proj)
         return y
 
+class Encoder(nn.Module):
+    """
+    Lightweight bidirectional encoder that produces a single global vector via [CLS].
+    """
+
+    def __init__(self, config: 'GPTConfig'):
+        super().__init__()
+        self.config = config
+        self.wte = nn.Embedding(config.vocab_size, config.enc_n_embd)
+        self.cls_token = nn.Parameter(torch.zeros(1, 1, config.enc_n_embd))
+        self.drop = nn.Dropout(config.enc_dropout)
+
+        encoder_cfg = replace(
+            config,
+            n_layer=config.enc_n_layer,
+            n_head=config.enc_n_head,
+            n_embd=config.enc_n_embd,
+            dropout=config.enc_dropout,
+            use_lora_attn=config.enc_use_lora_attn,
+            use_lora_mlp=config.enc_use_lora_mlp,
+            lora_rank=config.enc_lora_rank,
+            lora_alpha=config.enc_lora_alpha,
+            lora_dropout=config.enc_lora_dropout,
+            use_encoder_guidance=False,
+            film_rank=0,
+        )
+        self.h = nn.ModuleList([Block(encoder_cfg) for _ in range(config.enc_n_layer)])
+        self.ln_f = LayerNorm(config.enc_n_embd, bias=config.bias)
+
+    def forward(self, idx: torch.Tensor) -> torch.Tensor:
+        if idx.ndim != 2:
+            raise ValueError("Encoder expects input of shape (batch, sequence_length)")
+        b, _ = idx.size()
+        tok_emb = self.wte(idx)
+        cls_tok = self.cls_token.expand(b, -1, -1)
+        x = torch.cat((cls_tok, tok_emb), dim=1)
+        x = self.drop(x)
+        for block in self.h:
+            x = block(x)
+        x = self.ln_f(x)
+        return x[:, 0]
+
 class MLP(nn.Module):
 
     def __init__(self, config):
@@ -206,15 +263,36 @@ class Block(nn.Module):
     def __init__(self, config):
         super().__init__()
         self.ln_1 = LayerNorm(config.n_embd, bias=config.bias)
-
         self.attn = BidirectionalSelfAttention(config)
-
         self.ln_2 = LayerNorm(config.n_embd, bias=config.bias)
         self.mlp = MLP(config)
 
-    def forward(self, x):
-        x = x + self.attn(self.ln_1(x))
-        x = x + self.mlp(self.ln_2(x))
+        self.film_attn = None
+        self.film_mlp = None
+        if getattr(config, 'use_encoder_guidance', False):
+            film_rank = int(getattr(config, 'film_rank', 0) or 0)
+            if film_rank > 0:
+                g_dim = getattr(config, 'enc_n_embd', config.n_embd)
+                scale = float(getattr(config, 'guidance_scale', 1.0))
+                self.film_attn = FiLMAdapterLR(g_dim, config.n_embd, rank=film_rank, scale=scale)
+                self.film_mlp = FiLMAdapterLR(g_dim, config.n_embd, rank=film_rank, scale=scale)
+
+    def forward(self, x, g=None):
+        attn_in = self.ln_1(x)
+        if self.film_attn is not None and g is not None:
+            gamma, beta = self.film_attn(g)
+            gamma = gamma.to(attn_in.dtype).unsqueeze(1)
+            beta = beta.to(attn_in.dtype).unsqueeze(1)
+            attn_in = attn_in * (1 + gamma) + beta
+        x = x + self.attn(attn_in)
+
+        mlp_in = self.ln_2(x)
+        if self.film_mlp is not None and g is not None:
+            gamma, beta = self.film_mlp(g)
+            gamma = gamma.to(mlp_in.dtype).unsqueeze(1)
+            beta = beta.to(mlp_in.dtype).unsqueeze(1)
+            mlp_in = mlp_in * (1 + gamma) + beta
+        x = x + self.mlp(mlp_in)
         return x
 
 @dataclass
@@ -232,6 +310,18 @@ class GPTConfig:
     lora_rank: int = 8
     lora_alpha: float = 16.0
     lora_dropout: float = 0.0
+    use_encoder_guidance: bool = False
+    enc_n_layer: int = 1
+    enc_n_head: int = 4
+    enc_n_embd: int = 256
+    enc_dropout: float = 0.0
+    enc_use_lora_attn: bool = False
+    enc_use_lora_mlp: bool = False
+    enc_lora_rank: int = 8
+    enc_lora_alpha: float = 16.0
+    enc_lora_dropout: float = 0.0
+    film_rank: int = 0
+    guidance_scale: float = 1.0
 
 class GPT(nn.Module):
 
@@ -256,6 +346,10 @@ class GPT(nn.Module):
         # This behavior is deprecated and will be an error in future versions"
         # not 100% sure what this is, so far seems to be harmless. TODO investigate
         self.transformer.wte.weight = self.lm_head.weight # https://paperswithcode.com/method/weight-tying
+
+        self.encoder = None
+        if config.use_encoder_guidance:
+            self.encoder = Encoder(config)
 
         # share projection matrices across blocks when LoRA is active
         share_attn = getattr(config, 'use_lora_attn', False)
@@ -297,7 +391,7 @@ class GPT(nn.Module):
         elif isinstance(module, nn.Embedding):
             torch.nn.init.normal_(module.weight, mean=0.0, std=0.02)
 
-    def forward(self, idx, targets=None):
+    def forward(self, idx, targets=None, g=None):
         device = idx.device
         b, t = idx.size()
         assert t <= self.config.block_size, f"Cannot forward sequence of length {t}, block size is only {self.config.block_size}"
@@ -305,9 +399,22 @@ class GPT(nn.Module):
         # forward the GPT model itself
         tok_emb = self.transformer.wte(idx) # token embeddings of shape (b, t, n_embd)
         x = self.transformer.drop(tok_emb)
-            
+
+        g_ctx = None
+        if self.encoder is not None:
+            if g is None:
+                if targets is not None:
+                    enc_x = torch.where(targets != self.config.ignore_index, targets, idx)
+                else:
+                    enc_x = idx
+                g_ctx = self.encoder(enc_x)
+            else:
+                g_ctx = g
+            if g_ctx.dim() != 2 or g_ctx.size(0) != b:
+                raise ValueError("Global context g must be of shape (batch, enc_n_embd)")
+
         for block in self.transformer.h:
-            x = block(x)
+            x = block(x, g_ctx)
         x = self.transformer.ln_f(x)
 
         logits = self.lm_head(x)
@@ -317,6 +424,12 @@ class GPT(nn.Module):
             loss = None
 
         return logits, loss
+
+    @torch.no_grad()
+    def encode(self, enc_x: torch.Tensor) -> torch.Tensor:
+        if self.encoder is None:
+            raise RuntimeError("Encoder guidance is disabled in config.")
+        return self.encoder(enc_x)
 
     def crop_block_size(self, block_size):
         # model surgery to decrease the block size if necessary

@@ -24,6 +24,7 @@ class ModelSetup:
         dtype: str,
         compile_model: bool,
         start: str,
+        encoder_start: Optional[str] = None,
     ) -> None:
         self.init_from = init_from
         self.out_dir = out_dir
@@ -32,6 +33,7 @@ class ModelSetup:
         self.dtype = dtype
         self.compile_model = compile_model
         self.start = start
+        self.encoder_start = encoder_start
 
         model, checkpoint = self._load_model()
         encode, decode, space_token_id = self._load_tokenizer(checkpoint)
@@ -40,12 +42,23 @@ class ModelSetup:
         self.encode = encode
         self.decode = decode
         self.space_token_id = space_token_id
-        self.prompt = self._build_prompt(start_text=self._resolve_start_text())
+        start_text = self._resolve_text(self.start)
+        encoder_spec = self.encoder_start if self.encoder_start is not None else self.start
+        encoder_text = self._resolve_text(encoder_spec)
+
+        self.prompt = self._build_prompt(start_text=start_text)
         self.initial_length = self.prompt.size(0)
         self.block_size = self.model.config.block_size
         if self.initial_length > self.block_size:
             raise ValueError(
                 f"Prompt is longer ({self.initial_length}) than model block size ({self.block_size})."
+            )
+
+        self.encoder_prompt = self._build_prompt(start_text=encoder_text)
+        self.encoder_initial_length = self.encoder_prompt.size(0)
+        if self.encoder_initial_length > self.block_size:
+            raise ValueError(
+                f"Encoder prompt is longer ({self.encoder_initial_length}) than model block size ({self.block_size})."
             )
 
         self.device_type = "cuda" if "cuda" in self.device else "cpu"
@@ -145,12 +158,12 @@ class ModelSetup:
         space_token_id = space_token_ids[0]
         return encode, decode, space_token_id
 
-    def _resolve_start_text(self) -> str:
-        if self.start.startswith("FILE:"):
-            file_path = self.start[5:]
+    def _resolve_text(self, spec: str) -> str:
+        if spec.startswith("FILE:"):
+            file_path = spec[5:]
             with open(file_path, "r", encoding="utf-8") as f:
                 return f.read()
-        return self.start
+        return spec
 
     def _build_prompt(self, start_text: str) -> torch.Tensor:
         start_ids = self.encode(start_text)
@@ -159,4 +172,3 @@ class ModelSetup:
 
 
 __all__ = ["ModelSetup"]
-

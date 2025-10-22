@@ -67,6 +67,19 @@ use_lora_mlp = False
 lora_rank = 8
 lora_alpha = 16.0
 lora_dropout = 0.0
+# encoder guidance
+use_encoder_guidance = False
+enc_n_layer = 1
+enc_n_head = 4
+enc_n_embd = 256
+enc_dropout = 0.0
+enc_use_lora_attn = False
+enc_use_lora_mlp = False
+enc_lora_rank = 8
+enc_lora_alpha = 16.0
+enc_lora_dropout = 0.0
+film_rank = 8
+guidance_scale = 1.0
 # adamw optimizer
 learning_rate = 6e-4 # max learning rate
 max_iters = 600000 # total number of training iterations
@@ -170,6 +183,18 @@ model_args = dict(
     lora_rank=lora_rank,
     lora_alpha=lora_alpha,
     lora_dropout=lora_dropout,
+    use_encoder_guidance=use_encoder_guidance,
+    enc_n_layer=enc_n_layer,
+    enc_n_head=enc_n_head,
+    enc_n_embd=enc_n_embd,
+    enc_dropout=enc_dropout,
+    enc_use_lora_attn=enc_use_lora_attn,
+    enc_use_lora_mlp=enc_use_lora_mlp,
+    enc_lora_rank=enc_lora_rank,
+    enc_lora_alpha=enc_lora_alpha,
+    enc_lora_dropout=enc_lora_dropout,
+    film_rank=film_rank,
+    guidance_scale=guidance_scale,
 ) # start with model_args from command line
 if init_from == 'scratch':
     # init a new model from scratch
@@ -199,6 +224,18 @@ elif init_from == 'resume':
         'lora_rank',
         'lora_alpha',
         'lora_dropout',
+        'use_encoder_guidance',
+        'enc_n_layer',
+        'enc_n_head',
+        'enc_n_embd',
+        'enc_dropout',
+        'enc_use_lora_attn',
+        'enc_use_lora_mlp',
+        'enc_lora_rank',
+        'enc_lora_alpha',
+        'enc_lora_dropout',
+        'film_rank',
+        'guidance_scale',
     ]
     for k in resume_keys:
         if k in checkpoint_model_args:
