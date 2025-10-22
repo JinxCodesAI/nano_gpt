@@ -217,6 +217,22 @@ class Encoder(nn.Module):
         self.h = nn.ModuleList([Block(encoder_cfg) for _ in range(config.enc_n_layer)])
         self.ln_f = LayerNorm(config.enc_n_embd, bias=config.bias)
 
+        share_attn = getattr(config, 'enc_use_lora_attn', False)
+        share_mlp = getattr(config, 'enc_use_lora_mlp', False)
+        if (share_attn or share_mlp) and len(self.h) > 1:
+            base_block = self.h[0]
+            for block in self.h[1:]:
+                if share_attn:
+                    block.attn.c_attn.weight = base_block.attn.c_attn.weight
+                    block.attn.c_attn.bias = base_block.attn.c_attn.bias
+                    block.attn.c_proj.weight = base_block.attn.c_proj.weight
+                    block.attn.c_proj.bias = base_block.attn.c_proj.bias
+                if share_mlp:
+                    block.mlp.c_fc.weight = base_block.mlp.c_fc.weight
+                    block.mlp.c_fc.bias = base_block.mlp.c_fc.bias
+                    block.mlp.c_proj.weight = base_block.mlp.c_proj.weight
+                    block.mlp.c_proj.bias = base_block.mlp.c_proj.bias
+
     def forward(self, idx: torch.Tensor) -> torch.Tensor:
         if idx.ndim != 2:
             raise ValueError("Encoder expects input of shape (batch, sequence_length)")
@@ -449,6 +465,19 @@ class GPT(nn.Module):
         param_dict = {pn: p for pn, p in self.named_parameters()}
         # filter out those that do not require grad
         param_dict = {pn: p for pn, p in param_dict.items() if p.requires_grad}
+        # bucket parameters by module so we can report encoder/decoder/shared splits
+        param_categories = {}
+        shared_prefixes = ("transformer.wte", "lm_head")
+        for name, param in param_dict.items():
+            if name.startswith("encoder."):
+                category = "encoder"
+            elif name.startswith(shared_prefixes):
+                category = "shared"
+            else:
+                category = "decoder"
+            current = param_categories.get(id(param))
+            if current is None or (current != "shared" and category == "shared"):
+                param_categories[id(param)] = category
         # create optim groups. Any parameters that is 2D will be weight decayed, otherwise no.
         # i.e. all weight tensors in matmuls + embeddings decay, all biases and layernorms don't.
         decay_params = [p for n, p in param_dict.items() if p.dim() >= 2]
@@ -461,6 +490,17 @@ class GPT(nn.Module):
         num_nodecay_params = sum(p.numel() for p in nodecay_params)
         print(f"num decayed parameter tensors: {len(decay_params)}, with {num_decay_params:,} parameters")
         print(f"num non-decayed parameter tensors: {len(nodecay_params)}, with {num_nodecay_params:,} parameters")
+        category_totals = {k: {"tensors": 0, "params": 0} for k in ("decoder", "encoder", "shared")}
+        for param_list in (decay_params, nodecay_params):
+            for param in param_list:
+                category = param_categories.get(id(param), "decoder")
+                category_totals[category]["tensors"] += 1
+                category_totals[category]["params"] += param.numel()
+        print("parameter breakdown by module:")
+        for category in ("decoder", "encoder", "shared"):
+            tensors = category_totals[category]["tensors"]
+            count = category_totals[category]["params"]
+            print(f"  {category}: {tensors} tensors, {count:,} parameters")
         # Create AdamW optimizer and use the fused version if it is available
         fused_available = 'fused' in inspect.signature(torch.optim.AdamW).parameters
         use_fused = fused_available and device_type == 'cuda'

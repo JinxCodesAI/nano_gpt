@@ -53,7 +53,7 @@ else:
     validation_stages = None
 
 gradient_accumulation_steps = 1
-batch_size = 320  # slightly lower for encoder overhead; adjust per hardware
+batch_size = 8  # slightly lower for encoder overhead; adjust per hardware
 block_size = 1024
 
 learning_rate = 1e-3
