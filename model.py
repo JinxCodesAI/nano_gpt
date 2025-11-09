@@ -105,7 +105,7 @@ class BidirectionalSelfAttention(nn.Module):
         if not self.flash:
             print("WARNING: using slow attention. Flash Attention requires PyTorch >= 2.0")
 
-    def forward(self, x):
+    def forward(self, x, attention_mask: torch.Tensor | None = None):
         B, T, C = x.size() # batch size, sequence length, embedding dimensionality (n_embd)
 
         # calculate query, key, values for all heads in batch and move head forward to be the batch dim
@@ -118,15 +118,33 @@ class BidirectionalSelfAttention(nn.Module):
         position_ids = torch.arange(T, device=x.device).unsqueeze(0)
         q, k = apply_rotary_pos_emb(q, k, cos, sin, position_ids)
 
+        attn_mask = None
+        if attention_mask is not None:
+            attn_mask = attention_mask.to(dtype=torch.bool, device=x.device)
+            mask = attn_mask[:, None, :, None].to(dtype=q.dtype)
+            q = q * mask
+            k = k * mask
+            v = v * mask
+            attn_mask = attn_mask[:, None, None, :]
+
         # bidirectional self-attention; Self-attend: (B, nh, T, hs) x (B, nh, hs, T) -> (B, nh, T, T)
         if self.flash:
             # efficient attention using Flash Attention CUDA kernels
-            y = torch.nn.functional.scaled_dot_product_attention(q, k, v, attn_mask=None, dropout_p=self.dropout if self.training else 0, is_causal=False)
+            y = torch.nn.functional.scaled_dot_product_attention(
+                q,
+                k,
+                v,
+                attn_mask=attn_mask,
+                dropout_p=self.dropout if self.training else 0,
+                is_causal=False,
+            )
         else:
             # manual implementation of attention
             att = (q @ k.transpose(-2, -1)) * (1.0 / math.sqrt(k.size(-1)))
-            # No masking for bidirectional attention
+            if attn_mask is not None:
+                att = att.masked_fill(~attn_mask, float('-inf'))
             att = F.softmax(att, dim=-1)
+            att = torch.nan_to_num(att, nan=0.0)
             att = self.attn_dropout(att)
             y = att @ v # (B, nh, T, T) x (B, nh, T, hs) -> (B, nh, T, hs)
         y = y.transpose(1, 2).contiguous().view(B, T, C) # re-assemble all head outputs side by side
@@ -162,9 +180,15 @@ class Block(nn.Module):
         self.ln_2 = LayerNorm(config.n_embd, bias=config.bias)
         self.mlp = MLP(config)
 
-    def forward(self, x):
-        x = x + self.attn(self.ln_1(x))
-        x = x + self.mlp(self.ln_2(x))
+    def forward(self, x, attention_mask: torch.Tensor | None = None):
+        attn_out = self.attn(self.ln_1(x), attention_mask=attention_mask)
+        x = x + attn_out
+        if attention_mask is not None:
+            x = x * attention_mask.unsqueeze(-1)
+        mlp_out = self.mlp(self.ln_2(x))
+        x = x + mlp_out
+        if attention_mask is not None:
+            x = x * attention_mask.unsqueeze(-1)
         return x
 
 @dataclass
@@ -177,6 +201,7 @@ class GPTConfig:
     dropout: float = 0.0
     bias: bool = True # True: bias in Linears and LayerNorms. False: a bit better and faster
     ignore_index: int = -100 # Standard PyTorch ignore index for loss computation
+    pad_token_id: int | None = None
 
 class GPT(nn.Module):
 
@@ -232,11 +257,17 @@ class GPT(nn.Module):
 
         # forward the GPT model itself
         tok_emb = self.transformer.wte(idx) # token embeddings of shape (b, t, n_embd)
+        attention_mask = None
+        if self.config.pad_token_id is not None:
+            attention_mask = idx != self.config.pad_token_id
+            tok_emb = tok_emb * attention_mask.unsqueeze(-1)
         x = self.transformer.drop(tok_emb)
-            
+
         for block in self.transformer.h:
-            x = block(x)
+            x = block(x, attention_mask=attention_mask)
         x = self.transformer.ln_f(x)
+        if attention_mask is not None:
+            x = x * attention_mask.unsqueeze(-1)
 
         logits = self.lm_head(x)
         if targets is not None:
