@@ -6,7 +6,6 @@ from contextlib import nullcontext
 from typing import Callable, Optional, Sequence, Tuple
 
 import torch
-import tiktoken
 
 from model import GPT, GPTConfig
 
@@ -62,22 +61,21 @@ class ModelSetup:
         return torch.amp.autocast(device_type=self.device_type, dtype=self.ptdtype)
 
     def _load_model(self) -> Tuple[GPT, Optional[dict]]:
-        if self.init_from == "resume":
-            ckpt_path = os.path.join(self.out_dir, self.ckpt_name)
-            checkpoint = torch.load(ckpt_path, map_location=self.device)
-            gptconf = GPTConfig(**checkpoint["model_args"])
-            model = GPT(gptconf)
-            state_dict = checkpoint["model"]
-            unwanted_prefix = "_orig_mod."
-            for k, v in list(state_dict.items()):
-                if k.startswith(unwanted_prefix):
-                    state_dict[k[len(unwanted_prefix) :]] = state_dict.pop(k)
-            model.load_state_dict(state_dict)
-        elif self.init_from.startswith("gpt2"):
-            model = GPT.from_pretrained(self.init_from, dict(dropout=0.0))
-            checkpoint = None
-        else:
-            raise ValueError(f"Unknown init_from: {self.init_from}")
+        if self.init_from != "resume":
+            raise ValueError(
+                "ModelSetup supports init_from='resume' only; GPT-2 checkpoints are no longer available."
+            )
+
+        ckpt_path = os.path.join(self.out_dir, self.ckpt_name)
+        checkpoint = torch.load(ckpt_path, map_location=self.device)
+        gptconf = GPTConfig(**checkpoint["model_args"])
+        model = GPT(gptconf)
+        state_dict = checkpoint["model"]
+        unwanted_prefix = "_orig_mod."
+        for k, v in list(state_dict.items()):
+            if k.startswith(unwanted_prefix):
+                state_dict[k[len(unwanted_prefix) :]] = state_dict.pop(k)
+        model.load_state_dict(state_dict)
 
         model.eval()
         model.to(self.device)
@@ -133,17 +131,9 @@ class ModelSetup:
             decode = lambda token_ids: "".join(itos[i] for i in token_ids)
             return encode, decode, space_token_id
 
-        print("No meta.pkl found, assuming GPT-2 encodings...")
-        enc = tiktoken.get_encoding("gpt2")
-        encode = lambda text: enc.encode(text, allowed_special={"<|endoftext|>"})
-        decode = lambda token_ids: enc.decode(token_ids)
-        space_token_ids = encode("[MASK]")
-        if not space_token_ids:
-            raise ValueError("Encoder did not return a token id for a single space character.")
-        if len(space_token_ids) != 1:
-            raise ValueError(f"Expected a single token id for space, got: {space_token_ids}")
-        space_token_id = space_token_ids[0]
-        return encode, decode, space_token_id
+        raise FileNotFoundError(
+            "Dataset metadata (meta.pkl) not found; GPT-2 tokenizer fallback has been removed."
+        )
 
     def _resolve_start_text(self) -> str:
         if self.start.startswith("FILE:"):

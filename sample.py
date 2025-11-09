@@ -19,7 +19,7 @@ from sampling_utils import (
 )
 
 # -----------------------------------------------------------------------------
-init_from = 'resume' # either 'resume' (from an out_dir) or a gpt2 variant (e.g. 'gpt2-xl')
+init_from = 'resume' # sampling now requires a checkpoint produced by this repository
 out_dir = 'out-char-random-replacement' # ignored if init_from is not 'resume'
 ckpt_name = 'new_hope_4_9000.pt'
 start = "POMPEY:\n" # or "<|endoftext|>" or etc. Can also specify a file, use as: "FILE:prompt.txt"
