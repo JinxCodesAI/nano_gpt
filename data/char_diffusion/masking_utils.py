@@ -51,7 +51,8 @@ def apply_bert_style_corruption_cpu(
     # Apply random tokens
     if random_positions.any():
         num_random = random_positions.sum().item()
-        candidates = _candidate_tensor(random_token_ids, mask.device)
+        target_device = x.device if isinstance(x, torch.Tensor) else mask.device
+        candidates = _candidate_tensor(random_token_ids, target_device)
         if candidates.numel() == 0:
             raise ValueError("random_token_ids must contain at least one token")
         indices = torch.randint(

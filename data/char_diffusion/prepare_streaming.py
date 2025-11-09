@@ -12,62 +12,7 @@ import torch
 
 from data.common.provider_base import DataProviderBase
 from .file_utils import write_file_atomic, ensure_queue_dirs, get_backlog_size, get_max_sequence_number  
-from .masking_utils import apply_stage_masking
-
-
-def _candidate_tensor(random_token_ids, device: torch.device) -> torch.Tensor:
-    if isinstance(random_token_ids, torch.Tensor):
-        return random_token_ids.to(device)
-    return torch.tensor(list(random_token_ids), dtype=torch.long, device=device)
-
-
-def apply_bert_style_corruption_cpu(
-    x: torch.Tensor,
-    mask: torch.Tensor,
-    mask_token_id: int,
-    random_token_ids,
-    rng,
-) -> torch.Tensor:
-    """
-    Optimized BERT-style corruption using tensor operations.
-    Applies 80/10/10 rule: 80% [MASK], 10% random token, 10% unchanged.
-    
-    Args:
-        x: Original input tokens (batch_size, seq_len)
-        mask: Boolean mask of positions to corrupt (batch_size, seq_len)
-        mask_token_id: The ID of the [MASK] token
-        random_token_ids: Iterable of token IDs eligible for random replacement
-        rng: Torch random number generator for consistent randomization
-        
-    Returns:
-        corrupted_x: Input with BERT-style corruption applied
-    """
-    corrupted_x = x.clone()
-    
-    # Generate random values for all masked positions at once
-    rand_vals = torch.rand(mask.shape, generator=rng, device=mask.device)
-    
-    # Create masks for the three corruption types
-    mask_positions = mask & (rand_vals < 0.8)  # 80%: [MASK] token
-    random_positions = mask & (rand_vals >= 0.8) & (rand_vals < 0.9)  # 10%: random token
-    # 10%: unchanged (no mask needed)
-    
-    # Apply [MASK] tokens
-    corrupted_x[mask_positions] = mask_token_id
-    
-    # Apply random tokens
-    if random_positions.any():
-        num_random = random_positions.sum().item()
-        candidates = _candidate_tensor(random_token_ids, x.device)
-        if candidates.numel() == 0:
-            raise ValueError("random_token_ids must contain at least one token")
-        indices = torch.randint(
-            0, candidates.numel(), (num_random,), generator=rng, device=mask.device
-        )
-        random_tokens = candidates.index_select(0, indices)
-        corrupted_x[random_positions] = random_tokens
-    
-    return corrupted_x
+from .masking_utils import apply_stage_masking, apply_bert_style_corruption_cpu
 
 
 class CharDiffusionProvider(DataProviderBase):
