@@ -6,7 +6,6 @@ from contextlib import nullcontext
 from typing import Callable, Optional, Sequence, Tuple
 
 import torch
-import tiktoken
 
 from model import GPT, GPTConfig
 
@@ -34,12 +33,15 @@ class ModelSetup:
         self.start = start
 
         model, checkpoint = self._load_model()
-        encode, decode, space_token_id = self._load_tokenizer(checkpoint)
+        encode, decode, space_token_id, pad_token_id = self._load_tokenizer(checkpoint)
 
         self.model = model
         self.encode = encode
         self.decode = decode
         self.space_token_id = space_token_id
+        self.pad_token_id = pad_token_id
+        if getattr(self.model.config, "pad_token_id", pad_token_id) != pad_token_id:
+            self.model.config.pad_token_id = pad_token_id
         self.prompt = self._build_prompt(start_text=self._resolve_start_text())
         self.initial_length = self.prompt.size(0)
         self.block_size = self.model.config.block_size
@@ -62,22 +64,21 @@ class ModelSetup:
         return torch.amp.autocast(device_type=self.device_type, dtype=self.ptdtype)
 
     def _load_model(self) -> Tuple[GPT, Optional[dict]]:
-        if self.init_from == "resume":
-            ckpt_path = os.path.join(self.out_dir, self.ckpt_name)
-            checkpoint = torch.load(ckpt_path, map_location=self.device)
-            gptconf = GPTConfig(**checkpoint["model_args"])
-            model = GPT(gptconf)
-            state_dict = checkpoint["model"]
-            unwanted_prefix = "_orig_mod."
-            for k, v in list(state_dict.items()):
-                if k.startswith(unwanted_prefix):
-                    state_dict[k[len(unwanted_prefix) :]] = state_dict.pop(k)
-            model.load_state_dict(state_dict)
-        elif self.init_from.startswith("gpt2"):
-            model = GPT.from_pretrained(self.init_from, dict(dropout=0.0))
-            checkpoint = None
-        else:
-            raise ValueError(f"Unknown init_from: {self.init_from}")
+        if self.init_from != "resume":
+            raise ValueError(
+                "ModelSetup supports init_from='resume' only; GPT-2 checkpoints are no longer available."
+            )
+
+        ckpt_path = os.path.join(self.out_dir, self.ckpt_name)
+        checkpoint = torch.load(ckpt_path, map_location=self.device)
+        gptconf = GPTConfig(**checkpoint["model_args"])
+        model = GPT(gptconf)
+        state_dict = checkpoint["model"]
+        unwanted_prefix = "_orig_mod."
+        for k, v in list(state_dict.items()):
+            if k.startswith(unwanted_prefix):
+                state_dict[k[len(unwanted_prefix) :]] = state_dict.pop(k)
+        model.load_state_dict(state_dict)
 
         model.eval()
         model.to(self.device)
@@ -87,7 +88,12 @@ class ModelSetup:
 
     def _load_tokenizer(
         self, checkpoint: Optional[dict]
-    ) -> Tuple[Callable[[str], Sequence[int]], Callable[[Sequence[int]], str], int]:
+    ) -> Tuple[
+        Callable[[str], Sequence[int]],
+        Callable[[Sequence[int]], str],
+        int,
+        int,
+    ]:
         load_meta = False
         meta_path: Optional[str] = None
         if (
@@ -104,6 +110,12 @@ class ModelSetup:
                 meta = pickle.load(f)
             stoi = meta["stoi"]
             itos = meta["itos"]
+            pad_value = meta.get("pad_token_id")
+            pad_token_id = int(pad_value) if pad_value is not None else None
+            if pad_token_id is None:
+                raise ValueError(
+                    "pad_token_id missing from dataset metadata; tokenizer cannot represent padding."
+                )
             if " " not in stoi:
                 raise ValueError(
                     "Space character not found in dataset vocabulary; cannot perform space-based re-noising."
@@ -130,20 +142,14 @@ class ModelSetup:
                         encode_unknown_cache.update(unseen)
                 return ids
 
-            decode = lambda token_ids: "".join(itos[i] for i in token_ids)
-            return encode, decode, space_token_id
+            def decode(token_ids: Sequence[int]) -> str:
+                return "".join(itos[i] for i in token_ids if i != pad_token_id)
 
-        print("No meta.pkl found, assuming GPT-2 encodings...")
-        enc = tiktoken.get_encoding("gpt2")
-        encode = lambda text: enc.encode(text, allowed_special={"<|endoftext|>"})
-        decode = lambda token_ids: enc.decode(token_ids)
-        space_token_ids = encode("[MASK]")
-        if not space_token_ids:
-            raise ValueError("Encoder did not return a token id for a single space character.")
-        if len(space_token_ids) != 1:
-            raise ValueError(f"Expected a single token id for space, got: {space_token_ids}")
-        space_token_id = space_token_ids[0]
-        return encode, decode, space_token_id
+            return encode, decode, space_token_id, pad_token_id
+
+        raise FileNotFoundError(
+            "Dataset metadata (meta.pkl) not found; GPT-2 tokenizer fallback has been removed."
+        )
 
     def _resolve_start_text(self) -> str:
         if self.start.startswith("FILE:"):

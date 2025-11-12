@@ -4,11 +4,23 @@ Contains masking functions for sticky, span, and random masking strategies.
 """
 import torch
 import math
-from typing import Dict, Any
+from typing import Dict, Any, Optional
 
 
-def apply_bert_style_corruption_cpu(x: torch.Tensor, mask: torch.Tensor, 
-                                  mask_token_id: int, vocab_size: int, rng) -> torch.Tensor:
+def _candidate_tensor(random_token_ids, device: torch.device) -> torch.Tensor:
+    """Materialize the candidate token tensor on the requested device."""
+    if isinstance(random_token_ids, torch.Tensor):
+        return random_token_ids.to(device)
+    return torch.tensor(list(random_token_ids), dtype=torch.long, device=device)
+
+
+def apply_bert_style_corruption_cpu(
+    x: torch.Tensor,
+    mask: torch.Tensor,
+    mask_token_id: int,
+    random_token_ids,
+    rng,
+) -> torch.Tensor:
     """
     Optimized BERT-style corruption using tensor operations.
     Applies 80/10/10 rule: 80% [MASK], 10% random token, 10% unchanged.
@@ -17,7 +29,7 @@ def apply_bert_style_corruption_cpu(x: torch.Tensor, mask: torch.Tensor,
         x: Original input tokens (batch_size, seq_len)
         mask: Boolean mask of positions to corrupt (batch_size, seq_len)
         mask_token_id: The ID of the [MASK] token
-        vocab_size: Size of vocabulary for random token generation
+        random_token_ids: Iterable of token IDs eligible for random replacement
         rng: Torch random number generator for consistent randomization
         
     Returns:
@@ -39,16 +51,26 @@ def apply_bert_style_corruption_cpu(x: torch.Tensor, mask: torch.Tensor,
     # Apply random tokens
     if random_positions.any():
         num_random = random_positions.sum().item()
-        random_tokens = torch.randint(
-            0, vocab_size, (num_random,), generator=rng, device=mask.device
+        target_device = x.device if isinstance(x, torch.Tensor) else mask.device
+        candidates = _candidate_tensor(random_token_ids, target_device)
+        if candidates.numel() == 0:
+            raise ValueError("random_token_ids must contain at least one token")
+        indices = torch.randint(
+            0, candidates.numel(), (num_random,), generator=rng, device=mask.device
         )
+        random_tokens = candidates.index_select(0, indices)
         corrupted_x[random_positions] = random_tokens
     
     return corrupted_x
 
 
-def apply_random_masking_cpu(x: torch.Tensor, mask_probability: float, 
-                           mask_token_id: int, vocab_size: int, rng=None) -> tuple[torch.Tensor, torch.Tensor]:
+def apply_random_masking_cpu(
+    x: torch.Tensor,
+    mask_probability: float,
+    mask_token_id: int,
+    random_token_ids,
+    rng=None,
+) -> tuple[torch.Tensor, torch.Tensor]:
     """
     Optimized random masking for BERT-style training using tensor operations.
     
@@ -56,7 +78,7 @@ def apply_random_masking_cpu(x: torch.Tensor, mask_probability: float,
         x: Input tokens (batch_size, seq_len)
         mask_probability: Probability of masking each token (0.0 to 1.0)
         mask_token_id: Token ID for [MASK] token
-        vocab_size: Size of vocabulary for random token generation
+        random_token_ids: Iterable of token IDs eligible for random replacement
         rng: Random number generator
         
     Returns:
@@ -68,14 +90,23 @@ def apply_random_masking_cpu(x: torch.Tensor, mask_probability: float,
     mask = mask_tensor < mask_probability
     
     # Apply BERT-style corruption
-    corrupted_x = apply_bert_style_corruption_cpu(x, mask, mask_token_id, vocab_size, rng)
+    corrupted_x = apply_bert_style_corruption_cpu(
+        x, mask, mask_token_id, random_token_ids, rng
+    )
     
     return corrupted_x, mask
 
 
-def apply_target_driven_sticky_masking_cpu(x: torch.Tensor, target_masked_ratio: float, 
-                                         p1_probability: float, p2_probability: float, 
-                                         mask_token_id: int, vocab_size: int, rng) -> tuple[torch.Tensor, torch.Tensor]:
+def apply_target_driven_sticky_masking_cpu(
+    x: torch.Tensor,
+    target_masked_ratio: float,
+    p1_probability: float,
+    p2_probability: float,
+    mask_token_id: int,
+    random_token_ids,
+    rng,
+    valid_token_mask: Optional[torch.Tensor] = None,
+) -> tuple[torch.Tensor, torch.Tensor]:
     """
     CPU-optimized target-driven sticky masking for unmasking training.
     
@@ -85,7 +116,7 @@ def apply_target_driven_sticky_masking_cpu(x: torch.Tensor, target_masked_ratio:
         p1_probability: Probability of masking when no neighbors are masked
         p2_probability: Probability of masking when neighbors are masked
         mask_token_id: Token ID to use for masking
-        vocab_size: Size of vocabulary for random token generation
+        random_token_ids: Iterable of token IDs eligible for random replacement
         rng: Random number generator
         
     Returns:
@@ -94,17 +125,30 @@ def apply_target_driven_sticky_masking_cpu(x: torch.Tensor, target_masked_ratio:
     """
     batch_size, seq_len = x.shape
     device = x.device
-    
+
+    if valid_token_mask is not None:
+        valid_mask = valid_token_mask.to(device=device, dtype=torch.bool)
+    else:
+        candidates = _candidate_tensor(random_token_ids, device)
+        if candidates.numel() == 0:
+            valid_mask = torch.zeros_like(x, dtype=torch.bool, device=device)
+        else:
+            valid_mask = torch.isin(x, candidates)
+
     # Calculate target number of masked tokens per sequence
-    target_masked_count = max(1, math.ceil(target_masked_ratio * seq_len)) if target_masked_ratio > 0 else 0
-    
-    if target_masked_count == 0:
+    target_masked_count = (
+        max(1, math.ceil(target_masked_ratio * seq_len)) if target_masked_ratio > 0 else 0
+    )
+
+    if target_masked_count == 0 or not valid_mask.any():
         # No masking needed - return early
         return x.clone(), torch.zeros_like(x, dtype=torch.bool, device=device)
-    
+
     current_mask = torch.zeros_like(x, dtype=torch.bool, device=device)
     current_counts = torch.zeros(batch_size, dtype=torch.long, device=device)
     target_tensor = torch.full((batch_size,), target_masked_count, dtype=torch.long, device=device)
+    max_available = valid_mask.sum(dim=1)
+    target_tensor = torch.minimum(target_tensor, max_available)
 
     seq_len = x.shape[1]
     max_batch_add = max(1, seq_len // 8)
@@ -116,6 +160,7 @@ def apply_target_driven_sticky_masking_cpu(x: torch.Tensor, target_masked_ratio:
             break
 
         sub_mask = current_mask.index_select(0, active_idx)
+        valid_sub = valid_mask.index_select(0, active_idx)
         need_sub = need.index_select(0, active_idx)
 
         neighbor_masked = torch.zeros_like(sub_mask)
@@ -124,6 +169,7 @@ def apply_target_driven_sticky_masking_cpu(x: torch.Tensor, target_masked_ratio:
 
         weights = torch.where(neighbor_masked, p2_probability, p1_probability)
         weights = weights * (~sub_mask).float()
+        weights = weights * valid_sub.float()
 
         available_counts = (weights > 0).sum(dim=1)
         need_sub = torch.minimum(need_sub, available_counts)
@@ -137,7 +183,7 @@ def apply_target_driven_sticky_masking_cpu(x: torch.Tensor, target_masked_ratio:
             weights > 0, weights, torch.full_like(weights, 1e-6)
         )
         scores = -torch.log(torch.rand(weights.shape, device=device, generator=rng)) / weights
-        scores = scores.masked_fill(sub_mask, float("inf"))
+        scores = scores.masked_fill(sub_mask | (~valid_sub), float("inf"))
 
         topk_vals, topk_idx = torch.topk(scores, max_add, dim=1, largest=False)
         row_idx = torch.arange(active_idx.size(0), device=device).unsqueeze(1).expand(-1, max_add)
@@ -155,8 +201,9 @@ def apply_target_driven_sticky_masking_cpu(x: torch.Tensor, target_masked_ratio:
     remaining_idx = torch.nonzero(remaining > 0, as_tuple=False).squeeze(1)
     if remaining_idx.numel() > 0:
         sub_mask = current_mask.index_select(0, remaining_idx)
+        valid_sub = valid_mask.index_select(0, remaining_idx)
         remaining_sub = remaining.index_select(0, remaining_idx)
-        available = (~sub_mask)
+        available = (~sub_mask) & valid_sub
         available_counts = available.sum(dim=1)
         remaining_sub = torch.minimum(remaining_sub, available_counts)
         max_add = int(remaining_sub.max().item())
@@ -170,16 +217,26 @@ def apply_target_driven_sticky_masking_cpu(x: torch.Tensor, target_masked_ratio:
                 chosen_rows = row_idx[selection_mask]
                 chosen_cols = topk_idx[selection_mask]
                 sub_mask[chosen_rows, chosen_cols] = True
-            current_mask.index_copy_(0, remaining_idx, sub_mask)
-            current_counts[remaining_idx] += remaining_sub
+        current_mask.index_copy_(0, remaining_idx, sub_mask)
+        current_counts[remaining_idx] += remaining_sub
 
-    corrupted_x = apply_bert_style_corruption_cpu(x, current_mask, mask_token_id, vocab_size, rng)
+    current_mask &= valid_mask
+
+    corrupted_x = apply_bert_style_corruption_cpu(
+        x, current_mask, mask_token_id, random_token_ids, rng
+    )
 
     return corrupted_x, current_mask
 
 
-def apply_span_masking_cpu(x: torch.Tensor, spans_count: int, 
-                         mask_token_id: int, vocab_size: int, rng) -> tuple[torch.Tensor, torch.Tensor]:
+def apply_span_masking_cpu(
+    x: torch.Tensor,
+    spans_count: int,
+    mask_token_id: int,
+    rng,
+    *,
+    valid_token_mask: Optional[torch.Tensor] = None,
+) -> tuple[torch.Tensor, torch.Tensor]:
     """
     CPU-optimized span masking for unmasking training.
     Masks spans_count continuous areas in the input.
@@ -188,7 +245,6 @@ def apply_span_masking_cpu(x: torch.Tensor, spans_count: int,
         x: Input tokens (batch_size, seq_len)
         spans_count: Number of continuous spans to mask
         mask_token_id: Token ID to use for masking
-        vocab_size: Size of original vocabulary (not used for span masking)
         rng: Random number generator
         
     Returns:
@@ -201,7 +257,10 @@ def apply_span_masking_cpu(x: torch.Tensor, spans_count: int,
     if spans_count <= 0 or seq_len <= 1:
         # No masking needed - return original
         return x.clone(), torch.zeros_like(x, dtype=torch.bool, device=device)
-    
+
+    if valid_token_mask is not None and not valid_token_mask.any():
+        return x.clone(), torch.zeros_like(x, dtype=torch.bool, device=device)
+
     # Generate all random positions at once: (batch_size, 2*spans_count)
     random_positions = torch.rand(batch_size, 2 * spans_count, device=device, generator=rng)
     
@@ -231,7 +290,9 @@ def apply_span_masking_cpu(x: torch.Tensor, spans_count: int,
     
     # Combine all spans for each batch: (batch_size, seq_len)
     mask = span_masks.any(dim=1)
-    
+    if valid_token_mask is not None:
+        mask &= valid_token_mask.to(device=device, dtype=torch.bool)
+
     # Apply masking directly with mask token (no BERT-style corruption for spans)
     masked_x = x.clone()
     masked_x[mask] = mask_token_id
@@ -239,8 +300,13 @@ def apply_span_masking_cpu(x: torch.Tensor, spans_count: int,
     return masked_x, mask
 
 
-def apply_stage_masking(x: torch.Tensor, stage_config: Dict[str, Any], 
-                       mask_token_id: int, vocab_size: int, rng) -> tuple[torch.Tensor, torch.Tensor]:
+def apply_stage_masking(
+    x: torch.Tensor,
+    stage_config: Dict[str, Any],
+    mask_token_id: int,
+    random_token_ids,
+    rng,
+) -> tuple[torch.Tensor, torch.Tensor]:
     """
     Apply masking based on stage configuration type.
     
@@ -248,7 +314,7 @@ def apply_stage_masking(x: torch.Tensor, stage_config: Dict[str, Any],
         x: Input tokens (batch_size, seq_len)
         stage_config: Stage configuration dictionary
         mask_token_id: Token ID to use for masking
-        vocab_size: Size of original vocabulary (for random token generation, excluding special tokens)
+        random_token_ids: Iterable of token IDs eligible for random replacement
         rng: Random number generator
         
     Returns:
@@ -256,7 +322,12 @@ def apply_stage_masking(x: torch.Tensor, stage_config: Dict[str, Any],
         mask: Boolean mask indicating which positions were masked
     """
     stage_type = stage_config['type']
-    
+    candidates = _candidate_tensor(random_token_ids, x.device)
+    if candidates.numel() == 0:
+        valid_tokens = torch.zeros_like(x, dtype=torch.bool, device=x.device)
+    else:
+        valid_tokens = torch.isin(x, candidates)
+
     if stage_type == 'random':
         max_masked_ratio = stage_config['max_masked_ratio']
         # For random masking, each sample gets a different random ratio up to max
@@ -264,23 +335,37 @@ def apply_stage_masking(x: torch.Tensor, stage_config: Dict[str, Any],
         mask_ratios = torch.rand(batch_size, generator=rng, dtype=torch.float, device=x.device) * max_masked_ratio
         thresholds = mask_ratios.unsqueeze(1)
         rand_vals = torch.rand((batch_size, seq_len), generator=rng, dtype=torch.float, device=x.device)
-        mask = rand_vals < thresholds
-        corrupted_x = apply_bert_style_corruption_cpu(x, mask, mask_token_id, vocab_size, rng)
+        mask = (rand_vals < thresholds) & valid_tokens
+        corrupted_x = apply_bert_style_corruption_cpu(
+            x, mask, mask_token_id, random_token_ids, rng
+        )
         return corrupted_x, mask
-        
+
     elif stage_type == 'sticky':
         target_masked_ratio = stage_config['target_masked_ratio']
         p1_probability = stage_config['p1_probability'] 
         p2_probability = stage_config['p2_probability']
         
         return apply_target_driven_sticky_masking_cpu(
-            x, target_masked_ratio, p1_probability, p2_probability, 
-            mask_token_id, vocab_size, rng
+            x,
+            target_masked_ratio,
+            p1_probability,
+            p2_probability,
+            mask_token_id,
+            random_token_ids,
+            rng,
+            valid_token_mask=valid_tokens,
         )
-        
+
     elif stage_type == 'span':
         spans_count = stage_config['spans_count']
-        return apply_span_masking_cpu(x, spans_count, mask_token_id, vocab_size, rng)
+        return apply_span_masking_cpu(
+            x,
+            spans_count,
+            mask_token_id,
+            rng,
+            valid_token_mask=valid_tokens,
+        )
         
     else:
         raise ValueError(f"Unknown stage type: {stage_type}")

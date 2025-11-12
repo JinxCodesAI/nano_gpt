@@ -145,14 +145,29 @@ best_val_loss = 1e9
 # derive vocab_size from consumer meta
 meta = consumer.meta
 meta_vocab_size = meta.get('vocab_size', vocab_size)
+meta_pad_token_id = meta.get('pad_token_id')
+meta_ignore_index = meta.get('ignore_index', -100)
+if meta_pad_token_id is None:
+    raise ValueError(
+        "Dataset metadata is missing pad_token_id; ensure the provider exports padding information."
+    )
 print(f"found vocab_size = {meta_vocab_size} (from consumer.meta)")
 # attach dataset meta to config to inform checkpoint naming (contains training_type)
 config['meta'] = meta
 
 
 # model init
-model_args = dict(n_layer=n_layer, n_head=n_head, n_embd=n_embd, block_size=block_size,
-                  bias=bias, vocab_size=None, dropout=dropout) # start with model_args from command line
+model_args = dict(
+    n_layer=n_layer,
+    n_head=n_head,
+    n_embd=n_embd,
+    block_size=block_size,
+    bias=bias,
+    vocab_size=None,
+    dropout=dropout,
+    pad_token_id=meta_pad_token_id,
+    ignore_index=meta_ignore_index,
+)  # start with model_args from command line
 if init_from == 'scratch':
     # init a new model from scratch
     print("Initializing a new model from scratch")
@@ -169,8 +184,9 @@ elif init_from == 'resume':
     checkpoint_model_args = checkpoint['model_args']
     # force these config attributes to be equal otherwise we can't even resume training
     # the rest of the attributes (e.g. dropout) can stay as desired from command line
-    for k in ['n_layer', 'n_head', 'n_embd', 'block_size', 'bias', 'vocab_size']:
-        model_args[k] = checkpoint_model_args[k]
+    for k in ['n_layer', 'n_head', 'n_embd', 'block_size', 'bias', 'vocab_size', 'pad_token_id', 'ignore_index']:
+        if k in checkpoint_model_args:
+            model_args[k] = checkpoint_model_args[k]
     # create the model
     gptconf = GPTConfig(**model_args)
     model = GPT(gptconf)

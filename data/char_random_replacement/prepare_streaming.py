@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 import os
-from typing import Any, Callable, Dict, Iterable, Optional, Tuple
+from typing import Any, Callable, Dict, Iterable, List, Optional, Tuple
 
 import torch
 
@@ -35,6 +35,15 @@ class CharRandomReplacementProvider(CharDiffusionProvider):
         self._dataset_partial_targets = bool(dataset_partial_targets)
         self._active_corruption_split: Optional[str] = None
         super().__init__(*args, **kwargs)
+        self._primary_newline_id = self._select_primary_newline_id()
+        (
+            self._train_segment_lookup,
+            self._train_line_start_indices,
+        ) = self._build_segment_lookup(self.train_ids)
+        (
+            self._val_segment_lookup,
+            self._val_line_start_indices,
+        ) = self._build_segment_lookup(self.val_ids)
         self._initialize_corruptor()
 
     # ------------------------------------------------------------------
@@ -43,6 +52,7 @@ class CharRandomReplacementProvider(CharDiffusionProvider):
     def _initialize_corruptor(self) -> None:
         excluded_ids = set(self._extra_special_token_ids)
         excluded_ids.add(self.mask_token_id)
+        excluded_ids.add(self.pad_token_id)
         candidate_ids = build_candidate_token_ids(
             self.vocab_size, excluded_token_ids=excluded_ids
         )
@@ -69,6 +79,119 @@ class CharRandomReplacementProvider(CharDiffusionProvider):
             return self._gather_sequences(self.train_ids_tensor, start_indices)
 
         return sampler
+
+    def _select_primary_newline_id(self) -> int:
+        if not self._newline_token_ids:
+            raise ValueError(
+                "Newline token not found in vocabulary; cannot align sequences to line boundaries."
+            )
+        newline_char_id = self.stoi.get("\n")
+        if newline_char_id is not None:
+            return newline_char_id
+        return min(self._newline_token_ids)
+
+    def _build_segment_lookup(
+        self, ids_list: List[int]
+    ) -> Tuple[Dict[int, int], torch.Tensor]:
+        if self.block_size is None:
+            raise ValueError("block_size must be set before computing newline-aligned segments")
+
+        newline_ids = self._newline_token_ids
+        segments: List[Tuple[int, int]] = []
+        idx = 0
+        total = len(ids_list)
+
+        while idx < total:
+            while idx < total and ids_list[idx] in newline_ids:
+                idx += 1
+            if idx >= total:
+                break
+            start = idx
+            while idx < total and ids_list[idx] not in newline_ids:
+                idx += 1
+            if idx >= total:
+                break
+            end = idx  # newline token position
+            idx += 1
+            line_length = end - start + 1  # includes trailing newline
+            total_length = line_length + 1  # + leading newline token
+            if total_length <= self.block_size:
+                segments.append((start, end))
+
+        if not segments:
+            raise ValueError(
+                "No newline-aligned segments fit within block_size; increase block_size or review input text."
+            )
+
+        starts = torch.tensor(
+            [start for start, _ in segments],
+            dtype=torch.long,
+            device=self._tensor_device,
+        )
+        lookup = {start: end for start, end in segments}
+        return lookup, starts
+
+    def _gather_sequences(
+        self, ids_tensor: torch.Tensor, start_indices: torch.Tensor
+    ) -> torch.Tensor:
+        if self.block_size is None:
+            raise ValueError("block_size must be set for sequence gathering")
+
+        if ids_tensor is self.train_ids_tensor:
+            lookup = self._train_segment_lookup
+            source_ids = self.train_ids
+        else:
+            lookup = self._val_segment_lookup
+            source_ids = self.val_ids
+
+        batch_size = start_indices.shape[0]
+        sequences = torch.full(
+            (batch_size, self.block_size),
+            self.pad_token_id,
+            dtype=torch.long,
+            device=self._tensor_device,
+        )
+
+        newline_id = self._primary_newline_id
+
+        for row, start in enumerate(start_indices.tolist()):
+            end = lookup.get(start)
+            if end is None:
+                raise KeyError(
+                    f"Start index {start} missing from newline-aligned segment lookup"
+                )
+
+            sequences[row, 0] = newline_id
+            segment_tokens = source_ids[start : end + 1]
+            if segment_tokens:
+                token_tensor = torch.tensor(
+                    segment_tokens,
+                    dtype=torch.long,
+                    device=self._tensor_device,
+                )
+                limit = min(token_tensor.shape[0], self.block_size - 1)
+                sequences[row, 1 : 1 + limit] = token_tensor[:limit]
+
+        return sequences
+
+    def _sample_default_batch(self, split: str, rng) -> Dict[str, Any]:
+        ids_tensor = self.train_ids_tensor if split == "train" else self.val_ids_tensor
+        start_candidates = self._get_line_start_indices(split)
+        start_indices = self._sample_start_positions(start_candidates, self.batch_size, rng)
+
+        x = self._gather_sequences(ids_tensor, start_indices)
+        valid_tokens = x != self.pad_token_id
+        mask = torch.rand(
+            x.shape, generator=rng, device=self._tensor_device
+        ) < self.mask_probability
+        mask &= valid_tokens
+
+        corrupted_x = self._apply_corruption(x, mask, rng)
+        labels = self._create_labels(x, mask, split)
+        return {
+            "x": corrupted_x,
+            "y": labels,
+        }
 
     def _apply_train_corruption(
         self, x: torch.Tensor, mask: torch.Tensor, rng

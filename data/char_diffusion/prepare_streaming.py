@@ -12,45 +12,7 @@ import torch
 
 from data.common.provider_base import DataProviderBase
 from .file_utils import write_file_atomic, ensure_queue_dirs, get_backlog_size, get_max_sequence_number  
-from .masking_utils import apply_stage_masking
-
-
-def apply_bert_style_corruption_cpu(x: torch.Tensor, mask: torch.Tensor, 
-                                  mask_token_id: int, vocab_size: int, rng) -> torch.Tensor:
-    """
-    Optimized BERT-style corruption using tensor operations.
-    Applies 80/10/10 rule: 80% [MASK], 10% random token, 10% unchanged.
-    
-    Args:
-        x: Original input tokens (batch_size, seq_len)
-        mask: Boolean mask of positions to corrupt (batch_size, seq_len)
-        mask_token_id: The ID of the [MASK] token
-        vocab_size: Size of vocabulary for random token generation
-        rng: Torch random number generator for consistent randomization
-        
-    Returns:
-        corrupted_x: Input with BERT-style corruption applied
-    """
-    corrupted_x = x.clone()
-    
-    # Generate random values for all masked positions at once
-    rand_vals = torch.rand(mask.shape, generator=rng)
-    
-    # Create masks for the three corruption types
-    mask_positions = mask & (rand_vals < 0.8)  # 80%: [MASK] token
-    random_positions = mask & (rand_vals >= 0.8) & (rand_vals < 0.9)  # 10%: random token
-    # 10%: unchanged (no mask needed)
-    
-    # Apply [MASK] tokens
-    corrupted_x[mask_positions] = mask_token_id
-    
-    # Apply random tokens
-    if random_positions.any():
-        num_random = random_positions.sum().item()
-        random_tokens = torch.randint(0, vocab_size, (num_random,), generator=rng)
-        corrupted_x[random_positions] = random_tokens
-    
-    return corrupted_x
+from .masking_utils import apply_stage_masking, apply_bert_style_corruption_cpu
 
 
 class CharDiffusionProvider(DataProviderBase):
@@ -82,14 +44,23 @@ class CharDiffusionProvider(DataProviderBase):
         
         # Create vocabulary
         chars = sorted(list(set(data)))
-        self.vocab_size = len(chars) + 1  # +1 for [MASK] token
+        base_vocab_size = len(chars)
         self.stoi = {ch: i for i, ch in enumerate(chars)}
         self.itos = {i: ch for i, ch in enumerate(chars)}
-        
-        # Add [MASK] token
-        self.mask_token_id = len(chars)
+
+        # Add [PAD] and [MASK] tokens
+        self.pad_token_id = base_vocab_size
+        self.mask_token_id = base_vocab_size + 1
+        self.vocab_size = base_vocab_size + 2
+
+        self.stoi['[PAD]'] = self.pad_token_id
+        self.itos[self.pad_token_id] = '[PAD]'
         self.stoi['[MASK]'] = self.mask_token_id
         self.itos[self.mask_token_id] = '[MASK]'
+
+        self._random_token_ids = torch.tensor(
+            [self.stoi[ch] for ch in chars], dtype=torch.long
+        )
         
         # Create train/val splits
         n = len(data)
@@ -117,9 +88,10 @@ class CharDiffusionProvider(DataProviderBase):
         
         if self.verbose:
             print(f"CharDiffusionProvider initialized:")
-            print(f"  vocab_size: {self.vocab_size} (including [MASK])")
+            print(f"  vocab_size: {self.vocab_size} (including [PAD] and [MASK])")
             print(f"  mask_probability: {self.mask_probability}")
             print(f"  mask_token_id: {self.mask_token_id}")
+            print(f"  pad_token_id: {self.pad_token_id}")
             print(f"  train_data_size: {len(self.train_ids)}")
             print(f"  val_data_size: {len(self.val_ids)}")
             print(f"  compute_device: {self._tensor_device}")
@@ -157,7 +129,7 @@ class CharDiffusionProvider(DataProviderBase):
         procedure while reusing mask generation logic.
         """
         return apply_bert_style_corruption_cpu(
-            x, mask, self.mask_token_id, self.vocab_size - 1, rng
+            x, mask, self.mask_token_id, self._random_token_ids, rng
         )
 
     def _apply_stage_corruption(
@@ -323,6 +295,7 @@ class CharDiffusionProvider(DataProviderBase):
             "vocab_size": self.vocab_size,
             "mask_token_id": self.mask_token_id,
             "mask_probability": self.mask_probability,
+            "pad_token_id": self.pad_token_id,
             "ignore_index": self.ignore_index,
             "stoi": self.stoi,
             "itos": self.itos,
@@ -389,7 +362,7 @@ class CharDiffusionProvider(DataProviderBase):
             )
             batch_x = self._gather_sequences(ids_tensor, start_indices)
             stage_corrupted_x, mask = apply_stage_masking(
-                batch_x, stage_config, self.mask_token_id, self.vocab_size - 1, rng
+                batch_x, stage_config, self.mask_token_id, self._random_token_ids, rng
             )
             corrupted_x = self._apply_stage_corruption(
                 stage_corrupted_x, batch_x, mask, rng

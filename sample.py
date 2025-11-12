@@ -19,7 +19,7 @@ from sampling_utils import (
 )
 
 # -----------------------------------------------------------------------------
-init_from = 'resume' # either 'resume' (from an out_dir) or a gpt2 variant (e.g. 'gpt2-xl')
+init_from = 'resume' # sampling now requires a checkpoint produced by this repository
 out_dir = 'out-char-random-replacement' # ignored if init_from is not 'resume'
 ckpt_name = 'new_hope_4_9000.pt'
 start = "POMPEY:\n" # or "<|endoftext|>" or etc. Can also specify a file, use as: "FILE:prompt.txt"
@@ -85,6 +85,7 @@ setup = ModelSetup(
 model = setup.model
 decode = setup.decode
 space_token_id = setup.space_token_id
+pad_token_id = setup.pad_token_id
 prompt = setup.prompt
 initial_length = setup.initial_length
 block_size = setup.block_size
@@ -97,7 +98,12 @@ with torch.no_grad():
             seq_length = block_size
             max_token_pos = min(seq_length, initial_length + max_new_tokens)
 
-            x = torch.zeros((1, seq_length), dtype=torch.long, device=device)
+            x = torch.full(
+                (1, seq_length),
+                fill_value=pad_token_id,
+                dtype=torch.long,
+                device=device,
+            )
             x[0, :initial_length] = prompt
 
             if temperature <= 0:
@@ -110,6 +116,7 @@ with torch.no_grad():
             last_delete_indices: List[int] = []
 
             logits, _ = model(x)
+            logits[..., pad_token_id] = torch.finfo(logits.dtype).min
             last_log_probs = torch.log_softmax(logits, dim=-1).detach()
             display = DiffusionDisplay(decode)
 
@@ -189,7 +196,7 @@ with torch.no_grad():
                         del_indices,
                         max_token_pos=max_token_pos,
                         initial_length=initial_length,
-                        fill_id=space_token_id,
+                        fill_id=pad_token_id,
                         prior_insertions=applied_insertions,
                     )
                 else:
@@ -215,6 +222,7 @@ with torch.no_grad():
                 )
                 logits, _ = model(x)
                 logits = logits / temperature
+                logits[..., pad_token_id] = torch.finfo(logits.dtype).min
 
                 # Convert logits to log-probabilities for every token position, then exponentiate
                 # to obtain probabilities for sampling.
@@ -251,7 +259,7 @@ with torch.no_grad():
                 # Zero out any positions beyond the active window so that the next iteration continues to
                 # treat them as padding (i.e., not part of the diffusion process yet).
                 if max_token_pos < seq_length:
-                    x[:, max_token_pos:] = 0
+                    x[:, max_token_pos:] = pad_token_id
 
                 tokens_for_display = x[0, :max_token_pos].tolist()
                 display.emit_iteration(
