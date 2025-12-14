@@ -39,7 +39,7 @@ torch._dynamo.config.suppress_errors = True
 # I/O
 out_dir = 'out'
 eval_interval = 2000
-log_interval = 1
+log_interval = 10
 eval_iters = 200
 eval_only = False # if True, script exits right after the first eval
 always_save_checkpoint = True # if True, always save a checkpoint after each eval
@@ -78,7 +78,7 @@ backend = 'nccl' # 'nccl', 'gloo', etc.
 # system
 device = 'cuda' # examples: 'cpu', 'cuda', 'cuda:0', 'cuda:1' etc., or try 'mps' on macbooks
 dtype = 'bfloat16' if torch.cuda.is_available() and torch.cuda.is_bf16_supported() else 'float16' # 'float32', 'bfloat16', or 'float16', the latter will auto implement a GradScaler
-compile = True # use PyTorch 2.0 to compile the model to be faster
+compile = False # use PyTorch 2.0 to compile the model to be faster
 # -----------------------------------------------------------------------------
 config_keys = [k for k,v in globals().items() if not k.startswith('_') and isinstance(v, (int, float, bool, str))]
 exec(open('configurator.py').read()) # overrides from command line or config file
@@ -306,18 +306,27 @@ while True:
     optimizer.zero_grad(set_to_none=True)
 
     # timing and logging
-    t1 = time.time()
-    dt = t1 - t0
-    t0 = t1
     if iter_num % log_interval == 0 and master_process:
         # get loss as float. note: this is a CPU-GPU sync point
         # scale up to undo the division above, approximating the true total loss (exact would have been a sum)
         lossf = loss.item() * gradient_accumulation_steps
-        if local_iter_num >= 5: # let the training loop settle a bit
-            mfu = raw_model.estimate_mfu(batch_size * gradient_accumulation_steps, dt)
+        if device_type == 'cuda':
+            torch.cuda.synchronize()
+        t1 = time.time()
+        dt = t1 - t0
+        t0 = t1
+        if iter_num >= 5: # let the training loop settle a bit
+            # calculate average time per iteration
+            steps_log = 1 if iter_num == 0 else log_interval
+            dt_avg = dt / steps_log
+            mfu = raw_model.estimate_mfu(batch_size * gradient_accumulation_steps, dt_avg)
             running_mfu = mfu if running_mfu == -1.0 else 0.9*running_mfu + 0.1*mfu
-        print(f"iter {iter_num}: loss {lossf:.4f}, time {dt*1000:.2f}ms, mfu {running_mfu*100:.2f}%")
-        wandb.log({
+            print(f"iter {iter_num}: loss {lossf:.4f}, time {dt_avg*1000:.2f}ms, mfu {running_mfu*100:.2f}%")
+        else:
+            print(f"iter {iter_num}: loss {lossf:.4f}")
+
+        if wandb_log:
+            wandb.log({
                 "iter": iter_num,
                 "train/loss": lossf,
                 "mfu": running_mfu*100, # convert to percentage
