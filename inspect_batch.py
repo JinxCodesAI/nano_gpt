@@ -8,6 +8,7 @@ Example: python inspect_batch.py char_diffusion train/1757250083194-000013-100.p
 import sys
 import os
 import pickle
+import json
 import torch
 from pathlib import Path
 
@@ -21,6 +22,35 @@ def load_meta(data_dir):
     with open(meta_path, 'rb') as f:
         meta = pickle.load(f)
     return meta
+
+
+def load_tokenizer_info(data_dir):
+    """Load tokenizer info from tokenizer.json if available."""
+    tokenizer_path = os.path.join(data_dir, 'tokenizer.json')
+    if not os.path.exists(tokenizer_path):
+        return None
+        
+    try:
+        with open(tokenizer_path, 'r', encoding='utf-8') as f:
+            data = json.load(f)
+            
+        # Try to find vocab in model.vocab first
+        vocab = {}
+        if 'model' in data and 'vocab' in data['model']:
+            vocab = data['model']['vocab']
+            
+        # Fallback/Update from added_tokens if needed (though usually in vocab)
+        # added_tokens is a list of dicts
+        if 'added_tokens' in data:
+            for item in data['added_tokens']:
+                if 'content' in item and 'id' in item:
+                    vocab[item['content']] = item['id']
+                    
+        return vocab
+    except Exception as e:
+        print(f"Warning: Error loading tokenizer.json: {e}")
+        return None
+
 
 
 def decode_tokens(tokens, itos):
@@ -64,12 +94,36 @@ def analyze_batch_file(dataset_name, batch_file_path):
     
     stoi = meta.get('stoi', {})
     vocab_size = meta.get('vocab_size', len(itos))
-    mask_token_id = meta.get('mask_token_id', None)
+    
+    # Try to load from tokenizer.json first
+    tokenizer_vocab = load_tokenizer_info(data_dir)
+    
+    mask_token_id = None
+    pad_token_id = None
+    
+    if tokenizer_vocab:
+        mask_token_id = tokenizer_vocab.get('[MASK]')
+        pad_token_id = tokenizer_vocab.get('[PAD]')
+        print(f"Loaded special tokens from tokenizer.json: MASK={mask_token_id}, PAD={pad_token_id}")
+    
+    # Fallback to meta if not found
+    if mask_token_id is None:
+        mask_token_id = meta.get('mask_token_id')
+        if mask_token_id is None and 'stoi' in meta:
+            mask_token_id = meta['stoi'].get('[MASK]')
+            
+    if pad_token_id is None:
+        # meta usually doesn't store pad_token_id explicitly unless custom
+        if 'stoi' in meta:
+            pad_token_id = meta['stoi'].get('[PAD]')
+
     ignore_index = meta.get('ignore_index', -100)
     
     print("VOCABULARY INFO:")
+    print("VOCABULARY INFO:")
     print(f"  vocab_size: {vocab_size}")
     print(f"  mask_token_id: {mask_token_id}")
+    print(f"  pad_token_id: {pad_token_id}")
     print(f"  ignore_index: {ignore_index}")
     if mask_token_id is not None and mask_token_id in itos:
         print(f"  mask_token: '{itos[mask_token_id]}'")
@@ -158,19 +212,62 @@ def analyze_batch_file(dataset_name, batch_file_path):
     
     # Statistics
     total_tokens = batch_size * seq_len
-    masked_tokens = (y_tensor != ignore_index).sum().item()
-    mask_percentage = (masked_tokens / total_tokens) * 100
+    
+    # 1) Percentage of [PAD] token in input
+    pad_percentage = 0.0
+    if pad_token_id is not None:
+        pad_count = (x_tensor == pad_token_id).sum().item()
+        pad_percentage = (pad_count / total_tokens) * 100
+    
+    # 2) Percentage of [MASK] token in input
+    mask_input_percentage = 0.0
+    if mask_token_id is not None:
+        mask_input_count = (x_tensor == mask_token_id).sum().item()
+        mask_input_percentage = (mask_input_count / total_tokens) * 100
+
+    # 3) Percentage of tokens where input is different than target
+    # We only care where target is valid (not ignore_index), or maybe global?
+    # User request: "percentage of tokens where input is different than targer"
+    # Usually we ignore loss where y is ignore_index. 
+    # But strictly "input != target" could mean everywhere.
+    # However, usually target is -100 (ignore) where it's not trained.
+    # Logic: count where (x != y) AND (y != ignore_index)
+    valid_targets = (y_tensor != ignore_index)
+    diff_mask = (x_tensor != y_tensor) & valid_targets
+    diff_count = diff_mask.sum().item()
+    diff_percentage = (diff_count / total_tokens) * 100
     
     print("STATISTICS:")
     print(f"  Total tokens: {total_tokens}")
-    print(f"  Masked tokens: {masked_tokens}")
-    print(f"  Mask percentage: {mask_percentage:.2f}%")
+    # print(f"  Masked tokens: {masked_tokens}") # Removed as requested
+    # print(f"  Mask percentage: {mask_percentage:.2f}%") # Removed as requested
     
-    # Analyze mask token usage in input
+    if pad_token_id is not None:
+        print(f"  [PAD] tokens in input: {pad_percentage:.2f}%")
+    else:
+        print(f"  [PAD] tokens in input: N/A (id not found)")
+
     if mask_token_id is not None:
-        mask_token_count = (x_tensor == mask_token_id).sum().item()
-        mask_token_percentage = (mask_token_count / masked_tokens) * 100 if masked_tokens > 0 else 0
-        print(f"  [MASK] tokens in input: {mask_token_count} ({mask_token_percentage:.1f}% of masked positions)")
+        print(f"  [MASK] tokens in input: {mask_input_percentage:.2f}%")
+    else:
+        print(f"  [MASK] tokens in input: N/A (id not found)")
+
+    print(f"  Input != Target percentage: {diff_percentage:.2f}%")
+    
+    # Per-sample statistics for Input != Target
+    # valid_targets matches shape of x_tensor, y_tensor
+    diff_mask_float = diff_mask.float()
+    diff_per_sample = diff_mask_float.sum(dim=1)
+    # We should normalize by the number of valid targets per sample, or total seq_len?
+    # Usually seq_len is constant. If we want "percentage of tokens where input != target", 
+    # it implies over the whole sequence.
+    pct_per_sample = (diff_per_sample / seq_len) * 100
+    
+    p10 = torch.quantile(pct_per_sample, 0.1).item()
+    p90 = torch.quantile(pct_per_sample, 0.9).item()
+    
+    print(f"  10th percentile: {p10:.2f}%")
+    print(f"  90th percentile: {p90:.2f}%")
     
     # Check for vocabulary coverage
     unique_x_tokens = set(x_tensor.flatten().tolist())
