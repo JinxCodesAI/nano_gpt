@@ -20,9 +20,9 @@ from sampling_utils import (
 
 # -----------------------------------------------------------------------------
 init_from = 'resume' # either 'resume' (from an out_dir) or a gpt2 variant (e.g. 'gpt2-xl')
-out_dir = 'out-char-random-replacement' # ignored if init_from is not 'resume'
-ckpt_name = 'new_hope_4_9000.pt'
-start = "POMPEY:\n" # or "<|endoftext|>" or etc. Can also specify a file, use as: "FILE:prompt.txt"
+out_dir = 'out-cosmopedia' # ignored if init_from is not 'resume'
+ckpt_name = '2_ckpt_MLM_9250.pt'
+start = "Logical implication is" # or "<|endoftext|>" or etc. Can also specify a file, use as: "FILE:prompt.txt"
 num_samples = 1 # number of samples to draw
 max_new_tokens = 900 # number of tokens generated in each sample
 max_iterations = 20 # maximum number of diffusion iterations per sample
@@ -86,6 +86,7 @@ model = setup.model
 decode = setup.decode
 space_token_id = setup.space_token_id
 prompt = setup.prompt
+print("Prompt:",prompt)
 initial_length = setup.initial_length
 block_size = setup.block_size
 ctx = setup.autocast_context()

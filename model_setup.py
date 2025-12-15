@@ -96,7 +96,27 @@ class ModelSetup:
             and "config" in checkpoint
             and "dataset" in checkpoint["config"]
         ):
-            meta_path = os.path.join("data", checkpoint["config"]["dataset"], "meta.pkl")
+            dataset_dir = os.path.join("data", checkpoint["config"]["dataset"])
+            tokenizer_json_path = os.path.join(dataset_dir, "tokenizer.json")
+            if os.path.exists(tokenizer_json_path):
+                from tokenizers import Tokenizer
+                tokenizer = Tokenizer.from_file(tokenizer_json_path)
+                
+                # We need to find the space token ID. Cosmopedia uses [MASK] for space-based re-noising/infilling
+                # consistently so we look for that.
+                space_token_id = tokenizer.token_to_id("[MASK]")
+                if space_token_id is None:
+                     raise ValueError("Tokenizer loaded from json must have [MASK] token for space_token_id")
+
+                def encode(text: str) -> Sequence[int]:
+                    return tokenizer.encode(text).ids
+
+                def decode(token_ids: Sequence[int]) -> str:
+                    return tokenizer.decode(token_ids)
+
+                return encode, decode, space_token_id
+
+            meta_path = os.path.join(dataset_dir, "meta.pkl")
             load_meta = os.path.exists(meta_path)
 
         if load_meta and meta_path:
@@ -104,11 +124,11 @@ class ModelSetup:
                 meta = pickle.load(f)
             stoi = meta["stoi"]
             itos = meta["itos"]
-            if " " not in stoi:
+            if "[MASK]" not in stoi:
                 raise ValueError(
                     "Space character not found in dataset vocabulary; cannot perform space-based re-noising."
                 )
-            space_token_id = stoi[" "]
+            space_token_id = stoi["[MASK]"]
             encode_unknown_cache: set[str] = set()
 
             def encode(text: str) -> Sequence[int]:
@@ -133,7 +153,7 @@ class ModelSetup:
             decode = lambda token_ids: "".join(itos[i] for i in token_ids)
             return encode, decode, space_token_id
 
-        print("No meta.pkl found, assuming GPT-2 encodings...")
+        print("No tokenizer.json or meta.pkl found, assuming GPT-2 encodings...")
         enc = tiktoken.get_encoding("gpt2")
         encode = lambda text: enc.encode(text, allowed_special={"<|endoftext|>"})
         decode = lambda token_ids: enc.decode(token_ids)
