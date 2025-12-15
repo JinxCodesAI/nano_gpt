@@ -4,6 +4,7 @@ from __future__ import annotations
 import os
 import time
 from typing import Any, Dict, Iterable, Optional, Tuple, Sequence, List
+from collections import defaultdict
 
 import torch
 import datasets
@@ -187,26 +188,141 @@ class CosmopediaProvider(DataProviderBase):
         shuffled = [stage_pool[i] for i in perm]
         self._stage_cycle_state[split] = shuffled
 
-    def _stream_from_configs(self, config_names: Iterable[str], infinite: bool = False) -> Iterable[str]:
-        while True:
+    def _fetch_dataset_info(self, config_names: Iterable[str]) -> Optional[List[int]]:
+        """
+        Attempts to fetch the number of examples for each config.
+        Returns a list of counts if successful for ALL configs, otherwise None.
+        """
+        counts = []
+        try:
             for config_name in config_names:
                 if self.verbose:
-                    print(f"Streaming from {config_name}...")
-                try:
-                    ds = datasets.load_dataset("HuggingFaceTB/cosmopedia", config_name, split="train", streaming=True)
-                    for example in ds:
-                        text = example.get('text', '')
-                        if text:
-                            yield text
-                except Exception as e:
-                    print(f"Error streaming {config_name}: {e}")
-                    time.sleep(5)
-            
-            if not infinite:
+                    print(f"Fetching info for {config_name}...")
+                builder = datasets.load_dataset_builder("HuggingFaceTB/cosmopedia", config_name)
+                # Builder info might be empty if not downloaded, but usually works for streaming
+                if builder.info.splits and "train" in builder.info.splits:
+                    dataset_count = builder.info.splits["train"].num_examples
+                    if dataset_count is None or dataset_count <= 0:
+                        print(f"Warning: Count for {config_name} is invalid/None")
+                        return None
+                    counts.append(dataset_count)
+                else:
+                    print(f"Warning: Could not find split info for {config_name}")
+                    return None
+            return counts
+        except Exception as e:
+            print(f"Error fetching dataset info: {e}")
+            return None
+
+    def _stream_from_configs(self, config_names: Iterable[str], infinite: bool = False) -> Iterable[str]:
+        # 1. Load all datasets
+        loaded_datasets = []
+        valid_configs = []
+        for config_name in config_names:
+            try:
+                if self.verbose:
+                    print(f"Loading dataset stream for verify: {config_name}")
+                ds = datasets.load_dataset("HuggingFaceTB/cosmopedia", config_name, split="train", streaming=True)
+                loaded_datasets.append(ds)
+                valid_configs.append(config_name)
+            except Exception as e:
+                print(f"Error loading config {config_name}: {e}. Skipping.")
+        
+        if not loaded_datasets:
+            print("No datasets loaded successfully.")
+            return
+
+        # 2. Determine probabilities
+        counts = self._fetch_dataset_info(valid_configs)
+        probabilities = None
+        
+        if counts:
+            total = sum(counts)
+            if total > 0:
+                probabilities = [c / total for c in counts]
+                print(f"Using proportional sampling: {dict(zip(valid_configs, probabilities))}")
+            else:
+                print("Total count is 0, falling back to equal interleaving.")
+        else:
+            print("Could not fetch all dataset sizes, falling back to equal interleaving (Round-Robin).")
+
+        # 3. Interleave
+        # stopping_strategy="all_exhausted" ensures we use all data (oversampling smaller ones if needed to match probabilities, 
+        # or just cycling if probabilities are None - actually with None it cycles A,B,C until all exhausted)
+        interleaved_ds = datasets.interleave_datasets(
+            loaded_datasets, 
+            probabilities=probabilities, 
+            seed=self.seed,
+            stopping_strategy="all_exhausted"
+        )
+        
+        # 4. Stream with logging
+        self.read_counts = defaultdict(int) 
+        # Needs to track which config yielded the item. 
+        # interleave_datasets doesn't natively yield the source.
+        # BUT we can wrap the original datasets to inject their source info if really needed, 
+        # or just track total. The user asked for "how many items has been read so far from each set".
+        # To do that, we need to map the yielded item back to its source, or wrap the sources.
+        
+        # Let's wrap the datasets to identify them.
+        def identify_source(example, source_name):
+            example['__source_config__'] = source_name
+            return example
+
+        # Re-create loaded datasets with mapping
+        # Note: streaming datasets map returns a new iterable
+        labeled_datasets = []
+        for ds, name in zip(loaded_datasets, valid_configs):
+             # Fix lambda capture by binding name to n
+             labeled_datasets.append(ds.map(lambda x, n=name: identify_source(x, n)))
+             
+        # Re-interleave labeled datasets
+        interleaved_ds = datasets.interleave_datasets(
+            labeled_datasets, 
+            probabilities=probabilities, 
+            seed=self.seed,
+            stopping_strategy="all_exhausted"
+        )
+
+        iterator = iter(interleaved_ds)
+        
+        total_read = 0
+        LOG_INTERVAL = 1000
+
+        while True:
+            try:
+                 example = next(iterator)
+                 source = example.get('__source_config__', 'unknown')
+                 self.read_counts[source] += 1
+                 total_read += 1
+                 
+                 if total_read % LOG_INTERVAL == 0:
+                     print(f"Read stats: {dict(self.read_counts)}")
+
+                 text = example.get('text', '')
+                 if text:
+                     yield text
+                     
+            except StopIteration:
+                if not infinite:
+                    break
+                # If infinite, we restart the whole thing? 
+                # _get_infinite_stream logic usually handles the while True loop.
+                # But here we are inside _stream_from_configs.
+                # If infinite=True, we should probably recreate the iterator or just break and let the caller loop?
+                # The previous implementation had `while True` around the config loop.
+                # datasets.interleave_datasets with 'all_exhausted' will finish when everything is done.
+                # So if infinite=True, we break the loop here, and the outer loop (if we add one) restarts.
                 break
+    
+    # helper for infinite loop wrapper
+    def _stream_infinite_wrapper(self, config_names):
+        while True:
+            yield from self._stream_from_configs(config_names, infinite=False)
+
 
     def _get_infinite_stream(self):
-        return self._stream_from_configs(self.configs, infinite=True)
+        return self._stream_infinite_wrapper(self.configs)
 
     def _refill_stage_mix_buffer(self, split: str, rng) -> None:
         """Fetch enough data, apply various stage masks, and shuffle into a mixed buffer."""
