@@ -100,18 +100,11 @@ class CosmopediaProvider(DataProviderBase):
 
         def iterator():
             count = 0
-            for config_name in self.DEFAULT_CONFIGS:
+            for text in self._stream_from_configs(self.DEFAULT_CONFIGS, infinite=False):
+                yield text
+                count += 1
                 if count >= self.tokenizer_train_samples:
                     break
-                print(f"Sampling from {config_name} for tokenizer training...")
-                ds = datasets.load_dataset("HuggingFaceTB/cosmopedia", config_name, split="train", streaming=True)
-                for example in ds:
-                    text = example.get('text', '')
-                    if text:
-                        yield text
-                        count += 1
-                        if count >= self.tokenizer_train_samples:
-                            break
         
         tokenizer.train_from_iterator(iterator(), trainer=trainer)
         tokenizer.save(self.tokenizer_path)
@@ -194,9 +187,11 @@ class CosmopediaProvider(DataProviderBase):
         shuffled = [stage_pool[i] for i in perm]
         self._stage_cycle_state[split] = shuffled
 
-    def _get_infinite_stream(self):
+    def _stream_from_configs(self, config_names: Iterable[str], infinite: bool = False) -> Iterable[str]:
         while True:
-            for config_name in self.configs:
+            for config_name in config_names:
+                if self.verbose:
+                    print(f"Streaming from {config_name}...")
                 try:
                     ds = datasets.load_dataset("HuggingFaceTB/cosmopedia", config_name, split="train", streaming=True)
                     for example in ds:
@@ -206,6 +201,12 @@ class CosmopediaProvider(DataProviderBase):
                 except Exception as e:
                     print(f"Error streaming {config_name}: {e}")
                     time.sleep(5)
+            
+            if not infinite:
+                break
+
+    def _get_infinite_stream(self):
+        return self._stream_from_configs(self.configs, infinite=True)
 
     def _refill_stage_mix_buffer(self, split: str, rng) -> None:
         """Fetch enough data, apply various stage masks, and shuffle into a mixed buffer."""
