@@ -111,7 +111,7 @@ def _decode_row(
             decoded_tokens.append(decoder.get(int(tok), f"<{tok}>"))
         if idx + 1 >= token_limit:
             break
-    text = "".join(decoded_tokens).replace("\n", "\\n")
+    text = "".join(decoded_tokens).replace("Ġ", " ").replace("\n", "\\n")
     if len(values) > token_limit:
         text += "..."
     return f"shape={tuple(tensor.shape)} text=\"{text}\""

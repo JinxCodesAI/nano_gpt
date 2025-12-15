@@ -459,11 +459,15 @@ class CosmopediaProvider(DataProviderBase):
         raise NotImplementedError("Default non-stage batching not strictly implemented for full parity. Use stages.")
 
     def build_meta(self) -> Dict[str, Any]:
+        stoi = self.tokenizer.get_vocab()
+        itos = {v: k for k, v in stoi.items()}
         return {
             "dataset_name": "cosmopedia",
             "training_type": "MLM",
             "vocab_size": self.vocab_size,
             "tokenizer_path": self.tokenizer_path,
+            "stoi": stoi,
+            "itos": itos,
             "corruption": {
                 "type": "random_replacement",
                 "original_token_probability_multiplier": self._original_multiplier,

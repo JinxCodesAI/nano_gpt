@@ -25,7 +25,7 @@ def load_meta(data_dir):
 
 def decode_tokens(tokens, itos):
     """Decode token IDs to characters/strings."""
-    return ''.join([itos.get(token, f'<UNK:{token}>') for token in tokens])
+    return ''.join([itos.get(token, f'<UNK:{token}>') for token in tokens]).replace('Ġ', ' ')
 
 
 def analyze_batch_file(dataset_name, batch_file_path):
@@ -45,6 +45,7 @@ def analyze_batch_file(dataset_name, batch_file_path):
         print("METADATA:")
         for key, value in meta.items():
             if key in ['stoi', 'itos']:
+                # print(f"  {key}: <vocab mapping with {len(value)} entries>")
                 print(f"  {key}: <vocab mapping with {len(value)} entries>")
             elif isinstance(value, (list, dict)) and len(str(value)) > 100:
                 print(f"  {key}: <{type(value).__name__} with {len(value)} items>")
@@ -141,7 +142,7 @@ def analyze_batch_file(dataset_name, batch_file_path):
         
         print(f"Example {i+1}:")
         print(f"  Input (x):  {repr(x_decoded)}")
-        print(f"  Target (y): {''.join(y_decoded_parts)}")
+        print(f"  Target (y): {''.join(y_decoded_parts).replace('Ġ', ' ')}")
         print(f"  Masked positions: {masked_positions}")
         
         # Show token-by-token breakdown for first few positions
@@ -149,8 +150,8 @@ def analyze_batch_file(dataset_name, batch_file_path):
         for j in range(min(20, seq_len)):
             x_tok = x_tokens[j]
             y_tok = y_tokens[j]
-            x_char = itos.get(x_tok, f'<UNK:{x_tok}>')
-            y_char = itos.get(y_tok, f'<UNK:{y_tok}>') if y_tok != ignore_index else '<IGN>'
+            x_char = itos.get(x_tok, f'<UNK:{x_tok}>').replace('Ġ', ' ')
+            y_char = (itos.get(y_tok, f'<UNK:{y_tok}>').replace('Ġ', ' ') if y_tok != ignore_index else '<IGN>')
             mask_indicator = '*' if y_tok != ignore_index else ' '
             print(f"    {j:2d}: x={x_tok:3d}('{x_char}') y={y_tok:4d}('{y_char}') {mask_indicator}")
         print()

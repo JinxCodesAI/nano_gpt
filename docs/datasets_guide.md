@@ -23,9 +23,12 @@ Example skeleton inspired by the shipped `CharDiffusionProvider`:
 class CharDiffusionProvider(DataProviderBase):
     def build_meta(self) -> Dict:
         return {
+            "dataset_name": "my_dataset",
             "training_type": "MLM",
             "vocab_size": self.vocab_size,
             "mask_token_id": self.mask_token_id,
+            "stoi": self.stoi, # Required: str -> int mapping
+            "itos": self.itos, # Required: int -> str mapping (for inspection)
             "batch_schema": [
                 {"name": "x", "dtype": "int64", "shape": [self.block_size], "role": "input"},
                 {"name": "y", "dtype": "int64", "shape": [self.block_size], "role": "target"},
@@ -36,6 +39,24 @@ class CharDiffusionProvider(DataProviderBase):
         # Generate tensors and return a dict matching batch_schema
         return {"x": masked_inputs, "y": reconstruction_targets}
 ````
+
+#### Metadata and Schema
+Your `build_meta()` must return a dictionary that acts as the source of truth for downstream tools (`train.py`, `inspect_batch.py`). The following keys are **strictly required** to ensure compatibility across generators and inspection tools:
+
+| Key | Type | Description |
+| :--- | :--- | :--- |
+| `dataset_name` | `str` | Name of the dataset (e.g., "cosmopedia"). |
+| `training_type` | `str` | Type of training task (e.g., "MLM", "CLM"). |
+| `vocab_size` | `int` | Total size of the vocabulary. |
+| `batch_schema` | `List[Dict]` | List of tensor definitions (name, dtype, shape, role). |
+| `stoi` | `Dict[str, int]` | Token string to integer ID mapping. |
+| `itos` | `Dict[int, str]` | Integer ID to token string mapping. **Critical** for `inspect_batch.py` to decode samples. |
+
+Optional but recommended keys:
+- `mask_token_id`: `int` (if applicable)
+- `ignore_index`: `int` (default: -100)
+- `corruption`: `Dict` (details about corruption strategy)
+
 
 ### Step 2: Register your provider for `prepare.py`
 `prepare.py` uses a simple convention to map dataset name to the provider class.
