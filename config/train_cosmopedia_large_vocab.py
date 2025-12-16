@@ -20,16 +20,17 @@ dataset = 'cosmopedia'
 data_stream_verbose = True
 
 # Tokenizer / Data settings
-vocab_size = 4096
+vocab_size = 32768
 tokenizer_train_samples = 100000 # Configurable limit for tokenizer training
+bpe_dropout = 0.1 # BPE Dropout probability for training
 
 # Training settings
 gradient_accumulation_steps = 4
 batch_size = 128
-block_size = 1024
+block_size = 512
 
 learning_rate = 1e-3
-max_iters = 10000
+max_iters = 100000
 lr_decay_iters = 10000
 min_lr = 5e-5
 beta2 = 0.99

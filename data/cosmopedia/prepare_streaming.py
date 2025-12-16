@@ -41,12 +41,15 @@ class CosmopediaProvider(DataProviderBase):
         dataset_partial_targets: bool = False,
         use_all_stages_for_training: bool = False,
         unmasking_stages: Optional[List[Dict]] = None,
+
         validation_stages: Optional[List[Dict]] = None,
+        bpe_dropout: float = 0.0,
         **kwargs,
     ) -> None:
         super().__init__(*args, **kwargs)
         self.vocab_size = int(vocab_size)
         self.tokenizer_train_samples = int(tokenizer_train_samples)
+        self.bpe_dropout = float(bpe_dropout)
         
         # Corruption params
         self._original_multiplier = float(original_token_probability_multiplier)
@@ -85,7 +88,10 @@ class CosmopediaProvider(DataProviderBase):
 
     def _train_tokenizer(self) -> Tokenizer:
         tokenizer = Tokenizer(models.BPE())
-        tokenizer.pre_tokenizer = pre_tokenizers.ByteLevel(add_prefix_space=True)
+        tokenizer.pre_tokenizer = pre_tokenizers.Sequence([
+            pre_tokenizers.ByteLevel(add_prefix_space=False),
+            pre_tokenizers.Digits(individual_digits=True)  # <--- FIXES YOUR NUMBER ISSUE
+        ])
         tokenizer.decoder = decoders.ByteLevel()
         
         # Ensure we have common special tokens
@@ -347,6 +353,11 @@ class CosmopediaProvider(DataProviderBase):
 
         while len(sequences_x) < total_sequences_needed:
             text = next(self._stream)
+            
+            # Apply BPE Dropout if applicable
+            if hasattr(self.tokenizer.model, 'dropout'):
+                self.tokenizer.model.dropout = self.bpe_dropout if split == 'train' else 0.0
+                
             ids = self.tokenizer.encode(text).ids
             if len(ids) > self.block_size:
                 ids = ids[:self.block_size]
