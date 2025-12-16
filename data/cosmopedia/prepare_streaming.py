@@ -87,35 +87,77 @@ class CosmopediaProvider(DataProviderBase):
         return self._train_tokenizer()
 
     def _train_tokenizer(self) -> Tokenizer:
+        from collections import Counter
+        import json
+
+        # 1. Setup the Tokenizer & Trainer
         tokenizer = Tokenizer(models.BPE())
         tokenizer.pre_tokenizer = pre_tokenizers.Sequence([
             pre_tokenizers.ByteLevel(add_prefix_space=False),
-            pre_tokenizers.Digits(individual_digits=True)  # <--- FIXES YOUR NUMBER ISSUE
+            pre_tokenizers.Digits(individual_digits=True)
         ])
         tokenizer.decoder = decoders.ByteLevel()
         
-        # Ensure we have common special tokens
-        special_tokens = ["[PAD]", "[UNK]", "[SEP]", "[CLS]", "[MASK]"]
+        special_tokens = ["[PAD]", "[UNK]", "[SEP]", "[CLS]", "[MASK]", "[DEL]", "[EOS]", "[BOS]"]
         
         trainer = trainers.BpeTrainer(
             vocab_size=self.vocab_size,
-            min_frequency=2,
+            min_frequency=100, # or 50
             special_tokens=special_tokens,
             initial_alphabet=pre_tokenizers.ByteLevel.alphabet(),
             show_progress=True
         )
 
-        def iterator():
-            count = 0
-            for text in self._stream_from_configs(self.DEFAULT_CONFIGS, infinite=False):
-                yield text
-                count += 1
-                if count >= self.tokenizer_train_samples:
-                    break
+        # 2. CACHE DATA: Stream samples once into memory
+        print(f"Collecting {self.tokenizer_train_samples} samples for tokenizer training...")
+        corpus_buffer = []
+        count = 0
         
-        tokenizer.train_from_iterator(iterator(), trainer=trainer)
+        # We assume _stream_from_configs yields strings
+        stream_iter = self._stream_from_configs(self.DEFAULT_CONFIGS, infinite=False)
+        
+        for text in stream_iter:
+            corpus_buffer.append(text+"\n")
+            count += 1
+            if count >= self.tokenizer_train_samples:
+                break
+        
+        print(f"Collected {len(corpus_buffer)} samples. Starting BPE training...")
+
+        # 3. TRAIN: Use the in-memory buffer
+        tokenizer.train_from_iterator(corpus_buffer, trainer=trainer)
+        
+        # 4. COUNT: Use the same buffer to count frequencies
+        # Now that tokenizer is trained, we can check what it learned
+        print("Training complete. Counting token frequencies...")
+        token_counts = Counter()
+        
+        # Batch encoding is much faster than looping
+        # We encode in chunks to be safe with RAM if samples are huge
+        chunk_size = 1000
+        for i in range(0, len(corpus_buffer), chunk_size):
+            batch = corpus_buffer[i : i + chunk_size]
+            encodings = tokenizer.encode_batch(batch)
+            for enc in encodings:
+                token_counts.update(enc.ids)
+
+        # 5. SAVE: Save both tokenizer and counts
         tokenizer.save(self.tokenizer_path)
-        print(f"Tokenizer trained and saved to {self.tokenizer_path} with vocab size {tokenizer.get_vocab_size()}")
+        
+        counts_path = self.tokenizer_path.replace(".json", "_counts.json")
+        
+        # Sort by count descending (largest at top, smallest at bottom)
+        # Note: Python 3.7+ preserves insertion order.
+        sorted_counts = dict(sorted(token_counts.items(), key=lambda item: item[1], reverse=True))
+        
+        with open(counts_path, "w") as f:
+            # Convert int keys to string for valid JSON
+            # We must iterate over the *sorted* dict to preserve order in the new string-keyed dict
+            json.dump({str(k): v for k, v in sorted_counts.items()}, f, indent=2)
+
+        print(f"Tokenizer saved to {self.tokenizer_path}")
+        print(f"Token counts saved to {counts_path}")
+        
         return tokenizer
 
     def _initialize_corruptor(self) -> None:
@@ -127,7 +169,7 @@ class CosmopediaProvider(DataProviderBase):
             
         # Identify excluded tokens (specials)
         excluded_ids = set()
-        for token in ["[PAD]", "[UNK]", "[SEP]", "[CLS]", "[MASK]"]:
+        for token in ["[PAD]", "[UNK]", "[SEP]", "[CLS]", "[MASK]", "[BOS]", "[EOS]"]:
             tid = self.tokenizer.token_to_id(token)
             if tid is not None:
                 excluded_ids.add(tid)
@@ -136,6 +178,15 @@ class CosmopediaProvider(DataProviderBase):
             self.tokenizer.get_vocab_size(), 
             excluded_token_ids=excluded_ids
         )
+        
+        # Also store BOS/EOS ids for later use in buffer refilling
+        self.bos_token_id = self.tokenizer.token_to_id("[BOS]")
+        self.eos_token_id = self.tokenizer.token_to_id("[EOS]")
+
+        if self.bos_token_id is None or self.eos_token_id is None:
+             # Fallback if they are not found (though they should be in special_tokens list during training)
+             # But the user logic strictly requires them.
+             print("Warning: [BOS] or [EOS] token not found in tokenizer. This might cause issues if they are expected.")
         
         self._corruptor = RandomReplacementCorruptor(
             candidate_ids,
@@ -350,6 +401,14 @@ class CosmopediaProvider(DataProviderBase):
         # 2. Fetch sequences
         sequences_x = []
         pad_id = self.pad_token_id if self.pad_token_id is not None else 0
+        bos_id = self.bos_token_id if self.bos_token_id is not None else self.tokenizer.token_to_id("[BOS]")
+        eos_id = self.eos_token_id if self.eos_token_id is not None else self.tokenizer.token_to_id("[EOS]")
+        
+        # Effective max length for content is block_size - 2 (for BOS and EOS)
+        # If block_size is small, this might be tight.
+        max_content_len = self.block_size - 2
+        if max_content_len < 1:
+            raise ValueError(f"Block size {self.block_size} is too small to hold [BOS], content, and [EOS].")
 
         while len(sequences_x) < total_sequences_needed:
             text = next(self._stream)
@@ -359,15 +418,28 @@ class CosmopediaProvider(DataProviderBase):
                 self.tokenizer.model.dropout = self.bpe_dropout if split == 'train' else 0.0
                 
             ids = self.tokenizer.encode(text).ids
-            if len(ids) > self.block_size:
-                ids = ids[:self.block_size]
             
-            row = torch.tensor(ids, dtype=torch.long)
-            if len(ids) < self.block_size:
-                needed = self.block_size - len(ids)
-                padding = torch.full((needed,), pad_id, dtype=torch.long)
-                row = torch.cat([row, padding])
-            sequences_x.append(row)
+            # Truncate content if needed
+            if len(ids) > max_content_len:
+                ids = ids[:max_content_len]
+            
+            # Build sequence: [BOS] + content + [EOS]
+            row_list = []
+            if bos_id is not None:
+                row_list.append(bos_id)
+            row_list.extend(ids)
+            if eos_id is not None:
+                row_list.append(eos_id)
+                
+            # Pad if needed
+            current_len = len(row_list)
+            if current_len < self.block_size:
+                needed = self.block_size - current_len
+                # Important: EOS is always before PAD. We already added EOS above.
+                # Just append PADs now.
+                row_list.extend([pad_id] * needed)
+            
+            sequences_x.append(torch.tensor(row_list, dtype=torch.long))
 
         all_x = torch.stack(sequences_x) # [total_seqs, block_size]
         
@@ -419,8 +491,25 @@ class CosmopediaProvider(DataProviderBase):
             y = batch_x_slice.clone()
             
             # Enforce padding integrity (padding should not be masked or corrupted)
-            is_padding = (batch_x_slice == pad_id)
-            final_corrupted_x[is_padding] = pad_id # restore pads if corrupted
+            # Enforce integrity of special tokens (PAD, BOS, EOS)
+            # They should NEVER be masked or corrupted.
+            # 1. Update mask to exclude them (so we don't try to predict them if we were using partial targets based on mask, 
+            #    though for partial targets y is based on stage_mask)
+            # 2. Restore them in final_corrupted_x
+            
+            protected_mask = (batch_x_slice == pad_id)
+            if bos_id is not None:
+                protected_mask |= (batch_x_slice == bos_id)
+            if eos_id is not None:
+                protected_mask |= (batch_x_slice == eos_id)
+            
+            # Ensure stage_mask does not include protected tokens
+            # (In case random masking selected them)
+            stage_mask = stage_mask & (~protected_mask)
+            
+            # Restore protected tokens in the corrupted input
+            # This undoes any corruption that might have happened to them
+            final_corrupted_x[protected_mask] = batch_x_slice[protected_mask]
             
             if not self._dataset_partial_targets:
                  y[is_padding] = -100
