@@ -102,6 +102,9 @@ class CosmopediaProvider(DataProviderBase):
         tokenizer.decoder = decoders.ByteLevel()
         
         special_tokens = ["[PAD]", "[UNK]", "[SEP]", "[CLS]", "[MASK]", "[DEL]", "[EOS]", "[BOS]"]
+        # Add noise level tokens
+        for i in range(1, 11):
+            special_tokens.append(f"[NOISE{i}]")
         
         trainer = trainers.BpeTrainer(
             vocab_size=self.vocab_size,
@@ -172,6 +175,25 @@ class CosmopediaProvider(DataProviderBase):
         if self.mask_token_id is None:
             raise ValueError("Tokenizer must have [MASK] token")
             
+        # Ensure Noise Tokens exist (for backward compatibility with existing tokenizers)
+        base_noise_token = "[NOISE1]"
+        if self.tokenizer.token_to_id(base_noise_token) is None:
+            print("Adding missing noise tokens to tokenizer...")
+            new_tokens = [f"[NOISE{i}]" for i in range(1, 11)]
+            self.tokenizer.add_special_tokens(new_tokens)
+            self.tokenizer.save(self.tokenizer_path)
+            # We also might need to update counts? No, counts are for vocab learning.
+            # But the vocab size in meta might need updating if we are strict.
+            # self.vocab_size usually fixed, but tokenizer.get_vocab_size() changes.
+            print(f"Added {len(new_tokens)} noise tokens. New vocab size: {self.tokenizer.get_vocab_size()}")
+
+        self.noise_token_ids = []
+        for i in range(1, 11):
+            tid = self.tokenizer.token_to_id(f"[NOISE{i}]")
+            if tid is None:
+                raise ValueError(f"Token [NOISE{i}] missing after addition attempt")
+            self.noise_token_ids.append(tid)
+
         # Initialize rare tokens
         self._load_rare_tokens()
             
@@ -181,6 +203,10 @@ class CosmopediaProvider(DataProviderBase):
             tid = self.tokenizer.token_to_id(token)
             if tid is not None:
                 excluded_ids.add(tid)
+        
+        # Also exclude noise tokens from being candidates for random replacement
+        for tid in self.noise_token_ids:
+            excluded_ids.add(tid)
         
         candidate_ids = build_candidate_token_ids(
             self.tokenizer.get_vocab_size(), 
@@ -461,11 +487,11 @@ class CosmopediaProvider(DataProviderBase):
         bos_id = self.bos_token_id if self.bos_token_id is not None else self.tokenizer.token_to_id("[BOS]")
         eos_id = self.eos_token_id if self.eos_token_id is not None else self.tokenizer.token_to_id("[EOS]")
         
-        # Effective max length for content is block_size - 2 (for BOS and EOS)
+        # Effective max length for content is block_size - 3 (for BOS, NOISE, and EOS)
         # If block_size is small, this might be tight.
-        max_content_len = self.block_size - 2
+        max_content_len = self.block_size - 3
         if max_content_len < 1:
-            raise ValueError(f"Block size {self.block_size} is too small to hold [BOS], content, and [EOS].")
+            raise ValueError(f"Block size {self.block_size} is too small to hold [BOS], [NOISE], content, and [EOS].")
 
         while len(sequences_x) < total_sequences_needed:
             text = next(self._stream)
@@ -485,10 +511,14 @@ class CosmopediaProvider(DataProviderBase):
             if len(ids) > max_content_len:
                 ids = ids[:max_content_len]
             
-            # Build sequence: [BOS] + content + [EOS]
+            # Build sequence: [BOS] + [NOISE_PLACEHOLDER] + content + [EOS]
+            # using pad_id as placeholder (will be protected from corruption)
             row_list = []
             if bos_id is not None:
                 row_list.append(bos_id)
+            
+            row_list.append(pad_id) # Placeholder for noise token
+            
             row_list.extend(ids)
             if eos_id is not None:
                 row_list.append(eos_id)
@@ -584,6 +614,37 @@ class CosmopediaProvider(DataProviderBase):
                  # Partial targets (only predict masked)
                  y = torch.where(stage_mask, batch_x_slice, torch.tensor(-100, dtype=torch.long))
 
+            # --- Inject Noise Token Logic ---
+            # Calculate ratio of mismatch: input (final_corrupted_x) vs target/original (batch_x_slice)
+            # Placeholder is at index 1 (if BOS) or 0 (if no BOS).
+            # Both final_corrupted_x and batch_x_slice have PAD at the placeholder position (since it was protected).
+            # So diffs are purely from corruption.
+            
+            diff_mask = (final_corrupted_x != batch_x_slice)
+            diff_counts = diff_mask.sum(dim=1).float()
+            seq_len = float(final_corrupted_x.shape[1])
+            ratios = diff_counts / seq_len
+            
+            # Formula: 1-10% -> 1, ..., 91-100% -> 10.
+            # ceil(ratio * 10)
+            noise_indices = torch.ceil(ratios * 10).long()
+            # Map 0 to NOISE1, and ensure range 1-10
+            noise_indices = torch.clamp(noise_indices, 1, 10) 
+            
+            # Convert computed indices to token IDs
+            # noise_token_ids[0] is [NOISE1]
+            if hasattr(self, 'noise_token_ids') and self.noise_token_ids:
+                noise_ids_tensor = torch.tensor(self.noise_token_ids, dtype=torch.long, device=final_corrupted_x.device)
+                
+                # noise_indices is now always >= 1, so we always have a token to insert
+                # Subtract 1 because noise_indices 1 maps to noise_token_ids[0]
+                tokens_to_insert = noise_ids_tensor[noise_indices - 1]
+                
+                target_idx = 1 if bos_id is not None else 0
+                final_corrupted_x[:, target_idx] = tokens_to_insert
+                # Ensure y ignores this position
+                y[:, target_idx] = -100
+
             collected_mixed_batches.append({'x': final_corrupted_x, 'y': y})
             
         # 4. Shuffle the batches? 
@@ -627,7 +688,7 @@ class CosmopediaProvider(DataProviderBase):
         return {
             "dataset_name": "cosmopedia",
             "training_type": "MLM",
-            "vocab_size": self.vocab_size,
+            "vocab_size": self.tokenizer.get_vocab_size(),
             "tokenizer_path": self.tokenizer_path,
             "stoi": stoi,
             "itos": itos,

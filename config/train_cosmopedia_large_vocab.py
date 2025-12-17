@@ -38,9 +38,9 @@ beta2 = 0.99
 warmup_iters = 500
 
 # Model architecture
-n_layer = 6
+n_layer = 10
 n_head = 6
-n_embd = 768
+n_embd = 384
 dropout = 0.1
 dtype = 'float16'
 

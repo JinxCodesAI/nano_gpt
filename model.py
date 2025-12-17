@@ -239,6 +239,8 @@ class GPT(nn.Module):
         x = self.transformer.ln_f(x)
 
         if targets is not None:
+            # We must compute logits if we have targets for loss
+            logits = self.lm_head(x)
             loss = F.cross_entropy(logits.view(-1, logits.size(-1)), targets.view(-1), ignore_index=self.config.ignore_index)
             # auxiliary loss: calc cross entropy loss over only targets that do not equal inputs
             # inputs are 'idx', targets are 'targets'
@@ -249,6 +251,9 @@ class GPT(nn.Module):
                 else:
                     aux_loss = torch.tensor(0.0, device=device)
         else:
+            # optimization: during inference we might only need the last token?
+            # but simpler to just compute all for now
+            logits = self.lm_head(x)
             loss = None
             aux_loss = None
 
