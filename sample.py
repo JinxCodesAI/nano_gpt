@@ -110,7 +110,7 @@ with torch.no_grad():
             last_insert_indices: List[int] = []
             last_delete_indices: List[int] = []
 
-            logits, _ = model(x)
+            logits, _, _ = model(x)
             last_log_probs = torch.log_softmax(logits, dim=-1).detach()
             display = DiffusionDisplay(decode)
 
@@ -214,7 +214,7 @@ with torch.no_grad():
                     ratio=beta_s,
                     device=device,
                 )
-                logits, _ = model(x)
+                logits, _, _ = model(x)
                 logits = logits / temperature
 
                 # Convert logits to log-probabilities for every token position, then exponentiate

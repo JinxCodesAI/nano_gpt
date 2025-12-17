@@ -79,7 +79,7 @@ if profile:
         X, Y = get_batch('train')
         for k in range(num_steps):
             with ctx:
-                logits, loss = model(X, Y)
+                logits, loss, _ = model(X, Y)
             X, Y = get_batch('train')
             optimizer.zero_grad(set_to_none=True)
             loss.backward()
@@ -98,7 +98,7 @@ else:
         X, Y = get_batch('train')
         for k in range(num_steps):
             with ctx:
-                logits, loss = model(X, Y)
+                logits, loss, _ = model(X, Y)
             X, Y = get_batch('train')
             optimizer.zero_grad(set_to_none=True)
             loss.backward()

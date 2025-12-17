@@ -238,13 +238,21 @@ class GPT(nn.Module):
             x = block(x)
         x = self.transformer.ln_f(x)
 
-        logits = self.lm_head(x)
         if targets is not None:
             loss = F.cross_entropy(logits.view(-1, logits.size(-1)), targets.view(-1), ignore_index=self.config.ignore_index)
+            # auxiliary loss: calc cross entropy loss over only targets that do not equal inputs
+            # inputs are 'idx', targets are 'targets'
+            with torch.no_grad():
+                mask = (idx != targets) & (targets != self.config.ignore_index)
+                if mask.any():
+                    aux_loss = F.cross_entropy(logits[mask], targets[mask])
+                else:
+                    aux_loss = torch.tensor(0.0, device=device)
         else:
             loss = None
+            aux_loss = None
 
-        return logits, loss
+        return logits, loss, aux_loss
 
     def crop_block_size(self, block_size):
         # model surgery to decrease the block size if necessary

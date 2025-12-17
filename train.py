@@ -211,17 +211,21 @@ if ddp:
 
 # helps estimate an arbitrarily accurate loss over either split using many batches
 @torch.no_grad()
+@torch.no_grad()
 def estimate_loss():
     out = {}
     model.eval()
     for split in ['train', 'val']:
         losses = torch.zeros(eval_iters)
+        aux_losses = torch.zeros(eval_iters)
         for k in range(eval_iters):
             X, Y = consumer.get_batch(split, device)
             with ctx:
-                logits, loss = model(X, Y)
+                logits, loss, aux_loss = model(X, Y)
             losses[k] = loss.item()
+            aux_losses[k] = aux_loss.item()
         out[split] = losses.mean()
+        out[f'{split}_aux'] = aux_losses.mean()
     model.train()
     return out
 
@@ -262,12 +266,14 @@ while True:
     # evaluate the loss on train/val sets and write checkpoints
     if iter_num % eval_interval == 0 and master_process:
         losses = estimate_loss()
-        print(f"step {iter_num}: train loss {losses['train']:.4f}, val loss {losses['val']:.4f}")
+        print(f"step {iter_num}: train loss {losses['train']:.4f}, val loss {losses['val']:.4f}, train aux {losses['train_aux']:.4f}, val aux {losses['val_aux']:.4f}")
         if wandb_log:
             wandb.log({
                 "iter": iter_num,
                 "train/loss": losses['train'],
                 "val/loss": losses['val'],
+                "train/aux_loss": losses['train_aux'],
+                "val/aux_loss": losses['val_aux'],
                 "lr": lr,
                 "mfu": running_mfu*100, # convert to percentage
                 "mfu_head": running_mfu_head*100,
@@ -291,7 +297,7 @@ while True:
             # looking at the source of that context manager, it just toggles this variable
             model.require_backward_grad_sync = (micro_step == gradient_accumulation_steps - 1)
         with ctx:
-            logits, loss = model(X, Y)
+            logits, loss, aux_loss = model(X, Y)
             loss = loss / gradient_accumulation_steps # scale the loss to account for gradient accumulation
         # immediately async prefetch next batch while model is doing the forward pass on the GPU
         X, Y = consumer.get_batch('train', device)
@@ -312,6 +318,7 @@ while True:
         # get loss as float. note: this is a CPU-GPU sync point
         # scale up to undo the division above, approximating the true total loss (exact would have been a sum)
         lossf = loss.item() * gradient_accumulation_steps
+        aux_lossf = aux_loss.item()
         if device_type == 'cuda':
             torch.cuda.synchronize()
         t1 = time.time()
@@ -324,14 +331,15 @@ while True:
             mfu, mfu_head = raw_model.estimate_mfu(batch_size * gradient_accumulation_steps, dt_avg)
             running_mfu = mfu if running_mfu == -1.0 else 0.9*running_mfu + 0.1*mfu
             running_mfu_head = mfu_head if running_mfu_head == -1.0 else 0.9*running_mfu_head + 0.1*mfu_head
-            print(f"iter {iter_num}: loss {lossf:.4f}, time {dt_avg*1000:.2f}ms, mfu {running_mfu*100:.2f}% (head {running_mfu_head*100:.2f}%)")
+            print(f"iter {iter_num}: loss {lossf:.4f}, aux {aux_lossf:.4f}, time {dt_avg*1000:.2f}ms, mfu {running_mfu*100:.2f}% (head {running_mfu_head*100:.2f}%)")
         else:
-            print(f"iter {iter_num}: loss {lossf:.4f}")
+            print(f"iter {iter_num}: loss {lossf:.4f}, aux {aux_lossf:.4f}")
 
         if wandb_log:
             wandb.log({
                 "iter": iter_num,
                 "train/loss": lossf,
+                "train/aux_loss": aux_lossf,
                 "mfu": running_mfu*100, # convert to percentage
                 "mfu_head": running_mfu_head*100,
             })
