@@ -44,12 +44,15 @@ class CosmopediaProvider(DataProviderBase):
 
         validation_stages: Optional[List[Dict]] = None,
         bpe_dropout: float = 0.0,
+        min_token_count: int = -1,
         **kwargs,
     ) -> None:
         super().__init__(*args, **kwargs)
         self.vocab_size = int(vocab_size)
         self.tokenizer_train_samples = int(tokenizer_train_samples)
         self.bpe_dropout = float(bpe_dropout)
+        self.min_token_count = int(min_token_count)
+        
         
         # Corruption params
         self._original_multiplier = float(original_token_probability_multiplier)
@@ -164,8 +167,13 @@ class CosmopediaProvider(DataProviderBase):
         # Get special token IDs
         self.mask_token_id = self.tokenizer.token_to_id("[MASK]")
         self.pad_token_id = self.tokenizer.token_to_id("[PAD]")
+        self.unk_token_id = self.tokenizer.token_to_id("[UNK]")
+        
         if self.mask_token_id is None:
             raise ValueError("Tokenizer must have [MASK] token")
+            
+        # Initialize rare tokens
+        self._load_rare_tokens()
             
         # Identify excluded tokens (specials)
         excluded_ids = set()
@@ -198,6 +206,55 @@ class CosmopediaProvider(DataProviderBase):
 
     def _build_fragment_sampler(self):
          return lambda bs, rng: torch.full((bs, self.block_size), self.mask_token_id, dtype=torch.long)
+
+    def _load_rare_tokens(self) -> None:
+        """
+        Loads rare tokens based on min_token_count if counts file exists.
+        """
+        self.rare_token_ids = set()
+        
+        if self.min_token_count < 0:
+            return
+            
+        import json
+        counts_path = self.tokenizer_path.replace(".json", "_counts.json")
+        
+        if not os.path.exists(counts_path):
+            if self.verbose:
+                print(f"Counts file not found at {counts_path}, skipping rare token masking.")
+            return
+            
+        try:
+            with open(counts_path, "r") as f:
+                counts = json.load(f)
+            
+            # Counts keys are strings of token IDs
+            count_hits = 0
+            for tid_str, count in counts.items():
+                if count < self.min_token_count:
+                    # Explicitly checking against threshold
+                    tid = int(tid_str)
+                    self.rare_token_ids.add(tid)
+                    count_hits += 1
+            
+            if self.verbose:
+                print(f"Identified {count_hits} rare tokens (count < {self.min_token_count}) to be masked as [UNK].")
+                
+        except Exception as e:
+            print(f"Error loading token counts for rare token masking: {e}")
+
+    def _apply_rare_token_masking(self, ids: List[int]) -> List[int]:
+        """
+        Replaces rare tokens with [UNK] token ID.
+        """
+        if not self.rare_token_ids or self.unk_token_id is None:
+            return ids
+        
+        # Fast path if no overlap? Usually checking dict/set is fast enough.
+        # We modify in place or return new list? New list probably safer or list comp.
+        
+        # Logic: if id in rare_token_ids -> unk_token_id
+        return [self.unk_token_id if tid in self.rare_token_ids else tid for tid in ids]
 
     def _validate_stage_config(self):
         """Validate stage configuration."""
@@ -419,6 +476,11 @@ class CosmopediaProvider(DataProviderBase):
                 
             ids = self.tokenizer.encode(text).ids
             
+            # Apply Rare Token Masking
+            # This happens after encoding but before any truncation or special wrapping
+            if self.min_token_count > -1:
+                ids = self._apply_rare_token_masking(ids)
+            
             # Truncate content if needed
             if len(ids) > max_content_len:
                 ids = ids[:max_content_len]
@@ -512,6 +574,7 @@ class CosmopediaProvider(DataProviderBase):
             final_corrupted_x[protected_mask] = batch_x_slice[protected_mask]
             
             if not self._dataset_partial_targets:
+                 is_padding = (batch_x_slice == pad_id)
                  y[is_padding] = -100
                  # For full targets, we want to predict everything (except padding)
                  # Wait, Reference: `torch.where(mask, original_x, self.ignore_index)` for partial

@@ -21,8 +21,9 @@ data_stream_verbose = True
 
 # Tokenizer / Data settings
 vocab_size = 32768
-tokenizer_train_samples = 100000 # Configurable limit for tokenizer training
+tokenizer_train_samples = 1000000 # Configurable limit for tokenizer training
 bpe_dropout = 0.1 # BPE Dropout probability for training
+min_token_count = 100
 
 # Training settings
 gradient_accumulation_steps = 4

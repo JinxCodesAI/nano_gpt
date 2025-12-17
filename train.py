@@ -251,6 +251,7 @@ t0 = time.time()
 local_iter_num = 0 # number of iterations in the lifetime of this process
 raw_model = model.module if ddp else model # unwrap DDP container if needed
 running_mfu = -1.0
+running_mfu_head = -1.0
 while True:
 
     # determine and set the learning rate for this iteration
@@ -269,6 +270,7 @@ while True:
                 "val/loss": losses['val'],
                 "lr": lr,
                 "mfu": running_mfu*100, # convert to percentage
+                "mfu_head": running_mfu_head*100,
             })
         if losses['val'] < best_val_loss or always_save_checkpoint:
             best_val_loss = losses['val']
@@ -319,9 +321,10 @@ while True:
             # calculate average time per iteration
             steps_log = 1 if iter_num == 0 else log_interval
             dt_avg = dt / steps_log
-            mfu = raw_model.estimate_mfu(batch_size * gradient_accumulation_steps, dt_avg)
+            mfu, mfu_head = raw_model.estimate_mfu(batch_size * gradient_accumulation_steps, dt_avg)
             running_mfu = mfu if running_mfu == -1.0 else 0.9*running_mfu + 0.1*mfu
-            print(f"iter {iter_num}: loss {lossf:.4f}, time {dt_avg*1000:.2f}ms, mfu {running_mfu*100:.2f}%")
+            running_mfu_head = mfu_head if running_mfu_head == -1.0 else 0.9*running_mfu_head + 0.1*mfu_head
+            print(f"iter {iter_num}: loss {lossf:.4f}, time {dt_avg*1000:.2f}ms, mfu {running_mfu*100:.2f}% (head {running_mfu_head*100:.2f}%)")
         else:
             print(f"iter {iter_num}: loss {lossf:.4f}")
 
@@ -330,6 +333,7 @@ while True:
                 "iter": iter_num,
                 "train/loss": lossf,
                 "mfu": running_mfu*100, # convert to percentage
+                "mfu_head": running_mfu_head*100,
             })
     iter_num += 1
     checkpoint_manager.update_progress(iter_num=iter_num, best_val_loss=best_val_loss)
