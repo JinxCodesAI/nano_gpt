@@ -136,17 +136,18 @@ class BidirectionalSelfAttention(nn.Module):
         return y
 
 class MLP(nn.Module):
-
     def __init__(self, config):
         super().__init__()
-        self.c_fc    = nn.Linear(config.n_embd, 4 * config.n_embd, bias=config.bias)
-        self.gelu    = nn.GELU()
-        self.c_proj  = nn.Linear(4 * config.n_embd, config.n_embd, bias=config.bias)
+        hidden_dim = int(config.mlp_ratio * config.n_embd)
+
+        # 2× hidden for gating
+        self.c_fc = nn.Linear(config.n_embd, 2 * hidden_dim, bias=config.bias)
+        self.c_proj = nn.Linear(hidden_dim, config.n_embd, bias=config.bias)
         self.dropout = nn.Dropout(config.dropout)
 
     def forward(self, x):
-        x = self.c_fc(x)
-        x = self.gelu(x)
+        x, gate = self.c_fc(x).chunk(2, dim=-1)
+        x = x * F.silu(gate)   # SwiGLU
         x = self.c_proj(x)
         x = self.dropout(x)
         return x
@@ -177,6 +178,8 @@ class GPTConfig:
     dropout: float = 0.0
     bias: bool = True # True: bias in Linears and LayerNorms. False: a bit better and faster
     ignore_index: int = -100 # Standard PyTorch ignore index for loss computation
+    embed_dim_low: int = 128
+    mlp_ratio: float = 2.5
 
 class GPT(nn.Module):
 
@@ -188,26 +191,26 @@ class GPT(nn.Module):
 
         # Create transformer components
         transformer_components = dict(
-            wte = nn.Embedding(config.vocab_size, config.n_embd),
+            wte = nn.Embedding(config.vocab_size, config.embed_dim_low),
             drop = nn.Dropout(config.dropout),
             h = nn.ModuleList([Block(config) for _ in range(config.n_layer)]),
             ln_f = LayerNorm(config.n_embd, bias=config.bias),
         )
 
         self.transformer = nn.ModuleDict(transformer_components)
-        self.lm_head = nn.Linear(config.n_embd, config.vocab_size, bias=False)
-        # with weight tying when using torch.compile() some warnings get generated:
-        # "UserWarning: functional_call was passed multiple values for tied weights.
-        # This behavior is deprecated and will be an error in future versions"
-        # not 100% sure what this is, so far seems to be harmless. TODO investigate
-        self.transformer.wte.weight = self.lm_head.weight # https://paperswithcode.com/method/weight-tying
-
+        self.transformer = nn.ModuleDict(transformer_components)
+        self.embed_proj = nn.Linear(config.embed_dim_low, config.n_embd, bias=False)
+        self.lm_head = nn.Linear(config.embed_dim_low, config.vocab_size, bias=False)
         # init all weights
         self.apply(self._init_weights)
         # apply special scaled init to the residual projections, per GPT-2 paper
         for pn, p in self.named_parameters():
             if pn.endswith('c_proj.weight'):
                 torch.nn.init.normal_(p, mean=0.0, std=0.02/math.sqrt(2 * config.n_layer))
+
+        # Weight tying
+        self.lm_head.weight = self.transformer.wte.weight
+        # self.lm_proj is replaced by F.linear(x, self.embed_proj.weight.T)
 
         # report number of parameters
         print("number of parameters: %.2fM" % (self.get_num_params()/1e6,))
@@ -231,7 +234,8 @@ class GPT(nn.Module):
         assert t <= self.config.block_size, f"Cannot forward sequence of length {t}, block size is only {self.config.block_size}"
 
         # forward the GPT model itself
-        tok_emb = self.transformer.wte(idx) # token embeddings of shape (b, t, n_embd)
+        # forward the GPT model itself
+        tok_emb = self.embed_proj(self.transformer.wte(idx)) # token embeddings of shape (b, t, n_embd)
         x = self.transformer.drop(tok_emb)
             
         for block in self.transformer.h:
@@ -240,7 +244,9 @@ class GPT(nn.Module):
 
         if targets is not None:
             # We must compute logits if we have targets for loss
-            logits = self.lm_head(x)
+            # project back to embed_dim_low, using the transpose of embed_proj
+            x_low = F.linear(x, self.embed_proj.weight.T)
+            logits = self.lm_head(x_low)
             loss = F.cross_entropy(logits.view(-1, logits.size(-1)), targets.view(-1), ignore_index=self.config.ignore_index)
             # auxiliary loss: calc cross entropy loss over only targets that do not equal inputs
             # inputs are 'idx', targets are 'targets'
@@ -253,7 +259,9 @@ class GPT(nn.Module):
         else:
             # optimization: during inference we might only need the last token?
             # but simpler to just compute all for now
-            logits = self.lm_head(x)
+            # project back to embed_dim_low, using the transpose of embed_proj
+            x_low = F.linear(x, self.embed_proj.weight.T)
+            logits = self.lm_head(x_low)
             loss = None
             aux_loss = None
 
@@ -305,7 +313,7 @@ class GPT(nn.Module):
         flops_per_token = (
             6 * N
             + 12 * L * H * Q * T
-            + 2 * cfg.vocab_size * cfg.n_embd
+            + 2 * cfg.vocab_size * cfg.embed_dim_low
         )
 
         flops_per_fwdbwd = flops_per_token * T
@@ -315,7 +323,7 @@ class GPT(nn.Module):
         flops_promised = 30e12
         mfu = flops_achieved / flops_promised
 
-        flops_decoding_per_token = 2 * cfg.vocab_size * cfg.n_embd
+        flops_decoding_per_token = 2 * cfg.vocab_size * cfg.embed_dim_low
         mfu_decoding = (
             flops_decoding_per_token * T * fwdbwd_per_iter / dt
         ) / flops_promised

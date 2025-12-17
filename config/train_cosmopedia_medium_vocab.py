@@ -20,7 +20,7 @@ dataset = 'cosmopedia'
 data_stream_verbose = True
 
 # Tokenizer / Data settings
-vocab_size = 32768
+vocab_size = 16384
 tokenizer_train_samples = 1000000 # Configurable limit for tokenizer training
 bpe_dropout = 0.1 # BPE Dropout probability for training
 min_token_count = 100
@@ -43,7 +43,7 @@ n_head = 6
 n_embd = 384
 dropout = 0.1
 dtype = 'float16'
-embed_dim_low = 128
+embed_dim_low = 96
 mlp_ratio = 2.5
 
 training_type = 'MLM' 

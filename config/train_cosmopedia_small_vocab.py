@@ -43,6 +43,8 @@ n_head = 6
 n_embd = 768
 dropout = 0.1
 dtype = 'float16'
+embed_dim_low = 128
+mlp_ratio = 2.5
 
 training_type = 'MLM' 
 
