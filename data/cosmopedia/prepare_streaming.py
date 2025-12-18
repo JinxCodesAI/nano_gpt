@@ -28,20 +28,28 @@ class BufferedIterator:
     """
     Buffers items from an iterator using a background thread and a queue.
     This allows prefetching data (e.g. from network) while the main thread is processing.
+    Stores chunks of items to reduce queue overhead.
     """
-    def __init__(self, iterator, buffer_size=1000):
+    def __init__(self, iterator, buffer_size=1000, chunk_size=100):
         self.iterator = iterator
-        self.queue = queue.Queue(maxsize=buffer_size)
+        self.queue = queue.Queue(maxsize=max(1, buffer_size // chunk_size))
+        self.chunk_size = chunk_size
         self.stop_event = threading.Event()
         self.thread = threading.Thread(target=self._fill_buffer, daemon=True)
         self.thread.start()
 
     def _fill_buffer(self):
         try:
+            chunk = []
             for item in self.iterator:
                 if self.stop_event.is_set():
                     break
-                self.queue.put(item)
+                chunk.append(item)
+                if len(chunk) >= self.chunk_size:
+                    self.queue.put(chunk)
+                    chunk = []
+            if chunk:
+                self.queue.put(chunk)
             self.queue.put(None) # Sentinel for success
         except Exception as e:
             self.queue.put(e) # Sentinel for error
@@ -55,7 +63,7 @@ class BufferedIterator:
             raise StopIteration
         if isinstance(item, Exception):
             raise item
-        return item
+        return item # Returns a list (chunk)
 
 class CosmopediaProvider(DataProviderBase):
     """
@@ -81,6 +89,7 @@ class CosmopediaProvider(DataProviderBase):
         min_token_count: int = -1,
         batch_items_per_sample: int = 1,
         buffer_size: int = 1000,
+        buffer_chunk_size: int = 1024,
         **kwargs,
     ) -> None:
         super().__init__(*args, **kwargs)
@@ -90,6 +99,7 @@ class CosmopediaProvider(DataProviderBase):
         self.min_token_count = int(min_token_count)
         self.batch_items_per_sample = int(batch_items_per_sample)
         self.buffer_size = int(buffer_size)
+        self.buffer_chunk_size = int(buffer_chunk_size)
 
         if self.batch_size % self.batch_items_per_sample != 0:
             raise ValueError(f"batch_size ({self.batch_size}) must be divisible by batch_items_per_sample ({self.batch_items_per_sample})")
@@ -160,12 +170,16 @@ class CosmopediaProvider(DataProviderBase):
         corpus_buffer = []
         count = 0
         
-        # We assume _stream_from_configs yields strings
+        # We assume _stream_from_configs yields chunks of strings
         stream_iter = self._stream_from_configs(self.DEFAULT_CONFIGS, infinite=False)
         
-        for text in stream_iter:
-            corpus_buffer.append(text+"\n")
-            count += 1
+        for chunk in stream_iter:
+            # We iterate through the chunk
+            for text in chunk:
+                corpus_buffer.append(text+"\n")
+                count += 1
+                if count >= self.tokenizer_train_samples:
+                    break
             if count >= self.tokenizer_train_samples:
                 break
         
@@ -277,8 +291,10 @@ class CosmopediaProvider(DataProviderBase):
     def _load_rare_tokens(self) -> None:
         """
         Loads rare tokens based on min_token_count if counts file exists.
+        Precomputes a dense mapping tensor for vectorized masking.
         """
         self.rare_token_ids = set()
+        self.rare_token_map = None # Tensor mapping: id -> unk_id or id
         
         if self.min_token_count < 0:
             return
@@ -299,29 +315,46 @@ class CosmopediaProvider(DataProviderBase):
             count_hits = 0
             for tid_str, count in counts.items():
                 if count < self.min_token_count:
-                    # Explicitly checking against threshold
                     tid = int(tid_str)
                     self.rare_token_ids.add(tid)
                     count_hits += 1
             
             if self.verbose:
                 print(f"Identified {count_hits} rare tokens (count < {self.min_token_count}) to be masked as [UNK].")
+            
+            # Create vectorized map
+            vocab_size = self.tokenizer.get_vocab_size()
+            # Default: map x -> x
+            self.rare_token_map = torch.arange(vocab_size, dtype=torch.long)
+            # If tensor is on CPU, it's fine for now, we move to device usually later, 
+            # but prepare_streaming seems to run on CPU mostly (data gen).
+            
+            # Map rare -> unk
+            if self.unk_token_id is not None and self.rare_token_ids:
+                rare_indices = torch.tensor(list(self.rare_token_ids), dtype=torch.long)
+                self.rare_token_map[rare_indices] = self.unk_token_id
                 
         except Exception as e:
             print(f"Error loading token counts for rare token masking: {e}")
 
-    def _apply_rare_token_masking(self, ids: List[int]) -> List[int]:
+    def _apply_rare_token_masking_vectorized(self, ids_tensor: torch.Tensor) -> torch.Tensor:
         """
-        Replaces rare tokens with [UNK] token ID.
+        Replaces rare tokens with [UNK] token ID using vectorized lookup.
+        ids_tensor: [batch, len] or [len]
         """
-        if not self.rare_token_ids or self.unk_token_id is None:
-            return ids
+        if self.rare_token_map is None:
+            return ids_tensor
+            
+        # Ensure map is on same device (likely CPU)
+        if self.rare_token_map.device != ids_tensor.device:
+            self.rare_token_map = self.rare_token_map.to(ids_tensor.device)
+            
+        # Clamp to avoid index error if ids > vocab_size (safety)
+        max_id = self.rare_token_map.size(0) - 1
+        safe_ids = torch.clamp(ids_tensor, max=max_id)
         
-        # Fast path if no overlap? Usually checking dict/set is fast enough.
-        # We modify in place or return new list? New list probably safer or list comp.
-        
-        # Logic: if id in rare_token_ids -> unk_token_id
-        return [self.unk_token_id if tid in self.rare_token_ids else tid for tid in ids]
+        return self.rare_token_map[safe_ids]
+
 
     def _validate_stage_config(self):
         """Validate stage configuration."""
@@ -465,42 +498,52 @@ class CosmopediaProvider(DataProviderBase):
             stopping_strategy="all_exhausted"
         )
 
+        # Iterator for interleaved dataset
         iterator = iter(interleaved_ds)
 
         if self.buffer_size > 0:
             if self.verbose:
-                print(f"Buffering stream with size {self.buffer_size}...")
-            iterator = BufferedIterator(iterator, buffer_size=self.buffer_size)
-
-        
-        total_read = 0
-        LOG_INTERVAL = 1000
-
-        while True:
-            try:
-                 example = next(iterator)
+                 print(f"Buffering stream with size {self.buffer_size}, chunk_size={self.buffer_chunk_size}...")
+            # We use an internal variable to access the iterator directly in refill if we want structure,
+            # but _stream_from_configs is a generator.
+            buffered = BufferedIterator(iterator, buffer_size=self.buffer_size, chunk_size=self.buffer_chunk_size)
+            # We yield chunks from 'buffered'
+            for chunk in buffered:
+                # Update stats
+                for ex in chunk:
+                    source = ex.get('__source_config__', 'unknown')
+                    self.read_counts[source] += 1
+                    total_read += 1
+                
+                if total_read % LOG_INTERVAL < len(chunk): # Approx logging
+                     print(f"Read stats: {dict(self.read_counts)}")
+                
+                # The original filtered for `text`.
+                yield [ex.get('text', '') for ex in chunk if ex.get('text', '')]
+                
+        else:
+            # Fallback for no buffer (or tokenizer training if buffer_size=0?)
+            # Just yield chunks of 1 or similar to keep API consistent?
+            # Or keep original behavior?
+            # Best to harmonize: Always yield lists of strings.
+            buffer_acc = []
+            for example in iterator:
                  source = example.get('__source_config__', 'unknown')
                  self.read_counts[source] += 1
                  total_read += 1
                  
                  if total_read % LOG_INTERVAL == 0:
                      print(f"Read stats: {dict(self.read_counts)}")
-
+                 
                  text = example.get('text', '')
                  if text:
-                     yield text
-                     
-            except StopIteration:
-                if not infinite:
-                    break
-                # If infinite, we restart the whole thing? 
-                # _get_infinite_stream logic usually handles the while True loop.
-                # But here we are inside _stream_from_configs.
-                # If infinite=True, we should probably recreate the iterator or just break and let the caller loop?
-                # The previous implementation had `while True` around the config loop.
-                # datasets.interleave_datasets with 'all_exhausted' will finish when everything is done.
-                # So if infinite=True, we break the loop here, and the outer loop (if we add one) restarts.
-                break
+                     buffer_acc.append(text)
+                 
+                 if len(buffer_acc) >= self.buffer_chunk_size:
+                     yield buffer_acc
+                     buffer_acc = []
+            if buffer_acc:
+                yield buffer_acc
     
     # helper for infinite loop wrapper
     def _stream_infinite_wrapper(self, config_names):
@@ -546,47 +589,81 @@ class CosmopediaProvider(DataProviderBase):
              raise ValueError("total_sequences_needed not divisible by batch_items_per_sample")
         
         unique_needed = total_sequences_needed // self.batch_items_per_sample
+        unique_needed = total_sequences_needed // self.batch_items_per_sample
         unique_sequences_x = []
 
+        t_wait = 0.0
+        t_tokenize = 0.0
+        t_prepare = 0.0
+        
+        t0_loop = time.perf_counter()
+
         while len(unique_sequences_x) < unique_needed:
-            text = next(self._stream)
+            t0 = time.perf_counter()
+            # stream yields chunks now
+            try:
+                text_chunk = next(self._stream)
+            except StopIteration:
+                 # Should not happen in infinite loop wrapper, but if it does
+                 break
+            t1 = time.perf_counter()
+            t_wait += (t1 - t0)
             
             # Apply BPE Dropout if applicable
             if hasattr(self.tokenizer.model, 'dropout'):
                 self.tokenizer.model.dropout = self.bpe_dropout if split == 'train' else 0.0
+            
+            # Batch encode
+            # encode_batch returns List[Encoding]
+            # We assume text_chunk is List[str]
+            encodings = self.tokenizer.encode_batch(text_chunk)
+            
+            t2 = time.perf_counter()
+            t_tokenize += (t2 - t1)
+            
+            # Process each encoding
+            for enc in encodings:
+                ids = torch.tensor(enc.ids, dtype=torch.long)
                 
-            ids = self.tokenizer.encode(text).ids
-            
-            # Apply Rare Token Masking
-            # This happens after encoding but before any truncation or special wrapping
-            if self.min_token_count > -1:
-                ids = self._apply_rare_token_masking(ids)
-            
-            # Truncate content if needed
-            if len(ids) > max_content_len:
-                ids = ids[:max_content_len]
-            
-            # Build sequence: [BOS] + [NOISE_PLACEHOLDER] + content + [EOS]
-            # using pad_id as placeholder (will be protected from corruption)
-            row_list = []
-            if bos_id is not None:
-                row_list.append(bos_id)
-            
-            row_list.append(pad_id) # Placeholder for noise token
-            
-            row_list.extend(ids)
-            if eos_id is not None:
-                row_list.append(eos_id)
+                # Vectorized Rare Token Masking
+                if self.min_token_count > -1:
+                    ids = self._apply_rare_token_masking_vectorized(ids)
                 
-            # Pad if needed
-            current_len = len(row_list)
-            if current_len < self.block_size:
-                needed = self.block_size - current_len
-                # Important: EOS is always before PAD. We already added EOS above.
-                # Just append PADs now.
-                row_list.extend([pad_id] * needed)
+                # Truncate content if needed
+                if ids.size(0) > max_content_len:
+                    ids = ids[:max_content_len]
+                
+                # Construct sequence tensor
+                # We need to assemble [BOS, NOISE, ...ids..., EOS, PAD...]
+                # Pre-allocate buffer for speed? 
+                
+                row = torch.full((self.block_size,), pad_id, dtype=torch.long)
+                curr_pos = 0
+                if bos_id is not None:
+                    row[curr_pos] = bos_id
+                    curr_pos += 1
+                    
+                # Noise placeholder
+                row[curr_pos] = pad_id
+                curr_pos += 1
+                
+                # Content
+                l = ids.size(0)
+                row[curr_pos : curr_pos + l] = ids
+                curr_pos += l
+                
+                if eos_id is not None:
+                    row[curr_pos] = eos_id
+                    # curr_pos += 1
+                
+                # Padding is already filled by torch.full
+                
+                unique_sequences_x.append(row)
+                if len(unique_sequences_x) >= unique_needed:
+                    break
             
-            unique_sequences_x.append(torch.tensor(row_list, dtype=torch.long))
+            t3 = time.perf_counter()
+            t_prepare += (t3 - t2)
 
         # Expand unique sequences: reuse each one batch_items_per_sample times
         # We want distinct corruptions for each copy, so we just duplicate the CLEAN inputs here.
@@ -710,7 +787,20 @@ class CosmopediaProvider(DataProviderBase):
                 # Ensure y ignores this position
                 y[:, target_idx] = -100
 
+                y[:, target_idx] = -100
+
             collected_mixed_batches.append({'x': final_corrupted_x, 'y': y})
+            
+        t_corrupt = time.perf_counter() - t0_loop - t_wait - t_tokenize - t_prepare
+        
+        # Log aggregated stats
+        if self.verbose:
+             total_ms = (time.perf_counter() - t0_loop) * 1000
+             print(f"[profiler] refill {unique_needed} items: total={total_ms:.1f}ms | "
+                   f"wait={t_wait*1000:.1f}ms ({(t_wait*1000)/unique_needed:.2f}ms/it), "
+                   f"tok={t_tokenize*1000:.1f}ms, "
+                   f"prep={t_prepare*1000:.1f}ms, "
+                   f"corrupt={t_corrupt*1000:.1f}ms")
             
         # 4. Shuffle the batches? 
         # Reference `_refill_stage_mix_buffer` calls `torch.randperm` on the stacked rows and re-batches.

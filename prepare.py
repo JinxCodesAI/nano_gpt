@@ -111,7 +111,7 @@ def main() -> None:
     }
 
     # Pass through optional stage-composition knobs when defined.
-    for key in ("use_all_stages_for_training", "unmasking_stages", "validation_stages", "vocab_size", "tokenizer_train_samples", "bpe_dropout", "min_token_count"):
+    for key in ("use_all_stages_for_training", "unmasking_stages", "validation_stages", "vocab_size", "tokenizer_train_samples", "bpe_dropout", "min_token_count", "batch_items_per_sample"):
         if key in cfg:
             provider_kwargs[key] = cfg[key]
 
