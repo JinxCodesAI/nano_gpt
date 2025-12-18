@@ -4,6 +4,8 @@ from __future__ import annotations
 import os
 import time
 from typing import Any, Dict, Iterable, Optional, Tuple, Sequence, List
+import threading
+import queue
 from collections import defaultdict
 
 import torch
@@ -20,8 +22,40 @@ try:
     )
     from data.char_diffusion.masking_utils import apply_stage_masking
 except ImportError:
-    # Fallback or error handling if path is different, but strict plan says to use this
     raise ImportError("Could not import corruption_utils or masking_utils")
+
+class BufferedIterator:
+    """
+    Buffers items from an iterator using a background thread and a queue.
+    This allows prefetching data (e.g. from network) while the main thread is processing.
+    """
+    def __init__(self, iterator, buffer_size=1000):
+        self.iterator = iterator
+        self.queue = queue.Queue(maxsize=buffer_size)
+        self.stop_event = threading.Event()
+        self.thread = threading.Thread(target=self._fill_buffer, daemon=True)
+        self.thread.start()
+
+    def _fill_buffer(self):
+        try:
+            for item in self.iterator:
+                if self.stop_event.is_set():
+                    break
+                self.queue.put(item)
+            self.queue.put(None) # Sentinel for success
+        except Exception as e:
+            self.queue.put(e) # Sentinel for error
+
+    def __iter__(self):
+        return self
+
+    def __next__(self):
+        item = self.queue.get()
+        if item is None:
+            raise StopIteration
+        if isinstance(item, Exception):
+            raise item
+        return item
 
 class CosmopediaProvider(DataProviderBase):
     """
@@ -46,6 +80,7 @@ class CosmopediaProvider(DataProviderBase):
         bpe_dropout: float = 0.0,
         min_token_count: int = -1,
         batch_items_per_sample: int = 1,
+        buffer_size: int = 1000,
         **kwargs,
     ) -> None:
         super().__init__(*args, **kwargs)
@@ -54,6 +89,7 @@ class CosmopediaProvider(DataProviderBase):
         self.bpe_dropout = float(bpe_dropout)
         self.min_token_count = int(min_token_count)
         self.batch_items_per_sample = int(batch_items_per_sample)
+        self.buffer_size = int(buffer_size)
 
         if self.batch_size % self.batch_items_per_sample != 0:
             raise ValueError(f"batch_size ({self.batch_size}) must be divisible by batch_items_per_sample ({self.batch_items_per_sample})")
@@ -430,6 +466,12 @@ class CosmopediaProvider(DataProviderBase):
         )
 
         iterator = iter(interleaved_ds)
+
+        if self.buffer_size > 0:
+            if self.verbose:
+                print(f"Buffering stream with size {self.buffer_size}...")
+            iterator = BufferedIterator(iterator, buffer_size=self.buffer_size)
+
         
         total_read = 0
         LOG_INTERVAL = 1000
