@@ -501,6 +501,9 @@ class CosmopediaProvider(DataProviderBase):
         # Iterator for interleaved dataset
         iterator = iter(interleaved_ds)
 
+        total_read = 0
+        LOG_INTERVAL = 1000
+
         if self.buffer_size > 0:
             if self.verbose:
                  print(f"Buffering stream with size {self.buffer_size}, chunk_size={self.buffer_chunk_size}...")
