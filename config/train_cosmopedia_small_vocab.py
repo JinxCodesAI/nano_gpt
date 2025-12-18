@@ -28,6 +28,7 @@ min_token_count = 100
 # Training settings
 gradient_accumulation_steps = 4
 batch_size = 128
+batch_items_per_sample = 1
 block_size = 768
 
 learning_rate = 1e-3

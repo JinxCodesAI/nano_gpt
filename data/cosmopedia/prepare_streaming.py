@@ -45,6 +45,7 @@ class CosmopediaProvider(DataProviderBase):
         validation_stages: Optional[List[Dict]] = None,
         bpe_dropout: float = 0.0,
         min_token_count: int = -1,
+        batch_items_per_sample: int = 1,
         **kwargs,
     ) -> None:
         super().__init__(*args, **kwargs)
@@ -52,6 +53,10 @@ class CosmopediaProvider(DataProviderBase):
         self.tokenizer_train_samples = int(tokenizer_train_samples)
         self.bpe_dropout = float(bpe_dropout)
         self.min_token_count = int(min_token_count)
+        self.batch_items_per_sample = int(batch_items_per_sample)
+
+        if self.batch_size % self.batch_items_per_sample != 0:
+            raise ValueError(f"batch_size ({self.batch_size}) must be divisible by batch_items_per_sample ({self.batch_items_per_sample})")
         
         
         # Corruption params
@@ -493,7 +498,15 @@ class CosmopediaProvider(DataProviderBase):
         if max_content_len < 1:
             raise ValueError(f"Block size {self.block_size} is too small to hold [BOS], [NOISE], content, and [EOS].")
 
-        while len(sequences_x) < total_sequences_needed:
+        # Determine how many UNIQUE sequences we need to fetch from the stream
+        if total_sequences_needed % self.batch_items_per_sample != 0:
+             # Should be guaranteed by init check, but good for safety
+             raise ValueError("total_sequences_needed not divisible by batch_items_per_sample")
+        
+        unique_needed = total_sequences_needed // self.batch_items_per_sample
+        unique_sequences_x = []
+
+        while len(unique_sequences_x) < unique_needed:
             text = next(self._stream)
             
             # Apply BPE Dropout if applicable
@@ -531,8 +544,18 @@ class CosmopediaProvider(DataProviderBase):
                 # Just append PADs now.
                 row_list.extend([pad_id] * needed)
             
-            sequences_x.append(torch.tensor(row_list, dtype=torch.long))
+            unique_sequences_x.append(torch.tensor(row_list, dtype=torch.long))
 
+        # Expand unique sequences: reuse each one batch_items_per_sample times
+        # We want distinct corruptions for each copy, so we just duplicate the CLEAN inputs here.
+        # The corruption loop later (step 3) processes each item in all_x independently with RNG,
+        # so they will get different masks/replacements naturally.
+        
+        sequences_x = []
+        for seq in unique_sequences_x:
+            for _ in range(self.batch_items_per_sample):
+                 sequences_x.append(seq)
+                 
         all_x = torch.stack(sequences_x) # [total_seqs, block_size]
         
         # 3. Apply masking per stage
